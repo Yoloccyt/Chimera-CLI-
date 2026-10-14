@@ -1,8 +1,10 @@
 //! ShardedBus 分片核心 — 非 Critical 事件的分片扇出(灰度增量)
 //!
-//! 状态(ADR-181 发现 1 订正):PRODUCTION-WIRED —— osa/faae/gqep/gsoe/
-//! efficiency-monitor 五处组合根运行时 opt-in `let _ = enable_sharding(...)`
-//! (无 tokio runtime 自动降级单流,幂等拒绝重复启用);非"未接线"。
+//! 状态(ADR-181 发现 1 订正;接线清单 2026-10-05 第三轮 T1.3 重测):PRODUCTION-WIRED ——
+//! cmt-tiering/efficiency-monitor/faae-router/gqep-executor/mlc-engine/nmc-encoder/
+//! osa-coordinator/scc-cache/omega-learner 九处运行时 opt-in `try_enable_sharding(...)`
+//! (无 tokio runtime 自动降级单流,幂等拒绝重复启用);旧述「五处含 gsoe」已失实
+//! ——gsoe-evolution 实测零调用(第三轮审计 F-X5 漂移 #4),非"未接线"定性与本行无关。
 //!
 //! 对应架构层:L1 Core(event-bus)
 //! 对应任务:P1-T12(Phase 1 地基波次,手册 §8.5 ShardedEventBus 终版 +
@@ -15,8 +17,12 @@
 //! 主动路由。两者正交,合并会造成单文件双主题(维护者需跳跃理解),故独立成模块。
 //!
 //! # Lane 三车道(手册 §8.5)
-//! - `Critical`:18 个 Critical 事件(severity() == Critical,与 [`crate::bus::LANE_FORBIDDEN_SHARD`]
-//!   一一对应,守护测试保证)→ **永远走既有 mpsc/broadcast 通道,不进分片**(红线:
+//! - `Critical`：20 个 Critical 事件（`severity() == Critical`，与
+//!   [`crate::bus::LANE_FORBIDDEN_SHARD`] 一一对应，守护测试保证）
+//!   —— 上方数字**不是无人管的裸注释**：它由 `scripts/check_perf_redlines.py` 不变式 **I8**
+//!   机器校验必须等于 `bus::CRITICAL_TOTAL`（深审 E-7c：此处曾手工漂过 17→18，
+//!   I8 使其不可再现）；改常量而不同步本注释会直接判红，故与 `registry.rs` 里
+//!   **无门校验**、只能指向常量名的旁路计数注释属两种口径。→ **永远走既有 mpsc/broadcast 通道，不进分片**（红线：
 //!   Critical 分片会破坏"发布方 → 订阅方"全序投递语义与 mpsc 旁路免背压保证,
 //!   推演 9:Critical 背压 = 死锁源);
 //! - `OrderSensitive(SessionKey)`:携带会话键(白名单变体的 `session_id` 字段 /
@@ -59,6 +65,7 @@ use std::sync::Arc;
 
 use crossbeam_queue::ArrayQueue;
 use tokio::sync::Notify;
+use tracing::{debug, warn};
 
 use crate::credit_flow::CreditFlow;
 use crate::types::{EventSeverity, NexusEvent};
@@ -92,7 +99,7 @@ pub const MAX_EVENT_PAYLOAD_BYTES: usize = 64 * 1024;
 /// 事件车道 — 分片路由三分类(手册 §8.5 Lane 语义)
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Lane {
-    /// Critical 事件(17 个,severity() == Critical)— 永不进分片
+    /// Critical 事件(20 个,severity() == Critical)— 永不进分片
     Critical,
     /// 顺序敏感事件 — 携带会话键,走单流保序,不分片
     OrderSensitive(SessionKey),
@@ -125,18 +132,29 @@ impl SessionKey {
 ///
 /// 漏发率口径: `merged_total`(worker 汇入 broadcast 数) vs
 /// `sharded_total`(入分片事件数)。正常场景两者相等 = 漏发率 0。
+///
+/// 送达语义(第三轮 F-A2 补齐,2026-10-05):`merged_total` 无条件计入,
+/// 包含「汇入 broadcast 但当下无订阅者而被丢弃」的部分——该等式只证
+/// 「入汇流通道」不证「有人收到」;无订阅者丢弃数由 `merge_closed_total`
+/// 单独观测(第三轮 T1.1),慢消费者丢弃仍在 recv 侧 `lagged_count`
+/// (两条路径共用同一订阅者层计数器,非分片路径新增面)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShadowStats {
     /// 总线累计发布事件总数(与 [`crate::bus::EventBus::published_total`] 一致)
     pub published_total: u64,
     /// 入分片事件数(分片路径累计,单调递增)
     pub sharded_total: u64,
-    /// worker 汇入 broadcast 事件数(分片路径累计;漏发率分母/分子)
+    /// worker 汇入 broadcast 事件总数(分片路径累计;漏发率分母;
+    /// 含无订阅者丢弃,送达观测见 [`ShadowStats::merge_closed_total`])
     pub merged_total: u64,
     /// 背压 shed 累计(分片满 + 信用耗尽回退 broadcast 数,复用 T11 口径)
     pub shed_total: u64,
     /// Critical 事件发布数(永不进分片的车道观测)
     pub critical_total: u64,
+    /// worker 汇入时 `send` 返回 Err(当下无订阅者)的事件数(第三轮 T1.1)。
+    /// 非丢发错误(慢消费者是 recv 侧 Lagged),是「入通道即丢弃」的观测面:
+    /// 它为 `merged_total` 的「入通道≠送达」提供可归因数字。
+    pub merge_closed_total: u64,
 }
 
 /// 分片事件总线 — 64 片无锁队列 + Notify 唤醒 + worker 汇入 broadcast
@@ -164,6 +182,10 @@ pub struct ShardedEventBus {
     sharded_total: AtomicU64,
     /// worker 汇入 broadcast 事件总数(影子双跑前哨:漏发率分母)
     merged_total: AtomicU64,
+    /// worker 汇入时 send 因无订阅者返回 Err 的累计数(第三轮 T1.1 观测面;
+    /// 首见 warn 后续 debug 的 once 语义由 fetch_add 返回值 `closed == 0` 承担,
+    /// 无需额外标志位 —— 计数本身就是「首次」的无锁仲裁)
+    merge_closed_total: AtomicU64,
 }
 
 impl std::fmt::Debug for ShardedEventBus {
@@ -204,6 +226,7 @@ impl ShardedEventBus {
             depths: depths.into_boxed_slice(),
             sharded_total: AtomicU64::new(0),
             merged_total: AtomicU64::new(0),
+            merge_closed_total: AtomicU64::new(0),
         }
     }
 
@@ -330,6 +353,12 @@ impl ShardedEventBus {
     pub fn merged_total(&self) -> u64 {
         self.merged_total.load(Ordering::Relaxed)
     }
+
+    /// worker 汇入时无订阅者丢弃累计(第三轮 T1.1;非送达错误的观测面)
+    #[must_use = "观测汇入即丢弃数,忽略返回值无意义"]
+    pub fn merge_closed_total(&self) -> u64 {
+        self.merge_closed_total.load(Ordering::Relaxed)
+    }
 }
 
 /// shard_worker — 单片消费任务(手册 §10.3)
@@ -372,10 +401,28 @@ async fn shard_worker(
         }
         let batch_len = batch.len() as u64;
         for event in batch.drain(..) {
-            // 汇入既有 broadcast:无订阅者时 Err(Closed),静默(与 publish 语义一致:
-            // 无订阅者丢弃不视为错误)。merged_total 仅统计入片后成功投递到
-            // broadcast 的事件(「入片 → 汇入」守恒,漏发率统计口径)。
-            let _ = sender.send(event);
+            // 汇入既有 broadcast。语义登记(第三轮 F-A2/T1.1):
+            //   - tokio broadcast 的 `send` 错误形态只有「当下无订阅者」(Closed);
+            //     慢消费者 Lagged 发生在 recv 侧且已由订阅者层 `lagged_count` 计数
+            //     (两路径共用),此处不存在 Lagged 分支。
+            //   - merged_total 无条件递增的契约**保持不变**(漏发率等式口径),
+            //     但「入通道≠送达」由 `merge_closed_total` 单独归因。
+            //     无订阅者丢弃不视为错误(与 publish 单流同口径),
+            //     首见 warn 后续 debug —— 零订阅静默运行期不得刷屏(G-89 理据线)。
+            match sender.send(event) {
+                Ok(_) => {}
+                Err(_) => {
+                    let closed = sb.merge_closed_total.fetch_add(1, Ordering::Relaxed);
+                    if closed == 0 {
+                        warn!("分片汇入时零订阅者:merged_total 含此类丢弃,送达观测见 merge_closed_total");
+                    } else {
+                        debug!(
+                            merge_closed_total = closed + 1,
+                            "分片汇入零订阅者丢弃(已告警一次)"
+                        );
+                    }
+                }
+            }
             sb.merged_total.fetch_add(1, Ordering::Relaxed);
         }
         // ADR-125 批提交语义:整批归还(降低 notify_waiters 唤醒频率)
@@ -386,7 +433,7 @@ async fn shard_worker(
 /// Lane 判定 — 事件分片路由分类(手册 §8.5)
 ///
 /// 判定顺序(优先级从高到低):
-/// 1. `severity() == Critical`(17 个,与 [`crate::bus::LANE_FORBIDDEN_SHARD`]
+/// 1. `severity() == Critical`(20 个,与 [`crate::bus::LANE_FORBIDDEN_SHARD`]
 ///    一致性由守护测试双向断言)→ [`Lane::Critical`];
 /// 2. `EfficiencyAlertTriggered` 告警事件 → [`Lane::OrderSensitive`](告警占位键
 ///    rule_id);
@@ -395,7 +442,7 @@ async fn shard_worker(
 /// 5. 其余 → [`Lane::Unordered`]。
 #[must_use = "Lane 判定决定事件路由,忽略返回值将导致错误分片"]
 pub fn event_lane(event: &NexusEvent) -> Lane {
-    // 1. Critical 车道(红线:17 个 Critical 永不进分片)
+    // 1. Critical 车道(红线:20 个 Critical 永不进分片)
     if event.severity() == EventSeverity::Critical {
         return Lane::Critical;
     }
@@ -484,13 +531,13 @@ mod tests {
     }
 
     // ============================================================
-    // Lane 判定:17 Critical → Critical / 会话键 → OrderSensitive / 其余 → Unordered
+    // Lane 判定:20 Critical → Critical / 会话键 → OrderSensitive / 其余 → Unordered
     // ============================================================
 
     #[test]
     fn test_lane_forbidden_shard_list_covers_all_critical() {
         // 红线:LANE_FORBIDDEN_SHARD 清单与 severity() Critical 一一对应
-        // (全量 17 个逐一构造断言)—— helper 复用 bus.rs 测试模块的
+        // (全量 20 个逐一构造断言)—— helper 复用 bus.rs 测试模块的
         // all_severity_critical_variants(pub(crate),D-8 口径)
         let critical_variants = super::super::bus::tests_helpers::all_severity_critical_variants();
         assert_eq!(critical_variants.len(), crate::bus::CRITICAL_TOTAL);
@@ -672,18 +719,36 @@ mod tests {
 
     #[test]
     fn test_unordered_events_spread_across_shards() {
-        // 无序事件分散:从 `NexusEvent` 全体变体中取 32 个不同类型,分片分布不得塌缩到 1 片
-        // (设计口径 kind() % 64 的等价验证:type_name FNV-1a 哈希分散)
+        // 无序事件分散(第三轮 T1.4:取齐 TEST_UNORDERED_TYPE_NAMES 真实规模 = 15,
+        // 旧注误写"32";断言从"不塌缩到 1 片"弱判据升级为倾斜度上限)
+        // 设计口径 kind() % 64 的等价验证:type_name FNV-1a 哈希分散。
         let bus = ShardedEventBus::new(DEFAULT_SHARD_COUNT, SHARD_CAPACITY);
+        assert_eq!(
+            TEST_UNORDERED_TYPE_NAMES.len(),
+            15,
+            "测试清单规模与注释(15)必须一致(T1.4 取齐,防再次漂移)"
+        );
         let mut occupied = std::collections::HashSet::new();
+        let mut per_shard: std::collections::HashMap<usize, usize> =
+            std::collections::HashMap::new();
         for (i, name) in TEST_UNORDERED_TYPE_NAMES.iter().enumerate() {
             let event = make_event_by_type_name(name, i);
-            occupied.insert(bus.shard_index(&event));
+            let idx = bus.shard_index(&event);
+            occupied.insert(idx);
+            *per_shard.entry(idx).or_insert(0) += 1;
         }
+        let max_skew = *per_shard.values().max().unwrap_or(&0);
+        // 倾斜度上限:15 个类型名经 FNV-1a % 64 实测落 11 片、单片最多 3 个;
+        // 判据留裕度(≥10 片、单片 ≤4)——既放过确定性哈希的正常分布,又能在
+        // 键被改成"多数类型撞同片"的病态倾斜时判红(旧 >1 弱判据抓不到 2-3 片塌缩)。
         assert!(
-            occupied.len() > 1,
-            "无序事件分片分布塌缩到 {} 片(应分散)",
+            occupied.len() >= 10,
+            "无序事件分片分布塌缩:仅占 {} 片(15 类型应分散到 ≥10 片)",
             occupied.len()
+        );
+        assert!(
+            max_skew <= 4,
+            "分片倾斜度过高:单片最多承载 {max_skew} 个类型(上限 4;热点片由单类型独占,非多类型堆积)"
         );
         // 深度/计数初始为 0(新总线无残留)
         assert_eq!(bus.sharded_total(), 0);
@@ -848,6 +913,65 @@ mod tests {
         let rejected = bus.try_push(e3).expect_err("容量 2 满后应拒绝");
         assert_eq!(rejected.type_name(), "CacheHit", "拒绝时返回事件本体");
         assert_eq!(bus.sharded_total(), 2, "仅入片成功者计数");
+    }
+
+    #[test]
+    fn test_same_shard_concurrent_try_push_no_loss_no_dup() {
+        // 第三轮 T1.4:同片多线程并发 try_push 不丢不重(不引入 loom;以真
+        // 并发线程 + barrier 压 crossbeam ArrayQueue 的 MPSC 语义 + 无锁计数守恒)。
+        // 单片(n_shards=1)强制所有事件争抢同一 ArrayQueue。
+        use std::sync::Barrier;
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 24; // 8×24=192 ≤ SHARD_CAPACITY 256,零 shed
+        let bus = Arc::new(ShardedEventBus::new(1, SHARD_CAPACITY));
+        let barrier = Arc::new(Barrier::new(THREADS));
+        let handles: Vec<_> = (0..THREADS)
+            .map(|t| {
+                let bus = Arc::clone(&bus);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    let mut ok = 0usize;
+                    barrier.wait(); // 对齐起跑,最大化并发交错
+                    for j in 0..PER_THREAD {
+                        let ev = NexusEvent::CacheHit {
+                            metadata: EventMetadata::new("t"),
+                            cache_key: format!("k-{t}-{j}"),
+                        };
+                        if bus.try_push(ev).is_ok() {
+                            ok += 1;
+                        }
+                    }
+                    ok
+                })
+            })
+            .collect();
+        let pushed: usize = handles
+            .into_iter()
+            .map(|h| h.join().expect("worker thread panic"))
+            .sum();
+        assert_eq!(
+            pushed,
+            THREADS * PER_THREAD,
+            "并发入片不得因竞争而丢(容量内应全成功)"
+        );
+        // 计数守恒:sharded_total == 成功入片数(每成功恰一次 +1,无重)
+        assert_eq!(
+            bus.sharded_total(),
+            (THREADS * PER_THREAD) as u64,
+            "sharded_total 必须恰等于成功入片数(不重不漏)"
+        );
+        // 队列实收守恒:排空单片,唯一键集大小 == 入片数(既不重复也不丢失)
+        let mut seen = std::collections::HashSet::new();
+        let mut drained = 0usize;
+        while let Some(ev) = bus.shards[0].pop() {
+            if let NexusEvent::CacheHit { cache_key, .. } = &ev {
+                seen.insert(cache_key.clone());
+            }
+            drained += 1;
+        }
+        assert_eq!(drained, THREADS * PER_THREAD, "排空队列数 == 入片数");
+        assert_eq!(seen.len(), drained, "队列内事件互不重复(不重)");
+        // 排空后深度归零(入片 fetch_add / pop 不经 worker 时手动不维护,本测试未启 worker)
     }
 
     #[test]

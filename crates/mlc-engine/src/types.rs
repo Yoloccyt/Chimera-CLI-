@@ -268,6 +268,43 @@ pub struct MemoryEntry {
     /// 不破坏现有持久化数据与测试。`None` 在召回时按 `Current` 处理(向后兼容)。
     #[serde(default)]
     pub temporal_meta: Option<TemporalMeta>,
+    /// v2.3 §(b.3):认识类型标签 —— 与 `tier`(保留/用途层级)**正交**的第二维。
+    /// tier 表达"在哪一层/因何保留",`epistemic_type` 表达"这是什么认识"
+    /// (Fact/Episode/Observation/MindModel)。默认 Fact(老数据反序列化不破坏)。
+    #[serde(default = "default_epistemic_type")]
+    pub epistemic_type: nexus_contracts::EpistemicType,
+    /// Observation/派生结论的证据指针(指向原始记录条目 id);空=非归纳条目。
+    #[serde(default)]
+    pub evidence_ptrs: Vec<String>,
+    /// 因果来源引用(ADR-132 接线后启用;一期可选,不被未接线组件阻塞)。
+    #[serde(default)]
+    pub provenance: Option<String>,
+}
+
+/// `epistemic_type` 的 serde 默认(向后兼容:老数据无此字段时反序列化为 Fact)。
+fn default_epistemic_type() -> nexus_contracts::EpistemicType {
+    nexus_contracts::EpistemicType::Fact
+}
+
+/// 召回 token 预算 — WI-C1′（v2.3 §(d)⑨「检索预算裁剪（一期）」）
+///
+/// 语义:`recall_by_clv` 族的可选装包上限。`None`（默认）= 不裁剪,与接线前
+/// 逐位一致;`Some(budget)` = 按分数序贪心装包,装入后不超预算的条目保留,
+/// 装不下的**跳过继续**（保序;复用 RSB `ResidualStore::inject` 的预算检查
+/// 与按需合成的分数序贪心先例）。成本口径 = [`MemoryEntry::token_estimate`]
+/// （字符数/3+1,与 RSB `KeyFact` 同式）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenBudget {
+    /// 召回结果 token 上限
+    pub max_tokens: usize,
+}
+
+impl TokenBudget {
+    /// 新建预算（token）
+    #[must_use]
+    pub fn new(max_tokens: usize) -> Self {
+        Self { max_tokens }
+    }
 }
 
 impl MemoryEntry {
@@ -294,12 +331,32 @@ impl MemoryEntry {
             last_accessed_at: now,
             access_count: 0,
             temporal_meta: None, // P3-W11.1: 默认 None(向后兼容,视为 Current)
+            epistemic_type: nexus_contracts::EpistemicType::Fact,
+            evidence_ptrs: Vec::new(),
+            provenance: None,
         }
     }
 
     /// 附带 CLV 向量(用于 L2 语义记忆)
     pub fn with_clv(mut self, clv: CLV) -> Self {
         self.clv = Some(clv);
+        self
+    }
+
+    /// token 近似估算（WI-C1′ 召回预算成本口径）
+    ///
+    /// 口径 = 内容字符数/3 + 1（与 RSB `KeyFact::token_estimate` 同式,
+    /// 中文场景 3 字 ≈ 1 token;与既有压缩链路一致）。
+    /// 纯函数、O(字符数),不引入任何依赖。
+    #[must_use]
+    pub fn token_estimate(&self) -> usize {
+        self.content.chars().count() / 3 + 1
+    }
+
+    /// v2.3 §(b.3):设置认识类型标签(与 `tier` 正交的第二维)。
+    #[must_use]
+    pub fn with_epistemic(mut self, epistemic: nexus_contracts::EpistemicType) -> Self {
+        self.epistemic_type = epistemic;
         self
     }
 

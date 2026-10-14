@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     沙箱外临时文件清理脚本(需系统 PowerShell 管理员执行)

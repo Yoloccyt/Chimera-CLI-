@@ -51,6 +51,10 @@ jobs:
         with:
           persist-credentials: false
 
+      # WHY 钉定工具链:压测档产物是趋势数据(threads=2、scale=1.0),
+      # 工具链浮动会让"这周比上周慢"无法区分是代码回退还是 rustc 换代。
+      - uses: dtolnay/rust-toolchain@1.97.1
+
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
         with:

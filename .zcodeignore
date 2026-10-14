@@ -1,0 +1,96 @@
+# Chimera CLI NEXUS-OMEGA — .gitignore
+# 排除编译产物、工具链缓存、临时文件,避免误纳敏感文件
+
+# === Rust 编译产物 ===
+target/
+target_clippy*/
+**/*.rs.bk
+*.pdb
+
+# === Rust 工具链缓存(本地迁移至 D 盘)===
+.toolchain/
+
+# === 临时文件 ===
+tmp/
+tmp_podman/
+%SystemDrive%/
+*.tmp
+*.temp
+*.log
+
+# === Git Worktrees ===
+.worktrees/
+
+# === IDE / 编辑器 ===
+.idea/
+.vscode/
+.qoder/
+*.swp
+*.swo
+*~
+
+# === 操作系统 ===
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# === 环境与密钥(禁止提交)===
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# === 文档二进制(非源码)===
+*.docx
+*.pdf
+
+# === 发布构建产物 ===
+dist/
+*.exe
+*.zip
+
+# === 文档/规格/规则文件 — 本地保留，不入远程仓库 ===
+*.md
+.claude/
+.trae/
+
+
+
+# === Python 缓存 ===
+__pycache__/
+*.pyc
+
+# lychee link checker cache
+.lycheecache
+
+# ===== ↑ 以上同步自 .gitignore（「从 .gitignore 同步」只重写以上部分）=====
+.git/
+.hg/
+.svn/
+node_modules/
+bower_components/
+jspm_packages/
+site-packages/
+venv/
+coverage/
+htmlcov/
+lcov-report/
+cmakefiles/
+cmake-build-*/
+bazel-*/
+pods/
+deriveddata/
+storybook-static/
+playwright-report/
+test-results/
+allure-results/
+allure-report/
+cdk.out/
+*.egg-info/
+*.dist-info/
+eggs/
+pip-wheel-metadata/
+wheels/
+# ----- ↑ 以上为 ZCode 默认排除规则（自定义规则请写在本行下方，不会被同步/恢复改动）-----
+# 自定义规则写在下方（本行提示可删除）

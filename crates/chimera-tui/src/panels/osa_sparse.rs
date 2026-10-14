@@ -25,9 +25,9 @@
 //!   大于 0.7 红色(高稀疏度,大量上下文被掩码,可能过度过滤)。
 //!   WHY 此映射:稀疏度越高表示被 OSA 掩码的上下文比例越大,过高的稀疏度可能
 //!   误过滤关键上下文导致信息丢失,因此用红色警示运维人员关注。
-//! - **虚拟滚动**:context 活跃文件列表理论上可包含数百文件 ID,沿用
-//!   `virtual_scroll_window` 保持与 Timeline/EventStream 面板一致的渲染模式,
-//!   将渲染复杂度从 O(n) 降至 O(visible + 2×BUFFER)。
+//! - **虚拟滚动**:context 活跃文件列表理论上可包含数百文件 ID,按面板内联
+//!   窗口(基 = scroll_offset + 末端回填,与 Parliament/Log/EventStream/Timeline
+//!   收口方案一致)渲染,将渲染复杂度从 O(n) 降至 O(visible)。
 //! - **数据源**:`TuiState.osa_sparsity` / `osa_context_mask` / `osa_sparsity_history`
 //!   — 由 `OsaSparseSync` 从 `OmniSparseMasksComputed` 事件同步填充。
 
@@ -40,7 +40,7 @@ use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Widget};
 
 use crate::panels::list_state;
 use crate::panels::Panel;
-use crate::render::{self, virtual_scroll_window};
+use crate::render;
 use crate::types::{PanelId, TuiCommand, TuiState};
 
 /// OSA 稀疏度可视化面板
@@ -199,8 +199,7 @@ impl OsaSparsePanel {
 
     /// 渲染 context 活跃文件列表的可见窗口(中部区域)
     ///
-    /// 使用 `virtual_scroll_window` 仅构造可见区域 + 上下缓冲的 Text,
-    /// 确保即使文件数量增大,渲染复杂度仍为 O(visible + 2×BUFFER)。
+    /// 仅构造可见区域的 Text,确保即使文件数量增大,渲染复杂度仍为 O(visible)。
     fn render_window(
         state: &TuiState,
         selected: usize,
@@ -219,7 +218,7 @@ impl OsaSparsePanel {
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
-            let (start, end) = virtual_scroll_window(total, scroll_offset, visible_rows);
+            let (start, end) = render::scroll_offset_window(total, scroll_offset, visible_rows);
 
             for idx in start..end {
                 if let Some(file_id) = files.get(idx) {
@@ -385,10 +384,6 @@ impl Panel for OsaSparsePanel {
             self.selected = new_selected;
         }
         None
-    }
-
-    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("R", crate::t!("shortcut.refresh"))]
     }
 }
 

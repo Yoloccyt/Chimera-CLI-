@@ -213,7 +213,11 @@ fn test_chtc_panel_renders_adapter_list_when_non_empty() {
 
 #[test]
 fn test_chtc_panel_empty_adapters_shows_placeholder() {
-    // P2.5.1 测试点 5:空适配器列表时显示 "No CHTC adapters connected"
+    // P2.5.1 测试点 5:空适配器列表时显示 no_adapters 占位文案
+    // B6-M:文案迁键,期望串经 t! 与渲染同源;TestBackend 全帧逐 cell 收集下
+    // zh 宽字符会被续格空格碎裂,故 pin En 断言(与 en 表同源,无双源)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = TuiApp::with_data_source(
         TuiConfig {
             default_view_mode: chimera_tui::ViewMode::Dashboard,
@@ -228,10 +232,11 @@ fn test_chtc_panel_empty_adapters_shows_placeholder() {
 
     let content = render_to_string(&mut app, 100, 30);
     assert!(
-        content.contains("No CHTC adapters connected"),
+        content.contains(chimera_tui::t!("panel.chtc.no_adapters")),
         "empty adapter list should show placeholder, got: {}",
         &content[..content.len().min(300)]
     );
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
 }
 
 // ============================================================
@@ -357,10 +362,12 @@ fn test_chtc_panel_score_color_boundaries() {
 fn test_chtc_panel_content_empty_state() {
     use chimera_tui::TuiState;
 
+    // B6-M:文案迁键,期望串经 t! 与渲染同源(纯文本无宽字符碎裂,locale 无关自洽)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let state = TuiState::new();
     let text = ChtcPanel::content(&state).to_string();
     assert!(
-        text.contains("No CHTC adapters connected"),
+        text.contains(chimera_tui::t!("panel.chtc.no_adapters")),
         "content() empty state should show placeholder, got: {}",
         &text[..text.len().min(200)]
     );
@@ -388,12 +395,15 @@ fn test_chtc_panel_content_with_adapters() {
 fn test_chtc_panel_content_online_offline_status() {
     use chimera_tui::TuiState;
 
+    // B6-M:online/offline 标签迁键,断言经 t! 期望串(任一状态出现即通过)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let mut state = TuiState::new();
     state.chtc_state = five_adapters_snapshot().chtc_state;
     let text = ChtcPanel::content(&state).to_string();
     // emacs-adapter (score=45) 是离线的
     assert!(
-        text.contains("online") || text.contains("offline"),
+        text.contains(chimera_tui::t!("panel.chtc.status_online"))
+            || text.contains(chimera_tui::t!("panel.chtc.status_offline")),
         "content() should show online/offline status, got: {}",
         &text[..text.len().min(300)]
     );
@@ -436,6 +446,10 @@ fn test_chtc_panel_renders_progress_bar() {
 
 #[test]
 fn test_chtc_panel_renders_request_distribution() {
+    // B6-M:请求标签迁键,期望串经 t! 前缀派生(键值首段 "  Requests:" 去
+    // 前导空格后即为稳定特征);TestBackend 全帧下 pin En 避宽字符碎裂
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::En);
     let mut app = TuiApp::with_data_source(
         TuiConfig {
             default_view_mode: chimera_tui::ViewMode::Dashboard,
@@ -450,11 +464,16 @@ fn test_chtc_panel_renders_request_distribution() {
 
     let content = render_to_string(&mut app, 120, 40);
     // 请求分布区应显示标题或请求类型
+    let requests_prefix = chimera_tui::t!("panel.chtc.requests_label")
+        .trim()
+        .trim_end_matches(':')
+        .to_string();
     assert!(
-        content.contains("Request") || content.contains("request"),
+        content.contains(&requests_prefix),
         "request distribution section should be rendered, got: {}",
         &content[..content.len().min(500)]
     );
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
 }
 
 #[test]

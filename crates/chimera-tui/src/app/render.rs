@@ -12,7 +12,6 @@ use ratatui::Frame;
 use std::time::Instant;
 
 use super::TuiApp;
-use crate::config::Theme;
 use crate::types::{InputMode, LayoutMode, PanelId};
 
 impl TuiApp {
@@ -48,9 +47,13 @@ impl TuiApp {
         if focused != PanelId::Help
             && self.state.help_context.as_ref().map(|(id, _)| *id) != Some(focused)
         {
+            // B4-S(F-13):与 open_help_action 同源 —— 经构造期缓存的
+            // action_registry 调 shortcuts_with_registry(含 ActionRegistry
+            // 派生功能动作),不再用裸 shortcuts();`?` 浮层与 Help 面板
+            // 章节两条帮助路径键位一致(panels/mod.rs 契约文档成立)。
             let shortcuts = self
                 .panel_index(focused)
-                .map(|i| self.panels[i].shortcuts())
+                .map(|i| self.panels[i].shortcuts_with_registry(&self.action_registry))
                 .unwrap_or_default();
             self.state.help_context = Some((focused, shortcuts));
         }
@@ -145,6 +148,14 @@ impl TuiApp {
         // Concord W2/W3:Slash 态补全列表 overlay(会话流区底部靠栏)
         if self.state.input_mode == InputMode::Slash {
             self.render_slash_overlay(frame, parts.stream);
+        }
+
+        // M2.2/R5 F-01:命令面板作为居中 overlay 渲染在最上层。与 legacy/v3
+        // 路径(本文件 Dashboard 两分支)对齐 —— 键盘侧 event_loop 的 palette
+        // 分支不分视图全量接管,此处若不渲染即"打开即失明"。
+        // WHY 置于 Slash overlay 之后:palette 层级最高,覆盖其下的补全列表。
+        if self.chat_session.palette.is_some() {
+            self.render_palette(frame, frame.area());
         }
 
         // 帧末清理 dirty(与 Dashboard 路径一致)
@@ -294,8 +305,8 @@ impl TuiApp {
     /// WHY 底部靠栏而非居中:补全与输入栏视觉连续(主流 Agent CLI 交互惯例)。
     fn render_slash_overlay(&self, frame: &mut Frame<'_>, main_area: Rect) {
         use ratatui::widgets::Widget;
-        let reg = crate::actions::SlashCommandRegistry::with_builtin_commands();
-        let cands = crate::slash_surface::candidates(&reg, &self.state.input_buffer);
+        let reg = &self.slash_registry;
+        let cands = crate::slash_surface::candidates(reg, &self.state.input_buffer);
         if cands.is_empty() || main_area.height < 3 || main_area.width < 8 {
             return;
         }
@@ -520,7 +531,8 @@ impl TuiApp {
             .focus_manager
             .panels()
             .iter()
-            .map(|&p| Line::from(format!(" {} ", p.as_str())))
+            // B4-I(F-65):面板名走 i18n 键表,Ctrl+L 切换语言随动
+            .map(|&p| Line::from(format!(" {} ", crate::t!(p.name_key()))))
             .collect();
 
         let focused = self.focus_manager.focused();
@@ -564,7 +576,8 @@ impl TuiApp {
         }
 
         // M3d:按当前 PaneMode 计算可见窗格与区域,逐窗格渲染其面板。
-        // 单窗格模式 / 窄视口下 panes/rects 均退化为主区一块(与既有 companion 行为等价)。
+        // B7-C(F-36):pane_panels 与 pane_rects 共用 multi_pane_active 折叠判定,
+        // 单窗格模式 / 窄视口下两者长度恒一致(均退化为主区一块),zip 不再截断错位。
         let panes = self.pane_panels();
         let rects = self.pane_rects(area);
         for (panel_id, rect) in panes.iter().copied().zip(rects.iter().copied()) {
@@ -603,12 +616,14 @@ impl TuiApp {
         area: ratatui::layout::Rect,
     ) {
         self.status_bar_area = Some(area);
+        // B4-I(F-65):面板名走 i18n 键表(与 tab 栏同源),Ctrl+L 随动
+        let panel_name = crate::t!(self.current_panel().name_key());
         let (status, fg) = match &self.state.status_message {
             Some((msg, severity)) => (
                 format!(
                     " {}: {} | {}: {} | {}: {} | {} ",
                     crate::t!("status.panel"),
-                    self.current_panel().as_str(),
+                    panel_name,
                     crate::t!("status.tick"),
                     self.state.tick_mode.display(),
                     crate::t!("status.fps"),
@@ -621,7 +636,7 @@ impl TuiApp {
                 format!(
                     " {}: {} | {}: {} | {}: {} | {}: {} | {}: {} ",
                     crate::t!("status.panel"),
-                    self.current_panel().as_str(),
+                    panel_name,
                     crate::t!("status.tick"),
                     self.state.tick_mode.display(),
                     crate::t!("status.fps"),
@@ -672,24 +687,54 @@ impl TuiApp {
         frame.render_widget(paragraph, area);
     }
 
-    /// 返回主题前景色
-    pub(crate) fn theme_fg(&self) -> Color {
-        match self.config.theme {
-            Theme::Dark => Color::White,
-            Theme::Light => Color::Black,
-            // P6.1:HighContrast 前景为白色(纯黑白最大对比度)
-            Theme::HighContrast => Color::White,
-        }
+    /// 主题最终配色单点入口(F-37):config 颜色覆盖 + 主题预设合并
+    ///
+    /// WHY 每次 resolve 而非构造期缓存:resolve 是 6 次 `Option::unwrap_or`
+    /// 的纯内存合并(纳秒级),调用点仅为渲染帧内个位数次;构造期缓存则需在
+    /// `cycle_theme_action` 与配置装载两处维护同步,徒增一致性分叉面。
+    pub(crate) fn theme(&self) -> crate::config::ThemeColors {
+        self.config.colors.resolve(self.config.theme)
     }
 
-    /// 返回主题强调色
+    /// 返回主题前景色(F-37:经 resolve,与 Theme::colors() 预设逐值等价,
+    /// yaml `colors.foreground` 覆盖自此生效)
+    pub(crate) fn theme_fg(&self) -> Color {
+        color_kind_to_ratatui(self.theme().foreground)
+    }
+
+    /// 返回主题强调色(F-37:经 resolve,theme.rs yaml 示例承诺的
+    /// `colors.accent` 定制契约自此生效)
     pub(crate) fn theme_accent(&self) -> Color {
-        match self.config.theme {
-            Theme::Dark => Color::Cyan,
-            Theme::Light => Color::Blue,
-            // P6.1:HighContrast 强调色为亮黄(高饱和度,色盲友好)
-            Theme::HighContrast => Color::LightYellow,
-        }
+        color_kind_to_ratatui(self.theme().accent)
+    }
+}
+
+/// ColorKind(配置层)→ ratatui 渲染色
+///
+/// WHY 放 app 侧而非 config:config 层不依赖 UI 框架(theme.rs 模块注释),
+/// 颜色翻译属渲染边界职责。映射规则:基础色同名直译;`Bright*` 族对应
+/// ratatui 的 ANSI bright 系列 `Light*`;`LightGray` → `Gray`(ratatui
+/// 无同名变体,8 色浅灰)。三主题预设经此映射与 F-37 前的硬编码
+/// match 逐值等价(Dark Cyan / Light Blue / HighContrast LightYellow)。
+fn color_kind_to_ratatui(c: crate::config::ColorKind) -> Color {
+    use crate::config::ColorKind;
+    match c {
+        ColorKind::Black => Color::Black,
+        ColorKind::White => Color::White,
+        ColorKind::Red => Color::Red,
+        ColorKind::Green => Color::Green,
+        ColorKind::Yellow => Color::Yellow,
+        ColorKind::Blue => Color::Blue,
+        ColorKind::Cyan => Color::Cyan,
+        ColorKind::Magenta => Color::Magenta,
+        ColorKind::LightGray => Color::Gray,
+        ColorKind::DarkGray => Color::DarkGray,
+        ColorKind::BrightRed => Color::LightRed,
+        ColorKind::BrightGreen => Color::LightGreen,
+        ColorKind::BrightYellow => Color::LightYellow,
+        ColorKind::BrightBlue => Color::LightBlue,
+        ColorKind::BrightCyan => Color::LightCyan,
+        ColorKind::BrightMagenta => Color::LightMagenta,
     }
 }
 

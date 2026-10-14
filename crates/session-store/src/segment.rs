@@ -202,6 +202,13 @@ impl SegmentWriter {
         let start_row = self.row;
         let mut buf = Vec::with_capacity(events.len() * 64);
         let mut offsets = Vec::with_capacity(events.len());
+        // v2.3 §(b.5): 会话段落盘前拦截私钥/凭证/令牌类硬载荷(Block)。
+        // 高熵/键名启发式设 Pass 防误报(model_view 的 SENSITIVE_MARKERS 为键名类,不属 Block)。
+        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            ..Default::default()
+        };
         for ev in events {
             let offset = Offset::new(self.next_seq, self.row);
             offsets.push(offset);
@@ -215,6 +222,17 @@ impl SegmentWriter {
             let json = serde_json::to_vec(&record).map_err(|e| StoreError::Serialization {
                 reason: format!("SegmentRecord JSON 序列化失败: {e}"),
             })?;
+            if nexus_contracts::sensitive::scan(&String::from_utf8_lossy(&json), &scan_policy)
+                .is_blocked()
+            {
+                self.rollback_batch(start_seq, start_row);
+                return Err(StoreError::InvalidInput {
+                    reason: format!(
+                        "会话事件 seq={} 含敏感硬载荷(私钥/凭证/令牌),拒绝落盘",
+                        record.seq
+                    ),
+                });
+            }
             let len = u32::try_from(json.len()).map_err(|_| StoreError::InvalidInput {
                 reason: format!("事件 JSON 超长 ({} bytes > u32::MAX)", json.len()),
             })?;

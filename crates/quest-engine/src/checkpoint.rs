@@ -76,7 +76,10 @@ impl CheckpointManager {
         // UUIDv7 生成是 CPU-only 操作,在 async 上下文中完成
         let checkpoint_id = format!("cp-{}", Uuid::now_v7());
         // Quest 序列化也是纯 CPU,提前完成(避免 clone Quest 到 spawn_blocking)
-        let serialized_state = rmp_serde::to_vec(quest)
+        // 具名 map 编码(ADR-213 R7):数组形态把字段顺序钉成 wire 契约,同类型字段换序会
+        // 静默改值;map 按 key 取值不受声明顺序影响。旧的位置式 blob 仍可被 from_slice
+        // 读回(实测,见 nexus-contracts/tests/wire_format_compat.rs),故无需读侧垫片。
+        let serialized_state = rmp_serde::to_vec_named(quest)
             .map_err(|e| QuestError::SerializationError(format!("msgpack encode: {e}")))?;
         let memory_snapshot_hash = compute_sha256_hex(&serialized_state);
 
@@ -119,9 +122,25 @@ impl CheckpointManager {
             })?;
         }
 
-        // 序列化 Checkpoint 为 MessagePack 并写入磁盘
-        let bytes = rmp_serde::to_vec(&checkpoint)
+        // 序列化 Checkpoint 为 MessagePack 并写入磁盘(具名 map,理由见上;旧位置式文件仍可回读)
+        let bytes = rmp_serde::to_vec_named(&checkpoint)
             .map_err(|e| QuestError::SerializationError(format!("msgpack encode cp: {e}")))?;
+
+        // v2.3 §(b.5): 检查点落盘前拦截私钥/凭证/令牌类硬载荷(R3-1 补入的核心 Checkpoint 写点)。
+        // Block-only:高熵/键名启发式设 Pass;benign 检查点(无硬标记)零影响;命中即拒绝保存。
+        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            ..Default::default()
+        };
+        if nexus_contracts::sensitive::scan(&String::from_utf8_lossy(&bytes), &scan_policy)
+            .is_blocked()
+        {
+            return Err(QuestError::CheckpointSaveFailed(format!(
+                "checkpoint {checkpoint_id_str} 含敏感硬载荷(私钥/凭证/令牌),拒绝落盘"
+            )));
+        }
+
         fs::write(&file_path, bytes).map_err(|e| {
             QuestError::CheckpointSaveFailed(format!("write {}: {e}", file_path.display()))
         })?;

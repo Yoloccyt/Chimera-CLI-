@@ -28,11 +28,30 @@ pub type GqepFuture<T> = Pin<Box<dyn Future<Output = Result<T, GqepError>> + Sen
 /// 聚集执行结果统计
 ///
 /// 记录一次 `gather` 调用的整体执行情况,用于事件发布与监控指标。
-/// 字段 `succeeded + failed` 可能小于 `total`,两种场景:
-/// - 批量原子性场景下(`gather_atomic`),失败后剩余操作不执行
-/// - 全局 gather 超时场景下,被放弃(未完成)的 future 不计入 `succeeded`/`failed`,
-///   它们通过 `OrphanCallDetected` 事件(Critical)被独立报告
+///
+/// # 四段守恒不变量(ADR-202 I5,红线级)
+/// ```text
+/// succeeded + failed + abandoned + not_started == total
+/// ```
+/// 四段各自的语义(不得相互混用,否则重试判定会错):
+/// - `succeeded` / `failed`:已入流、已被 poll、已有结果(含单操作超时)
+/// - `abandoned`:已入流且已被 poll,但因**全局 deadline** 放弃而未完成——
+///   它的 `entangle` 已执行,故 `OrphanGuard` 会触发并经
+///   `NexusEvent::OrphanCallDetected`(event-bus)上报(可观测)
+/// - `not_started`:**从未入流、因此从未被 poll**——`entangle` 的注册与
+///   `OrphanGuard` 创建都发生在 async 体首次执行
+///   (`qeep-protocol/src/protocol.rs:283-284` 源码自述),故这一类**没有任何
+///   孤儿上报**,只能靠本字段显式记账。这是并发上界(分批入流)引入的新段。
+///
+/// WHY 必须拆成两段而不是合并为一个「未完成」计数:副作用型/计费型调用方
+/// 需要区分「根本没执行(可安全重试)」与「执行了但被放弃(重试可能重复副作用)」,
+/// 即 `not_started` 兼有**重试幂等判据**语义(ADR-202 Annex C-6 契约变更登记)。
+///
+/// WHY `#[non_exhaustive]`:本结构字段集刚发生结构性扩展(加两个计数),
+/// 标注后外部无法用字面量整体构造,未来再加字段不属破坏性变更。
+/// 仓内全部字面量构造点均在本 crate 内(gatherer.rs / batch.rs),故零影响。
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct GatherResult {
     /// 批次中总操作数(传入的 futures 数量)
     pub total: u32,
@@ -40,6 +59,16 @@ pub struct GatherResult {
     pub succeeded: u32,
     /// 失败操作数(含单操作超时、执行错误;不含全局超时放弃的 future)
     pub failed: u32,
+    /// 已入流被 poll、但因全局 deadline 放弃而未完成的操作数
+    ///
+    /// 这一类会触发 `OrphanGuard` 并另有 `OrphanCallDetected` 事件上报。
+    pub abandoned: u32,
+    /// 从未入流、因此从未被 poll 的操作数(并发上界下留在 backlog 的尾部)
+    ///
+    /// WHY 必须有这一字段:没有它,限流下的未执行操作就是**静默消失**,
+    /// 直接破坏 UNLEARNABLE #3「零孤儿调用保证(QEEP)不可绕过」。
+    /// 它无 `OrphanGuard` 故无孤儿事件,并另经 `GatherTimedOut` 事件字段上报。
+    pub not_started: u32,
     /// 聚集延迟(毫秒),从 gather 开始到所有 future 完成的总耗时
     pub latency_ms: f32,
     /// 失败操作的错误列表。
@@ -47,6 +76,8 @@ pub struct GatherResult {
     /// 常规场景长度 == `failed`(每个失败操作一条错误)。全局 gather 超时时,
     /// 额外追加一条 `GqepError::GlobalTimedOut` 汇总错误(此时长度 == failed + 1),
     /// 用于让调用者区分"整批被全局超时放弃"与"单个操作失败"。
+    /// 注意:`not_started` 的操作**不产生**逐条错误(它们没有错误,只是没跑),
+    /// 计数只落在本结构字段与 `GatherTimedOut` 事件上。
     pub errors: Vec<GqepError>,
 }
 
@@ -54,17 +85,24 @@ impl GatherResult {
     /// 创建全成功的聚集结果
     ///
     /// 便捷构造器,用于测试或已知全部成功的场景。
+    /// 全成功即 `abandoned == not_started == 0`,四段守恒自然成立。
     pub fn all_success(total: u32, latency_ms: f32) -> Self {
         Self {
             total,
             succeeded: total,
             failed: 0,
+            abandoned: 0,
+            not_started: 0,
             latency_ms,
             errors: Vec::new(),
         }
     }
 
     /// 判断是否全部成功(无失败操作)
+    ///
+    /// 注意语义边界：本方法只看 `failed`,不等价于「全部跑完」——
+    /// `abandoned`/`not_started` 非零时也没有逐条错误,但操作确实未完成。
+    /// 调用方若需区分「全部完成」与「有未完成但无错误」,应直接读后两个字段。
     pub fn is_all_success(&self) -> bool {
         self.failed == 0
     }
@@ -76,6 +114,8 @@ impl Default for GatherResult {
             total: 0,
             succeeded: 0,
             failed: 0,
+            abandoned: 0,
+            not_started: 0,
             latency_ms: 0.0,
             errors: Vec::new(),
         }

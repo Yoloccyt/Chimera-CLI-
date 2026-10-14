@@ -38,6 +38,16 @@ fn render_to_string(panel: &mut SysinfoPanel, state: &TuiState) -> String {
         .collect()
 }
 
+/// 取键值首个 {} 占位符之前的固定前缀(B6-M 断言范式:与键表同源的渲染行
+/// 特征,避免断言串与键值双源漂移)
+fn prefix_before_placeholder(key: &'static str) -> String {
+    chimera_tui::i18n::tr(key)
+        .split("{}")
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// 验证 Panel trait 7 方法签名对 SysinfoPanel 都可调用且不 panic。
 #[test]
 fn test_sysinfo_panel_id_and_title() {
@@ -64,6 +74,10 @@ fn test_sysinfo_panel_id_and_title() {
 /// 若未来 sysinfo 升级或平台优化使首次采集 < 1s,本测试仍会通过。
 #[test]
 fn test_host_info_displays_within_1s() {
+    // B6-M:正文行迁键;TestBackend 全帧逐 cell 收集下 zh 宽字符会被续格
+    // 空格碎裂,故 pin En 后经 t! 派生期望断言(guard 防 locale 竞争)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::En);
     let start = Instant::now();
     let mut panel = SysinfoPanel::new();
     let state = TuiState::new();
@@ -77,19 +91,22 @@ fn test_host_info_displays_within_1s() {
         elapsed
     );
 
-    // 2. 渲染内容应包含"OS"或"Host"行 — 主机信息标题
-    // WHY 任一即可:SysinfoPanel 的实现可能在标题上选 "OS:" 或 "Host:",
-    // 只要包含其一即表示主机信息已被渲染。规避对实现细节的过度耦合。
+    // 2. OS 行:键值经 panel 公开取值器按序回填(与 render 消费点完全同源)
+    let expected_os = chimera_tui::t!("panel.sysinfo.line_os")
+        .replacen("{}", &panel.host_name(), 1)
+        .replacen("{}", &panel.os_version(), 1)
+        .replacen("{}", &panel.cpu_arch(), 1);
     assert!(
-        content.contains("OS") || content.contains("Host"),
-        "host info should contain OS or Host label, got: {content}"
+        content.contains(&expected_os),
+        "host info should contain OS line, got: {content}"
     );
 
     // 3. 应包含 CPU 字段(主机的关键信息)
     assert!(
-        content.contains("CPU"),
+        content.contains(&prefix_before_placeholder("panel.sysinfo.line_cpu")),
         "host info should contain CPU label, got: {content}"
     );
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
 }
 
 /// 进程信息(Chimera PID/RSS)按 `refresh_interval_ms` 周期刷新。

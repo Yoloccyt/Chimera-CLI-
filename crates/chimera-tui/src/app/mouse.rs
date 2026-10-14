@@ -41,6 +41,11 @@ impl TuiApp {
                     // 三分层执行);IT-01(批次-B)后这是唯一入口——遗留
                     // InputMode::Command 双轨已删除,`:命令` 由 Slash 的
                     // Legacy 回退完整承接。
+                    // R5 F-02:palette 打开时点击底栏 = 用户意图离开面板,先关闭
+                    // palette(与 handle_palette_key 的 Esc 关闭语义一致);否则
+                    // palette 分支(event_loop)继续全量接管键盘,形成"Slash 输入
+                    // 栏可见、按键全进不可见 palette"的状态双轨。
+                    self.chat_session.palette = None;
                     self.state.input_mode = InputMode::Slash;
                     self.state.input_buffer.clear();
                 }
@@ -82,6 +87,9 @@ impl TuiApp {
         }
         let index = (column / tab_width) as usize;
         if let Some(&panel) = self.focus_manager.panels().get(index) {
+            // R5 F-02:palette 打开时点击 tab 切换面板,与底栏点击同语义一并
+            // 关闭,避免面板已切而键盘仍被 palette 全量接管的状态双轨。
+            self.chat_session.palette = None;
             self.switch_panel_to(panel);
         }
     }

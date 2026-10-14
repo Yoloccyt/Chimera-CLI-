@@ -20,7 +20,7 @@
 //!   与 Health 面板的"信息+可视化"双栏模式互补 — Timeline 面板纵向布局更适合
 //!   时间序列数据的浏览。
 //! - **虚拟滚动**:快照容量上限 100(max_snapshots),虽然不算海量,但沿用
-//!   `virtual_scroll_window` 保持与 EventStream 面板一致的渲染模式,
+//!   窗口化渲染保持与 EventStream 面板一致的渲染模式(F-22 起窗口不含 ±缓冲),
 //!   为未来扩展更大历史窗口预留性能余量。
 //! - **数据源**:`TuiState.timeline_snapshots` — 由 `DataPipeline` 按
 //!   `snapshot_interval_s` 周期生成,FIFO 丢弃最旧快照。
@@ -35,7 +35,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
-use crate::render::{self, virtual_scroll_window};
+use crate::render;
 use crate::types::{PanelId, TimelineSnapshot, TuiCommand, TuiState};
 
 /// Timeline 历史回放面板
@@ -129,8 +129,9 @@ impl TimelinePanel {
 
     /// 渲染快照列表的可见窗口(中部区域)
     ///
-    /// 使用 `virtual_scroll_window` 仅构造可见区域 + 上下缓冲的 Text,
-    /// 确保即使快照数量增大,渲染复杂度仍为 O(visible + 2×BUFFER)。
+    /// 窗口基直接取 scroll_offset(无 ±缓冲,窗口算术见 render.rs
+    /// scroll_offset_window 文档),
+    /// 确保即使快照数量增大,渲染复杂度仍为 O(visible)。
     fn render_window(
         state: &TuiState,
         selected: usize,
@@ -148,16 +149,11 @@ impl TimelinePanel {
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
-            let (start, end) = virtual_scroll_window(total, scroll_offset, visible_rows);
+            let (start, end) = render::scroll_offset_window(total, scroll_offset, visible_rows);
 
-            for idx in start..end {
-                if let Some(snap) = snapshots.get(idx) {
-                    let line = format_snapshot_line(snap, idx, idx == selected);
-                    lines.push(line);
-                }
-            }
-
-            // 虚拟滚动提示:总快照数 > 可见窗口时显示总数
+            // F-22 修复:总数提示行前置到快照行之前 —— 原追加在窗口尾部,叠加
+            // 缓冲行后 Text 总行数超出列表区,提示行恒不可见;前置后紧贴顶部,
+            // 任何滚动位置都可见。
             if total > visible_rows {
                 lines.push(Line::from(Span::styled(
                     crate::t!("panel.timeline.showing_snapshots")
@@ -165,6 +161,13 @@ impl TimelinePanel {
                         .replacen("{}", &total.to_string(), 1),
                     Style::default().fg(Color::DarkGray),
                 )));
+            }
+
+            for idx in start..end {
+                if let Some(snap) = snapshots.get(idx) {
+                    let line = format_snapshot_line(snap, idx, idx == selected);
+                    lines.push(line);
+                }
             }
         }
 
@@ -392,10 +395,7 @@ impl Panel for TimelinePanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("↑/↓", crate::t!("shortcut.navigate")),
-            ("←/→", crate::t!("shortcut.time_jump")),
-        ]
+        vec![("↑/↓", crate::t!("shortcut.navigate"))]
     }
 }
 

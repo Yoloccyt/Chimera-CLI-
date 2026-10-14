@@ -1,4 +1,4 @@
-# Concord W2 T2.4 — 斜杠命令主流同义词表抽查脚本(PowerShell 版)
+﻿# Concord W2 T2.4 — 斜杠命令主流同义词表抽查脚本(PowerShell 版)
 #
 # 断言:重构方案 §9.8 与主流五家(Codex/Claude Code/opencode/Qoder/Hermes)
 # 同名的 24 条命令均存在于 SlashCommandRegistry 且执行分层(tier)正确。

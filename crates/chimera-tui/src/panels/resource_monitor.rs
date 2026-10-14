@@ -122,7 +122,10 @@ impl ResourceMonitorPanel {
 
     /// 推送所有资源采样点(一次性从 `SystemMetrics` 提取)
     ///
-    /// 由 `DataPipeline` 在每个 tick 调用,或测试中直接调用以填充面板历史。
+    /// WHY 文档修正(F-39 喂数接线后):生产喂数走
+    /// `DataPipeline` → `DataSnapshot.net_*_history` → `TuiState` 快照链路,
+    /// 管道与面板经快照解耦(无实例引用),本方法不再由管道直接调用;
+    /// 保留供测试喂数与未来直接喂数场景。
     pub fn push_all_samples(&mut self, sys: &crate::types::SystemMetrics) {
         self.push_cpu_sample(sys.cpu.global_usage);
         self.push_mem_sample(sys.memory.usage_percent);
@@ -188,20 +191,24 @@ impl ResourceMonitorPanel {
             level.color()
         };
 
-        // 标题行(monitor.pause_sampling 暂停时追加 [PAUSED] 标记)
+        // 标题行(monitor.pause_sampling 暂停时追加 [已暂停] 标记,En: [PAUSED])
         let paused_tag = if state.monitor_paused {
-            " [PAUSED]"
+            crate::t!("panel.resources.paused_tag")
         } else {
             ""
         };
-        let title = format!(
-            " CPU: {}{} ",
-            crate::render::percent_from_value(
-                cpu.global_usage,
-                crate::render::PERCENT_PRECISION_DETAIL
-            ),
-            paused_tag
-        );
+        let title = crate::t!("panel.resources.cpu_title")
+            .replacen(
+                "{}",
+                &crate::render::percent_from_value(
+                    cpu.global_usage,
+                    crate::render::PERCENT_PRECISION_DETAIL,
+                ),
+                1,
+            )
+            .replacen("{}", paused_tag, 1);
+        // F-48:选中区块标题加 "> " 前缀;未选中补等宽空格保持标题列对齐
+        let title = format!("{}{title}", if self.selected == 0 { "> " } else { "  " });
         let title_span = Span::styled(
             &title,
             Style::default()
@@ -293,15 +300,19 @@ impl ResourceMonitorPanel {
     fn render_memory_section(&mut self, mem: &MemMetrics, area: Rect, buf: &mut Buffer) {
         let total_gb = mem.total_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
         let used_gb = mem.used_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
-        let title = format!(
-            " RAM: {:.1}/{:.1} GB ({}) ",
-            used_gb,
-            total_gb,
-            crate::render::percent_from_value(
-                mem.usage_percent,
-                crate::render::PERCENT_PRECISION_DETAIL
-            )
-        );
+        let title = crate::t!("panel.resources.ram_title")
+            .replacen("{}", &format!("{:.1}", used_gb), 1)
+            .replacen("{}", &format!("{:.1}", total_gb), 1)
+            .replacen(
+                "{}",
+                &crate::render::percent_from_value(
+                    mem.usage_percent,
+                    crate::render::PERCENT_PRECISION_DETAIL,
+                ),
+                1,
+            );
+        // F-48:选中指示(同 CPU 区块)
+        let title = format!("{}{title}", if self.selected == 1 { "> " } else { "  " });
         let style = Style::default()
             .fg(Self::mem_color(mem.usage_percent))
             .add_modifier(Modifier::BOLD);
@@ -362,7 +373,9 @@ impl ResourceMonitorPanel {
         if area.height > 2 {
             let swap_used_gb = mem.swap_used_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
             let swap_total_gb = mem.swap_total_bytes as f64 / 1024.0 / 1024.0 / 1024.0;
-            let swap_line = format!(" Swap: {:.1}/{:.1} GB", swap_used_gb, swap_total_gb);
+            let swap_line = crate::t!("panel.resources.swap_title")
+                .replacen("{}", &format!("{:.1}", swap_used_gb), 1)
+                .replacen("{}", &format!("{:.1}", swap_total_gb), 1);
             buf.set_line(area.x, area.y + 2, &Line::from(swap_line), area.width);
         }
     }
@@ -381,7 +394,11 @@ impl ResourceMonitorPanel {
     fn render_disk_section(&self, disk: &DiskMetrics, area: Rect, buf: &mut Buffer) {
         let read_mb = disk.read_bytes_per_sec as f64 / 1024.0 / 1024.0;
         let write_mb = disk.write_bytes_per_sec as f64 / 1024.0 / 1024.0;
-        let title = format!(" Disk: R {:.1}MB/s  W {:.1}MB/s ", read_mb, write_mb);
+        let title = crate::t!("panel.resources.disk_title")
+            .replacen("{}", &format!("{:.1}", read_mb), 1)
+            .replacen("{}", &format!("{:.1}", write_mb), 1);
+        // F-48:选中指示(同 CPU 区块)
+        let title = format!("{}{title}", if self.selected == 2 { "> " } else { "  " });
         buf.set_line(
             area.x,
             area.y,
@@ -394,39 +411,32 @@ impl ResourceMonitorPanel {
             area.width,
         );
 
-        if self.collapsed.contains(&2) || area.height <= 2 {
-            return;
-        }
-
-        // 磁盘读写速率 dual sparkline
-        let chart_area = Rect::new(
-            area.x,
-            area.y + 1,
-            area.width,
-            area.height.saturating_sub(1),
-        );
-        // 使用当前速率构造单元素历史
-        let read_data = vec![disk.read_bytes_per_sec / 1024]; // KB/s
-        let write_data = vec![disk.write_bytes_per_sec / 1024]; // KB/s
-        sparkline_dual_colored(
-            &read_data,
-            &write_data,
-            chart_area,
-            buf,
-            Color::Green,
-            Color::Red,
-            None,
-        );
+        // F-39(诚实路径):磁盘 sparkline 移除 —— sysinfo 0.32 无磁盘 IO 速率
+        // 采集源(SysMetricsCollector 置 DiskMetrics::default(),见
+        // data/pipeline.rs 模块注释),面板亦无磁盘 history 字段;原实现以瞬时
+        // 值构造单元素历史画孤柱,速率>0 渲染满格色块、=0 全空白,均不反映
+        // 时间趋势(D-6 禁伪造数据)。标题数值保留;补速率采样属备选方案,
+        // 由计划评审另行裁决。
     }
 
     // ============================================================
     // 网络子区域渲染
     // ============================================================
 
-    fn render_network_section(&self, net: &NetworkMetrics, area: Rect, buf: &mut Buffer) {
+    fn render_network_section(
+        &self,
+        state: &TuiState,
+        net: &NetworkMetrics,
+        area: Rect,
+        buf: &mut Buffer,
+    ) {
         let rx_mb = net.rx_bytes_per_sec as f64 / 1024.0 / 1024.0;
         let tx_mb = net.tx_bytes_per_sec as f64 / 1024.0 / 1024.0;
-        let title = format!(" Net: RX {:.1}MB/s  TX {:.1}MB/s ", rx_mb, tx_mb);
+        let title = crate::t!("panel.resources.net_title")
+            .replacen("{}", &format!("{:.1}", rx_mb), 1)
+            .replacen("{}", &format!("{:.1}", tx_mb), 1);
+        // F-48:选中指示(同 CPU 区块)
+        let title = format!("{}{title}", if self.selected == 3 { "> " } else { "  " });
         buf.set_line(
             area.x,
             area.y,
@@ -450,11 +460,36 @@ impl ResourceMonitorPanel {
             area.width,
             area.height.saturating_sub(1),
         );
-        let rx_data = vec![net.rx_bytes_per_sec / 1024];
-        let tx_data = vec![net.tx_bytes_per_sec / 1024];
+        // F-39:消费时间趋势历史而非单帧瞬时值(原实现单元素历史 max 归一化
+        // 自指,速率>0 渲染满格色块、=0 全空白)。两级数据源对齐 CPU 趋势
+        // 模式 fallback:面板自身 history(push_net_sample,单位 B/s)优先,
+        // 空时回退快照喂数的 state 历史(DataPipeline 重 tick 与 sysinfo 采集
+        // 同节奏推入,单位已是 KB/s,无需再除 1024)。
+        let points = state.monitor_window.points();
+        let rx_data: Vec<u64> =
+            if self.net_rx_history.is_empty() && !state.net_rx_history.is_empty() {
+                state.net_rx_history.clone()
+            } else {
+                self.net_rx_history
+                    .filtered_values()
+                    .iter()
+                    .map(|v| (v / 1024.0) as u64)
+                    .collect()
+            };
+        let tx_data: Vec<u64> =
+            if self.net_tx_history.is_empty() && !state.net_tx_history.is_empty() {
+                state.net_tx_history.clone()
+            } else {
+                self.net_tx_history
+                    .filtered_values()
+                    .iter()
+                    .map(|v| (v / 1024.0) as u64)
+                    .collect()
+            };
+        // monitor.time_window:仅取尾部 N 点(近况聚焦 / 全窗,与 CPU 同口径)
         sparkline_dual_colored(
-            &rx_data,
-            &tx_data,
+            window_tail(&rx_data, points),
+            window_tail(&tx_data, points),
             chart_area,
             buf,
             Color::Green,
@@ -540,11 +575,7 @@ impl Panel for ResourceMonitorPanel {
         self.render_cpu_section(state, &sys.cpu, chunks[0], buf);
         self.render_memory_section(&sys.memory, chunks[1], buf);
         self.render_disk_section(&sys.disk, chunks[2], buf);
-        self.render_network_section(&sys.network, chunks[3], buf);
-    }
-
-    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("R", crate::t!("shortcut.refresh"))]
+        self.render_network_section(state, &sys.network, chunks[3], buf);
     }
 }
 
@@ -552,6 +583,17 @@ impl Panel for ResourceMonitorPanel {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// 取键值首个 {} 占位符之前的固定前缀(trim 后即子区标题特征;
+    /// B6-M 断言范式:与键表同源,避免断言串与键值双源漂移)
+    fn title_prefix(key: &'static str) -> String {
+        crate::i18n::tr(key)
+            .split("{}")
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
 
     #[test]
     fn test_resource_monitor_panel_id() {
@@ -696,6 +738,11 @@ mod tests {
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
 
+        // B6-M:四子区标题迁键;TestBackend 全帧逐 cell 收集下 zh 宽字符会被
+        // 续格空格碎裂,故 pin En 后经 t! 前缀派生断言
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::En);
+
         let mut panel = ResourceMonitorPanel::new();
         let mut state = TuiState::new();
         state.sys_metrics = crate::types::SystemMetrics {
@@ -732,16 +779,33 @@ mod tests {
             .iter()
             .map(|c| c.symbol().chars().next().unwrap_or(' '))
             .collect();
-        assert!(content.contains("CPU"), "should contain CPU section");
-        assert!(content.contains("RAM"), "should contain RAM section");
-        assert!(content.contains("Disk"), "should contain Disk section");
-        assert!(content.contains("Net"), "should contain Network section");
+        assert!(
+            content.contains(&title_prefix("panel.resources.cpu_title")),
+            "should contain CPU section"
+        );
+        assert!(
+            content.contains(&title_prefix("panel.resources.ram_title")),
+            "should contain RAM section"
+        );
+        assert!(
+            content.contains(&title_prefix("panel.resources.disk_title")),
+            "should contain Disk section"
+        );
+        assert!(
+            content.contains(&title_prefix("panel.resources.net_title")),
+            "should contain Network section"
+        );
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
     }
 
     #[test]
     fn test_collapsed_section_compact() {
         use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+
+        // B6-M:标题迁键,pin En + 经 t! 前缀派生断言(同 test_render_produces_content)
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::En);
 
         let mut panel = ResourceMonitorPanel::new();
         // 折叠 CPU 和磁盘
@@ -776,15 +840,22 @@ mod tests {
             .collect();
         // CPU 和 Disk 标题仍应显示(折叠后仅标题行)
         assert!(
-            content.contains("CPU"),
+            content.contains(&title_prefix("panel.resources.cpu_title")),
             "CPU title should still show when collapsed"
         );
         assert!(
-            content.contains("Disk"),
+            content.contains(&title_prefix("panel.resources.disk_title")),
             "Disk title should still show when collapsed"
         );
-        assert!(content.contains("RAM"), "RAM should be expanded");
-        assert!(content.contains("Net"), "Net should be expanded");
+        assert!(
+            content.contains(&title_prefix("panel.resources.ram_title")),
+            "RAM should be expanded"
+        );
+        assert!(
+            content.contains(&title_prefix("panel.resources.net_title")),
+            "Net should be expanded"
+        );
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
     }
 
     #[test]

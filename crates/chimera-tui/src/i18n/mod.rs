@@ -169,6 +169,8 @@ thread_local! {
 /// 测试作用域内持锁;drop 时复位线程持有标记并释放锁。锁中毒时降级取用内部值
 /// (测试已 panic 失败,不因中毒再连锁 panic 掩盖真实失败)。
 ///
+/// 非重入:同线程嵌套调用立即 panic(原表现为 std Mutex 自死锁)。
+///
 /// WHY pub + 非 cfg(test)(2026-08-17):集成测试(tests/)与单元测试共享同一
 /// 全局 locale,且 set_locale 的锁在函数返回即释放,En-pin 窗口(set→渲染→
 /// 恢复)不防其他测试插入写;guard 全程持锁是窗口安全的唯一途径。集成测试
@@ -193,14 +195,24 @@ impl Drop for LocaleTestGuard {
 
 #[doc(hidden)]
 pub fn locale_test_guard() -> LocaleTestGuard {
-    LOCALE_LOCK_HELD.with(|h| h.set(true));
-    let previous = current_locale();
-    LocaleTestGuard {
-        _guard: LOCALE_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        previous,
+    // WHY panic 而非等锁:guard 非重入,嵌套调用会在下方 lock() 上自死锁
+    // (std Mutex 不可重入,批次四修复轮实测挂起 30 分钟);HELD 已置位说明
+    // 同线程已有 guard 在持锁,立即报错优于静默挂起。panic 点在置位与抢锁之前,
+    // 外层 guard 的标记与锁状态不受影响。
+    if LOCALE_LOCK_HELD.with(|h| h.get()) {
+        panic!("locale_test_guard 不可重入,请检查嵌套调用点");
     }
+    LOCALE_LOCK_HELD.with(|h| h.set(true));
+    // WHY previous 必须持锁后采样(2026-10-02 修复):若在等锁期间采样,
+    // 捕获到的是前一持锁测试 En 窗口内的瞬时值,本 guard drop 时会把全局
+    // locale "恢复"成 En 残留,污染同二进制后续测试(decay_panel_test
+    // 多 En-pin 测试并行实测复现)。持锁后采样保证 previous 是上一写者
+    // 收尾后的稳态值,drop 恢复语义才成立。
+    let _guard = LOCALE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = current_locale();
+    LocaleTestGuard { _guard, previous }
 }
 
 #[cfg(test)]
@@ -237,6 +249,19 @@ mod tests {
         reset();
         // 未定义的 key 返回自身,不 panic
         assert_eq!(tr("nonexistent.key.xyz"), "nonexistent.key.xyz");
+    }
+
+    #[test]
+    fn reentrant_locale_test_guard_panics_instead_of_deadlock() {
+        let _outer = locale_test_guard();
+        // catch_unwind 而非 #[should_panic]:须验证 panic 后外层 guard 仍能正常
+        // drop(HELD 复位 + 释放锁),不污染同二进制后续测试;panic 点在置位与
+        // 抢锁之前,内层不持有任何锁状态。
+        let result = std::panic::catch_unwind(locale_test_guard);
+        assert!(
+            result.is_err(),
+            "嵌套调用 locale_test_guard 应立即 panic,而非静默自死锁"
+        );
     }
 
     #[test]

@@ -56,7 +56,7 @@ use clap::{Parser, Subcommand};
     about = "NEXUS-OMEGA AI Coding Agent — 全维稀疏架构的下一代编码代理",
     long_about = "NEXUS-OMEGA AI Coding Agent — 全维稀疏架构的下一代编码代理\n\
 \n\
-基于 OMEGA 九定律(Ω₁-Sparse / Ω₂-Compress / Ω₃-Evolve / Ω₄-Event / Ω₅-Credit / Ω₆-Reuse / Ω₇-Locate / Ω₈-Assess / Ω₉-Preserve)构建,\n\
+基于 OMEGA 十一定律(Ω₁-Sparse / Ω₂-Compress / Ω₃-Evolve / Ω₄-Event / Ω₅-Credit / Ω₆-Reuse / Ω₇-Locate / Ω₈-Assess / Ω₉-Preserve / Ω₁₀-Card / Ω₁₁-Synthesize)构建,\n\
 提供 Quest 长期任务管理、多模型议会审议、MCP 量子网格、红队安全审计等能力。\n\
 默认启动 TUI 交互界面,也可通过子命令进行脚本化操作。",
     // Task 5 of spec: 禁用 clap 自动生成的 `help` 子命令,避免与我们的 `Help` 变体冲突
@@ -375,7 +375,7 @@ chimera --yes agent cancel <agent-id>          # 取消 Agent(跳过确认)"
     },
     /// 系统健康检查
     ///
-    /// 执行 9 维度健康检查:
+    /// 执行 11 维度健康检查:
     /// 1. 配置文件路径与有效性
     /// 2. Cargo.lock 依赖完整性
     /// 3. SQLite 数据库可读写
@@ -385,10 +385,12 @@ chimera --yes agent cancel <agent-id>          # 取消 Agent(跳过确认)"
     /// 7. 认证密钥环境变量(WI-02)
     /// 8. SecCore 沙箱可用性(WI-02)
     /// 9. SCC 推测上下文缓存(M13 重路由)
+    /// 10. L3 存储三后端(WI-G12)
+    /// 11. 模型资产面 NMC 多模态(W5-1 R-2 / ADR-196 V6)
     ///
     /// `--fix` 自动修复可修复项(如缺失配置文件)。
     #[command(
-        long_about = "执行 9 维度健康检查:\n\
+        long_about = "执行 11 维度健康检查:\n\
 1. 配置文件路径与有效性\n\
 2. Cargo.lock 依赖完整性\n\
 3. SQLite 数据库可读写\n\
@@ -398,10 +400,12 @@ chimera --yes agent cancel <agent-id>          # 取消 Agent(跳过确认)"
 7. 认证密钥环境变量(WI-02)\n\
 8. SecCore 沙箱可用性(WI-02)\n\
 9. SCC 推测上下文缓存(M13 重路由)\n\
+10. L3 存储三后端(WI-G12)\n\
+11. 模型资产面 NMC 多模态(W5-1 R-2)\n\
 \n\
 `--fix` 自动修复可修复项（如缺失配置文件）。",
         after_long_help = "EXAMPLES:\n  \
-chimera doctor                                 # 执行 9 维度健康检查\n  \
+chimera doctor                                 # 执行 11 维度健康检查\n  \
 chimera --json doctor                          # JSON 输出健康报告\n  \
 chimera doctor --fix                           # 自动修复可修复项"
     )]
@@ -491,6 +495,19 @@ chimera acp                                    # 启动 ACP 桥(等待 stdin 帧
 printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/new\",\"params\":{}}' | chimera acp"
     )]
     Acp,
+    /// 统一价格向量可见性（价格向量一期）— 只读展示各模型 token 单价与最便宜模型
+    ///
+    /// 把 `model_router.providers` 的 USD/1k 单价归一为 L0 `PriceVector`（micro USD/1k）
+    /// 并展示；纯只读、无副作用，空配置优雅降级“成本不可见”。成本感知路由属二期（Wave 4）。
+    #[command(
+        long_about = "统一价格向量可见性（价格向量一期）:\n\
+将 model_router.providers 各模型单价(USD/1k)归一为 micro USD/1k 的统一向量,\
+展示逐模型 in/out 单价、最便宜模型与样例成本估算。只读、无副作用。",
+        after_long_help = "EXAMPLES:\n  \
+chimera cost                                   # 人类可读价格向量\n  \
+chimera --json cost                            # JSON envelope(供脚本消费)"
+    )]
+    Cost,
 }
 
 /// Quest 子命令动作

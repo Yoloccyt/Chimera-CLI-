@@ -94,6 +94,16 @@ hnsw_tiered = 2_000_000
 sigmoid_scalar = 500
 sigmoid_map = 200000
 percentile_sorted = 1000
+# 静默窗口重锁（2026-10-04,CPU 前置均值 6.8%）:faae_parallel_bench 由 dev-only 升格
+# registered。阈值依据 = 静默 release 单跑 median（docs/reports/
+# cpu-plane-closeout-2026-10-04.md §4）:faae_scoring max 组 serial_24k 19.915ms
+# → ×2.5 余量 50ms;faae_hot_scoring max 组 serial_24k 12.201ms → ×2.5 余量 30ms
+# （ms 级 ×2-2.5 惯例，同 C6 校准批）。
+# 并发组 faae_concurrent_route（w1_k2..w8_k2，w8 静默 median 54.601ms）跨核数敏感:
+# 随文件注册进 CI 运行（run_bench 文件级）,绝对阈值待 CI 首跑数据后按校准批次
+# 定档（不假锁,ADR-190 反幽灵门）。
+faae_scoring = 50000000
+faae_hot_scoring = 30000000
 
 [path_keywords]
 exit_code_matrix = ["exit_code"]
@@ -136,6 +146,9 @@ xts_top_k = ["xts_top_k"]
 sigmoid_scalar = ["sigmoid scalar"]
 sigmoid_map = ["sigmoid map"]
 percentile_sorted = ["percentile_sorted"]
+# 与 [thresholds_ns] 同批（I1 成对;与既有全部键双向互不为子串,I2 已核）
+faae_scoring = ["faae_scoring/serial_24k", "faae_scoring/parallel_24k"]
+faae_hot_scoring = ["faae_hot_scoring/serial_24k", "faae_hot_scoring/parallel_24k"]
 # C6 新增（关键词与既有 36 键交叉核验无子串冲突，满足 I2）
 immune_probe = ["immune_probe"]
 bus_bench = ["single_publish_latency", "concurrent_subscribe_throughput", "publish_batch_vs_serial"]
@@ -320,8 +333,12 @@ bench = "cache_hit"
 
 [[run_bench]]
 alias = "tiering"
-crate = "lsct-tiering"
-bench = "tiering_benchmark"
+crate = "cmt-tiering"
+# WI-G14④ 裁决(2026-10-07): bench 名 lsct_tiering_benchmark = 现役 cmt_tiering::lsct
+# 模块基准(ADR-193 批次二: crate lsct-tiering 退役、lsct 模块保留于 cmt-tiering)
+# ——名指模块非退役 crate,维持原名;与 retired_crates.txt 的 lsct-tiering 行互不冲突
+# (G-55 四类谓词不匹配 --bench 目标名)。
+bench = "lsct_tiering_benchmark"
 
 [[run_bench]]
 alias = "gather"
@@ -414,4 +431,11 @@ bench = "formal_gate_eval"
 alias = "hnsw_tiered"
 crate = "mlc-engine"
 bench = "hnsw_tiered"
+
+# 静默窗口升格（2026-10-04）:faae_parallel_bench 由 dev-only → registered
+# （文件级执行含三组;hot/scoring 有绝对阈值守门,concurrent 组阈值待首跑校准）。
+[[run_bench]]
+alias = "faae_parallel"
+crate = "faae-router"
+bench = "faae_parallel_bench"
 

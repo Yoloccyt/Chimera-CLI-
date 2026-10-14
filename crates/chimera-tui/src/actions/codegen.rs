@@ -189,6 +189,9 @@ mod tests {
 
     #[test]
     fn palette_entries_resolve_titles_and_filter() {
+        // set_locale 的写锁返回即释放,不覆盖下方 tr() 读窗口;guard 全程持锁才能
+        // 阻断并行测试 En-pin 对本读窗的污染(i18n::tr 读 LOCALE 不加锁)
+        let _locale_guard = crate::i18n::locale_test_guard();
         crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let reg = ActionRegistry::with_builtin_domains();
         // 空 query 返回全部

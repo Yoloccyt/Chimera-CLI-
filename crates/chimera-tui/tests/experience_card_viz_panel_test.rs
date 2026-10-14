@@ -71,12 +71,16 @@ fn panel_id_and_honest_display_without_provider() {
     let panel = ExperienceCardVizPanel::new();
     assert_eq!(panel.id(), PanelId::ExperienceCardViz);
     // 未接线诚实展示（虚假数据治理先例）
+    // B6-M:文案迁键,断言经 t! 期望串与渲染同源(持 guard 防 locale 竞争)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let content = panel.content().to_string();
-    assert!(content.contains("Awaiting stats provider..."));
+    assert!(content.contains(chimera_tui::t!("panel.exp_card.awaiting_provider")));
 }
 
 #[test]
 fn panel_renders_provider_stats() {
+    // B6-M:统计行迁键,期望串经 t! + 同序 replacen 与渲染完全同源
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let panel = ExperienceCardVizPanel::with_provider(Arc::new(MockProvider {
         stats: ExperienceCardVizStats {
             total_cards: 100,
@@ -92,11 +96,15 @@ fn panel_renders_provider_stats() {
         },
     }));
     let content = panel.content().to_string();
-    assert!(content.contains("Total: 100"));
-    assert!(content.contains("Evaluated: 80"));
-    assert!(content.contains("Unique errors: 12"));
-    assert!(content.contains("Best score: 0.95"));
-    assert!(content.contains("Average score: 0.71"));
+    let expected_stats = chimera_tui::t!("panel.exp_card.stats_summary")
+        .replacen("{}", "100", 1)
+        .replacen("{}", "80", 1)
+        .replacen("{}", "12", 1);
+    assert!(content.contains(&expected_stats));
+    let expected_scores = chimera_tui::t!("panel.exp_card.scores_summary")
+        .replacen("{}", "0.95", 1)
+        .replacen("{}", "0.71", 1);
+    assert!(content.contains(&expected_scores));
     assert!(content.contains("Improve"));
 }
 

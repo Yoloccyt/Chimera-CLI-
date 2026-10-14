@@ -2,8 +2,8 @@
 //! LAYER:    L1
 //! ROLE:     事件总线 — 基于 tokio::broadcast + MessagePack 的跨层通信通道
 //! BACKEND:  fs
-//! PRODUCERS: 101 ActivationCacheStats,ActivationThresholdAdjusted,AffinityCapabilityNegotiated,AffinityQuotaExhausted,AffinityUnknownField…
-//! CONSUMERS: 34 chimera-cli,chimera-mas,chimera-tui,chtc-bridge,cmt-tiering…
+//! PRODUCERS: 104 ActivationCacheStats,ActivationThresholdAdjusted,AffinityCapabilityNegotiated,AffinityQuotaExhausted,AffinityUnknownField…
+//! CONSUMERS: 33 chimera-cli,chimera-mas,chimera-tui,chtc-bridge,cmt-tiering…
 //! MATURITY: NOT-IMPL-CN
 //! CRATE-CONTRACT END
 //! 事件总线 — 基于 tokio::broadcast + MessagePack 的跨层通信通道
@@ -13,11 +13,57 @@
 //!
 //! # 核心职责
 //! - 提供类型安全的发布订阅(typed broadcast bus)
-//! - 定义 145 个 NexusEvent 跨层事件变体(2026-09-12 实测枚举,
-//!   v2.27.1 后新增 TuiChatHistoryReplaced),
+//! - 定义 152 个 NexusEvent 跨层事件变体(2026-09-12 实测枚举时点为 145,
+//!   2026-10-07 现测 152; v2.27.1 后新增 TuiChatHistoryReplaced),
 //!   修正 4 处依赖方向违规(Part A 分析)
 //! - 背压处理与慢消费者隔离,避免孤儿调用(架构红线)
 //! - MessagePack 序列化(ADR-004),支持跨进程投递
+//!
+//! # 装配态口径（2026-10-09 / v3.5 W6-3 全栈取证；只陈述现状，不改上方机器字段）
+//!
+//! 上方 `PRODUCERS/CONSUMERS` 由 `scripts/crate_contract.py` 从清单与代码派生，
+//! **它们描述的是“本 crate 定义了哪些事件与类型”，不是“这些子系统已在生产运行”**。
+//! 下列子系统在仓内**无任何生产装配点**（反查方式：排除本 crate 自身 `src`、
+//! `tests`、`benches` 后全库检索构造点），不得被当作已生效能力引用：
+//!
+//! | 子系统 | 规模 | 当前唯一引用面 |
+//! |---|---|---|
+//! | [`token_ledger`] | 约 0.6k 行 | 仅 chimera-tui 的跨目录漂移测 |
+//! | [`segment_per`] | 约 0.4k 行 | 仅本 crate 测试 |
+//! | `membrane`（`MembraneFilter`） | 约 1k 行 | 仅本 crate bench |
+//! | `pattern_index`（`PatternIndex`） | 约 0.3k 行 | 仅本 crate bench |
+//! | `dynamic_registry` | 404 行 | **零引用**（crate 内外均 0 处 `crate::dynamic_registry`/`event_bus::dynamic_registry`） |
+//!
+//! # 三个“看似同族、实则已接线”的模块（不得一并归入上表）
+//!
+//! 上游方案（v3.5 Spec W6-3）曾把 `causal` / `shadow_diff` / `credit_flow` 与上述
+//! 五个同列为“零装配子系统”（并给“8 个、约 2.2k 行”的规模）——**现取否证该清单**：
+//! - [`credit_flow`]：`EventBus` 的流控本体——`credit_flow: Arc<CreditFlow>` 是总线字段
+//!   （:329），三处构造点（:567/:596/:629），发送路径上 `try_acquire(1)`/`release(1)` 实际
+//!   生效（:443/:464/:900），并由 `shard` worker 持有与批量归还（`shard.rs:248/254/429`）。
+//! - [`causal`] / [`shadow_diff`]：均被**已接线**的 [`attribution`] 引用（`attribution.rs:40` 取
+//!   `causal::{CausalRelation, VectorClock}`、`:42` 取 `shadow_diff::event_fingerprint`，且 `VectorClock`
+//!   在 `:57/:114/:315` 真实构造），而 `spawn_attribution_tap` 经组合根 `experience_loop.rs` 装配
+//!   ⇒ **这两个模块处在已生效的归因链内，不是死码**。
+//!   粒度订正（本轮自查）：“模块被用”不等于“模块里每个公开类型都被构造”——`CausalConsistencyChecker`
+//!   与 `ShadowDiffRecorder` 本身仍无任何生产构造点。判“零装配”必须按**类型粒度**，否则就会把
+//!   已用部分与未用部分同批抹掉（这正是本批在上游清单上抓到的错的镜像面）。
+//!
+//! 因此本 crate 的“撤主张”面是上表五个（合计约 2.7k 行），而非八个。数字校正已入
+//! v3.5 总账 §7.2 漂移表；拿“八个”做后续工作量估算会高估约 1.5k 行可删面。
+//!
+//! 已被 crate **外部**真实装配的只有 [`attribution`]（`spawn_attribution_tap`）与
+//! [`experience_card_bus`]（`ExperienceCardBus`），两者均经组合根
+//! `chimera-cli/src/experience_loop.rs` 装配；本 crate 其余公开模块要么在上表（零装配），
+//! 要么在那两条已接链路的内部（见上节）。
+//!
+//! WHY 不拆分为独立 crate：那会新增 workspace 成员，违 ADR-049“0 新增 crate”与
+//! v3.5 总账的 crate 总账冻结原则；本 crate 因此**保留代码但撤掉 L1 语义主张**。
+//!
+//! 同名概念易错点（引用前必读）：本 crate 的 `TokenLedger` ≠ L0 的
+//! `nexus_contracts::token_evidence::TokenLedgerEntry`（后者是 cmt-tiering 实际落盘的
+//! 证据行）；本 crate `segment_per::PerBuffer` 与 `omega_learner::per_buffer::PerBuffer`
+//! 是两套独立实现，同名不同物。
 //!
 //! # 快速示例
 //! ```no_run
@@ -41,8 +87,8 @@
 
 /// P4-T6: CausalGraph 归因台账（ADR-132,diff 5s 窗口因果链回溯）
 ///
-/// 状态(ADR-181):EXPERIMENTAL-UNWIRED —— 零生产消费方;接线路径=
-/// 遥测导出侧接入或降为内部结构,退役条件见 ADR-181 决策 2。
+/// 状态(ADR-200 D1/D2 终裁,2026-10-07):PRODUCTION-WIRED —— 经 AttributionTap
+/// 订阅侧接线(experience_loop 组合根启动);即 ADR-181 决策 2 的到点复核。
 pub mod attribution;
 pub mod backpressure;
 pub mod bus;
@@ -54,8 +100,8 @@ pub mod bus;
 ///
 /// 详见 [`causal::VectorClock`]。
 ///
-/// 状态(ADR-181):EXPERIMENTAL-UNWIRED —— 消费方仅 attribution(本 crate
-/// 内部基座),零外部/生产接线;对外 API 面不扩大。
+/// 状态(ADR-200 D2 终裁,2026-10-07):PRODUCTION-WIRED(经 attribution tap);
+/// 对外 API 面不扩大。
 pub mod causal;
 /// CBF 信用流原语(P1-T11,手册 §8.5 / T-06 / v4.0 WI-08)
 ///
@@ -135,9 +181,11 @@ pub mod shadow_diff;
 ///
 /// Lane 三车道判定(Critical/OrderSensitive/Unordered)+ 64 片无锁队列扇出
 /// + shard_worker 攒批汇入既有 broadcast。灰度开关:`EventBus::enable_sharding`。
-/// 状态(ADR-181 发现 1 订正):PRODUCTION-WIRED —— osa/faae/gqep/gsoe/
-/// efficiency-monitor 五处组合根运行时 opt-in `let _ = enable_sharding(...)`
-/// (无 tokio runtime 自动 Err 降级单流,幂等拒绝重复启用),非"未接线"。
+/// 状态(ADR-181 发现 1 订正;接线清单 2026-10-05 第三轮 T1.3 重测):PRODUCTION-WIRED
+/// —— cmt-tiering/efficiency-monitor/faae-router/gqep-executor/mlc-engine/nmc-encoder/
+/// osa-coordinator/scc-cache/omega-learner 九文件十处运行时 opt-in `try_enable_sharding(...)`
+/// (无 tokio runtime 自动 Err 降级单流,幂等拒绝重复启用),非"未接线";旧述
+/// 「五处含 gsoe」已失实(gsoe 实测零调用)。
 /// 详见 [`shard::ShardedEventBus`]。
 pub mod shard;
 pub mod subscriber;
@@ -166,7 +214,9 @@ pub use bus::{
 // P3-T10: 事件双轨注册表公开 API（WI-21/ADR-149）
 // P4-T4: 双跑采集公开 API
 pub use attribution::{
-    AttributionNode, AttributionResult, CausalAttributionLedger, ATTRIBUTION_WINDOW_MS,
+    is_attribution_trigger, spawn_attribution_tap, AttributionNode, AttributionResult,
+    AttributionTapHandle, CausalAttributionLedger, ATTRIBUTION_DUMP_ENV,
+    ATTRIBUTION_TRIGGER_VARIANTS, ATTRIBUTION_WINDOW_MS,
 };
 pub use dynamic_registry::{
     DynamicEventRegistry, RegisterOutcome, RegistryAuditEntry, NAMESPACE_QUOTA,

@@ -74,6 +74,7 @@ BENCH_WORKFLOW_PATH = os.path.join(ROOT, ".github", "workflows", "bench_check.ym
 # 只认 "us" -> 落入 else 分支按 ms 处理, 造成 1000 倍误判 (check_perf_redlines.sh
 # :178-182 的实测缺陷, 本表是其在 py 侧的归零点)。
 UNIT_TO_SEC = {
+    "ps": 1e-12,  # 皮秒: criterion 对 <1 ns 的值独立渲染为 ps (2026-10-02 实测 immune_probe readonly 组)
     "ns": 1e-9,
     "us": 1e-6,
     "\u00b5s": 1e-6,  # µ MICRO SIGN
@@ -383,6 +384,120 @@ def mode_invariants(redlines, thresholds_doc, freeze):
     except OSError as exc:
         if not _check(f"I8 event-bus sources readable ({exc})", False):
             fails += 1
+
+    # I8b (R3-6 扩展, 2026-09-29): 覆盖原 I8 单一 "N 个 Critical 事件" phrasing
+    # 盲区 —— 历史滞后注释会以 "17 个,"/"个 Critical 变体名"/"个 Critical 永不进分片"
+    # 等形态出现而不被 I8 捕获。规则: 任何同线同时出现 LANE_FORBIDDEN_SHARD 令牌与
+    # "(\d+) 个 Critical" 计数, 该计数必须等于 CRITICAL_TOTAL。令牌约束天然豁免
+    # 语义无关的 "4096 个 Critical 事件"(通道容量)与历史 "6 个 Critical 事件"(spec.md:186)。
+    try:
+        import glob as _glob
+        with open(os.path.join(ROOT, "crates", "event-bus", "src", "bus.rs"),
+                  encoding="utf-8", errors="ignore") as fh:
+            _bus_src = fh.read()
+        _tot_m = re.search(r"CRITICAL_TOTAL\s*:\s*usize\s*=\s*(\d+)", _bus_src)
+        _tot_val = _tot_m.group(1) if _tot_m else None
+        _cnt_re = re.compile(r"(\d+)\s*个\s*Critical")
+        _offenders, _scanned = [], 0
+        if _tot_val:
+            for _path in _glob.glob(
+                    os.path.join(ROOT, "crates", "event-bus", "**", "*.rs"),
+                    recursive=True):
+                try:
+                    with open(_path, encoding="utf-8", errors="ignore") as fh:
+                        for _lineno, _line in enumerate(fh, 1):
+                            if "LANE_FORBIDDEN_SHARD" in _line:
+                                _cm = _cnt_re.search(_line)
+                                if _cm:
+                                    _scanned += 1
+                                    if _cm.group(1) != _tot_val:
+                                        _offenders.append(
+                                            "%s:%d=%s" % (
+                                                os.path.relpath(_path, ROOT),
+                                                _lineno, _cm.group(1)))
+                except OSError:
+                    continue
+            if not _check(
+                    "I8b LANE_FORBIDDEN_SHARD Critical-count comments == CRITICAL_TOTAL "
+                    "(scanned=%d, total=%s, offenders=%s)" % (
+                        _scanned, _tot_val, _offenders or "none"),
+                    _scanned >= 1 and not _offenders):
+                fails += 1
+    except OSError as exc:
+        if not _check(f"I8b event-bus sources readable ({exc})", False):
+            fails += 1
+
+    # I8c (v3.5 W6-3, 2026-10-09): 关闭 I8/I8b 自陈的「mpsc 旁路 N 类」自由文本盲区。
+    # 两段断言（均仅读源文本，不依赖编译产物）：
+    #   (a) 常量 vs 臂数：CRITICAL_MPSC_VARIANTS 必须等于 `is_critical_mpsc_event` 体内
+    #       `NexusEvent::X { .. }` 模式数。此前该等式只由 Rust 侧
+    #       test_critical_double_list_d8_counts 锁，治理门本身看不见；
+    #   (b) 措辞：行内同时出现「旁路/mpsc/is_critical_mpsc_event」与**清单规模指标词**
+    #       （清单 / CRITICAL_MPSC_VARIANTS / 变体数 / 判定的）且写了「N 类」时，
+    #       N 必须等于该常量——这是 bus.rs:42-52 注释自己登记的已知盲区
+    #       （旧值 13/14/17/18 全在监测面外）。
+    #       为何需两个条件：单看「mpsc + N 类」会误伤“本测试覆盖 4 类事件”这类
+    #       **测试范围声明**（实测 4 处假阳性）——它们说的不是旁路清单规模。
+    # 取向沿用 I8b：`scanned >= 1` 才算有效（空扫描=判据失能，不许当干净）；
+    # 而 (a) 两侧任缺其一即红，不允许“没找到函数体”路径静默绿。
+    try:
+        import glob as _glob
+        with open(os.path.join(ROOT, "crates", "event-bus", "src", "bus.rs"),
+                  encoding="utf-8", errors="ignore") as fh:
+            _bus = fh.read()
+        _mpsc_m = re.search(r"CRITICAL_MPSC_VARIANTS\s*:\s*usize\s*=\s*(\d+)", _bus)
+        _fn_at = _bus.find("fn is_critical_mpsc_event")
+        # 函数体：从签名到下一个顶格 `}`（不剥缩进，否则会被嵌套臂收尾带偏）
+        _body = ""
+        if _fn_at >= 0:
+            _end = _bus.find("\n}\n", _fn_at)
+            _body = _bus[_fn_at:_end if _end > 0 else len(_bus)]
+        _arms = re.findall(r"NexusEvent::([A-Z]\w*)\s*\{\s*\.\.\s*\}", _body)
+        _n_mpsc = int(_mpsc_m.group(1)) if _mpsc_m else None
+        ok_a = bool(_arms) and _n_mpsc is not None and len(_arms) == _n_mpsc
+        if not _check(
+                "I8c CRITICAL_MPSC_VARIANTS == is_critical_mpsc_event arm-count "
+                "(const=%s arms=%d)" % (_n_mpsc, len(_arms)), ok_a):
+            fails += 1
+        _off, _seen = [], 0
+        # 规模指标词：只有把“N 类”归给「清单/常量/函数判定」的措辞才是规模声明。
+        _size_tokens = ("清单", "CRITICAL_MPSC_VARIANTS", "变体数", "判定的")
+        for _path in _glob.glob(os.path.join(ROOT, "crates", "event-bus", "**", "*.rs"),
+                                recursive=True):
+            try:
+                with open(_path, encoding="utf-8", errors="ignore") as fh:
+                    for _lineno, _line in enumerate(fh, 1):
+                        if not ("旁路" in _line or "mpsc" in _line
+                                or "is_critical_mpsc_event" in _line):
+                            continue
+                        if not any(_t in _line for _t in _size_tokens):
+                            continue
+                        _cm = re.search(r"(\d+)\s*类", _line)
+                        if not _cm:
+                            continue
+                        _seen += 1
+                        if _n_mpsc is None or _cm.group(1) != str(_n_mpsc):
+                            _off.append("%s:%d=%s类" % (
+                                os.path.relpath(_path, ROOT), _lineno, _cm.group(1)))
+            except OSError:
+                continue
+        if not _check(
+                "I8c mpsc-bypass list-size 'N 类' prose == CRITICAL_MPSC_VARIANTS "
+                "(scanned=%d, const=%s, offenders=%s)" % (
+                    _seen, _n_mpsc, _off or "none"),
+                _seen >= 1 and not _off):
+            fails += 1
+    except OSError as exc:
+        if not _check(f"I8c event-bus sources readable ({exc})", False):
+            fails += 1
+
+    # I8 盲区收敛记录（第三轮 T1.3 登记 → v3.5 W6-3 闭合）：
+    #   I8/I8b 锁 “N 个 Critical 事件/变体” 措辞 == CRITICAL_TOTAL(=20 全量)；
+    #   mpsc 旁路子数那一组自由文本（=16）与「常量 == is_critical_mpsc_event 臂数」
+    #   曾长期在本门监测面之外（历史上 v2.3 补入 CertifyIssued/FailureRegistered 后
+    #   正文多处残留旧值 13/14/17/18）。自 2026-10-09 起由 **I8c** 接住：
+    #   两个子断言均为静态源文扫描，不依赖编译产物，也不改动任何判定阈值。
+
     verdict = f"FAIL ({fails} violation(s))" if fails else "PASS (all invariants hold)"
     print(f"\n  RESULT: {verdict}")
     return rc_from_findings(fails)
@@ -640,12 +755,18 @@ def parse_criterion_time(txt):
     float('ns')):
       * criterion 2.x: 'lo est hi unit'                     -> 4 tokens
       * criterion 3.x: 'lo u est u hi u' (unit per value)   -> 6 tokens
+    criterion 0.5.1 对 CI 下界/点估计/上界各自独立选单位 (report.rs 逐值调
+    format_value: <1e3->ns / <1e6->us), 故三单位可不相等。旧分支要求
+    vals[1]==vals[3]==vals[5] 在亚微秒项 CI 跨档时 (下界落 ns、点估计落 us,
+    2026-10-02 实测 immune_probe) 会返回 None -> mode_slo SKIP -> rc=2, 把
+    仪器抖动误报成门失败。改为"每个单位槽都是已知单位"既接受混合单位行,
+    又仍拒绝垃圾行 (selftest-20e), 门不失牙。取点估计 vals[2] 配其自身单位 vals[3]。
     Returns (float, str), or None when the line matches neither shape.
     """
     vals = txt.split()
     if len(vals) == 4:
         est, unit = vals[1], vals[3]
-    elif len(vals) == 6 and vals[1] == vals[3] == vals[5]:
+    elif len(vals) == 6 and all(v in UNIT_TO_SEC for v in (vals[1], vals[3], vals[5])):
         est, unit = vals[2], vals[3]
     else:
         return None
@@ -992,12 +1113,27 @@ def mode_selftest():
 
         # 第 7 枚地雷：criterion 3.x 逐值单位行曾使 mode_slo 崩溃（ValueError
         # float('ns')，2026-09-25 实测）；解析纯函数两方言各一枚断言 + 垃圾行兑底
-        expect("selftest-19a criterion 2.x line parses (mid, unit)",
+        # （编号取 20x 而非续用 19x：mode_compare 夹具已占 selftest-19a..19d，
+        #   本文件"标记须可机检且唯一"纪律——grep selftest-19a 曾同时命中两处。）
+        expect("selftest-20a criterion 2.x line parses (mid, unit)",
                parse_criterion_time("9.902 9.967 10.037 ns"), (9.967, "ns"))
-        expect("selftest-19b criterion 3.x per-value-unit line parses",
+        expect("selftest-20b criterion 3.x per-value-unit line parses",
                parse_criterion_time("68.439 ns 68.483 ns 68.661 ns"), (68.483, "ns"))
-        expect("selftest-19c garbage line yields None (SKIP not crash)",
+        expect("selftest-20c garbage line yields None (SKIP not crash)",
                parse_criterion_time("ns"), None)
+        # 20d：混合单位 6-token (criterion 0.5.1 逐值选单位, CI 跨档实测行) 须解析为
+        #   (点估计, 其单位); 旧"三单位全等"守卫会 None -> SKIP -> rc=2。
+        expect("selftest-20d mixed-unit per-value line parses (est, its unit)",
+               parse_criterion_time("960.53 ns 1.2215 \u00b5s 1.2868 \u00b5s"),
+               (1.2215, "\u00b5s"))
+        # 20e：6-token 但单位槽非已知单位 -> 仍 None (特异度对照, 保住门的牙)
+        expect("selftest-20e 6-token with unknown unit-token yields None",
+               parse_criterion_time("1.0 zz 2.0 zz 3.0 zz"), None)
+        # 20f：ps 单位须可解 (亚纳秒值渲染为 ps), 否则 window_select 等逼近 1 ns 会假红
+        expect("selftest-20f ps unit resolves",
+               ("ps" in UNIT_TO_SEC,
+                parse_criterion_time("500.0 ps 600.0 ps 700.0 ps")),
+               (True, (600.0, "ps")))
 
         # 断言 9：真实表必绿（防止自测只测红路径而把真表测挂）
         rc = _capture(lambda: mode_lint(real_rl),)

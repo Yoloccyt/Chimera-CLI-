@@ -98,6 +98,145 @@ jobs:
           python3 scripts/check_layer_map_parity.py --selftest
           python3 scripts/check_layer_map_parity.py
 
+      # WHY: L0 契约层纯度机器门(G-99, ADR-033 追加节 2026-10-09 自陈缺口的收口)——
+      # ADR-033 规定 nexus-contracts 为「纯类型 + 受控纯逻辑」(无 IO/async/网络/随机,
+      # 依赖仅 serde/chrono/uuid/thiserror)。此前「受控」二字无机器判据,仅靠 WI-G1
+      # 人工审计 + 单测;check_dependency_rules.ps1 Check B 只拦 crate 级向上依赖,
+      # 不拦「经合法依赖或 std 引入的 impure 符号」。本门双刃:①[dependencies] 白名单,
+      # ②注释/字符串先 blank 后再扫禁用符号(避免误判文档里的 tokio::spawn/URL 提及,
+      # 正是 ADR-033 追加节「先确认计数口径」教训的机器化)。零编译秒级 light 门,
+      # 沿 check_layer_map_parity/check_accel_exclusion 的 --selftest 双向夹具先例。
+      - name: L0 contracts purity gate (G-99)
+        run: |
+          python3 scripts/check_l0_purity.py --selftest
+          python3 scripts/check_l0_purity.py
+
+      # WHY: PowerShell 5.1 parity 守门(ADR-198 G-85)——本仓将 .ps1 定位为
+      # “Windows 权威执行体”，但 CI 与 gate_manifest 均以 pwsh（默认 UTF-8）调用，
+      # 而无 BOM 且含非 ASCII 的文件在 5.1 下会按 ANSI 解码。2026-10-02 实测：
+      # 工作树副本 24 个 .ps1 中 17 个无 BOM 且含非 ASCII，其中 11 个在 5.1 下根本解析失败
+      # （此前由根 e2e dependency_rules_inner_ring_test 调用；该 target 已按 ADR-213 R3 退役，
+      #  本步骤判据不变——.ps1 孪生仍由本地 pwsh 与 check_gate_predicates_parity 对拍面调用），
+      # 而全量 cargo test 当时仍报绿——即“Windows 侧从未跑成”被沉默吞噬。
+      # 本门为字节级检查（不依赖平台），故 Linux runner 同样有效。
+      - name: PowerShell UTF-8 BOM gate (Windows 5.1 parity)
+        run: |
+          python3 scripts/check_ps1_bom_gate.py --selftest
+          python3 scripts/check_ps1_bom_gate.py
+
+      # WHY: 加速器/推理栈排除门(ADR-195 V1/D5)——把"零 GPU 依赖"从一次性人工核对升为
+      # 机器判据。当前排除靠 feature 非激活而非结构隔离:nmc-encoder 直接依赖
+      # mel_spec="0.4",其可选 feature 面(wgpu/cuda/ort-tensor,default=[])可在零 ADR、
+      # 零评审可见决策下把 GPU/ONNX-Runtime 栈拖入 Cargo.lock(ort 仅 MSVC 破 windows-gnu
+      # 钉定,wgpu 路径触发 ADR-195 D5 E1 无先例的 forbid(unsafe)×bytemuck::Pod 未决)。
+      # 本门断言 Cargo.lock 中 wgpu/naga/ash/d3d12/candle/burn/ort 族 0 命中。先跑 --selftest
+      # 守护检测器自身不退化(沿 check_ps1_bom_gate 先例)。
+      - name: Accelerator / inference-stack exclusion gate (ADR-195 V1)
+        run: |
+          python3 scripts/check_accel_exclusion.py --selftest
+          python3 scripts/check_accel_exclusion.py
+
+      # WHY: 第三轮收口(2026-10-05, F-U1/决策 3/F-P3+F-A2)——把"并行卸载生产可达性"
+      # (组合根唯一口径,棘轮禁静默升降级)、"同步卸载 async 边界必须 worker 让出保护"
+      # (flavor 双分支强制模式)与"分片总线热点片事实 + 静默丢发唯一豁免"三件事
+      # 从散文升为机器判据。均为零编译秒级 light 门,沿 --selftest 双向夹具先例。
+      - name: Compute offload reachability gate (G-87)
+        run: |
+          python3 scripts/check_compute_offload_reachability.py --selftest
+          python3 scripts/check_compute_offload_reachability.py
+
+      - name: Sync offload guard gate (G-88)
+        run: |
+          python3 scripts/check_sync_offload_guard.py --selftest
+          python3 scripts/check_sync_offload_guard.py
+
+      - name: Bus shard hotspot gate (G-89)
+        run: |
+          python3 scripts/check_bus_shard_hotspot.py --selftest
+          python3 scripts/check_bus_shard_hotspot.py
+
+      # WHY: nexus-core 最小依赖机器门(WI-F1,2026-10-06 用户裁决解锁)——L1 枢纽 crate
+      # 的生产依赖面是最小性论证的事实基座,本门把"集合不得无评审增减"升为机器判据
+      # (NEW/STALE 双向棘轮),同时校验全部生产声明走 workspace 继承,关闭 ADR-196 D5
+      # 实录的空档(grep 式检查只认 workspace=true 行,`foo = "1.0"` 外部版本钉死声明
+      # 静默漏检)。dev-dependencies 不在冻结面(测试/bench 依赖不进生产图)。
+      # 先 --selftest 证明门有牙再跑真实裁决;零 cargo、秒级。
+      - name: Nexus-core dependency freeze gate (G-90)
+        run: |
+          python3 scripts/check_nexus_core_dep_freeze.py --selftest
+          python3 scripts/check_nexus_core_dep_freeze.py
+
+      # WHY: L0 契约">=2 消费者"门(WI-A1,2026-10-07)——契约类型诞生即须有两个以上
+      # 工作区消费方,否则"先占位后接线"的幽灵契约(recall_fusion/price_vector 先例)
+      # 会长期冒充能力。只减登记册 scripts/contract_consumer_baseline.txt 首跑为
+      # 全量豁免态;与 check_dead_contract_apis.py(ADR-197 A6)互认。
+      # 先 --selftest 证明门有牙(含 DEFS<50 真空守卫),再跑真实裁决;零 cargo、秒级。
+      - name: Contract consumers gate (G-91)
+        run: |
+          python3 scripts/check_contract_consumers.py --selftest
+          python3 scripts/check_contract_consumers.py
+
+      # WHY: ADR-213 残余债务波把四支「有牙但从没咬」的检查升为阻塞门。
+      # G-101(check_dead_contract_apis.py)按 ADR-197 D5「暂不登记」长期以 advisory 存在、
+      # ci.yml 此前只在注释里提过它(原 :171)而从未执行;G-103(check_gates_provenance.py)
+      # 方向 B 专抓「脚本自带 --selftest 却未登记 gate_manifest」,而执行这条纪律的门自身
+      # 此前也未登记(它首轮实跑就抓到了自己)。两支升格已同批删除
+      # gate_provenance_exemptions.txt 对应豁免行——该文件 :17-19 自订纪律:升为门未删行
+      # ⇒豁免成为与清单冲突的第二真值源。
+      # G-105/G-107 是本轮新建的 L0 只减棘轮:G-91 的 DEF_RE 只枚举
+      # pub struct|enum|trait|type,L0 的 pub fn 面(现读 255)与 crate 根 re-export 面
+      # (现读 53,W3 刻意保留的双路径)此前不受任何门统计——新增公开项不会让任何东西变红。
+      # 四支门均先 --selftest 证明有牙(含真空守卫与畸形台账退 2),再跑真实裁决;零 cargo、秒级。
+      - name: L0 contract-surface ratchets (G-105, G-107)
+        run: |
+          python3 scripts/check_l0_pubfn_ratchet.py --selftest
+          python3 scripts/check_l0_pubfn_ratchet.py
+          python3 scripts/check_l0_root_surface.py --selftest
+          python3 scripts/check_l0_root_surface.py
+
+      - name: Gate provenance and contract-member ledger (G-101, G-103)
+        run: |
+          python3 scripts/check_dead_contract_apis.py --selftest
+          python3 scripts/check_dead_contract_apis.py
+          python3 scripts/check_gates_provenance.py --selftest
+          python3 scripts/check_gates_provenance.py
+
+      # WHY: 源文件级可达性门(ADR-213 D-18)。ADR-160 的可达性棘轮数的是 crate,而 cargo
+      # 对「某个 .rs 没有任何 mod 指向它」一个警告都不给:该文件从不被解析,其 #[cfg(test)]
+      # 测试永不运行,其 pub 项不在 API 里,只会随时间腐坏。2026-10-13 实测发现 9 个此类
+      # 文件(chimera-tui 5 / parliament 3 / quest-engine 1),其中 parliament 的
+      # delegation·event_pipeline·scheduler 三文件在 `cargo test -p parliament --lib --list`
+      # 里贡献 0 个测试——即"已交付"叙事下不参与编译的死码。台账是可见债务而非许可:
+      # 每行须补 mod 或删文件并同批删行;新增孤儿必红。先 --selftest 证明门有牙再跑真实裁决。
+      - name: Source-file reachability ledger (G-109)
+        run: |
+          python3 scripts/check_src_module_reachability.py --selftest
+          python3 scripts/check_src_module_reachability.py
+
+      # WHY: ADR-213 R8.2 冻结了「位置式(MessagePack array)持久类型的字段序」、R9 禁止给这类
+      # 类型新增 default+skip 字段,但两条裁决此前**判据为零**(台账文件不存在、无门引用)。它们
+      # 守的是唯一不产生信号的失败形态,且是实测的:nexus-contracts/tests/wire_format_compat.rs
+      # 钉住的矩阵显示 array 下「同类型两字段交换声明顺序」解码 Ok 而值静默互换——无编译错、
+      # 无测试失败、无解码点异常(中间插入反而大声报 invalid length)。具名 map 形态免疫,故本门
+      # 刻意只判 to_vec 站点。现取实况:799 个 src 文件中 2 处生产位置式写点,一处在 G-109 孤儿
+      # 台账(wal.rs,不参与编译;一旦接线即落入本门面判 NEW),一处经取证为弹窗内存态 hex 预览
+      # (popup.rs,EXEMPT)⇒ Class B 现存 0 员,本门是新增准入而非存量清算。先 --selftest 证牙。
+      - name: Positional field-order freeze (G-113)
+        run: |
+          python3 scripts/check_positional_field_order_freeze.py --selftest
+          python3 scripts/check_positional_field_order_freeze.py
+
+      # WHY: L0 实测 103 pub enum + 124 pub struct 且 #[non_exhaustive] 命中 0 ⇒ 每个公共类型
+      # 都是封闭的,新增任一变体/字段即对 30+ 消费 crate 造成源码级破坏。但"全加 non_exhaustive"
+      # 也不对:本仓刻意依赖反向机制——event-bus/registry.rs 的 define_event_registry! 展开 5 个
+      # 无通配 match,靠"新变体必须被每个消费方处理"当安全属性。故政策按类型定档并锁成
+      # class=open ⇔ 带属性:开一个类型须同批翻行+加属性,只做一半即 CLASS_MISMATCH 红。
+      # floor 守卫排在 --emit 之前,致盲的解析器不得把致盲写成一份"干净"基线。
+      - name: L0 extensibility class ledger (G-115)
+        run: |
+          python3 scripts/check_l0_extensibility_class.py --selftest
+          python3 scripts/check_l0_extensibility_class.py
+
       # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
       # 2026-08-29 冗余审计实测:43 个 crate 中仅 28 个从组合根 chimera-cli 沿生产
       # [dependencies] 边可达,15 个孤岛合计 50,604 src LOC(15.2%),而同期
@@ -182,10 +321,15 @@ jobs:
           python3 scripts/check_config_sample_parity.py
           python3 scripts/check_contract_consumers_parity.py --selftest
           python3 scripts/check_contract_consumers_parity.py
+          python3 scripts/check_deleted_crate_registry.py --selftest
+          python3 scripts/check_deleted_crate_registry.py
           python3 scripts/check_doc_pointer_integrity.py --selftest
           python3 scripts/check_doc_pointer_integrity.py
           python3 scripts/check_event_ownership.py --selftest
           python3 scripts/check_event_ownership.py
+          python3 scripts/check_certify_whitelist.py
+          python3 scripts/check_write_sensitive_instrumentation.py --selftest
+          python3 scripts/check_write_sensitive_instrumentation.py
           python3 scripts/check_gated_wiring_substance.py --selftest
           python3 scripts/check_gated_wiring_substance.py
           python3 scripts/check_impl_maturity_claims.py --selftest
@@ -201,6 +345,32 @@ jobs:
           python3 scripts/emit_architecture_views.py --selftest
           python3 scripts/emit_architecture_views.py --check
           python3 scripts/emit_architecture_views.py --verify
+
+      # WHY: P0-③（调度层 v2.0 §7-bis）——把此前以 ci_exempt 豁免在册的判据门接进
+      # CI 阻塞轨，关闭「清单看着不是红、实际从未裁决」病理（§5.2 断点 2）。
+      # G-38/G-39 的 P3|Check A 分歧已随 ADR-187（α′）双侧退役消除（expect 翻 0）；
+      # G-93~G-98 为 v3.5 门底座（dev-dep 方向 / 形式化名册 / v3.4.0 提案三态）。
+      # 全部门 2026-10-12 本机实跑 rc=0、--selftest 全绿；零 cargo、秒级。
+      # 沿既有「先 --selftest 证明有牙，再跑真实裁决」范式。
+      - name: Gate predicate parity (G-38/G-39, Q15)
+        run: |
+          python3 scripts/check_gate_predicates_parity.py --selftest
+          python3 scripts/check_gate_predicates_parity.py
+
+      - name: Dev-dependency direction gate (G-93/G-94)
+        run: |
+          python3 scripts/check_dev_dep_direction.py --selftest
+          python3 scripts/check_dev_dep_direction.py
+
+      - name: Formal property ledger gate (G-95/G-96)
+        run: |
+          python3 scripts/check_formal_property_ledger.py --selftest
+          python3 scripts/check_formal_property_ledger.py
+
+      - name: v3.4.0 crate proposals tri-state gate (G-97/G-98)
+        run: |
+          python3 scripts/check_v340_crate_proposals.py --selftest
+          python3 scripts/check_v340_crate_proposals.py
 
       # WHY: 组合根装配门(架构重构方向 B-c 交付, gate_manifest G-28/G-29)——
       # chimera-cli/src/composition.rs 是唯一合法装配点;实测(2026-09-12)生产路径
@@ -311,33 +481,49 @@ jobs:
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # WHY 预编译安装(2026-09-28 工具链效率重构):原先 machete/typos/taplo 三个工具
+      # 各走 `cargo install --locked`,即在 2 核 runner 上从源码编译,单次 PR 合计
+      # 约 5-8 分钟纯工具编译开销;而 Swatinem/rust-cache 只缓存 registry 与 target/,
+      # 不缓存 $CARGO_HOME/bin 的安装产物 ⇒ 每一轮都重编一次。
+      # taiki-e/install-action 直接下载 GitHub Releases 预编译二进制并校验 SHA256,
+      # 秒级完成。C5 的"版本钉死"口径不变(仍逐一 @version);供应链姿态只升不降
+      # ——从"编译 crates.io 源码"变为"校验上游 release 校验和"。
+      # 本 action 已在本仓 cargo-nextest(ci.yml check/e2e/mca 三 job)、hyperfine
+      # (bench_check.yml)上在用,非新增依赖面。
+      - name: Install static-analysis CLIs (prebuilt, version-pinned)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-machete@0.9.2,typos@1.50.1,taplo@0.10.0
+
       # WHY: 无用依赖门禁(报告 §3.6 行动项 7)——cargo-machete 秒级扫描,
       # 返回码 0/1/2 适合 CI;误报用 workspace.metadata.cargo-machete 忽略表解决。
       - name: Unused dependencies (cargo-machete)
-        run: |
-          # C5(2026-09-04): --version 固定工具自身版本(--locked 仅锁依赖树),
-          # 防上游 breaking 造成 CI 间歇红;升级需显式改版本号并观察首轮结果。
-          cargo install cargo-machete --locked --version 0.9.2
-          cargo machete
+        run: cargo machete
 
       # E4(报告附录 E): 拼写检查门禁——typos 以"已知拼写错误修正表"设计保持低误报,
       # 可无监督跑 PR;词表配置见 _typos.toml(项目专有名词/标识符豁免)。
       - name: Spell check (typos)
-        run: |
-          # C5(2026-09-04): pin 1.50.1(注意: crate 名是 typos-cli,与 typos 库版本不同步)
-          cargo install typos-cli --locked --version 1.50.1
-          typos
+        run: typos
 
       # E4(报告附录 E, P1-3 基线): TOML 格式门禁——taplo 为 Even Better TOML 内核;
       # 范围限定配置文件(manifest 因依赖铁律注释布局豁免,见 .taplo.toml WHY);
       # 2026-08-17 已应用基线,本地 check 归零。
+      # 注:"profiles/deployment/*.toml" 已于 2026-09-28 摘除——该目录在仓内不存在
+      # (本机 taplo 实测匹配 0 文件、静默 rc=0),它是 mca-gateway spec_loader 期待的
+      # 部署档目录,属"待实现"而非"待格式化";留在列表里只会掩盖真实缺口。
+      #
+      # ⚠ 本地复跑须知(2026-09-28 实测,与 CLAUDE.md §5 的 cargo fmt 长路径问题同类):
+      # 本仓 core.autocrlf=true 且无根 .gitattributes ⇒ 工作树文件是 CRLF、git blob 是 LF,
+      # 而 taplo 对行尾敏感。故在 Windows 工作树上直接跑
+      #   taplo fmt --check .cargo/config.toml
+      # 会**恒红**——已证明与文件内容无关:把 HEAD 版本转成 CRLF 同样红,转回 LF 即绿。
+      # 要本地等效验证,先把待检文件归一化为 LF 再跑,否则极易误判为"自己改坏了格式"。
+      # CI(checkout 为 LF)不受此影响,这也是本门在 CI 侧长期为绿而本地为红的原因。
       - name: TOML format check (taplo)
         run: |
-          # C5(2026-09-04): pin 0.10.0
-          cargo install taplo-cli --locked --version 0.10.0
           taplo fmt --check -c .taplo.toml \
             "deny.toml" ".cargo/config.toml" ".config/nextest.toml" \
-            "fuzz/Cargo.toml" "examples/*.toml" "profiles/deployment/*.toml" \
+            "fuzz/Cargo.toml" "examples/*.toml" \
             "crates/mca-gateway/affinity.d/*.toml"
 
       - name: Install cargo-nextest
@@ -351,7 +537,16 @@ jobs:
       - name: Test (workspace, 快速回归)
         # WHY 命令裁剪(2026-08-05 实测,冷全量 ~30min):
         # - --exclude chimera-e2e-tests:根 package 33 个 E2E/压测 [[test]] 独立二进制的
+        #   口径注（2026-10-10 现取，防下一轮误判为陈旧数字）：33 = `tests/e2e/*` 31 + `tests/stress/*` 2；
+        #   根 Cargo.toml 的 [[test]] 声明共 **41**，分解 = 37 个带 path（31 e2e + 6 非 e2e，
+        #   含 2 个 stress 与 owasp/dependency-rules/composition/nexus-contracts 定向测）+ 4 个未写 path
+        #   （走 Cargo 默认 `tests/<name>.rs`）——“41”与“33”不是同一个口径，不得互校。
         #   编译+链接+运行移出快轨,由下方 e2e job 并行承担(门禁不丢失);
+        #   “不丢失”的两端证据（2026-10-10 逐条核对）：排除是**按 package 级**
+        #   （`--exclude chimera-e2e-tests` 排除根包全部 41 个 [[test]]），而 e2e job 跑
+        #   `cargo nextest run -p chimera-e2e-tests -E 'not binary(/stress/)'` ⇒ 同一包内除压测外
+        #   全跑；剩下的压测由 `stress.yml`（nightly 03:00 UTC，`-E 'binary(/stress/)'`）接住。
+        #   ⇒ 改任何一个过滤式都会破这个闭合，三条（快轨 exclude / e2e -E / stress.yml -E）必须同批看。
         #   注:必须显式传入(2026-08-12 修复——此前命令缺失该参数,注释与命令漂移,
         #   导致 check job 重复编译运行 E2E target,拖慢快轨);
         # - nextest:不运行 doc-tests(~335s,占 cargo test 运行段 55%),
@@ -492,11 +687,15 @@ jobs:
       # E2(报告附录 E): feature 矩阵机械闸门——cargo-hack each-feature 穷举
       # 每个 crate 的 feature 组合,封堵"门控代码腐化、转 on 集中爆雷"风险(R5)。
       # --no-dev-deps 减少编译量;--exclude chimera-e2e-tests 避免重复编译 E2E。
+      # WHY 预编译安装:同 check job 论证——cargo-hack 源码编译约 1-2 分钟/轮,
+      # 而预编译二进制秒级;C5 的版本钉死口径不变。
+      - name: Install cargo-hack (prebuilt, version-pinned)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack@0.6.45
+
       - name: Feature matrix check (cargo-hack)
-        run: |
-          # C5(2026-09-04): pin 0.6.45
-          cargo install cargo-hack --locked --version 0.6.45
-          cargo hack check --workspace --each-feature --no-dev-deps --exclude chimera-e2e-tests
+        run: cargo hack check --workspace --each-feature --no-dev-deps --exclude chimera-e2e-tests
 
       - name: Test (workspace, --features mca)
         # WHY nextest + 排除 stress(2026-08-19 修复):cargo test 串行跑全部 target

@@ -18,15 +18,15 @@
 //! - **重名**:同一变体在注册表登记两次 → 展开出重复 match 臂,
 //!   `unreachable_patterns` 在 `-D warnings` 下即编译失败;
 //! - **错位/定级错误**:由 tests/variant_count_test.rs 三层锁守护
-//!   (146 计数锁 + 序数表交叉锁 + 18/11/117 分布锁 + Critical 名单与
+//!  (152 计数锁 + 序数表交叉锁 + 20/11/121 分布锁 + Critical 名单与
 //!   bus.rs `LANE_FORBIDDEN_SHARD` 双向互锁),注册表任一属性笔误都会
 //!   使对应锁测试红灯;
 //! - **metadata()**:所有变体第一字段均为 `metadata: EventMetadata`,
 //!   注册表逐变体生成取元数据臂,与手写表逐字等价。
 //!
 //! # 双清单同步红线(刻意保留的人工清单)
-//! bus.rs `is_critical_mpsc_event`(14 个 mpsc 旁路变体)与
-//! `LANE_FORBIDDEN_SHARD`(18 个 Critical 变体名)**不**由本注册表生成,
+//! bus.rs `is_critical_mpsc_event`(16 个 mpsc 旁路变体)与
+//! `LANE_FORBIDDEN_SHARD`(20 个 Critical 变体名)**不**由本注册表生成,
 //! 维持独立手写清单 —— 这是设计特性而非疏漏:两张独立清单 + 守护测试
 //! 互锁(bus.rs `test_mpsc_required_events_hit_both_lists` 等)使
 //! "severity 定级"与"mpsc 旁路判定"的漂移可被双向捕获;若二者同源于
@@ -51,8 +51,8 @@ macro_rules! define_event_registry {
         impl NexusEvent {
             /// 判断事件是否为关键事件(Critical)
             ///
-            /// 由 `define_event_registry!` 从注册表展开,全部 146 个变体
-            /// 显式定级(Critical 18 / Info 11 / Normal 117),无通配符兜底:
+            /// 由 `define_event_registry!` 从注册表展开,全部 152 个变体
+            /// 显式定级（Critical 20 / Info 11 / Normal 121）,无通配符兜底:
             /// 新增变体不显式定级即编译错误(fail-closed,M1 属性)。
             /// Critical 语义与红线文档见模块文档;旁路通道判定见 bus.rs
             /// `is_critical_mpsc_event`(双清单同步红线)。
@@ -74,7 +74,7 @@ macro_rules! define_event_registry {
 
             /// 获取事件所属主题(10 类 EventTopic)
             ///
-            /// 由 `define_event_registry!` 从注册表展开,146 变体映射到
+            /// 由 `define_event_registry!` 从注册表展开,152 个变体映射到
             /// 10 类 topic,无通配符兜底,新增变体编译器强制登记。
             pub fn topic(&self) -> EventTopic {
                 match self {
@@ -123,7 +123,10 @@ define_event_registry! {
     QuestListUpdated => Normal, Quest;
     QuestCompleted => Normal, Quest;
     ThinkingModeSwitched => Normal, Quest;
-    // [Critical·broadcast] 检查点保存:背压保护级别,非 mpsc 旁路 13 清单成员
+    // [Critical·broadcast] 检查点保存:背压保护级别,不属 mpsc 旁路清单
+    // (旁路成员的唯一权威是 `bus::is_critical_mpsc_event`,规模由
+    // `CRITICAL_MPSC_VARIANTS` 持有;本行不复述数字,避免注释与常量漂移——
+    // 历史上此处曾长期挂着已变的旧计数「13」。)
     CheckpointSaved => Critical, Quest;
     CheckpointLoaded => Normal, Quest;
     // [Critical·broadcast] 共识达成:同上,历史 Critical 只走 broadcast
@@ -319,6 +322,8 @@ define_event_registry! {
     // PROBE P0:HCW 召回评测事件(观测面遥测,与 BenchmarkMetricsCollected 同族)
     HcwRecallReported => Normal, System;
     HcwRecallDegraded => Normal, System;
+    // ADR-197:L1 计算池饱和观测面事件（由装配层周期上报；非 Critical、不进分片禁区）
+    ComputePoolSaturated => Normal, System;
     OverWindowFallbackTriggered => Normal, System;
     // Milestone B-2:Ambient 资源恢复(与 BudgetExceeded 成对)
     ResourceRecovered => Normal, Quest;
@@ -330,7 +335,8 @@ define_event_registry! {
     // [Critical·mpsc] §16.4(Phase 10 Wave 4):停止裁决丢失导致 Quest 无界运行
     StopRulingIssued => Critical, Parliament;
     // §16.4(Phase 10 Wave 4):变体审议通过(L8 三因子裁决事件化;
-    // 定级 Normal —— 审议记录非"必须确保投递"类,不进 mpsc 13 清单)
+    // 定级 Normal —— 审议记录非"必须确保投递"类,故不属 mpsc 旁路清单;
+    // 清单规模只由 `CRITICAL_MPSC_VARIANTS` 持有,本行不复述数字)
     VariantApproved => Normal, Parliament;
     // §16.4(Phase 10 Wave 4):三因子父本选择结果(L5 → L6/L9)
     ParentSelected => Normal, Knowledge;
@@ -344,4 +350,13 @@ define_event_registry! {
     BusThroughputReported => Normal, System;
     // §16.5 L4 沙箱拦截率观测(Phase 10 Wave 6)
     SecurityInterceptionReported => Normal, System;
+    // v2.3 (b.1): 裁决权分离三事件(Claim/Certify/Declaim) + (b.4) FailureRegistry
+    // Claim/Declaim 为广播级(agent 可写);Certify 走 Critical 旁路(验证器语义独占);
+    // FailureRegistered 走 Critical 旁路(丢失=全 swarm 重复踩坑)。mpsc 旁路同步见 bus.rs。
+    ClaimIssued => Normal, Parliament;
+    ClaimRetracted => Normal, Parliament;
+    CertifyIssued => Critical, Parliament;
+    FailureRegistered => Critical, Security;
+    // v2.3 (b.2): 黑板条目 —— 广播级 Normal,不走 mpsc 旁路(Critical 清单不变)
+    BlackboardEntry => Normal, Memory;
 }

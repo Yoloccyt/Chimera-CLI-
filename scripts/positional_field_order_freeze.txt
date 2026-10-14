@@ -1,0 +1,42 @@
+# Positional (MessagePack array) persistence field-order ledger (G-111, ADR-213 R8.2/R9).
+# ONLY-DECREASE. Judged by scripts/check_positional_field_order_freeze.py.
+#
+# WHY THIS LEDGER EXISTS. ADR-213 R8.2 froze the declaration order of every type persisted
+# positionally, and R9 banned adding `default + skip` fields to such types. Both were
+# written as norm with NO machine judgement behind them. The failure they guard is the one
+# kind that leaves no trace, and it is measured rather than argued:
+# crates/nexus-contracts/tests/wire_format_compat.rs pins the matrix -- under array
+# encoding a middle-inserted field fails LOUD (`invalid length`), a tail-appended field
+# with #[serde(default)] still decodes, and two SAME-TYPED FIELDS SWAPPING DECLARATION
+# ORDER decode `Ok` with the values INTERCHANGED. No compile error, no test failure, no
+# signal at the decode site. Named (map) encoding is immune, which is why to_vec_named is
+# deliberately NOT judged here: freezing map field order would manufacture false reds
+# against a risk that measurement says does not exist.
+#
+# ROW FORMS (one per line; # starts a comment; keys are | separated):
+#   WRITE  | site=<crates/x/src/y.rs>::<enclosing_fn> | arg=<literal expr> | type=<T>
+#          | [in=<declaring file.rs>] | fields=<ordered csv> | [skips=<csv>]
+#          | evidence=<24+ chars>
+#          -> this site persists <T> positionally; `fields` is the frozen order.
+#   EXEMPT | site=<...>::<fn> | reason=<24+ chars>
+#          -> the site does not create a durable positional record.
+#
+# DISCIPLINE. The site key is <file>::<enclosing fn>, never a line number: W3 physically
+# moved 53 L0 modules and every line shifted, so a line-anchored ledger would have gone
+# wholesale red on a pure relocation. A NEW site without a row is red; a row whose site is
+# gone is STALE red and must have its row deleted in the same commit. Growing a frozen type
+# is legal ONLY as a tail append with #[serde(default)], and the row must be re-emitted in
+# that same commit -- the ledger stays the authoritative order, not a hint.
+#
+# CURRENT MEASURED STATE (2026-10-14, --emit over 799 src files): exactly 2 production
+# positional write points exist. One is crates/quest-engine/src/wal.rs::append_entry, which
+# is excluded because that file is an orphan in src_module_reachability_freeze.txt (G-109)
+# and participates in no build; the day it is wired up its site lands here with no row and
+# turns NEW. So ADR-213 R8.2's "Class B" set has ZERO live members today, and this gate is
+# admission control, not a cleanup -- it exists so that the first new positional type is a
+# reviewed decision instead of a silent data-corruption bug shipped behind a green CI.
+# WRITE-NONE: this ledger intentionally carries no WRITE row yet (see CURRENT MEASURED
+# STATE above). An empty sanctioned set is a measured fact, not a placeholder that may be
+# filled silently by whoever notices it first.
+
+EXEMPT | site=crates/chimera-tui/src/popup.rs::event_detail | reason=transient UI round-trip, nothing durable: the bytes encoded at popup.rs:249 are decoded back at :263 inside the same fn and only reach hex_string(&payload_raw) at :280 for an on-screen hex preview; payload_raw has no other consumer (popup.rs:92,272,280,281 plus one literal in crates/chimera-tui/tests/event_detail_test.rs:248) and popup.rs contains no fs/write/save path; the encoded value is a serde_json::Value, which has no declaration order to freeze at all

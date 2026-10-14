@@ -54,7 +54,7 @@ cargo test --workspace --release -- --ignored --test-threads=1   # 压测/性能
 cargo clippy --workspace --all-targets --jobs 2 -- -D warnings   # --jobs 2 规避 Windows OOM
 ```
 
-发布前的完整门禁清单（含 `cargo audit` 的 ignore 清单——条数以 `.github/workflows/audit.yml:65` 现取，不在本文件登记；fuzz 委托 Linux CI、Docker 三级降级验证）以 `.claude/CLAUDE.md` §2 与 §「发布前检查清单」为准；红线与 async 反模式清单见 `agents.md` §4.4 / §6.2。
+发布前的完整门禁清单（含 `cargo audit` 的 ignore 清单——条数以 `.github/workflows/audit.yml` 的 `Run security audit` 步骤现取，不在本文件登记；fuzz 委托 Linux CI、Docker 三级降级验证）以 `.claude/CLAUDE.md` §2 与 §「发布前检查清单」为准；红线与 async 反模式清单见 `agents.md` §4.4 / §6.2。
 
 ## 已知待决事项
 

@@ -10,7 +10,7 @@
 //!
 //! # 本任务边界（T8）
 //! 只建 trait 与测试实现,**不要求任何生产代码改用它**;
-//! T14(WI-34 并行化注入)时才接线本模块到 ComputeBridge 与各热点。
+//! T14(WI-34)已落地且未消费本模块——接线触发条件=首个需注入的生产热点(W4-2 诚实化登记)。
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -25,7 +25,7 @@ use thiserror::Error;
 /// 缝合点错误 — 最小抽象,占位后端与测试后端共用
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum SeamError {
-    /// 后端在骨架阶段未实现（如 `OsFs` 生产后端,T14 接线）
+    /// 后端未实现（如 `OsFs` 生产后端）——T14/WI-34 已落地且未消费本缝合点，接线触发条件=首个需 FS 注入的生产热点（W4-2 诚实化登记）
     #[error("seam backend not implemented: {0}")]
     Unsupported(&'static str),
 }
@@ -48,7 +48,7 @@ pub trait Rng: Send + Sync {
 /// 文件系统缝合点 — 生产 `OsFs`（骨架占位）,测试 `MemFs`
 ///
 /// 最小抽象:read / write / list 三个操作,足够覆盖存储类热点的可测试需求;
-/// 生产后端（真实磁盘 IO）在 T14 接线。
+/// 生产后端（真实磁盘 IO）未接线（T14/WI-34 已落地未消费,W4-2 诚实化登记）。
 pub trait Fs: Send + Sync {
     /// 读取文件全部字节
     fn read(&self, path: &Path) -> Result<Vec<u8>, SeamError>;
@@ -60,7 +60,7 @@ pub trait Fs: Send + Sync {
 
 /// 网络缝合点 — 生产后端骨架不实现（任务边界）,测试 `MockNet`
 ///
-/// 最小抽象:HTTP GET / POST;生产后端（reqwest 等）在 T14 接线,
+/// 最小抽象:HTTP GET / POST;生产后端（reqwest 等）未接线（T14 已落地未消费,W4-2 登记）,
 /// 且 **LLM 调用类任务禁止进 rayon 池**（红线,§7.5.3 纪律⑥）。
 pub trait Net: Send + Sync {
     /// HTTP GET — 返回响应体字节
@@ -111,8 +111,8 @@ impl Rng for ChaCha8Rng {
 
 /// 生产文件系统 — 骨架占位,返回 [`SeamError::Unsupported`]
 ///
-/// WHY 占位:本任务只建 trait 与测试实现,真实磁盘 IO 后端在 T14 接线;
-/// 占位语义显式化,防止误用未实现后端产生"看似成功"的假读写。
+/// WHY 占位:本任务只建 trait 与测试实现;T14(WI-34)已落地且未消费本缝合点,
+/// 占位语义显式化(fail-closed),防止误用未实现后端产生"看似成功"的假读写。
 pub struct OsFs;
 
 impl Fs for OsFs {

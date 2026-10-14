@@ -15,6 +15,17 @@ use nexus_contracts::app::{AppEvent, AppOp, ThreadStartParams, UserInput};
 
 fn bench_build_app_context(c: &mut Criterion) {
     let cfg = ChimeraConfig::default();
+    // v3.5 实测修正（2026-10-09）：本组此前**从未给出过读数**——`build()` 自己就会经
+    // `composition.rs::spawn_critical_subscriber` 调 `tokio::spawn`（C3 接线，M4-P2 起为
+    // build() 标准行为），而无 runtime 语境时 `tokio::spawn` 直接 panic
+    // （`there is no reactor running`）⇒ `cargo bench` 与 `cargo test --all-targets` 双双 rc=101。
+    // 下面的 rt.enter() 不改变被测代码路径，只补上 spawn 所需的运行期语境（与
+    // `bench_build_app_server` 同构先例）。
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("current-thread runtime");
+    let _guard = rt.enter();
     c.bench_function("composition_build_app_context", |b| {
         b.iter(|| {
             let ctx = build(black_box(&cfg)).expect("装配应成功");

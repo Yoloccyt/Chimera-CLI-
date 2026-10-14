@@ -7,10 +7,29 @@
 # 用法:bash scripts/check_slash_vocab.sh ; EXIT=1 时列出差异。
 
 set -euo pipefail
+
+# ★ 前置自检（F39b 口径，与 test_fnlen_smoke.sh / test_impl_maturity_smoke.sh 同构）
+# 本门是 bash 门，依赖 coreutils。若执行器 PATH 里没有 dirname/awk/grep（典型场景：
+# 用 Git 自带的 bash 但 PATH 未包含其 usr/bin），`$(dirname ...)` 会静默返回空串，
+# 于是 REPO_ROOT 退化成 `/`，下一行的 REGISTRY 变成 `//crates/...` 不存在，
+# 门就报 `[FAIL] registry file not found` 并退 1 —— 那是**把环境故障读成红线破了**
+# （假红，2026-10-09 本机实测到）。不可判定必须退 2，不得借 1 冒充判定。
+for prereq in dirname awk grep head; do
+  if ! command -v "$prereq" >/dev/null 2>&1; then
+    echo "[UNDECIDABLE] missing required tool '$prereq' - gate did not judge"
+    exit 2
+  fi
+done
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -z "$REPO_ROOT" || ! -d "$REPO_ROOT" ]]; then
+  echo "[UNDECIDABLE] REPO_ROOT resolved to '$REPO_ROOT' - gate did not judge"
+  exit 2
+fi
 REGISTRY="$REPO_ROOT/crates/chimera-tui/src/actions/slash_registry.rs"
 
 if [[ ! -f "$REGISTRY" ]]; then
+  # 到这里 REPO_ROOT 已自检通过，因此“单一事实源缺失”是**真红线**（不是环境噪声）。
   echo "[FAIL] registry file not found: $REGISTRY"
   exit 1
 fi

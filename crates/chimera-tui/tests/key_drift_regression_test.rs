@@ -181,6 +181,9 @@ fn metrics_dashboard_l_switches_layout_globally() {
 
 #[test]
 fn action_menu_opens_moves_and_executes_on_quest() {
+    // B5-G(F-65):菜单标题改走 t!(name_key()) 动态键,断言同源取期望串;
+    // 弹窗构造与断言是两次 t! 读取,持 guard 防 En-pin 渲染测试在窗口间翻转 locale
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let mut app = make_app();
     assert_eq!(app.current_panel(), PanelId::Quest, "初始焦点应为 Quest");
 
@@ -188,7 +191,11 @@ fn action_menu_opens_moves_and_executes_on_quest() {
     app.handle_key_event(key(KeyCode::Char('a')));
     match app.state().popup_stack.current() {
         Some(chimera_tui::popup::PopupKind::ActionMenu { title, entries, .. }) => {
-            assert_eq!(title, "Quest", "菜单标题应为焦点面板名");
+            assert_eq!(
+                title,
+                chimera_tui::t!("panel.name.quest"),
+                "菜单标题应为焦点面板名"
+            );
             assert!(
                 entries.iter().any(|(id, _)| id == "quest.pause"),
                 "Quest 动作菜单应含 quest.pause, got: {entries:?}"

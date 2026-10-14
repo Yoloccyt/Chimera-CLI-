@@ -409,7 +409,7 @@ impl SpecLoader {
     /// WHY 提供: 调用方（如 SpecRegistry P4-W15.2）可能需要枚举不可进化面
     /// 做安全审计。此方法透传 `HarnessSpec::immutable_surfaces()` 避免调用方
     /// 直接依赖 nexus_contracts（虽然 gsoe-evolution 已依赖）
-    pub fn immutable_surfaces() -> &'static [ImmutableSurface; 20] {
+    pub fn immutable_surfaces() -> &'static [ImmutableSurface; 31] {
         HarnessSpec::immutable_surfaces()
     }
 

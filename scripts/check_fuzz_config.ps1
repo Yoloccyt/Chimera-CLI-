@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Chimera CLI fuzz 配置静态验证脚本(Windows / PowerShell)
 

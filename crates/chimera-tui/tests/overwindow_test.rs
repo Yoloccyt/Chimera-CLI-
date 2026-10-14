@@ -108,6 +108,12 @@ fn empty_state_shows_hint_en() {
         out.contains("No overwindow fallback triggered yet"),
         "空态应展示等待提示(En 文案)"
     );
+    // B4-S(F-55):hint 指引须指向真实入口(命令面板 Ctrl+P → overwindow.run
+    // 参数流);不得回退为不存在的 `:overwindow run` 命令栏/斜杠入口
+    assert!(
+        out.contains("Ctrl+P") && out.contains("overwindow.run"),
+        "空态 hint 应指向命令面板真实入口, got: {out}"
+    );
 }
 
 #[test]

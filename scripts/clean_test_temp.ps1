@@ -1,4 +1,4 @@
-#!/usr/bin/env pwsh
+﻿#!/usr/bin/env pwsh
 # P9-T4: Clean accumulated test temporary files to prevent I/O degradation
 # Usage: powershell -File scripts/clean_test_temp.ps1
 # Safe: only removes .tmp* directories under tmp/ and target/tmp/

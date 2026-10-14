@@ -18,7 +18,7 @@ use crate::panels::filter_cache::FilterCache;
 use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
-use crate::render::{virtual_scroll_window, FOOTER_TEXT};
+use crate::render::scroll_offset_window;
 use crate::types::{PanelId, TuiCommand, TuiState};
 use event_bus::{EventSeverity, NexusEvent};
 
@@ -87,12 +87,11 @@ impl LogPanel {
             .collect()
     }
 
-    /// 构建 Log 面板文本内容(窗口化:仅构建可见区域 + 上下缓冲)
+    /// 构建 Log 面板文本内容(窗口化:仅构建 [scroll_offset, scroll_offset+visible) 事件)
     ///
     /// WHY P-4 性能:原实现 `.take(50)` + `Paragraph::scroll` 在过滤结果超过
     /// 50 条时滚入空白(滚动偏移超过 Text 行数),且每帧全量构建事件文本;
-    /// 改为复用 EventStream 的 `virtual_scroll_window` 模式,
-    /// Text 构造复杂度 O(visible + 2×BUFFER),万级事件下不随总量线性膨胀。
+    /// 改为窗口化构建,Text 构造复杂度 O(visible),万级事件下不随总量线性膨胀。
     pub fn content(state: &TuiState, selected: usize) -> Text<'static> {
         let scroll_offset =
             list_state::adjust_scroll(selected, 0, LOG_CONTENT_DEFAULT_VISIBLE_ROWS);
@@ -123,7 +122,7 @@ impl LogPanel {
         if filtered.is_empty() {
             lines.push(Line::from(crate::t!("panel.log.no_matching")));
         } else {
-            let (start, end) = virtual_scroll_window(total, scroll_offset, visible_rows);
+            let (start, end) = scroll_offset_window(total, scroll_offset, visible_rows);
             for idx in start..end {
                 if let Some(event) = filtered.get(idx) {
                     let metadata = event.metadata();
@@ -166,7 +165,7 @@ impl LogPanel {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(FOOTER_TEXT));
+        lines.push(Line::from(crate::t!("panel.footer")));
         Text::from(lines)
     }
 
@@ -207,13 +206,14 @@ impl Panel for LogPanel {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        // 内部高度扣除:标题(2 行) + 页脚(2 行) + 可能的"showing"提示行(1 行)
-        // WHY saturating_sub(5):与 EventStream 一致,避免内容溢出边框
+        // 内部高度扣除 chrome:标题 2 行(body_title + 分隔线)+ 可能的 showing
+        // 提示行 1 行 + 空行 1 行 + 页脚 1 行 = 5,保证任意组合下 Text 不溢出 inner
         let content_height = inner.height.saturating_sub(5) as usize;
         self.scroll_offset =
             list_state::adjust_scroll(self.selected, self.scroll_offset, content_height);
 
-        // P-4 性能:虚拟滚动仅构造可见区域 + 缓冲;不再全量构建 50 行后二次滚动
+        // P-4 性能:虚拟滚动仅构造可见区域(F-11 起不再含 ±缓冲,窗口算术见
+        // render.rs scroll_offset_window);不再全量构建 50 行后二次滚动
         // (原实现 Paragraph::scroll 在 scroll_offset > Text 行数时显示空白)
         let paragraph = Paragraph::new(Self::render_window(
             state,
@@ -644,18 +644,28 @@ mod tests {
         let _locale_guard = crate::i18n::locale_test_guard();
         crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let mut state = TuiState::new();
+        // WHY 倒序播种 + source 承载标记:Log 行渲染仅含 ts/source/type_name
+        // (cache_key 不进 content),key-N 必须写入 source 才能被断言;倒序使
+        // 最新在前的 filtered[k] = key-k,窗口 [0, 20) 恰为 key-0..key-19。
         state.latest_events = std::sync::Arc::new(
             (0..200)
+                .rev()
                 .map(|i| NexusEvent::CacheHit {
-                    metadata: EventMetadata::new("scc-cache"),
+                    metadata: EventMetadata::new(format!("key-{i}")),
                     cache_key: format!("key-{i}"),
                 })
                 .collect(),
         );
 
         let content = LogPanel::content(&state, 0).to_string();
-        // 窗口 = [0, 20 + VIRTUAL_SCROLL_BUFFER(5)) → key-0..key-24
+        // F-11 起窗口不含 ±缓冲:[0, 20) → key-0..key-19
         assert!(!content.contains("key-50"), "窗口外事件不应被构建进 Text");
+        // 判别性断言:修复前 ±5 缓冲窗口为 [0, 25),key-20..key-24 作为缓冲行
+        // 会命中 contains,该断言必红(B2 批次评审 #1)
+        assert!(
+            content.contains("key-19") && !content.contains("key-20"),
+            "去缓冲后窗口右界应恰落在 key-19(第 20 条), got: {content}"
+        );
         assert!(content.contains("显示"), "超窗时应显示虚拟滚动总量提示");
         assert!(content.contains("200"));
     }

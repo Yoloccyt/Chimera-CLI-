@@ -30,7 +30,7 @@ pub enum TuiEventClass {
     NotForTui,
 }
 
-/// Consumed 变体名单(审计锁:73(F-1)→74(F-6)→76(PS-2 批次1))
+/// Consumed 变体名单(审计锁:73(F-1)→74(F-6)→76(PS-2 批次1)→80(v2.3 §(b.1)/(b.2) 审查队列/黑板浏览面板消费 Claim/Certify/Retract/Blackboard))
 ///
 /// 不变量:与 `classify` 的 Consumed 臂一一对应。名单变动必须伴随评估报告更新。
 pub const CONSUMED_NAMES: &[&str] = &[
@@ -38,6 +38,7 @@ pub const CONSUMED_NAMES: &[&str] = &[
     "AhirtProbeCompleted",
     "AsaIntervention",
     "AuditFindingRaised",
+    "BlackboardEntry",
     "BudgetAdjusted",
     "BudgetExceeded",
     "BudgetMetricsUpdated",
@@ -48,9 +49,12 @@ pub const CONSUMED_NAMES: &[&str] = &[
     "CacheStatsReported",
     "CapabilityFrozen",
     "CapabilityTierStatsReported",
+    "CertifyIssued",
     "CheckpointLoaded",
     "CheckpointSaved",
     "ChtcAdapterStatus",
+    "ClaimIssued",
+    "ClaimRetracted",
     "ClvSnapshotReported",
     "ConsensusReached",
     "ContextCompressed",
@@ -138,6 +142,24 @@ pub fn classify(event: &NexusEvent) -> TuiEventClass {
         AhirtProbeCompleted { .. } => TuiEventClass::Consumed,
         AsaIntervention { .. } => TuiEventClass::Consumed,
         AssessmentUpdated { .. } => TuiEventClass::NotForTui,
+        // v2.3 (b.1)/(b.4): 裁决权分离三事件——审查队列面板从 latest_events 派生消费
+        // (ReviewQueuePanel 匹配 Claim/Certify/Retract;§(b.1) 仅 Certify 渲染为已认证)。
+        // F-60 诚实登记(2026-10-01,R5):TUI 消费面真实,但生产侧当前零发布——
+        // ClaimIssued/ClaimRetracted 全仓无生产构造点(仅 event-bus 测试),
+        // CertifyIssued 唯一生产构造点 parliament/debate/mod.rs certify_if_reviewed
+        // 的调用方仅内联测试(adversarial_review.rs parliament_certify_if_reviewed_end_to_end)。
+        // 生产运行期审查队列恒显诚实空态(设计内,非故障);生产发布点接线属
+        // Wave-3 待办,接线前维持 Consumed 不改判(消费面不因生产缺位而谎报)。
+        ClaimIssued { .. } => TuiEventClass::Consumed,
+        ClaimRetracted { .. } => TuiEventClass::Consumed,
+        CertifyIssued { .. } => TuiEventClass::Consumed,
+        // FailureRegistered 暂无面板消费(失败登记面属 Wave 3),如实保持 NotForTui。
+        FailureRegistered { .. } => TuiEventClass::NotForTui,
+        // v2.3 (b.2): 黑板浏览面板从 latest_events 派生消费 BlackboardEntry。
+        // F-60 诚实登记(2026-10-01,R5):生产侧当前零发布——全仓无生产构造点
+        // (mlc-engine/blackboard_projector 为消费投影方,非发布方),生产运行期
+        // 黑板面板恒显诚实空态(设计内);Wave-3 接线待办,接线前维持 Consumed 不改判。
+        BlackboardEntry { .. } => TuiEventClass::Consumed,
         AuditFindingRaised { .. } => TuiEventClass::Consumed,
         AuditLogged { .. } => TuiEventClass::NotForTui,
         BenchmarkMetricsCollected { .. } => TuiEventClass::NotForTui,
@@ -160,6 +182,8 @@ pub fn classify(event: &NexusEvent) -> TuiEventClass {
         ChtcAdapterStatus { .. } => TuiEventClass::Consumed,
         ChtcToolCallReceived { .. } => TuiEventClass::NotForTui,
         ClvSnapshotReported { .. } => TuiEventClass::Consumed,
+        // ADR-197:L1 计算面观测事件（仅遥测，不占面板）
+        ComputePoolSaturated { .. } => TuiEventClass::NotForTui,
         ConsensusReached { .. } => TuiEventClass::Consumed,
         ContextBudgetAllocated { .. } => TuiEventClass::NotForTui,
         ContextCompressed { .. } => TuiEventClass::Consumed,
@@ -319,7 +343,7 @@ fn consumed_names_lock_is_sorted_unique_and_sized() {
         CONSUMED_NAMES.windows(2).all(|w| w[0] < w[1]),
         "CONSUMED_NAMES 必须严格升序且无重复"
     );
-    assert_eq!(CONSUMED_NAMES.len(), 76, "Consumed 集合规模变更属审计行为");
+    assert_eq!(CONSUMED_NAMES.len(), 80, "Consumed 集合规模变更属审计行为");
 }
 
 // ============================================================

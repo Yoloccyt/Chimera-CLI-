@@ -58,6 +58,11 @@ pub struct EventMetricCollector {
     /// (单调递增,不重置),由 `EfficiencyMonitor::sample_critical_dropped_count()`
     /// 周期性更新。供 /metrics 输出与 TUI 告警显示。
     critical_dropped_count: Arc<AtomicU64>,
+    /// 计算池饱和降级累计数（ADR-197 A5）
+    ///
+    /// WHY 镜像而非累加:真值源在 L1 `ComputeBridge`(单调递增),本字段只取
+    /// `fetch_max` 镜像——重复/乱序消费同一事件不会虚高（同 `critical_dropped_count` 理由）。
+    compute_degraded_total: Arc<AtomicU64>,
 }
 
 impl EventMetricCollector {
@@ -68,6 +73,7 @@ impl EventMetricCollector {
             critical_counts: Arc::new(DashMap::new()),
             alert_counts: Arc::new(DashMap::new()),
             critical_dropped_count: Arc::new(AtomicU64::new(0)),
+            compute_degraded_total: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -86,6 +92,19 @@ impl EventMetricCollector {
             let mut crit_entry = self.critical_counts.entry(type_name).or_insert(0);
             *crit_entry += 1;
         }
+
+        // A5/ADR-197:计算池饱和事件携带 L1 累计降级数 → 镜像为资源压力证据（Ω₈）
+        if let NexusEvent::ComputePoolSaturated { degraded_count, .. } = event {
+            self.compute_degraded_total
+                .fetch_max(*degraded_count, Ordering::Relaxed);
+        }
+    }
+
+    /// 获取计算池饱和降级累计数（ADR-197 A5）
+    ///
+    /// 返回从 `ComputePoolSaturated` 事件镜像到的最大值;未收到任何饱和事件时为 0。
+    pub fn compute_degraded_total(&self) -> u64 {
+        self.compute_degraded_total.load(Ordering::Relaxed)
     }
 
     /// 记录一次告警触发,按严重级别更新计数器
@@ -196,6 +215,15 @@ impl MetricCollector for EventMetricCollector {
             timestamp: now,
         });
 
+        // A5/ADR-197:计算池降级累计数（L1 真值源镜像,全局聚合无标签）
+        let degraded = self.compute_degraded_total.load(Ordering::Relaxed);
+        samples.push(MetricSample {
+            name: "nexus_compute_pool_degraded_total".to_string(),
+            value: degraded as f64,
+            labels: vec![],
+            timestamp: now,
+        });
+
         samples
     }
 }
@@ -205,6 +233,54 @@ impl MetricCollector for EventMetricCollector {
 mod tests {
     use super::*;
     use event_bus::EventMetadata;
+
+    /// A5/ADR-197:计算池饱和事件 → 降级数镜像为资源压力证据
+    ///
+    /// WHY 测镜像而不测事件计数:type_name 计数已由 `record_event` 通用路径覆盖;
+    /// 本例盯的是"乱序/重复消费不得虚高"这一条镜像语义。
+    #[test]
+    fn compute_pool_saturation_mirrors_degraded_total() {
+        let collector = EventMetricCollector::new();
+        let saturated = |degraded: u64| NexusEvent::ComputePoolSaturated {
+            metadata: EventMetadata::new("nexus-core"),
+            active_tasks: 14,
+            pool_threads: 14,
+            saturation_ratio_bp: 1_000,
+            // 双口径合成值故意与单口径占用不等，验证两者可区分（ADR-157 口径）
+            combined_utilization_bp: 620,
+            threshold_bp: 900,
+            saturation_count: degraded + 1,
+            degraded_count: degraded,
+            hottest_kind: "KnnSearch".into(),
+        };
+
+        assert_eq!(
+            collector.compute_degraded_total(),
+            0,
+            "未消费前不得凭空有值"
+        );
+        collector.record_event(&saturated(7));
+        assert_eq!(collector.compute_degraded_total(), 7);
+        // 乱序(较小值)与重复消费均不得拉低/推高真值
+        collector.record_event(&saturated(5));
+        collector.record_event(&saturated(7));
+        assert_eq!(collector.compute_degraded_total(), 7, "镜像语义:只取最大值");
+        collector.record_event(&saturated(9));
+        assert_eq!(collector.compute_degraded_total(), 9);
+
+        // 采集输出必须含该指标（否则 Ω₈ 证据链在 /metrics 处断掉）
+        let samples = collector.collect();
+        let gauge = samples
+            .iter()
+            .find(|s| s.name == "nexus_compute_pool_degraded_total")
+            .expect("collect() 应输出计算池降级指标");
+        assert_eq!(gauge.value, 9.0);
+        assert_eq!(
+            collector.event_count("ComputePoolSaturated"),
+            4,
+            "观测面事件计数走通用路径"
+        );
+    }
 
     fn make_event(type_name: &str) -> NexusEvent {
         let meta = EventMetadata::new("test-source");

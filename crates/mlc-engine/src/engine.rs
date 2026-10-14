@@ -38,8 +38,39 @@ use crate::l3_procedural::ProceduralMemory;
 use crate::mem_con::{MemConConfig, MemConController};
 use crate::memory_strategy_learner::MemoryStrategyLearnerHolder;
 use crate::types::{
-    assert_archive_monotonicity, MemoryEntry, MemoryId, MemoryTier, ProceduralEntry,
+    assert_archive_monotonicity, MemoryEntry, MemoryId, MemoryTier, ProceduralEntry, TokenBudget,
 };
+
+/// 分数序贪心装包 — 召回结果的 token 预算裁剪（WI-C1′）
+///
+/// 语义:按输入序（= 分数降序）累加成本,装入后不超 `budget.max_tokens` 的
+/// 条目保留,装不下的**跳过继续**（保序,不回头）。`None` = 原样直通（现行为,回滚位）。
+/// 成本不可得的条目（并发驱逐等防御场景）保守跳过,不计入也不放入。
+///
+/// WHY 复用两处先例:RSB `ResidualStore::inject` 的预算检查式
+/// （`used + cost <= budget`）+ 按需合成的分数序贪心装包
+/// （`on_demand_synthesizer.rs`）;成本口径统一为 [`MemoryEntry::token_estimate`]。
+fn pack_within_budget<T>(
+    items: Vec<T>,
+    budget: Option<TokenBudget>,
+    cost_of: impl Fn(&T) -> Option<usize>,
+) -> Vec<T> {
+    let Some(b) = budget else {
+        return items;
+    };
+    let mut out = Vec::with_capacity(items.len());
+    let mut used = 0usize;
+    for item in items {
+        let Some(cost) = cost_of(&item) else {
+            continue; // 成本不可得:防御性跳过（保守,不放不可估成本项）
+        };
+        if used.saturating_add(cost) <= b.max_tokens {
+            used += cost;
+            out.push(item);
+        }
+    }
+    out
+}
 
 /// MLC 引擎 — 四级神经形态记忆的统一接口
 ///
@@ -130,6 +161,28 @@ pub struct CardSystemStatsView {
 }
 
 impl MlcEngine {
+    /// v2.3 §(b.3): 按认识类型把召回结果分为「派生结论(Observation)」与「原始事实」两库。
+    ///
+    /// 主线③「归纳结论与原始事实必须可区分」的 recall 结果面实现:调用方拿到
+    /// 召回集后据此把 `EpistemicType::Observation`(带 `evidence_ptrs` 的派生结论)
+    /// 与原始事实(Fact/Episode/MindModel)分离呈现。纯静态方法,无副作用、不依赖引擎状态。
+    #[must_use]
+    pub fn partition_by_epistemic(
+        entries: &[MemoryEntry],
+    ) -> (Vec<&MemoryEntry>, Vec<&MemoryEntry>) {
+        use nexus_contracts::EpistemicType;
+        let mut observations = Vec::new();
+        let mut facts = Vec::new();
+        for e in entries {
+            if e.epistemic_type == EpistemicType::Observation {
+                observations.push(e);
+            } else {
+                facts.push(e);
+            }
+        }
+        (observations, facts)
+    }
+
     /// 创建 MLC 引擎,使用指定配置与 EventBus
     ///
     /// 会自动打开 L3 SQLite 数据库(路径从 config 读取,展开 `~`)
@@ -280,9 +333,9 @@ impl MlcEngine {
     pub fn new_in_memory(event_bus: EventBus) -> Result<Self, MlcError> {
         // P1-T12 示范接入(灰度验证「公共 API 零感知」):
         // MemoryMetricsReported 每 100 次操作发布(高频非 Critical)→ 分片扇出;
-        // 无 tokio runtime 上下文时 enable_sharding 返回 Err,let _ 忽略即
-        // 降级回单流(零回归;分片默认关闭=EventBus::new() 行为与 v2.27.1 一致)
-        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
+        // 无 tokio runtime 上下文时 enable_sharding 返回 Err 即降级回单流
+        // (零回归;分片默认关闭=EventBus::new() 行为与 v2.27.1 一致);ADR-197 起结果可见化
+        event_bus.try_enable_sharding("mlc-engine");
         let config = MlcConfig::default();
         let l3 = ProceduralMemory::open_in_memory()?;
         let mem_con_controller =
@@ -313,8 +366,8 @@ impl MlcEngine {
         config: MlcConfig,
         event_bus: EventBus,
     ) -> Result<Self, MlcError> {
-        // P1-T12 示范接入(与 new_in_memory 一致,见其注释)
-        let _ = event_bus.enable_sharding(event_bus::DEFAULT_SHARD_COUNT);
+        // P1-T12 示范接入(与 new_in_memory 一致,见其注释);ADR-197 起结果可见化
+        event_bus.try_enable_sharding("mlc-engine");
         config.validate()?;
         let l3 = ProceduralMemory::open_in_memory()?;
         let mem_con_controller =
@@ -557,12 +610,23 @@ impl MlcEngine {
     /// | `recall_by_clv`(本方法) | 显式 top_k,无策略介入 | 调用方完全控制召回数(固定 k 场景/兼容旧路径) |
     /// | `recall_by_clv_with_strategy` | 显式传入策略,从 strategy 推导 k/阈值 | 单次调用需特定策略覆盖(不修改全局状态) |
     /// | `recall_by_clv_with_current_policy` | 自动感知 learner 当前策略 | **默认推荐**:与 S2 接缝下发/MemCon 自适应联动 |
+    ///
+    /// # 参数
+    /// - `query`: 查询 CLV 向量
+    /// - `top_k`: 显式召回上限
+    /// - `budget`: 可选 token 预算（WI-C1′;`None` = 不裁剪现行为=默认回滚位;
+    ///   `Some` = 分数序贪心装包,超预算条目跳过,保序——口径见 [`TokenBudget`]）
     pub async fn recall_by_clv(
         &self,
         query: &CLV,
         top_k: usize,
+        budget: Option<TokenBudget>,
     ) -> Result<Vec<(MemoryId, f32)>, MlcError> {
         let results = self.l2.recall_by_clv(query, top_k)?;
+        // WI-C1′:超预算裁剪（None = 现行为;裁剪保持分数序）
+        let results = pack_within_budget(results, budget, |(id, _)| {
+            self.l2.get(id.as_str()).ok().map(|e| e.token_estimate())
+        });
         // 召回视为命中(每个结果计一次命中)
         self.hit_count
             .fetch_add(results.len() as u64, Ordering::Relaxed);
@@ -592,6 +656,8 @@ impl MlcEngine {
     /// # 参数
     /// - `query`: 查询 CLV 向量
     /// - `strategy`: 记忆策略(决定 top_k/阈值/L0-only)
+    /// - `budget`: 可选 token 预算（WI-C1′;`None` = 现行为;L0 快速路径与
+    ///   L2 路径均受同一装包约束,策略过滤后应用）
     ///
     /// # 返回
     /// `Vec<(MemoryId, f32)>`: 召回条目 ID 与相似度分数(已按 strategy 过滤)
@@ -611,6 +677,7 @@ impl MlcEngine {
     /// let results = engine.recall_by_clv_with_strategy(
     ///     &query,
     ///     MemoryStrategy::AggressivePruning,
+    ///     None,
     /// ).await?;
     /// # Ok(())
     /// # }
@@ -619,6 +686,7 @@ impl MlcEngine {
         &self,
         query: &CLV,
         strategy: MemoryStrategy,
+        budget: Option<TokenBudget>,
     ) -> Result<Vec<(MemoryId, f32)>, MlcError> {
         // MinimalRecall 快速路径:仅查 L0 工作记忆
         // WHY: MinimalRecall 语义是"最小检索",应避免 L2 KNN 扫描开销
@@ -633,6 +701,8 @@ impl MlcEngine {
                 .into_iter()
                 .take(strategy.default_top_k())
                 .collect();
+            // WI-C1′:L0 快速路径同样受预算约束（None = 现行为直通）
+            let recent = pack_within_budget(recent, budget, |e| Some(e.token_estimate()));
             self.hit_count
                 .fetch_add(recent.len() as u64, Ordering::Relaxed);
             // L0 召回无相似度分数,用 1.0 表示"完全匹配"(工作记忆优先级最高)
@@ -655,6 +725,10 @@ impl MlcEngine {
         } else {
             raw_results
         };
+        // WI-C1′:策略过滤后应用预算装包（None = 现行为）
+        let filtered = pack_within_budget(filtered, budget, |(id, _)| {
+            self.l2.get(id.as_str()).ok().map(|e| e.token_estimate())
+        });
 
         self.hit_count
             .fetch_add(filtered.len() as u64, Ordering::Relaxed);
@@ -674,6 +748,7 @@ impl MlcEngine {
     ///
     /// # 参数
     /// - `query`: 查询 CLV 向量
+    /// - `budget`: 可选 token 预算（WI-C1′;`None` = 现行为,透传给策略变体）
     ///
     /// # 返回
     /// `Vec<(MemoryId, f32)>`: 召回条目 ID 与相似度分数
@@ -690,16 +765,18 @@ impl MlcEngine {
     /// # let engine = MlcEngine::new_in_memory(bus)?;
     /// # let query = CLV::zero();
     /// // 使用当前激活策略召回(默认 StandardTopK,或 learner 下发的 Learned 策略)
-    /// let results = engine.recall_by_clv_with_current_policy(&query).await?;
+    /// let results = engine.recall_by_clv_with_current_policy(&query, None).await?;
     /// # Ok(())
     /// # }
     /// ```
     pub async fn recall_by_clv_with_current_policy(
         &self,
         query: &CLV,
+        budget: Option<TokenBudget>,
     ) -> Result<Vec<(MemoryId, f32)>, MlcError> {
         let strategy = self.memory_strategy_holder.strategy();
-        self.recall_by_clv_with_strategy(query, strategy).await
+        self.recall_by_clv_with_strategy(query, strategy, budget)
+            .await
     }
 
     /// 异步下发记忆策略 — S2 接缝策略注入入口(P4-W14.1)
@@ -837,8 +914,90 @@ impl MlcEngine {
     }
 
     /// 按 Quest ID 查询关联的所有情节记忆(委托给 L1)
+    ///
+    /// # G-78 扫描假阳性复核注记（WI-G15③,2026-10-07）
+    /// `check_sqlite_blocking.py` 命名启发式会命中本方法体首行
+    ///（现 `:928`;原 `:863`——行号随批次漂移,台账同步更新）:
+    /// `l1.query_by_quest`（l1_episodic.rs）是**纯内存** `RwLock<EpisodicInner>`
+    /// 读（BTreeMap/HashMap 查表加 clone 返回）,**无 rusqlite/Connection**;
+    /// 按 `&self` 借用且非阻塞 DB——包 `spawn_blocking` 是反模式
+    ///（会把纯内存读推进阻塞池,徒增调度开销）。
+    /// 处置 = `scripts/sqlite_blocking_allowlist.txt` 逐行复核登记（附同款理由）;
+    /// 复核定性见 `docs/reports/cpu-plane-phase0-c0-2026-10-02.md`「假阳性」节;勿按扫描器提示“修复”。
     pub async fn recall_by_quest(&self, quest_id: &str) -> Result<Vec<MemoryEntry>, MlcError> {
         self.l1.query_by_quest(quest_id)
+    }
+
+    /// 四路召回混合融合（v2.3 §(d)⑨「四路召回入口（二期启动）」引擎级编排）
+    ///
+    /// 把引擎内已有的三路有序召回 + 调用方传入的第四路经 L0 RRF 融合
+    /// （k=60，与 repo-wiki 同参）：
+    /// - **语义路**：`l2.recall_by_clv(query, top_k×2)`（§(b.3) 一期同款，策略/配额零扰）
+    /// - **情节路**：`quest_id`  Some 时的 `l1.query_by_quest`（L1 天然序）
+    /// - **认识路**：语义命中集经 [`partition_by_epistemic`](Self::partition_by_epistemic) 的派生结论前置序
+    ///   （主线③「归纳结论与原始事实分离」的序表达）
+    /// - **第四路（可选）**：图扩（`memory_graph::recall_with_graph_ids` 生产衔接器）等
+    ///   引擎外 Ranked 路径的 id 表——MemoryGraph 非引擎字段，由组合根传入；
+    ///   不传即三路，诚实不虚设。路权重 = `tuning.graph_weight`（1.0 等权现行为；
+    ///   ≤0.0 等效断路——WI-G9 回滚锚，与不传第四路逐位一致）。
+    ///
+    /// 边界：`quest_id=None` 且无 `extra_path_ids` 时退化为语义序前 `top_k`（合法非破坏）。
+    /// 完整四路**自动并行编排/跨路配额联动**属 Wave 4 触发条件（§(b.3) 明示，
+    /// 涉 omega-learner S7 接缝 R2 冻结面）；本方法为启动形态的确定性融合。
+    pub async fn recall_hybrid(
+        &self,
+        query: &CLV,
+        quest_id: Option<&str>,
+        extra_path_ids: Option<&[MemoryId]>,
+        top_k: usize,
+        tuning: crate::recall_fusion::FusionTuning,
+    ) -> Result<Vec<nexus_contracts::recall_fusion::FusedItem>, MlcError> {
+        use crate::recall_fusion::{fuse_recall_paths, RecallPath};
+
+        // 语义路过采样 2×top_k：给跨路重叠更多融合信号（有界，非全库）
+        let semantic = self
+            .l2
+            .recall_by_clv(query, top_k.saturating_mul(2).max(1))?;
+        let semantic_ids: Vec<MemoryId> = semantic.iter().map(|(id, _)| id.clone()).collect();
+
+        // 情节路
+        let episodic_ids: Vec<MemoryId> = match quest_id {
+            Some(q) => self
+                .l1
+                .query_by_quest(q)?
+                .into_iter()
+                .map(|e| e.id)
+                .collect(),
+            None => Vec::new(),
+        };
+
+        // 认识路：仅 Observation 派生结论计份（§(b.3) 主线③「归纳结论与原始事实分离」
+        // 的序表达；原始 Fact 已由语义路代表，重复计份会虚增 hits）
+        let epistemic_ids: Vec<MemoryId> = {
+            let entries: Vec<MemoryEntry> = semantic_ids
+                .iter()
+                .filter_map(|id| self.l2.get(id.as_str()).ok())
+                .collect();
+            let (observations, _facts) = Self::partition_by_epistemic(&entries);
+            observations.into_iter().map(|e| e.id.clone()).collect()
+        };
+
+        let mut paths = vec![
+            RecallPath::new("semantic", semantic_ids),
+            RecallPath::new("episodic", episodic_ids),
+            RecallPath::new("epistemic", epistemic_ids),
+        ];
+        if let Some(ids) = extra_path_ids {
+            // WI-G9:第四路（图扩 graph 主用实例,`memory_graph::recall_with_graph_ids`
+            // 生产衔接器）权重入融合配置（`tuning.graph_weight`）;
+            // graph_weight <= 0.0 = **等效断路**（回滚锚:路径整体不参与融合,
+            // 与不传第四路逐位一致——只压权重为 0 仍会贡献 list_hits 与
+            // tie-break 首现索引,不等效,故按移除而非零权实现）
+            if tuning.graph_weight > 0.0 {
+                paths.push(RecallPath::new("extra", ids.to_vec()).with_weight(tuning.graph_weight));
+            }
+        }
+        fuse_recall_paths(&paths, tuning)
     }
 
     /// 按时间范围查询情节记忆(委托给 L1)
@@ -960,6 +1119,11 @@ impl MlcEngine {
                 "迁移源层删除失败,条目可能同时存在于两层(冗余但不丢失)"
             );
         }
+
+        // G-27（持锁跨 await 红线）：迁移临界区（fetch/insert/remove，上方）已全部
+        // 同步完成，此处提前释放条目级迁移锁，避免 `_migration_lock` 跨下方
+        // tier_count / event publish 的 .await 持有（否则同 ID 并发迁移串行化会跨越异步 I/O）。
+        drop(_migration_lock);
 
         // 5. 发布 MemoryTiered 事件
         // SubTask 17.4:单条迁移填充 memory_id,供消费者(如 efficiency-monitor)

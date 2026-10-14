@@ -12,6 +12,25 @@
 # chimera-mas Check D base 11/16). Regenerate with:
 #   python scripts/check_dep_edge_freeze.py --emit > scripts/dep_edge_freeze.txt
 # (then re-add this header block).
+#
+# COUNTING SCOPE (written down 2026-10-08 / v3.5 W6-2, C-51): this register holds
+#   `[dependencies]` edges ONLY -- the production assembly face, same scope as
+#   Check D (see check_dep_edge_freeze.py:59). `optional = true` edges (e.g.
+#   chimera-cli|mca-gateway / |mas-sched / |nexus-hook / |omega-learner /
+#   |decay-engine, and nexus-app-server|session-store when it is made optional)
+#   are deliberately NOT here; they are governed by gated_wiring_baseline.txt
+#   ★ 2026-10-12: chimera-cli|mas-sched flipped optional->production (ADR-211,
+#   P1 candidate-3); it is now a `[dependencies]` edge already counted in the
+#   baseline. The historical example list above keeps its wording per the
+#   only-append discipline; this note is the correction of record.
+#   (G-56/G-57) instead. Consequence, stated so nobody re-derives it wrongly:
+#   adding a NEW optional direct edge does not trip this ratchet -- that is a
+#   known gap, not a bug in this file.
+#   Do NOT hand-count edges into this header: the numbers 138 (initial baseline)
+#   and 143 (current line count) are snapshots of different dates, and a manual
+#   graph build that also counts optional edges lands on a third number (146).
+#   The only authoritative count is what `--emit` derives right now; G-33 stays
+#   green exactly while file == derived set.
 chimera-cli|chimera-mas
 chimera-cli|chimera-tui
 chimera-cli|cmt-tiering
@@ -85,7 +104,6 @@ hcw-window|nexus-core
 kvbsr-router|event-bus
 kvbsr-router|nexus-contracts
 kvbsr-router|nexus-core
-lsct-tiering|event-bus
 mas-sched|nexus-contracts
 mca-gateway|event-bus
 mca-gateway|hcw-window
@@ -159,9 +177,15 @@ chimera-cli|gea-activator      # L10->L9 down; composition.rs:102 pub gea: Arc<g
 chimera-cli|gqep-executor      # L10->L7 down; commands/doctor.rs:183 probes gqep_executor:: (health probe consumes the API)
 chimera-cli|scc-cache          # L10->L3 down; commands/doctor.rs:576 check_scc_cache via scc_cache:: (probe, not new data path)
 chimera-mas|gea-activator      # L9->L9 same-layer allowed; delegation.rs:393 Option<Arc<gea_activator::..>> (5 files)
-cmt-tiering|lsct-tiering       # L3->L3 same-layer allowed; lsct_policy.rs:32 use lsct_tiering::LsctCo.. (policy needs the tier type, no event equivalent)
 efficiency-monitor|decb-governor # L9->L8 down; auditor.rs:47 use decb_governor::Dec.. (auditor reads governor state synchronously)
-osa-coordinator|router-traits  # L6->L6 same-layer allowed; lib.rs:61 use router_traits::{RouterCon..} (seam abstraction, replacing the per-router hand glue)
-router-traits|nexus-contracts  # L6->L0 down, ADR-033 allows L(N)->L0; lib.rs:42 use nexus_contracts::{..} (trait over shared types only)
 gsoe-evolution|decay-engine    # L5->L4 DOWNWARD, lawful under agents.md 2.2 ten-layer law; registered per ADR-187 (alpha-prime: Check A retired, was a strict subset of Check B with zero unique detections). Engine reads ShadowModeCircuitBreaker synchronously (engine.rs:255 breaker.is_tripped()); event-ization rejected (would turn a fail-closed safety read fail-open). Ref docs/reports/Q3-adjudication-inner-ring-gate-2026-09-21.md
+# --- registered 2026-10-06: composition-root GATED / island-repayment wiring edges already in HEAD manifests but never frozen ---
+chimera-cli|chtc-bridge       # L10->L10 same-layer; composition-root optional GATED edge (r2_island_repayment, ADR-177)
+chimera-cli|csn-substitutor   # L10->L10 same-layer; composition-root optional GATED edge (island repayment, ADR-177)
+chimera-cli|mas-sched         # L10->L9 down; OPTIONAL edge declared in Cargo.toml:94 under feature r2_island_repayment (ADR-145/160/177). ★ 2026-10-09 v3.5 corrected: the previous wording claimed "composition-root wiring" — measurably false: `mas_sched` has ZERO references in crates/chimera-cli/src, CRATE-CONTRACT self-reports PRODUCERS 0/CONSUMERS 0, and scripts/gated_wiring_baseline.txt:13 holds this same dep as DECORATIVE. The row stays (edge retirement authority is ADR-188, which does NOT authorize deletion), but its semantics are now GATED-UNWIRED, not wired. ★ 2026-10-12 P1-candidate-3 (ADR-211 Accepted) CONNECTED: mas_sched referenced in crates/chimera-cli/src (agent.rs spawn pre-claim + sched_claim.rs), edge flipped optional->production (Cargo.toml no longer optional), gated_wiring row deleted, CRATE-CONTRACT CONSUMERS 1. WIRED, not GATED-UNWIRED.
+chimera-cli|mtpe-executor     # L10->L7 down; composition-root optional GATED edge (island repayment, ADR-177)
+chimera-cli|nexus-hook        # L10->L9 down; composition-root optional GATED edge (lifecycle hooks, ADR-146/177)
+chimera-cli|sesa-router       # L10->L6 down; composition-root optional GATED edge (island repayment, ADR-177)
+chimera-cli|ssra-fusion       # L10->L7 down; composition-root optional GATED edge (island repayment, ADR-177)
+mcp-mesh|nexus-contracts      # L10->L0 down; consumes nexus-contracts event/affinity contract types (ADR-033)
 

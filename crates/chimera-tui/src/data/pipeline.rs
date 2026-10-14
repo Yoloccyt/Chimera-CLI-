@@ -459,6 +459,10 @@ impl DataPipeline {
             let mut event_rate_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
             let mut decay_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
             let mut sys_metrics_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
+            // F-39 喂数接线:网络速率历史(重 tick 与 sysinfo 采集同节奏推进,
+            // KB/s —— 渲染端与瞬时值 /1024 口径一致)
+            let mut net_rx_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
+            let mut net_tx_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
 
             let mut timeline_snapshots: VecDeque<crate::types::TimelineSnapshot> =
                 VecDeque::with_capacity(max_snapshots);
@@ -517,33 +521,13 @@ impl DataPipeline {
 
                 // Concord T1.6:块作用域限定 subscriber guard 生命周期(同快照
                 // guard 理由:历史回填 .await 要求循环内无存活 MutexGuard)。
-                let events = {
-                    let mut guard = subscriber_clone.lock().unwrap_or_else(|poisoned| {
-                        tracing::warn!(
-                            "TUI data pipeline subscriber mutex was poisoned; recovering state"
-                        );
-                        poisoned.into_inner()
-                    });
-                    let Some(sub) = guard.as_mut() else {
-                        break;
-                    };
-
-                    let mut events = Vec::new();
-                    while let Some(event) = sub.try_recv() {
-                        events.push(event);
-                    }
-                    events
+                // v3.5 G-48 分解:该形状收进 `Self::drain_events`（非 async 函数，
+                // guard 止于函数返回）⇒ 循环体内不再出现任何加锁表达式。
+                let Some(events) = Self::drain_events(&subscriber_clone) else {
+                    break;
                 };
 
-                let mut last_quest_idx = None::<usize>;
-                let mut last_budget_idx = None::<usize>;
-                for (idx, event) in events.iter().enumerate() {
-                    match event {
-                        NexusEvent::QuestListUpdated { .. } => last_quest_idx = Some(idx),
-                        NexusEvent::BudgetMetricsUpdated { .. } => last_budget_idx = Some(idx),
-                        _ => {}
-                    }
-                }
+                let (last_quest_idx, last_budget_idx) = Self::last_update_indices(&events);
 
                 let events_this_tick = events.len();
                 for (idx, event) in events.into_iter().enumerate() {
@@ -669,6 +653,18 @@ impl DataPipeline {
                         (m.cpu.global_usage * 10.0) as u64,
                         max_history_len,
                     );
+                    // F-39:网络速率与 CPU 同点喂数(同一 sysinfo 采样内推入,
+                    // 节奏天然对齐;轻量 tick 复用上次采样故不重复推点)
+                    push_history(
+                        &mut net_rx_history,
+                        m.network.rx_bytes_per_sec / 1024,
+                        max_history_len,
+                    );
+                    push_history(
+                        &mut net_tx_history,
+                        m.network.tx_bytes_per_sec / 1024,
+                        max_history_len,
+                    );
                     last_sys_metrics = Some(m.clone());
                     m
                 };
@@ -792,6 +788,8 @@ impl DataPipeline {
                     recall_chain_success: osa_sync.recall_chain_success(),
                     sys_metrics,
                     sys_metrics_history: sys_metrics_history.iter().copied().collect(),
+                    net_rx_history: net_rx_history.iter().copied().collect(),
+                    net_tx_history: net_tx_history.iter().copied().collect(),
                     resource_cpu_backfill: cpu_backfill.clone(),
                     resource_mem_backfill: mem_backfill.clone(),
                     tick_mode,
@@ -882,32 +880,71 @@ impl DataPipeline {
         &self.config
     }
 
+    /// 取走本 tick 已到达的事件；subscriber 已被 `shutdown()` 取走时返回 `None`（后台循环据此退出）。
+    ///
+    /// WHY 单独成函数：与 [`Self::take_locked`] 同款理由——guard 的生命周期止于本函数
+    /// 返回，且本函数非 async，调用点拿到的已是 owned `Vec`，词法门与编译器都能直接
+    /// 判定「不持锁跳 await」。毒化恢复语义与原逐处写法逐字一致（日志文本不变）。
+    fn drain_events(slot: &Mutex<Option<EventSubscriber>>) -> Option<Vec<NexusEvent>> {
+        let mut guard = slot.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("TUI data pipeline subscriber mutex was poisoned; recovering state");
+            poisoned.into_inner()
+        });
+        let sub = guard.as_mut()?;
+        let mut events = Vec::new();
+        while let Some(event) = sub.try_recv() {
+            events.push(event);
+        }
+        Some(events)
+    }
+
+    /// 求同一 tick 内「最后一次」Quest/Budget 批量更新事件的下标（去重依据）。
+    ///
+    /// WHY 纯函数：把“同一批内重复的批量更新只保留最后一次”这条规则从 900 行的
+    /// 事件循环里拿出来，既可单测，也不再随循环一起膨胀。
+    fn last_update_indices(events: &[NexusEvent]) -> (Option<usize>, Option<usize>) {
+        let mut quest = None::<usize>;
+        let mut budget = None::<usize>;
+        for (idx, event) in events.iter().enumerate() {
+            match event {
+                NexusEvent::QuestListUpdated { .. } => quest = Some(idx),
+                NexusEvent::BudgetMetricsUpdated { .. } => budget = Some(idx),
+                _ => {}
+            }
+        }
+        (quest, budget)
+    }
+
+    /// 取走 `Mutex<Option<T>>` 内的值；guard 的生命周期止于本函数返回。
+    ///
+    /// WHY 单独成函数：`shutdown()` 需要先取值再 `.await`。写成
+    /// `let v = self.field.lock()….take();` 时 guard 虽是语句级临时量
+    ///（编译器可证不跨 await），但本仓词法门 `check_await_across_guard.py` 对
+    /// 跨行方法链一律判为「guard 存活到后续 await」（SCANNER 过近似，同一处
+    /// 历史上已两次被迫 re-key 豁免行号）。把取值形状收进非 async 辅助函数后，
+    /// await 语句里不再出现任何加锁表达式，门与人都能直接判定「不持锁」，
+    /// 两处豁免条目（`await_guard_allowlist.txt` / `lock_await_freeze.txt`）随之整条删除。
+    /// 毒化恢复语义与原逐处写法逐字一致（仅把互斥体名字参数化，日志文本不变）。
+    fn take_locked<T>(slot: &Mutex<Option<T>>, site: &str) -> Option<T> {
+        slot.lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("TUI data pipeline {site} mutex was poisoned; recovering state");
+                poisoned.into_inner()
+            })
+            .take()
+    }
+
     /// 关闭数据管道，中止并等待后台任务结束
     ///
     /// 取 `&self` 使外部 Arc 持有方可在不回收所有权的情况下清理后台任务。
     /// 先关闭 `EventSubscriber` 的转发任务，再中止数据聚合任务，避免 orphan task。
     pub async fn shutdown(&self) {
-        let sub = self
-            .subscriber
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("TUI data pipeline subscriber mutex was poisoned; recovering state");
-                poisoned.into_inner()
-            })
-            .take();
-        if let Some(mut sub) = sub {
+        // 加锁与 await 分处于不同语句：guard 在 `take_locked` 返回时已释放。
+        if let Some(mut sub) = Self::take_locked(&self.subscriber, "subscriber") {
             sub.shutdown().await;
         }
 
-        let Some(handle) = self
-            .task
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("TUI data pipeline task mutex was poisoned; recovering state");
-                poisoned.into_inner()
-            })
-            .take()
-        else {
+        let Some(handle) = Self::take_locked(&self.task, "task") else {
             return;
         };
         handle.abort();

@@ -6,7 +6,7 @@
 //! - **L-a 全局计算池**:独立 rayon `ThreadPool`（池 = num_cpus−2、栈 2MB、
 //!   线程名 `chimera-compute-*`）,与 tokio worker 隔离防互饿（v4.0 §7.5.2）。
 //! - **L-f 路由**:`route()` 纳秒级查表三态派发（Inline / Rayon / Async,ADR-127）。
-//! - **panic 隔离**:`spawn_compute` 用 `catch_unwind` + `tokio::sync::oneshot` 回传,
+//! - **panic 隔离**:`spawn_compute_batch` 逐任务 `catch_unwind` 回传,
 //!   池内 panic 永不跨线程传播到调用方（§11.1 不变式）。
 //!
 //! # 契约纪律（§7.5.3 纪律④⑥,CI 静态扫描兜底）
@@ -19,17 +19,32 @@
 //!   [`update_threshold`](ComputeBridge::update_threshold) 灌入。
 //! - **HTS 序贯检验判定已落地**（T9,[`super::hts::sequential_test`]）:本桥只转发
 //!   更新接口,真实运行时采样接线在 T14（注入时启用）。
-//! - `ComputeError::Saturated`（池饱和熔断,D15）为契约变体,触发路径在 T14 接线。
+//! - `ComputeError::Saturated`（池饱和,D15）**自 ADR-197 起有真实触发路径**:
+//!   饱和处置为 env 三态（判定与计数见 [`super::telemetry`]）——默认 `observe` 仅
+//!   记观测+发事件、任务仍走池（行为零变更）;`degrade` 才降级为 Inline 执行
+//!   （变慢不变错）;`strict`（旧 `CHIMERA_COMPUTE_STRICT_POOL`）才以 `Saturated` 返回错误。
 //! - 缝合点（Clock/Rng/Fs/Net,§10.8 Ω₇）见 [`super::seam`],T14 注入时才接线本桥。
+//! - **hnsw_rs 全局池例外（第三轮 T2.5 · 纪律④ 桥接唯一的已知破口）**：`mlc-engine`
+//!   语义建边（mlc-engine `memory_graph` >1K 路径）与 `repo-wiki` `HnswStore` 依赖
+//!   `hnsw_rs` 索引,其 search/insert 内部自行派发 **rayon 全局池**任务,不经本桥
+//!   专用 `self.pool`。本桥的 `pool.install`/`scope` **无法将 hnsw_rs 内部的全局池调度
+//!   排除/归并**（它直接调 rayon 全局 spawn,不继承外层 scope）,因此实际存在两个线程池并存。
+//!   接线前须显式决定：① 迁桥（包 hnsw_rs 调用入本桥任务——因上述 install 无法排除而不可行，
+//!   或需上游改造），或② 接受为**长期有界例外**并固定其线程上限。未决定前不得默认它已合规。
 
-use std::future::Future;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use arc_swap::ArcSwap;
+
+use super::calibration::{self, CalibrationMode, ExecPath};
 
 use super::dispatch::{DispatchPlan, TaskKind};
 use super::hts::{HtsTable, ThresholdSource};
 use super::reduce::{reduce as reduce_impl, ReduceMode};
+// A1/ADR-197:饱和判定与按 TaskKind 归因遥测
+use super::telemetry::{self, KindCounters, SaturationMode};
 // T1(WI-34):rayon 池活跃计数探针（利用率测量基座,见 utilization.rs）
 use super::utilization::{ActiveCounter, RayonProbe};
 use thiserror::Error;
@@ -46,10 +61,16 @@ pub enum ComputeError {
     /// 任务在计算池内 panic — 已被 catch_unwind 隔离,不跨线程传播
     #[error("task panicked in compute pool")]
     Panicked,
-    /// 调用方在完成前取消（oneshot 接收端失效）
+    /// 批量入口槽位理论不可达时的兜底错误（保持库代码零 panic；oneshot 取消路径已随
+    /// `spawn_compute` 退役,此变体仅由 [`spawn_compute_batch`] 的 None 兜底构造）。
     #[error("cancelled before completion")]
     Cancelled,
-    /// 计算池饱和,可重试（D15 熔断触发路径,T9/T14 接线）
+    /// 计算池饱和,可重试
+    ///
+    /// 触发条件（ADR-197）:池占用 ≥ [`threshold_bp`](super::telemetry::threshold_bp)
+    /// **且** 饱和处置模式为 `strict`（旧 `CHIMERA_COMPUTE_STRICT_POOL`）。默认 `observe`
+    /// 模式仅记观测不改分支（任务仍走池,不返回本错误）;`degrade` 模式降级为 Inline
+    /// 执行,二者均不产生本错误,后者计入降级计数。
     #[error("pool saturated, retryable")]
     Saturated,
 }
@@ -66,12 +87,33 @@ pub struct ComputeBridge {
     /// WHY ArcSwap 而非 RwLock:route() 是纳秒级热路径（P99 < 1µs 门禁）,读路径
     /// 必须无锁;更新（T1 测定/T14 校准）低频,RCU store 全表替换代价可忽略。
     hts: ArcSwap<HtsTable>,
+    /// 阈值表写者串行锁 — 消除 `update_threshold` 的 load→clone→store lost-update
+    ///
+    /// WHY 单独一把 Mutex 而非 arc-swap CAS:见 [`update_threshold`](Self::update_threshold)
+    /// 文档。仅串行化低频写者,读路径 `route` 不碰此锁。
+    hts_write_lock: std::sync::Mutex<()>,
     /// WI-34 利用率探针 — 池活跃任务计数（spawn +1 / 完成 −1,T1 接线）
     ///
     /// WHY 独立 Arc:任务闭包需 `'static`,守卫持 Arc 克隆入闭包,RAII Drop 归还。
     active: Arc<ActiveCounter>,
     /// 池线程数快照（rayon ThreadPool 无公开线程数访问器,构造时保存）
     thread_count: usize,
+    /// A1/ADR-197:按 TaskKind 归因的卸载/失败/降级计数（零分配原子数组）
+    counters: KindCounters,
+    /// 饱和阈值千分比覆盖（0 = 沿用 env/默认值）
+    ///
+    /// WHY 字段而不直读 env:[`strict_pool_mode`](super::telemetry::strict_pool_mode)
+    /// 等 env 缓存是进程级 `OnceLock`,在并行测试里改 env 会彼此干扰其他用例;
+    /// 实例字段供**同模块测试**确定性地模拟饱和,对外行为零影响。
+    sat_bp_override: std::sync::atomic::AtomicU32,
+    /// 处置策略实例覆盖（`u8::MAX` = 沿用 env;0=Observe / 1=Degrade / 2=Strict）
+    ///
+    /// WHY 用 AtomicU8 而不就是两个 bool:三态策略加一个"未设置"哨兵共 4 个取值,
+    /// 单字段无锁读写即可表达,避开“双字段手工配对”这种可漂移的真值源（本仓
+    /// shard_bus 已由 ArcSwap 收敛过同类问题）。
+    mode_override: std::sync::atomic::AtomicU8,
+    /// B1/ADR-198:校准采样计数器（仅当 `CHIMERA_COMPUTE_CALIBRATION` ≠ off 时读写）
+    cal_counter: std::sync::atomic::AtomicU64,
 }
 
 /// 进程级单例 — 手册 §8.3 骨架（`OnceLock` 惰性初始化,线程安全,幂等）
@@ -94,7 +136,7 @@ impl ComputeBridge {
         // rayon build 失败仅当 OS 拒绝创建线程(进程级资源耗尽),此时计算桥不可用
         // 即进程不可用,无运行期降级路径(与 D15 运行期熔断杀池不同)——这是进程
         // 启动期致命前提的失败,panic 沿 OnceLock 惰性初始化传播(§11.1 不变式
-        // "spawn_compute 永不 panic 到调用方"仅约束运行期计算任务,不覆盖单例初始化前提)
+        // "计算任务永不 panic 到调用方"仅约束运行期批处理,不覆盖单例初始化前提)
         let pool = match rayon::ThreadPoolBuilder::new()
             .num_threads(threads)
             .stack_size(STACK_SIZE_BYTES)
@@ -108,8 +150,39 @@ impl ComputeBridge {
             pool,
             // HTS 初始表:dispatch.rs 静态值迁移（S9 离线测定预填,W1 复测,§8.4）
             hts: ArcSwap::from_pointee(HtsTable::default()),
+            hts_write_lock: std::sync::Mutex::new(()),
             active: Arc::new(ActiveCounter::default()),
             thread_count: threads,
+            counters: KindCounters::default(),
+            sat_bp_override: std::sync::atomic::AtomicU32::new(0),
+            mode_override: std::sync::atomic::AtomicU8::new(u8::MAX),
+            cal_counter: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// 同模块测试专用桥构造 —— 不碰全局单例,零串扰
+    ///
+    /// WHY 集中构造:测试需多个独立实例验证饱和/降级/探针行为,
+    /// 字段集会随功能演进,集中一处避免多处同步修改。
+    // 本函数仅在 cfg(test) 下编译,池构建失败 = 测试环境前提不成立,expect 在此合法
+    // （E-5 红线的适用域是生产代码,与 `mod tests` 顶部的同类放行一致）
+    #[allow(clippy::expect_used)]
+    #[cfg(test)]
+    pub(crate) fn test_bridge(threads: usize) -> Self {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .expect("测试池构建失败");
+        Self {
+            pool,
+            hts: ArcSwap::from_pointee(HtsTable::default()),
+            hts_write_lock: std::sync::Mutex::new(()),
+            active: Arc::new(ActiveCounter::default()),
+            thread_count: threads,
+            counters: KindCounters::default(),
+            sat_bp_override: std::sync::atomic::AtomicU32::new(0),
+            mode_override: std::sync::atomic::AtomicU8::new(u8::MAX),
+            cal_counter: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -123,6 +196,118 @@ impl ComputeBridge {
     #[must_use]
     pub fn pool_threads(&self) -> usize {
         self.thread_count
+    }
+
+    /// A1/ADR-197:累计因饱和而降级为 Inline 的卸载次数（**仅 Degrade 策略下会增长**）
+    #[must_use]
+    pub fn saturation_degradations(&self) -> u64 {
+        self.counters.degradations()
+    }
+
+    /// 第三轮 T2.2:累计降级为 Inline 的**项数**（项粒度，与 `saturation_degradations`
+    /// 的批粒度口径不同；一批降级 n 项则本计数 +n、`saturation_degradations` +1）
+    #[must_use]
+    pub fn saturation_degraded_items(&self) -> u64 {
+        self.counters.degraded_items_total()
+    }
+
+    /// A1/ADR-197:累计超阈观测次数（三种策略均增长，上报器去抖基线）
+    #[must_use]
+    pub fn saturation_observations(&self) -> u64 {
+        self.counters.saturations()
+    }
+
+    /// A1/ADR-197:占用最高的任务类型名（事件归因字段）
+    #[must_use]
+    pub fn saturation_hottest_kind(&self) -> String {
+        self.counters.hottest_kind()
+    }
+
+    /// A1/ADR-197:按类型计数快照（供指标导出与测试断言）
+    #[must_use]
+    pub fn kind_counters(&self) -> &KindCounters {
+        &self.counters
+    }
+
+    /// B1/ADR-198:当前生效阈值（校准候选计算与测试断言用）
+    #[must_use]
+    pub fn threshold_of(&self, kind: TaskKind) -> usize {
+        self.hts.load().get(kind).threshold
+    }
+
+    /// B1/ADR-198:当前生效 chunk（写表时沿用现值,本批不主张 chunk 语义）
+    #[must_use]
+    pub fn chunk_of(&self, kind: TaskKind) -> usize {
+        self.hts.load().get(kind).chunk
+    }
+
+    /// B1/ADR-198:阈值来源描述串（可审计面:预填/校准/兜底三态必可区分）
+    ///
+    /// WHY 返回字符串而非 `ThresholdSource`:本方法只服务可观测面与测试断言,
+    /// 将枚举逐变异展开为串可避免在公API 里泄露 `hts` 内部类型。
+    #[must_use]
+    pub fn threshold_source_of(&self, kind: TaskKind) -> String {
+        use super::hts::ThresholdSource;
+        match self.hts.load().get(kind).source {
+            ThresholdSource::OfflineMeasured { measured_at } => {
+                format!("OfflineMeasured{{measured_at:{measured_at}}}")
+            }
+            ThresholdSource::SequentialTest {
+                promoted_at,
+                samples,
+            } => {
+                format!("SequentialTest{{promoted_at:{promoted_at},samples:{samples}}}")
+            }
+            ThresholdSource::ConservativeDefault => "ConservativeDefault".to_string(),
+        }
+    }
+
+    /// 当前占用是否已达饱和阈值（公开只读判定,供上层与测试使用）
+    #[must_use]
+    pub fn is_saturated(&self) -> bool {
+        telemetry::saturation_ratio_bp(self.active.active(), self.thread_count)
+            >= self.saturation_threshold_bp()
+    }
+
+    /// 生效的饱和阈值千分比（实例覆盖优先,否则 env/默认）
+    #[must_use]
+    pub fn saturation_threshold_bp(&self) -> u32 {
+        let override_bp = self.sat_bp_override.load(Ordering::Relaxed);
+        if override_bp == 0 {
+            telemetry::threshold_bp()
+        } else {
+            override_bp
+        }
+    }
+
+    /// 生效的饱和处置策略（实例覆盖优先,否则 env/默认 Observe）
+    #[must_use]
+    pub fn saturation_mode(&self) -> SaturationMode {
+        match self.mode_override.load(Ordering::Relaxed) {
+            0 => SaturationMode::Observe,
+            1 => SaturationMode::Degrade,
+            2 => SaturationMode::Strict,
+            // 哨兵 u8::MAX = 未覆盖 → 回落 env/默认
+            _ => telemetry::saturation_mode(),
+        }
+    }
+
+    /// 测试可见的饱和注入缝:强制阈值与处置策略（仅同模块测试使用）
+    #[cfg(test)]
+    fn force_saturation(&self, threshold_bp: u32, mode: SaturationMode) {
+        self.sat_bp_override.store(threshold_bp, Ordering::Relaxed);
+        let encoded = match mode {
+            SaturationMode::Observe => 0,
+            SaturationMode::Degrade => 1,
+            SaturationMode::Strict => 2,
+        };
+        self.mode_override.store(encoded, Ordering::Relaxed);
+    }
+
+    /// 测试可见的活跃计数句柄（仅同模块测试用于人工占池）
+    #[cfg(test)]
+    fn active_handle(&self) -> Arc<ActiveCounter> {
+        Arc::clone(&self.active)
     }
 
     /// WI-34 rayon 探针 — 池活跃率快照（供 utilization::RayonProbe 消费）
@@ -151,8 +336,14 @@ impl ComputeBridge {
 
     /// 运行期更新阈值表 — T1 测定值灌入 / T14 序贯检验校准的转发接口
     ///
-    /// WHY RCU store 而非原地改:读路径持无锁快照,更新必须全表替换（arc-swap 语义）;
-    /// 更新低频（测定/校准事件）,每次复制 6 条 Entry 的成本可忽略。
+    /// WHY 写者串行而非 arc-swap CAS:旧实现 `load_full → clone → store` 非原子,两个
+    /// 并发更新会互相覆盖(lost update)——旧注释"单写者"此前只靠"唯一写者=低频周期器且
+    /// 默认 Off"这一运行期约定成立,并非接口层保证(`update_threshold` 是 `pub`)。
+    /// `Shared`/`Guard` deref 到内层值而非 `Arc`,指针级 CAS 成功判据在本绑定(1.9.2)易踩
+    /// API 陷阱,且 `compare_and_swap` 自 1.6 soft-deprecated 会触发 `-D warnings`。故用
+    /// `hts_write_lock` 仅在**写者之间**串行——写者本就低频(T1 测定 / T14 周期器 flush),
+    /// **读路径 `route` 仍走 ArcSwap `load` 无锁,热路径零影响**。持锁仅跨一次 clone+store
+    /// (同步、无 await,不触"持锁跨 await"红线);中毒经 into_inner 兜底。
     /// `source` 为强制显式参数（诚实数据红线:阈值必须可溯源,见 [`ThresholdSource`]）。
     pub fn update_threshold(
         &self,
@@ -161,6 +352,12 @@ impl ComputeBridge {
         chunk: usize,
         source: ThresholdSource,
     ) {
+        // 写者串行:独占一次 load→clone→update→store,消除跨写者的 lost-update。
+        // 命名 `_guard`(非 `let _`)确保 RAII 持到作用域末;into_inner 兜底中毒(单值语义,无脏数据)。
+        let _guard = self
+            .hts_write_lock
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let current = self.hts.load_full();
         let mut next = (*current).clone();
         next.update(kind, threshold, chunk, source);
@@ -178,43 +375,10 @@ impl ComputeBridge {
     ///   （审计开销 ≤ 30% 门禁,见 `reduce_bench`）。
     #[must_use]
     pub fn reduce(&self, vals: &[f64], mode: ReduceMode) -> f64 {
-        // WHY 不走 spawn_compute:归约是标量级计算,池调度（微秒级）反成主导开销;
+        // WHY 不走 spawn_compute_batch:归约是标量级计算,池调度（微秒级）反成主导开销;
         // T14 接线时若输入规模超 HTS 阈值,再考虑 Rayon 分块并行（接口不变,
         // 返回类型 f64 无错误面）
         reduce_impl(vals, mode)
-    }
-
-    /// L-a 统一入口 — CPU 卸载单任务
-    ///
-    /// 契约（§11.1 不变式）:
-    /// - 池内闭包 panic 被 `catch_unwind` 捕获,返回 [`ComputeError::Panicked`],**永不 panic 到调用方**;
-    /// - 调用方在 await 前 drop future（取消）时,池任务完成后静默丢弃结果（oneshot 取消契约）;
-    /// - rayon 闭包内禁 `.await` / IO / 持锁跨闭包边界（§7.5.3 纪律④⑥,红线）。
-    ///
-    /// `kind` 当前仅作契约占位（骨架阶段不参与调度权重/遥测,T9/T14 接线）。
-    pub fn spawn_compute<F, T>(
-        &self,
-        kind: TaskKind,
-        f: F,
-    ) -> impl Future<Output = Result<T, ComputeError>> + Send
-    where
-        F: FnOnce() -> T + Send + 'static,
-        T: Send + 'static,
-    {
-        // WHY 骨架阶段:kind 仅登记契约,调度权重与遥测计数(ADR-125)在 T9/T14 接线
-        let _ = kind;
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        // WI-34 探针:执行即计（闭包内守卫 +1/Drop 归还）;排队阶段不计入活跃数
-        let active = Arc::clone(&self.active);
-        self.pool.spawn(move || {
-            let _guard = active.enter();
-            // AssertUnwindSafe:闭包 f 不跨 await/锁边界(契约纪律),panic 隔离无需全局可反射状态
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
-                .map_err(|_| ComputeError::Panicked);
-            // 调用方已取消(drop rx)时 send 返回 Err,静默丢弃——取消安全
-            let _ = tx.send(r);
-        });
-        async move { rx.await.map_err(|_| ComputeError::Cancelled)? }
     }
 
     /// L-a 批量入口 — CPU 卸载批量任务（任意数量闭包,分块并行）
@@ -225,7 +389,12 @@ impl ComputeBridge {
     ///
     /// 单个任务 panic 不影响同批其他任务（逐个 catch_unwind 隔离）。
     ///
-    /// `kind` 当前仅作契约占位（同 [`spawn_compute`](Self::spawn_compute)）。
+    /// `kind` 用于按类型归因遥测（ADR-197,[`KindCounters`]）。
+    ///
+    /// # 饱和行为（ADR-197 D2）
+    /// 达阈值时按策略分流：`Observe`（默认）仍走池只记观测；`Degrade` 在当前线程逐个
+    /// Inline 执行（结果序仍 = 输入序,逐元素等价）；`Strict` 整批不执行并逐项返回
+    /// [`ComputeError::Saturated`]。
     #[must_use]
     pub fn spawn_compute_batch<F, T, I>(
         &self,
@@ -237,12 +406,59 @@ impl ComputeBridge {
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        // WHY 骨架阶段:同 spawn_compute,kind 仅登记契约
-        let _ = kind;
+        self.counters.record_spawn(kind);
         let items: Vec<F> = items.into_iter().collect();
         let n = items.len();
         if n == 0 {
             return Vec::new();
+        }
+
+        // B1/ADR-198：校准探测（默认 off ⇒ 不进本块，零开销、零行为变更）。
+        // 入参是 FnOnce 闭包——同一个闭包不能跑两遍，故成对样本只能靠
+        // “探测式分流”获得：被采样的调用按奇偶决定本次走池还是走 Inline。
+        // 两桶统一按 µs/项 记账，避免不同 n_items 的调用直接配对时把
+        // “任务更大”误判为“池更慢”。
+        let mut probe_start: Option<Instant> = None;
+        let mut probe_inline = false;
+        if calibration::mode() != CalibrationMode::Off {
+            let c = self.cal_counter.fetch_add(1, Ordering::Relaxed);
+            if calibration::should_sample(c) {
+                probe_start = Some(Instant::now());
+                probe_inline = calibration::explores_inline(c);
+            }
+        }
+
+        // A1/ADR-197：超阈处置按策略分流；Observe 不 return（避免排队堆积把尾延
+        // 拉成队头阻塞这件事交给 Degrade，需显式开启）
+        if self.is_saturated() {
+            self.counters.record_saturation();
+            match self.saturation_mode() {
+                SaturationMode::Strict => {
+                    self.counters.record_rejection();
+                    return (0..n).map(|_| Err(ComputeError::Saturated)).collect();
+                }
+                SaturationMode::Degrade => {
+                    self.counters.record_degradation();
+                    // T2.2 独立项粒度遥测:降级批的 n 项计入 degraded_items_total,
+                    // 与 active.enter 解耦(不致饱和自屏蔽);批粒度 degradations 仍 +1。
+                    self.counters.record_degraded_items(n as u64);
+                    let out = self.run_inline_all(kind, items);
+                    if let Some(t0) = probe_start {
+                        calibration::observe(kind, ExecPath::Inline, n, t0.elapsed());
+                    }
+                    return out;
+                }
+                SaturationMode::Observe => {}
+            }
+        }
+
+        // 探测位：本次改走 Inline（结果逐元素等价，仅延迟特征不同）
+        if probe_inline {
+            let out = self.run_inline_all(kind, items);
+            if let Some(t0) = probe_start {
+                calibration::observe(kind, ExecPath::Inline, n, t0.elapsed());
+            }
+            return out;
         }
 
         // 槽位共享:每任务写唯一索引槽(结果序 = 输入序);
@@ -261,8 +477,11 @@ impl ComputeBridge {
                 let active = Arc::clone(&active);
                 s.spawn(move |_| {
                     let _guard = active.enter();
-                    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
-                        .map_err(|_| ComputeError::Panicked);
+                    let r =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|_| {
+                            bridge().counters.record_failure(kind);
+                            ComputeError::Panicked
+                        });
                     // 任务内全部 catch_unwind,锁不 poison;unwrap_or_else 兜底防御
                     let mut guard = slots
                         .lock()
@@ -274,18 +493,44 @@ impl ComputeBridge {
 
         // 理论不可达分支:scope 同步阻塞至全部任务完成,槽位必然已填;
         // None 兜底用 Cancelled(取消语义)而非 panic,保持库代码零 panic 红线
-        slots
+        let results: Vec<Result<T, ComputeError>> = slots
             .into_inner()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .into_iter()
             .map(|slot| slot.unwrap_or(Err(ComputeError::Cancelled)))
+            .collect();
+        if let Some(t0) = probe_start {
+            calibration::observe(kind, ExecPath::Pool, n, t0.elapsed());
+        }
+        results
+    }
+
+    /// 在当前线程逐个执行整批闭包（Degrade 降级与 B1 探测共用同一实现）
+    ///
+    /// WHY 抽函数:两条路径必须**逐元素等价**，各写一份就有静默分叉风险
+    /// （本仓曾因 publish/publish_blocking 双份实现踩过同类问题，现以宏收敛）。
+    /// 活跃计数守卫同样适用:Inline 也是占一份计算力的执行。
+    fn run_inline_all<F, T>(&self, kind: TaskKind, items: Vec<F>) -> Vec<Result<T, ComputeError>>
+    where
+        F: FnOnce() -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        let _guard = self.active.enter();
+        items
+            .into_iter()
+            .map(|f| {
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|_| {
+                    self.counters.record_failure(kind);
+                    ComputeError::Panicked
+                })
+            })
             .collect()
     }
 }
 
 /// 三态判定纯函数 — route 的核心逻辑,与 `is_io_bound` 判定/阈值查询解耦
 ///
-/// WHY 拆分(Ω₇):`is_io_bound` 当前对六类登记恒为 `false`(手册 §8.4 全 CPU 型),
+/// WHY 拆分(Ω₇):`is_io_bound` 当前对十类登记恒为 `false`(手册 §8.4 全 CPU 型),
 /// 直接经公开 `route` 无法覆盖 Async 分支;拆出纯函数后三态分支均可在
 /// IO 类任务登记(T9)之前被单测锁定,登记时零回归风险。
 ///
@@ -366,41 +611,7 @@ mod tests {
         );
     }
 
-    /// spawn_compute 正常路径 — 返回闭包结果,类型保真
-    #[tokio::test]
-    async fn spawn_compute_ok() {
-        let out = bridge()
-            .spawn_compute(TaskKind::Generic, || 42u64)
-            .await
-            .expect("正常任务应成功");
-        assert_eq!(out, 42);
-    }
-
-    /// spawn_compute panic 隔离 — 池内 panic 转为 ComputeError::Panicked,不跨线程传播
-    #[tokio::test]
-    async fn spawn_compute_panics_isolated() {
-        // 静音 panic hook:panic 消息预期出现(隔离语义),避免污染测试输出
-        let prev = std::panic::take_hook();
-        std::panic::set_hook(Box::new(|_| {}));
-        let res = bridge()
-            .spawn_compute(TaskKind::Generic, || -> u64 { panic!("boom") })
-            .await;
-        std::panic::set_hook(prev);
-        assert_eq!(res, Err(ComputeError::Panicked));
-    }
-
-    /// spawn_compute 取消契约 — oneshot 接收端失效后发送失败（取消安全）
-    ///
-    /// spawn_compute 依赖此契约:调用方 drop future 时,池内任务完成后的
-    /// tx.send 返回 Err 被静默丢弃,无泄漏无 panic。
-    #[test]
-    fn spawn_compute_oneshot_cancel_semantics() {
-        let (tx, rx) = tokio::sync::oneshot::channel::<u64>();
-        drop(rx);
-        assert!(tx.send(42).is_err(), "接收端 drop 后发送必须失败");
-    }
-
-    /// Cancelled 映射 — rx.await 在发送端失效时返回 ComputeError::Cancelled
+    /// Cancelled 映射 — oneshot 接收端在发送端失效时以 Err 收场
     #[tokio::test]
     async fn cancelled_mapping() {
         let (tx, rx) = tokio::sync::oneshot::channel::<u64>();
@@ -483,16 +694,7 @@ mod tests {
     /// 独立实例在私有字段可访问处构造（同模块测试）,零全局副作用。
     #[test]
     fn update_threshold_changes_route() {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(2)
-            .build()
-            .expect("测试池构建失败");
-        let b = ComputeBridge {
-            pool,
-            hts: ArcSwap::from_pointee(HtsTable::default()),
-            active: Arc::new(ActiveCounter::default()),
-            thread_count: 2,
-        };
+        let b = ComputeBridge::test_bridge(2);
         let kind = TaskKind::ClvSimilarity;
         // §8.4 初值:阈值 1000 → 20 项走 Inline
         assert_eq!(b.route(kind, 20), DispatchPlan::Inline);
@@ -508,6 +710,39 @@ mod tests {
         assert_eq!(b.route(TaskKind::KnnSearch, 5_000), DispatchPlan::Rayon);
     }
 
+    /// 并发 update_threshold 无丢更新 — 锁住旧实现 load→clone→store 的非原子竞态
+    ///
+    /// WHY:旧实现裸 `store` 整表替换,多线程并发写**各不同的 kind**时会互相覆盖
+    /// (后写者基于自己早先 load 的快照,抹掉先写者对其他 kind 的更新)。distinct-kind
+    /// 设计不依赖各 kind 默认值、断言稳健:每个 kind 的哨兵写入都必须存活。CAS 环
+    /// (`rc_swap`)失败即基于最新快照重放,保证全部写入存活。本测在旧实现有概率红、
+    /// 新实现必绿(跨 kind 丢失更新被 CAS 消除)。用 `test_bridge` 独立实例避全局单例竞争。
+    #[test]
+    fn update_threshold_concurrent_no_lost_update() {
+        let b = Arc::new(ComputeBridge::test_bridge(4));
+        const SENTINEL: usize = 12_345;
+        let handles: Vec<_> = TaskKind::ALL
+            .iter()
+            .copied()
+            .map(|kind| {
+                let b = Arc::clone(&b);
+                std::thread::spawn(move || {
+                    b.update_threshold(kind, SENTINEL, 64, ThresholdSource::ConservativeDefault);
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().expect("并发 update_threshold 线程应正常退出");
+        }
+        for kind in TaskKind::ALL {
+            assert_eq!(
+                b.threshold_of(kind),
+                SENTINEL,
+                "{kind:?} 的阈值更新被他线程覆盖(lost update)"
+            );
+        }
+    }
+
     /// 池探针语义 — 批量任务执行期间活跃数 > 0,完成后归零
     ///
     /// WHY 独立实例而非全局 `bridge()`:全局单例池被并行测试共享（如
@@ -515,16 +750,7 @@ mod tests {
     /// 独立实例构造私有字段（同模块测试可见）,零全局副作用。
     #[test]
     fn pool_active_probe_lifecycle() {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(2)
-            .build()
-            .expect("测试池构建失败");
-        let b = ComputeBridge {
-            pool,
-            hts: ArcSwap::from_pointee(HtsTable::default()),
-            active: Arc::new(ActiveCounter::default()),
-            thread_count: 2,
-        };
+        let b = ComputeBridge::test_bridge(2);
         assert_eq!(b.pool_active_tasks(), 0, "空闲池活跃数必须为 0");
         assert_eq!(b.pool_threads(), 2);
         let n = 16;
@@ -550,15 +776,31 @@ mod tests {
     }
 
     /// 池探针并发可见性 — 8 并发 batch 交叉执行时峰值计数可达 >0
+    ///
+    /// WHY 用 `Arc<test_bridge>` 而不拿全局 `bridge()`:同文件
+    /// [`pool_active_probe_lifecycle`] 的注释早点名“全局单例被并行测试共享会污染
+    /// active 计数断言”——该污染是真实的（2026-10-02 全量跑中出现
+    /// “活跃数应为 0、实际为 1”的偶发失败）。独立实例 + Arc 既让 8 线程共享同一个桥,
+    /// 又与其他测试零串扰。
+    ///
+    /// 同时补上本测试名义上宣称却从未断言的语义：并发期间“峰值 > 0”。
     #[test]
     fn pool_active_probe_concurrent() {
-        let b = bridge();
+        let b = Arc::new(ComputeBridge::test_bridge(4));
+        let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let handles: Vec<_> = (0..8)
             .map(|_| {
+                let b = Arc::clone(&b);
+                let peak = Arc::clone(&peak);
                 std::thread::spawn(move || {
                     let items: Vec<_> = (0..8)
                         .map(|i| {
+                            // 每个任务闭包各自持一份桥与峰值计数器的句柄（'static 要求）
+                            let b = Arc::clone(&b);
+                            let peak = Arc::clone(&peak);
                             move || {
+                                // 先记录在途峰值（本测试要断言的并发可见性）,再自旋一小段
+                                peak.fetch_max(b.pool_active_tasks(), Ordering::Relaxed);
                                 let start = std::time::Instant::now();
                                 while start.elapsed() < std::time::Duration::from_millis(1) {
                                     std::hint::spin_loop();
@@ -575,6 +817,11 @@ mod tests {
         for h in handles {
             h.join().expect("并发线程应正常退出");
         }
+        assert!(
+            peak.load(Ordering::Relaxed) > 0,
+            "并发执行期间活跃峰值应 > 0（实测 {}）",
+            peak.load(Ordering::Relaxed)
+        );
         assert_eq!(b.pool_active_tasks(), 0, "全部并发任务完成后活跃数归零");
     }
 
@@ -655,5 +902,215 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ============================================================
+    // A1/ADR-197:饱和降级与严格模式行为
+    //
+    // WHY 用实例级注入缝（force_saturation + 人工占池）而不改 env:
+    // 阈值与严格模式的 env 缓存是进程级 OnceLock,并行测试下会彼此干扰;
+    // 实例字段只在当前测试拥有的桥内生效,结果确定。
+    // ============================================================
+
+    /// 构造一个可被测试占满的桥:返回（桥, 活跃计数器副本）
+    ///
+    /// WHY 分开返回而不返回 guard:`enter()` 返回的守卫借用计数器,
+    /// 无法与按值返回的桥同存（自引用）;调用方在本地持有 `Arc` 副本再 `enter()`,
+    /// 既占住活跃数又不产生跨所有权 borrow。
+    fn saturated_bridge(mode: SaturationMode) -> (ComputeBridge, Arc<ActiveCounter>) {
+        let b = ComputeBridge::test_bridge(2);
+        b.force_saturation(1_000, mode);
+        let counter = b.active_handle();
+        (b, counter)
+    }
+
+    /// A1 风险缓解的核心用例：默认 Observe 下只记观测，**分支不变**（任务仍走池）
+    #[test]
+    fn observe_mode_records_saturation_without_changing_branch() {
+        let (b, counter) = saturated_bridge(SaturationMode::Observe);
+        let _guards = (counter.enter(), counter.enter());
+        let results = b.spawn_compute_batch(TaskKind::KnnSearch, (0..4u32).map(|i| move || i + 1));
+        let vals: Vec<u32> = results.into_iter().map(|r| r.unwrap()).collect();
+        assert_eq!(vals, vec![1, 2, 3, 4], "Observe 下结果必须与平时一致");
+        assert_eq!(b.kind_counters().saturations(), 1, "超阈必须被观测到");
+        assert_eq!(
+            b.kind_counters().degradations(),
+            0,
+            "Observe 必须零行为变更:不能把观测误记为降级"
+        );
+        assert_eq!(b.kind_counters().rejections(), 0);
+    }
+
+    /// spawn_compute_batch Degrade — 饱和时整批 Inline 执行,结果逐元素不变,降级计数+1
+    ///（与 spawn_compute 的 async Degrade 测同构,补 batch 入口覆盖，为 S-2-B 前置）。
+    #[test]
+    fn saturated_spawn_compute_batch_degrades_to_inline_with_same_results() {
+        let (b, counter) = saturated_bridge(SaturationMode::Degrade);
+        let _guards = (counter.enter(), counter.enter());
+        assert!(b.is_saturated(), "占池后必须判为饱和");
+        let results = b.spawn_compute_batch(TaskKind::KnnSearch, (0..4u32).map(|i| move || i * 2));
+        let vals: Vec<u32> = results
+            .into_iter()
+            .map(|r| r.expect("降级方向=变慢不变错"))
+            .collect();
+        assert_eq!(vals, vec![0, 2, 4, 6], "降级结果必须与走池逐元素一致");
+        assert_eq!(b.kind_counters().degradations(), 1, "整批降级计一次");
+        assert_eq!(b.kind_counters().saturations(), 1, "超阈观测与降级分开计数");
+        assert_eq!(b.kind_counters().rejections(), 0, "Degrade 非拒绝");
+    }
+
+    /// spawn_compute_batch Strict — 饱和时逐任务 Err(Saturated),任何闭包不执行,拒绝计数+1
+    #[test]
+    fn strict_pool_batch_rejects_all_without_running() {
+        let (b, counter) = saturated_bridge(SaturationMode::Strict);
+        let _guards = (counter.enter(), counter.enter());
+        let executed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let flag = Arc::clone(&executed);
+        let results = b.spawn_compute_batch(
+            TaskKind::OsaMask,
+            (0..3u32).map(move |_| {
+                let flag = Arc::clone(&flag);
+                move || {
+                    flag.fetch_add(1, Ordering::SeqCst);
+                    1u32
+                }
+            }),
+        );
+        assert_eq!(
+            results,
+            vec![Err(ComputeError::Saturated); 3],
+            "严格模式整批逐任务报饱和"
+        );
+        assert_eq!(
+            executed.load(Ordering::SeqCst),
+            0,
+            "严格模式语义=不执行任何闭包"
+        );
+        assert_eq!(b.kind_counters().rejections(), 1, "一次批量调用计一次拒绝");
+        assert_eq!(b.kind_counters().degradations(), 0, "拒绝与降级分开计数");
+    }
+
+    /// spawn_compute_batch panic 隔离 — 单任务 panic 转 Err(Panicked),同批其它任务不受影响
+    #[test]
+    fn spawn_compute_batch_panic_isolated_per_item() {
+        let prev = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {})); // 静音预期 panic,避免污染测试输出
+        let results = bridge().spawn_compute_batch(
+            TaskKind::Generic,
+            (0..3u64).map(|i| move || if i == 1 { panic!("boom") } else { i }),
+        );
+        std::panic::set_hook(prev);
+        assert_eq!(results.len(), 3, "结果数恒等于输入数");
+        assert_eq!(results[0], Ok(0), "panic 前项正常");
+        assert_eq!(
+            results[1],
+            Err(ComputeError::Panicked),
+            "panic 隔离为错误值,不跨线程传播"
+        );
+        assert_eq!(results[2], Ok(2), "panic 后项不受影响");
+    }
+
+    #[test]
+    fn saturated_batch_keeps_input_order_and_values() {
+        let (b, counter) = saturated_bridge(SaturationMode::Degrade);
+        let _guards = (counter.enter(), counter.enter());
+        let results = b.spawn_compute_batch(TaskKind::Generic, (0..8u32).map(|i| move || i * 2));
+        let vals: Vec<u32> = results.into_iter().map(|r| r.unwrap()).collect();
+        assert_eq!(
+            vals,
+            vec![0, 2, 4, 6, 8, 10, 12, 14],
+            "结果序必须等于输入序"
+        );
+        assert_eq!(
+            b.kind_counters().degradations(),
+            1,
+            "一批只记一次降级(批粒度)"
+        );
+    }
+
+    /// 第三轮 T2.2:降级项数与批数**双口径**独立计数（项粒度 vs 批粒度）；
+    /// Observe/Strict 不得误记项数（只 Degrade 分支才 +n）。
+    #[test]
+    fn degraded_items_counts_items_not_batches() {
+        // Degrade 一批 6 项:批粒度 +1、项粒度 +6
+        let (b, counter) = saturated_bridge(SaturationMode::Degrade);
+        let _guards = (counter.enter(), counter.enter());
+        let results = b.spawn_compute_batch(TaskKind::KnnSearch, (0..6u32).map(|i| move || i));
+        assert_eq!(results.len(), 6, "结果数不变(降级仅换执行路径)");
+        assert_eq!(b.saturation_degradations(), 1, "批粒度仍计一批");
+        assert_eq!(
+            b.saturation_degraded_items(),
+            6,
+            "项粒度计六项(T2.2 独立计数)"
+        );
+        // 二批再降级 3 项:批 +1(共 2)、项 +3(共 9)——两口径互不可互推
+        let _ = b.spawn_compute_batch(TaskKind::KnnSearch, (0..3u32).map(|i| move || i));
+        assert_eq!(b.saturation_degradations(), 2, "两批→批粒度 2");
+        assert_eq!(b.saturation_degraded_items(), 9, "6+3→项粒度 9");
+    }
+
+    /// T2.2 反侧:Observe/Strict 不降级，故 degraded_items 恒为 0
+    #[test]
+    fn observe_and_strict_do_not_count_degraded_items() {
+        let (o, oc) = saturated_bridge(SaturationMode::Observe);
+        let _og = (oc.enter(), oc.enter());
+        let _ = o.spawn_compute_batch(TaskKind::KnnSearch, (0..4u32).map(|i| move || i));
+        assert_eq!(
+            o.saturation_degraded_items(),
+            0,
+            "Observe 不降级→项计数不动"
+        );
+        let (s, sc) = saturated_bridge(SaturationMode::Strict);
+        let _sg = (sc.enter(), sc.enter());
+        let _ = s.spawn_compute_batch(TaskKind::KnnSearch, (0..4u32).map(|i| move || i));
+        assert_eq!(
+            s.saturation_degraded_items(),
+            0,
+            "Strict 拒绝不执行→项计数不动"
+        );
+    }
+
+    #[test]
+    fn strict_batch_reports_saturated_per_item() {
+        let (b, counter) = saturated_bridge(SaturationMode::Strict);
+        let _guards = (counter.enter(), counter.enter());
+        let results = b.spawn_compute_batch(TaskKind::KnnSearch, (0..5u32).map(|i| move || i));
+        assert_eq!(results.len(), 5);
+        assert!(
+            results.iter().all(|r| *r == Err(ComputeError::Saturated)),
+            "逐项报错而不缩减结果数(调用方索引对齐契约)"
+        );
+    }
+
+    #[test]
+    fn unsaturated_bridge_does_not_degrade() {
+        let b = ComputeBridge::test_bridge(2);
+        assert!(!b.is_saturated(), "空闲桥不得判为饱和");
+        let results =
+            b.spawn_compute_batch(TaskKind::GsoeEvaluate, (0..4u32).map(|i| move || i + 1));
+        let vals: Vec<u32> = results.into_iter().map(|r| r.unwrap()).collect();
+        assert_eq!(vals, vec![1, 2, 3, 4]);
+        assert_eq!(b.kind_counters().degradations(), 0);
+        assert_eq!(b.kind_counters().saturations(), 0, "未超阈不得记观测");
+    }
+
+    #[test]
+    fn inline_panic_is_counted_as_failure_not_zero_value() {
+        let (b, counter) = saturated_bridge(SaturationMode::Degrade);
+        let _guards = (counter.enter(), counter.enter());
+        let got = b.spawn_compute_batch(
+            TaskKind::CscCollapseScore,
+            vec![
+                Box::new(|| -> u32 { 1 }) as Box<dyn FnOnce() -> u32 + Send>,
+                Box::new(|| -> u32 { panic!("注入池内 panic") }) as Box<dyn FnOnce() -> u32 + Send>,
+            ],
+        );
+        assert_eq!(got[0], Ok(1), "同批其他任务不受影响");
+        assert_eq!(
+            got[1],
+            Err(ComputeError::Panicked),
+            "失败必须以 Err 暴露,不得被折算成合法值(审计 S-3)"
+        );
+        assert_eq!(b.kind_counters().failures_of(TaskKind::CscCollapseScore), 1);
     }
 }

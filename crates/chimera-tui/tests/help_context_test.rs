@@ -49,10 +49,17 @@ fn help_shows_focused_panel_shortcut_section() {
     })
     .unwrap();
 
+    // i18n(B4-I/F-65):Help 章节标题面板名与 tab 栏同源走 name_key() 键表,
+    // 期望串与渲染同源经 t! 求值、locale 无关;持 guard 串行化但不写全局
+    // locale——不新增 En 窗口。WHY compact:TestBackend 逐格渲染 CJK 时
+    // 字符间含空格,期望串须对压缩后内容匹配。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let expected = chimera_tui::t!(PanelId::TaskManager.name_key());
     let content = help_content_after_focus(&mut app, PanelId::TaskManager);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("TaskManager"),
-        "Help 应渲染焦点面板专属章节标题(含面板名 TaskManager)"
+        compact.contains(expected),
+        "Help 应渲染焦点面板专属章节标题(含面板名 {expected})"
     );
 }
 
@@ -65,17 +72,24 @@ fn help_context_updates_on_focus_change() {
     })
     .unwrap();
 
+    // i18n(B4-I/F-65):期望串与渲染同源经 t! 求值,locale 无关;不写全局
+    // locale(WHY 见 help_shows_focused_panel_shortcut_section 注)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let expected = chimera_tui::t!(PanelId::TaskManager.name_key());
+
     // 焦点 Quest:Help 无 TaskManager 章节
     let content = help_content_after_focus(&mut app, PanelId::Quest);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        !content.contains("TaskManager"),
+        !compact.contains(expected),
         "焦点为 Quest 时 Help 不应出现 TaskManager 章节"
     );
 
     // 焦点切到 TaskManager:Help 章节跟随更新(死功能 → 活)
     let content = help_content_after_focus(&mut app, PanelId::TaskManager);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("TaskManager"),
+        compact.contains(expected),
         "焦点切到 TaskManager 后 Help 应更新章节"
     );
 }
@@ -112,13 +126,18 @@ fn help_scrolls_to_reveal_context_section() {
         ..Default::default()
     })
     .unwrap();
+    // i18n(B4-I/F-65):期望串与渲染同源经 t! 求值,locale 无关;不写全局
+    // locale(WHY 见 help_shows_focused_panel_shortcut_section 注)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let expected = chimera_tui::t!(PanelId::TaskManager.name_key());
     // 注入 TaskManager 上下文 → 切 Help
     app.switch_panel_to(PanelId::TaskManager);
     let _ = render_to_string(&mut app, 120, 40);
     app.switch_panel_to(PanelId::Help);
     let clipped = render_to_string(&mut app, 120, 40);
+    let clipped_compact: String = clipped.chars().filter(|c| *c != ' ').collect();
     assert!(
-        !clipped.contains("TaskManager"),
+        !clipped_compact.contains(expected),
         "120x40 下上下文章节应被裁掉(滚动前,复现 U-N3 现场)"
     );
 
@@ -127,8 +146,9 @@ fn help_scrolls_to_reveal_context_section() {
         app.handle_key_event(key(KeyCode::Down));
     }
     let scrolled = render_to_string(&mut app, 120, 40);
+    let scrolled_compact: String = scrolled.chars().filter(|c| *c != ' ').collect();
     assert!(
-        scrolled.contains("TaskManager"),
+        scrolled_compact.contains(expected),
         "滚动后应可见焦点面板专属快捷键章节"
     );
 }

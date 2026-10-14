@@ -63,12 +63,12 @@ fn panel_unregistered_in_focus_order() {
 #[test]
 fn panel_next_prev_fallbacks_for_unregistered() {
     // 未注册变体的 next/prev 走 fallback:next → 环首 Quest,prev → 环尾
-    // ExperienceCardViz(types.rs 未注册变体回退语义,避免孤立分支)。
+    // Blackboard(v2.3 §(b.6) 新环尾;types.rs 未注册变体回退语义,避免孤立分支)。
     let panel = PanelId::InjectionStrategy;
     assert_eq!(panel.next(), PanelId::Quest, "未注册变体 next 回退环首");
     assert_eq!(
         panel.prev(),
-        PanelId::ExperienceCardViz,
+        PanelId::Blackboard,
         "未注册变体 prev 回退环尾"
     );
 }

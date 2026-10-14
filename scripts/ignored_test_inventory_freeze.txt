@@ -92,3 +92,4 @@ seccore|crates/seccore/tests/asa_concurrent.rs#test_audit_latency_under_5ms|slo-
 sesa-router|crates/sesa-router/benches/router_benchmark.rs#test_activate_256_experts_latency_p95_under_5ms|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
 sesa-router|crates/sesa-router/benches/router_benchmark.rs#test_enforce_sparsity_latency_under_1ms|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
 sesa-router|crates/sesa-router/benches/router_benchmark.rs#test_mask_ops_latency_under_100us|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
+nexus-core|crates/nexus-core/tests/calibration_observe_datatake.rs#calibration_observe_datatake|manual-only|WI-G6c 阶段 3 静默窗口取数驱动:需 CHIMERA_COMPUTE_CALIBRATION=observe + --ignored 手动运行(runbook 见文件头),刻意不接入自动通道|wired: no

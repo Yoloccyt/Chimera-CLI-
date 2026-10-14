@@ -26,6 +26,8 @@ chrono = { workspace = true }
 dashmap = { workspace = true }
 # L1 Core:跨层通信唯一通道,发布 McpMeshTransactionCompleted 事件、订阅 ChtcToolCallReceived
 event-bus = { workspace = true }
+# L0 Contracts:写入敏感扫描引擎(v2.3 §(b.5) quantum WAL 落盘前拦截;L10→L0 向下合规)
+nexus-contracts = { workspace = true }
 
 [dev-dependencies]
 # 性能基准框架(SubTask 1.7)

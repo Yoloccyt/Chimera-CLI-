@@ -164,10 +164,16 @@ fn test_no_r2_path_implementation_in_gsoe_evolution_src() {
     ];
 
     // 递归扫描 src/ 目录下所有 .rs 文件
+    //
+    // 先断言目录存在：旧写法把整个扫描包在 `if src_dir.exists()` 里，一旦目录不存在（重命名
+    // 该 crate、路径写错、工作树不完整）`violations` 就恒空 ⇒ 测试**根本没扫描却报绿**（假绿）。
+    // gsoe-evolution 是现役成员 crate，目录不存在本身就是异常，必须红。
+    assert!(
+        src_dir.exists(),
+        "gsoe-evolution/src 必须存在（现役 workspace 成员）；不存在时本测试无法给出任何判定"
+    );
     let mut violations: Vec<String> = Vec::new();
-    if src_dir.exists() {
-        scan_dir_for_keywords(&src_dir, &r2_keywords, &mut violations);
-    }
+    scan_dir_for_keywords(&src_dir, &r2_keywords, &mut violations);
 
     assert!(
         violations.is_empty(),
@@ -177,20 +183,24 @@ fn test_no_r2_path_implementation_in_gsoe_evolution_src() {
 }
 
 /// 验证 auto-dpo 源码中无 R2 路径实现关键词
+///
+/// fail-closed 形态（2026-10-08 / v3.5 W6-5 订正）：本 crate 已按 ADR-172 体系退役，
+/// “目录不存在”才是期望态。旧写法 `if src_dir.exists() { scan }` 在不存在时 violations
+/// 恒空 ⇒ 扫描未执行却报绿（假绿）；一旦有人重建同名目录，断言方向也不能要求“只补扫
+/// 描”——那等于把门交给重建者自觉。现改为：**目录存在即判红**，并显式记录“不存在 ⇒ 无从违反”。
 #[test]
 fn test_no_r2_path_implementation_in_auto_dpo_src() {
     let src_dir = workspace_root().join("crates").join("auto-dpo").join("src");
-    let r2_keywords = ["constrained_rl", "r2_policy", "train_r2", "GsoeAutoDpoRL"];
-
-    let mut violations: Vec<String> = Vec::new();
-    if src_dir.exists() {
-        scan_dir_for_keywords(&src_dir, &r2_keywords, &mut violations);
-    }
 
     assert!(
-        violations.is_empty(),
-        "auto-dpo/src/ 发现 R2 路径实现关键词(违反 ADR-042 决策 1):\n{}",
-        violations.join("\n")
+        !src_dir.exists(),
+        "[DELETED-BY-ADR-172] auto-dpo/src 不应存在；若确需重建，必须**先在本测试内恢复** \
+         `scan_dir_for_keywords`（关键词：constrained_rl / r2_policy / train_r2 / GsoeAutoDpoRL）\
+         并同步恢复 R2 冻结声明断言，再提交代码"
+    );
+    // 目录不存在 ⇒ 无代码可违反：这是显式记录的通过，不是静默跳过。
+    eprintln!(
+        "[DELETED-BY-ADR-172] auto-dpo/src 不存在，R2 关键词扫描面为空（断言方向：存在即红）"
     );
 }
 

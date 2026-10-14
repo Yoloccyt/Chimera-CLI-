@@ -1,0 +1,274 @@
+# L0 public-type extensibility class ledger (G-115/G-116, ADR-214 decision 3 / D-22).
+# Judged by scripts/check_l0_extensibility_class.py. Baseline emitted 2026-10-14 from the
+# live tree: 227 production public types (103 pub enum + 124 pub struct). The raw unmasked
+# grep says 228; the extra one is vector_math/vector.rs:342 `InMemoryVectorStore`, declared
+# inside a #[cfg(test)] tail -- the gate's blank+tail-mask surface (shared lexer with G-99/
+# G-105) is the authoritative count, and this ledger is keyed to THAT number on purpose.
+#
+# WHAT A ROW MEANS (this is a POLICY declaration, not a description of code):
+#   class=closed  the type is extensible only by a breaking change. Downstream may match it
+#                 exhaustively, so adding a variant/field forces every consumer to handle it.
+#                 This is the safety property that event-bus/src/registry.rs exploits with its
+#                 FIVE wildcard-free matches (a new NexusEvent variant without a severity
+#                 cannot compile). Verdict / failure / severity / strategy enums want this.
+#   class=open    the type carries #[non_exhaustive]; consumers must keep a catch-all arm, so
+#                 L0 may add variants or fields without breaking anyone. Right for display,
+#                 format, and vocabulary-like types whose value set is known to grow.
+#
+# THE LOCK (why a prose list would have rotted):
+#   class=open   <=> the attribute is present;  class=closed <=> the attribute is absent.
+#   Opening a type is therefore TWO edits in ONE commit: flip this row (with a reason of at
+#   least 24 chars) AND add #[non_exhaustive]. Doing only one is CLASS_MISMATCH red. Either
+#   half alone is exactly the silent drift this repository keeps getting bitten by: an
+#   attribute added "to be forward compatible" quietly removes compile-forced handling from
+#   every consumer, and a row flipped without the attribute makes the ledger a lie.
+#   NEW public types with no row are red, and a row whose type moved/disappeared is STALE
+#   red -- so a W3-style physical move must re-key rows in the same commit.
+#
+# CURRENT STATE: all 227 rows are closed, because L0 measures ZERO #[non_exhaustive] today
+# (grep -rc over src = 0). Emitting the baseline therefore encodes no new decision; it makes
+# the existing, never-declared default explicit and reviewable, so the first future opening
+# is a choice someone signs rather than a side effect.
+#
+# OPENING SHORTLIST (decided later, per type -- deliberately NOT pre-applied here):
+# 21 pub enums have zero textual mention in ANY other crate's src/tests/benches/examples and
+# in the root tests/ tree, which proves no downstream match, use-path, or construction site
+# exists today; marking them cannot break a single line of code. That list, plus the measured
+# 64 pub structs with no external `Name {` literal, is recorded in ADR-214 (D-22) together
+# with the counter-argument: zero-mention marking is compile-safe NOW but forfeits the forced
+# handling for FUTURE consumers, so verdict/failure/layer types (ErrorLayer, RecoveryStrategy,
+# ToolFailure, EventFailure, GateVerdict, CertifyVerdict, PlanViolation, JudgeTier) should stay
+# closed even though they are on the compile-safe list.
+# Scope note that changed the answer: the first scan counted only crates/*/src and reported
+# 22 candidates; VerificationMethod turned out to be matched in three root tests/e2e files, so
+# the downstream surface MUST include root tests/ -- otherwise the set is falsely permissive.
+# emitted from the live tree; class mirrors the CURRENT attribute state,
+# so every emitted row agrees with the tree by construction. Review before
+# promoting to the real ledger: opening a type is a decision, not a default.
+ENUM | type=core_domain/domain::MultimodalInput | class=closed
+ENUM | type=core_domain/domain::ThinkingMode | class=closed
+ENUM | type=core_domain/event_payload::AgentStatus | class=closed
+ENUM | type=core_domain/event_payload::EventSeverity | class=closed
+ENUM | type=core_domain/event_payload::TaskPriority | class=closed
+ENUM | type=core_domain/event_v2::Compressibility | class=closed
+ENUM | type=core_domain/event_v2::EventNamespace | class=closed
+ENUM | type=core_domain/event_v2::EventPattern | class=closed
+ENUM | type=core_domain/task::TaskStatus | class=closed
+ENUM | type=core_domain/temporal::TransitionType | class=closed
+ENUM | type=mca/affinity::CacheSupport | class=closed
+ENUM | type=mca/affinity::ContentBlock | class=closed
+ENUM | type=mca/affinity::Currency | class=closed
+ENUM | type=mca/affinity::FinishReason | class=closed
+ENUM | type=mca/affinity::MessageRole | class=closed
+ENUM | type=mca/affinity::ModalityKind | class=closed
+ENUM | type=mca/affinity::NegotiationFidelity | class=closed
+ENUM | type=mca/affinity::OutputFormat | class=closed
+ENUM | type=mca/affinity::ProtocolDialect | class=closed
+ENUM | type=mca/affinity::ProviderId | class=closed
+ENUM | type=mca/affinity::QuirkRule | class=closed
+ENUM | type=mca/affinity::ServiceTier | class=closed
+ENUM | type=mca/affinity::StatePreservationPolicy | class=closed
+ENUM | type=mca/affinity::ThinkingPreference | class=closed
+ENUM | type=mca/affinity::ThinkingSupport | class=closed
+ENUM | type=mca/omni_message::OmniMessage | class=closed
+ENUM | type=memory/archive_monotonicity::ArchiveTier | class=closed
+ENUM | type=memory/experience_card::AtomicOperator | class=closed
+ENUM | type=memory/experience_card::ExecutionStatus | class=closed
+ENUM | type=memory/memory_pyramid::AtomicCardType | class=closed
+ENUM | type=memory/memory_pyramid::MemoryPyramidLevel | class=closed
+ENUM | type=memory/skill_lifecycle::SkillLifecycleState | class=closed
+ENUM | type=memory/token_evidence::SegmentCreationReason | class=closed
+ENUM | type=protocol/app::AppEvent | class=closed
+ENUM | type=protocol/app::AppOp | class=closed
+ENUM | type=protocol/app::ApprovalDecision | class=closed
+ENUM | type=protocol/app::ItemStatus | class=closed
+ENUM | type=protocol/app::PermissionMode | class=closed
+ENUM | type=safety/adjudication::CertifyVerdict | class=closed
+ENUM | type=safety/adjudication::EpistemicType | class=closed
+ENUM | type=safety/adjudication::FailureFixStatus | class=closed
+ENUM | type=safety/adjudication::VerifierKind | class=closed
+ENUM | type=safety/budget_tier::BudgetTier | class=closed
+ENUM | type=safety/calibration::EvalSampleKind | class=closed
+ENUM | type=safety/calibration::GateVerdict | class=closed
+ENUM | type=safety/calibration::HumanLabel | class=closed
+ENUM | type=safety/calibration::JudgeTier | class=closed
+ENUM | type=safety/command_validation::AttackType | class=closed
+ENUM | type=safety/errors::ErrorLayer | class=closed
+ENUM | type=safety/errors::EventFailure | class=closed
+ENUM | type=safety/errors::NexusError | class=closed
+ENUM | type=safety/errors::RecoveryStrategy | class=closed
+ENUM | type=safety/errors::ToolFailure | class=closed
+ENUM | type=safety/sensitive::SensitiveDisposition | class=closed
+ENUM | type=safety/sensitive::SensitiveKind | class=closed
+ENUM | type=seams/capability_token::CapabilityTokenStatus | class=closed
+ENUM | type=seams/capability_token::SeamId | class=closed
+ENUM | type=seams/decay_profile::DecayPolicy | class=closed
+ENUM | type=seams/decay_profile::DecayProfile | class=closed
+ENUM | type=seams/density::DensityPolicy | class=closed
+ENUM | type=seams/density::DensityTier | class=closed
+ENUM | type=seams/memory_strategy::MemoryTaskPhase | class=closed
+ENUM | type=seams/parliament_policy::ActivationStrategy | class=closed
+ENUM | type=seams/parliament_policy::ParliamentPolicy | class=closed
+ENUM | type=seams/policy::SelectorPolicy | class=closed
+ENUM | type=seams/prefetch::PrefetchPolicy | class=closed
+ENUM | type=seams/prefetch::PrefetchStrategy | class=closed
+ENUM | type=seams/recall_quota::RecallQuota | class=closed
+ENUM | type=seams/recall_quota::RecallQuotaPolicy | class=closed
+ENUM | type=seams/reward::RewardLayer | class=closed
+ENUM | type=seams/reward::SecuritySeverity | class=closed
+ENUM | type=seams/rl_hooks::PolicyFormat | class=closed
+ENUM | type=seams/rl_types::MemPiAction | class=closed
+ENUM | type=seams/rl_types::RLAction | class=closed
+ENUM | type=seams/strategy::MemoryStrategy | class=closed
+ENUM | type=seams/strategy::MemoryStrategyPolicy | class=closed
+ENUM | type=spec/behavior_contract::ContractCheckOutcome | class=closed
+ENUM | type=spec/behavior_contract::ContractContext | class=closed
+ENUM | type=spec/blueprint::BlueprintSource | class=closed
+ENUM | type=spec/blueprint::PlanViolation | class=closed
+ENUM | type=spec/formal_props::PropertyCategory | class=closed
+ENUM | type=spec/formal_props::VerificationMethod | class=closed
+ENUM | type=spec/formal_props::VerificationResult | class=closed
+ENUM | type=spec/harness_dimensions::CompressionStrategy | class=closed
+ENUM | type=spec/harness_dimensions::EvictionStrategy | class=closed
+ENUM | type=spec/harness_dimensions::ExtractionFormat | class=closed
+ENUM | type=spec/harness_dimensions::FallbackStrategy | class=closed
+ENUM | type=spec/harness_dimensions::OperatorSelectionStrategy | class=closed
+ENUM | type=spec/harness_dimensions::RetentionPolicy | class=closed
+ENUM | type=spec/harness_dimensions::WorkflowType | class=closed
+ENUM | type=spec/harness_spec::HarnessSpecError | class=closed
+ENUM | type=spec/harness_spec::ImmutableSurface | class=closed
+ENUM | type=spec/platform_grounding::GroundingCategory | class=closed
+ENUM | type=spec/platform_grounding::GroundingCheckOutcome | class=closed
+ENUM | type=spec/scheduler_contract::ClaimOutcome | class=closed
+ENUM | type=spec/scheduler_contract::DenyReason | class=closed
+ENUM | type=spec/scheduler_contract::Priority | class=closed
+ENUM | type=spec/scheduler_contract::RenewOutcome | class=closed
+ENUM | type=spec/scheduler_contract::ShouldRunVerdict | class=closed
+ENUM | type=spec/tool_plan::PlanError | class=closed
+ENUM | type=spec/tool_plan::SideEffectDecl | class=closed
+ENUM | type=spec/tool_plan::ToolOp | class=closed
+ENUM | type=vector_math/vector::VectorBackend | class=closed
+STRUCT | type=core_domain/checkpoint::Checkpoint | class=closed
+STRUCT | type=core_domain/domain::Quest | class=closed
+STRUCT | type=core_domain/domain::Task | class=closed
+STRUCT | type=core_domain/domain::UserIntent | class=closed
+STRUCT | type=core_domain/event_metadata::EventMetadata | class=closed
+STRUCT | type=core_domain/event_v2::EventMetadataV2 | class=closed
+STRUCT | type=core_domain/event_v2::EventTypeId | class=closed
+STRUCT | type=core_domain/event_v2::ImportanceScore | class=closed
+STRUCT | type=core_domain/event_v2::NamespaceQuotaV2 | class=closed
+STRUCT | type=core_domain/graph_identity::GraphIdentity | class=closed
+STRUCT | type=core_domain/temporal::TemporalMeta | class=closed
+STRUCT | type=mca/affinity::AffinityMessage | class=closed
+STRUCT | type=mca/affinity::AffinityOverrides | class=closed
+STRUCT | type=mca/affinity::AffinityRequest | class=closed
+STRUCT | type=mca/affinity::AffinityResponse | class=closed
+STRUCT | type=mca/affinity::CapabilitySet | class=closed
+STRUCT | type=mca/affinity::CostEstimate | class=closed
+STRUCT | type=mca/affinity::EndpointSpec | class=closed
+STRUCT | type=mca/affinity::ModelAffinitySpec | class=closed
+STRUCT | type=mca/affinity::OutputBudget | class=closed
+STRUCT | type=mca/affinity::PeakPeriod | class=closed
+STRUCT | type=mca/affinity::PricingSpec | class=closed
+STRUCT | type=mca/affinity::ProviderReceipt | class=closed
+STRUCT | type=mca/affinity::SamplingParams | class=closed
+STRUCT | type=mca/affinity::TokenCacheKey | class=closed
+STRUCT | type=mca/affinity::ToolDecl | class=closed
+STRUCT | type=mca/affinity::UsageReport | class=closed
+STRUCT | type=mca/omni_message::ModelConfig | class=closed
+STRUCT | type=mca/omni_message::TokenUsage | class=closed
+STRUCT | type=mca/price_vector::ModelPrice | class=closed
+STRUCT | type=mca/price_vector::PriceVector | class=closed
+STRUCT | type=memory/archive_monotonicity::InvariantViolation | class=closed
+STRUCT | type=memory/experience_card::CardMetadata | class=closed
+STRUCT | type=memory/experience_card::EnvironmentInfo | class=closed
+STRUCT | type=memory/experience_card::ErrorSignature | class=closed
+STRUCT | type=memory/experience_card::ExperienceCard | class=closed
+STRUCT | type=memory/experience_card::NormalizedThreeFactor | class=closed
+STRUCT | type=memory/experience_card::ThreeFactorScore | class=closed
+STRUCT | type=memory/memory_pyramid::AtomicMemoryCard | class=closed
+STRUCT | type=memory/memory_pyramid::PersonaSummary | class=closed
+STRUCT | type=memory/memory_pyramid::SceneBlock | class=closed
+STRUCT | type=memory/quota::NamespaceQuota | class=closed
+STRUCT | type=memory/quota::QuotaLimits | class=closed
+STRUCT | type=memory/skill_lifecycle::SkillLifecycleContract | class=closed
+STRUCT | type=memory/token_evidence::SegmentMetadata | class=closed
+STRUCT | type=memory/token_evidence::TokenLedgerEntry | class=closed
+STRUCT | type=memory/token_evidence::ToolCallRecord | class=closed
+STRUCT | type=protocol/app::AppTokenUsage | class=closed
+STRUCT | type=protocol/app::ApprovalRequest | class=closed
+STRUCT | type=protocol/app::Item | class=closed
+STRUCT | type=protocol/app::ItemId | class=closed
+STRUCT | type=protocol/app::ReqId | class=closed
+STRUCT | type=protocol/app::Thread | class=closed
+STRUCT | type=protocol/app::ThreadId | class=closed
+STRUCT | type=protocol/app::ThreadStartParams | class=closed
+STRUCT | type=protocol/app::TurnId | class=closed
+STRUCT | type=protocol/app::UserInput | class=closed
+STRUCT | type=safety/adjudication::CertifyPayload | class=closed
+STRUCT | type=safety/adjudication::ClaimPayload | class=closed
+STRUCT | type=safety/adjudication::DeclaimPayload | class=closed
+STRUCT | type=safety/adjudication::FailureRecord | class=closed
+STRUCT | type=safety/calibration::AgreementTrendPoint | class=closed
+STRUCT | type=safety/calibration::BadCaseConversion | class=closed
+STRUCT | type=safety/calibration::CalibrationSample | class=closed
+STRUCT | type=safety/calibration::EvalRecord | class=closed
+STRUCT | type=safety/calibration::GateCoverage | class=closed
+STRUCT | type=safety/calibration::MonthlyEvalReport | class=closed
+STRUCT | type=safety/command_validation::BlockedPattern | class=closed
+STRUCT | type=safety/command_validation::Command | class=closed
+STRUCT | type=safety/command_validation::CommandPolicy | class=closed
+STRUCT | type=safety/command_validation::CommandValidationError | class=closed
+STRUCT | type=safety/sensitive::ScanHit | class=closed
+STRUCT | type=safety/sensitive::ScanPolicy | class=closed
+STRUCT | type=safety/sensitive::ScanVerdict | class=closed
+STRUCT | type=seams/capability_token::CapabilityToken | class=closed
+STRUCT | type=seams/policy::SelectorWeights | class=closed
+STRUCT | type=seams/reward::RewardSignal | class=closed
+STRUCT | type=seams/reward::RewardSpec | class=closed
+STRUCT | type=seams/rl_hooks::RLActionVector | class=closed
+STRUCT | type=seams/rl_hooks::RLStateVector | class=closed
+STRUCT | type=seams/rl_hooks::RLTrajectory | class=closed
+STRUCT | type=seams/rl_hooks::SerializedPolicy | class=closed
+STRUCT | type=seams/rl_types::RLExperience | class=closed
+STRUCT | type=seams/rl_types::RLState | class=closed
+STRUCT | type=sparse/masks::SparseMask | class=closed
+STRUCT | type=sparse/omni_masks::OmniSparseMasks | class=closed
+STRUCT | type=spec/behavior_contract::BehaviorContract | class=closed
+STRUCT | type=spec/behavior_contract::ContractExample | class=closed
+STRUCT | type=spec/blueprint::BlueprintStep | class=closed
+STRUCT | type=spec/blueprint::ProceduralBlueprint | class=closed
+STRUCT | type=spec/formal_props::EmptyFormalProvider | class=closed
+STRUCT | type=spec/formal_props::FormalProperty | class=closed
+STRUCT | type=spec/formal_props::InvariantSpec | class=closed
+STRUCT | type=spec/formal_props::VerifiedWithStrength | class=closed
+STRUCT | type=spec/harness_dimensions::ContextAssemblyContract | class=closed
+STRUCT | type=spec/harness_dimensions::GenerationControlContract | class=closed
+STRUCT | type=spec/harness_dimensions::HarnessConfigContract | class=closed
+STRUCT | type=spec/harness_dimensions::MemoryManagementContract | class=closed
+STRUCT | type=spec/harness_dimensions::OutputProcessingContract | class=closed
+STRUCT | type=spec/harness_dimensions::StopStrategyConfig | class=closed
+STRUCT | type=spec/harness_dimensions::TaskOrchestrationContract | class=closed
+STRUCT | type=spec/harness_dimensions::ToolInteractionContract | class=closed
+STRUCT | type=spec/harness_dimensions::ValidationRule | class=closed
+STRUCT | type=spec/harness_spec::ContractSpec | class=closed
+STRUCT | type=spec/harness_spec::HarnessMeta | class=closed
+STRUCT | type=spec/harness_spec::HarnessSpec | class=closed
+STRUCT | type=spec/harness_spec::HopSpec | class=closed
+STRUCT | type=spec/harness_spec::RetryPolicy | class=closed
+STRUCT | type=spec/platform_grounding::GroundingRequirement | class=closed
+STRUCT | type=spec/platform_grounding::PlatformGroundingSpec | class=closed
+STRUCT | type=spec/scheduler_contract::Lease | class=closed
+STRUCT | type=spec/scheduler_contract::Quota | class=closed
+STRUCT | type=spec/scheduler_contract::TodoClaim | class=closed
+STRUCT | type=spec/tool_plan::PlanEdge | class=closed
+STRUCT | type=spec/tool_plan::ToolNode | class=closed
+STRUCT | type=spec/tool_plan::ToolPlan | class=closed
+STRUCT | type=spec/variant::VariantContract | class=closed
+STRUCT | type=spec/variant::VariantId | class=closed
+STRUCT | type=vector_math/mcsm::ProjectedMatrix | class=closed
+STRUCT | type=vector_math/mcsm::SinkhornParams | class=closed
+STRUCT | type=vector_math/recall_fusion::FusedItem | class=closed
+STRUCT | type=vector_math/recall_fusion::WeightedList | class=closed
+STRUCT | type=vector_math/vector::VectorHit | class=closed
+STRUCT | type=vector_math/vector::VectorStoreStats | class=closed

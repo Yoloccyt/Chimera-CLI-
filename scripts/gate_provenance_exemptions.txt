@@ -1,0 +1,23 @@
+# =============================================================================
+# gate_provenance_exemptions.txt -- scripts that are deliberately NOT gates
+# =============================================================================
+# Consumed by scripts/check_gates_provenance.py (direction B: disk -> manifest).
+#
+# WHY this file exists: direction B reports every self-testing script that is
+# neither registered in scripts/gate_manifest.toml nor listed here. A script
+# with a `--selftest` is NOT automatically a gate -- promoting one is a
+# separate decision that needs a spec_ref and a committee resolution
+# (ADR-197 D5, ADR-198 §3.4). Without an exemption list, "not promoted yet"
+# and "nobody noticed" are indistinguishable.
+#
+# Format:  scripts/<file> = <reason>
+#   - one reason per line, mandatory; a line without a reason is a parse error
+#   - NO wildcards. Each entry names exactly one file on purpose: a pattern
+#     would silently absorb future scripts, which is the drift being guarded.
+#   - a script that later IS promoted to a gate must have its line deleted in
+#     the same commit that registers it, or the exemption becomes a second
+#     source of truth that disagrees with the manifest.
+#
+# ASCII only (Windows PowerShell 5.1 console is GBK).
+
+scripts/adr_index_sync.py = Not a gate by design: it audits ADR index/registry agreement and is run ad hoc during documentation batches; its rc=0 was verified per ADR-198 but promoting it to a blocking gate would make every doc edit block CI on an unrelated axis. Promotion needs a spec_ref + committee decision.

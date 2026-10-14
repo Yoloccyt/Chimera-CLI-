@@ -27,10 +27,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install zizmor
-        # WHY: cargo install 编译耗时较长(约 3-5min),但扫描本身秒级;
-        #      保持与 fuzz.yml 的 cargo install 模式一致(可复现性优先)。
-        run: cargo install zizmor --locked
+      # WHY 预编译安装(2026-09-28):zizmor 源码编译约 3-5min,而扫描本身秒级
+      # ——安装耗时比扫描耗时高两个数量级,是纯浪费。taiki-e/install-action 的
+      # TOOLS.md 已收录 zizmor(GitHub Releases + SHA256 校验),故改为预编译下载。
+      # 原注释"保持与 fuzz.yml 一致"的约束已消解:fuzz 所需的 cargo-fuzz 不在该
+      # action 清单内(仍走 cargo install),二者不再需要形式上的对称。
+      - name: Install zizmor (prebuilt)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: zizmor
 
       - name: Run zizmor scan
         # WHY: --min-severity=high——仅高危发现阻塞合入;

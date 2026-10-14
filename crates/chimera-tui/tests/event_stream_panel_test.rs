@@ -479,3 +479,125 @@ fn event_stream_panel_topic_only_filter_second_render_uses_cache() {
     assert_eq!(text1, text2, "缓存命中帧的渲染输出应与冷路径一致");
     assert_eq!(panel.selected(), 0, "过滤后仅 1 条事件,selected 应为 0");
 }
+
+// ============================================================
+// 测试 15:F-22 — 万级事件贴底,总数提示行与页脚不再被裁剪
+// ============================================================
+
+/// 宽字符感知的渲染收集(timeline_panel_test.rs / pvl_score_panel_test 同款口径:
+/// 跳过 CJK 续格,避免"显 示"被续格空格隔断导致 contains 失配);
+/// 按 buffer 列宽插 '\n'(对齐 log_panel_test render_to_string 的 join("\n")
+/// 口径),使输出有行结构支撑行级锚定断言(lines().find 定位选中行)
+fn render_panel_to_string(
+    panel: &mut EventStreamPanel,
+    state: &TuiState,
+    w: u16,
+    h: u16,
+) -> String {
+    let area = Rect::new(0, 0, w, h);
+    let mut buf = Buffer::empty(area);
+    panel.render(state, area, &mut buf);
+    let mut out = String::new();
+    let mut prev_wide = false;
+    for (i, cell) in buf.content().iter().enumerate() {
+        if i > 0 && i % w as usize == 0 {
+            out.push('\n');
+        }
+        if cell.skip {
+            continue;
+        }
+        let s = cell.symbol();
+        if prev_wide {
+            prev_wide = false;
+            continue;
+        }
+        if s.is_empty() {
+            continue;
+        }
+        let ch = s.chars().next().unwrap_or(' ');
+        prev_wide = unicode_width::UnicodeWidthStr::width(s) >= 2;
+        out.push(ch);
+    }
+    out
+}
+
+#[test]
+fn event_stream_panel_showing_and_footer_visible_at_bottom_with_10000_events() {
+    // WHY pin Zh:任务书要求断言 zh "显示" 提示行文案;配合宽字符感知收集。
+    // guard 防并行测试污染全局 locale。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+
+    // 万级事件 + auto_scroll 默认 true:render 时 selected 自动跟随到末条
+    // (贴底主路径),与 R5 F-22 复算场景(120x40 / 10000 事件)同口径。
+    let events: Vec<NexusEvent> = (0..10000).map(cache_hit_event).collect();
+    let state = make_state_with_events(events);
+
+    let mut panel = EventStreamPanel::new();
+    let content = render_panel_to_string(&mut panel, &state, 120, 40);
+
+    assert!(
+        content.contains("CacheHit"),
+        "事件行应渲染, got: {}",
+        &content[..content.len().min(400)]
+    );
+    // 修复前复算(R5):窗口 38 事件行 + 标题 2 + 提示 1 + 页脚 1 = 42 行
+    // > inner 38 行,提示行(第 41)与页脚(第 42)被 Paragraph 系统性裁剪。
+    assert!(
+        content.contains("显示"),
+        "总数提示行应渲染在视口内(F-22 修复前被系统性裁剪), got: {}",
+        &content[..content.len().min(400)]
+    );
+    // F-17 迁键后页脚走 panel.footer 键:断言与键表同源(本用例 pin Zh,
+    // 原字面断言 "Press Tab to switch panels" 依赖迁键前的硬编码英文,已失效)
+    assert!(
+        content.contains(chimera_tui::t!("panel.footer")),
+        "页脚应渲染在视口内(F-22 修复前被系统性裁剪), got: {}",
+        &content[..content.len().min(400)]
+    );
+}
+
+#[test]
+fn event_stream_panel_showing_and_selected_visible_mid_scroll() {
+    // WHY pin Zh:同上方贴底用例口径(断言 zh "显示" 提示行文案)。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+
+    // WHY 关 auto_scroll:默认 true 时 render 自动跟随到末条(贴底),
+    // Down 无法停在滚动中部;关闭后选中才可任意驻留。
+    // WHY source 逐条唯一:行级锚定需选中行文本全帧唯一(cache_hit_event
+    // 的 source 恒为 "scc-cache",全帧事件行同文,find 无法定位选中行)
+    let events: Vec<NexusEvent> = (0..10000)
+        .map(|i| NexusEvent::CacheHit {
+            metadata: EventMetadata::new(format!("src-{i:04}")),
+            cache_key: format!("k{i}"),
+        })
+        .collect();
+    let mut state = make_state_with_events(events);
+    state.auto_scroll = false;
+
+    let mut panel = EventStreamPanel::new();
+    // Down×60:120x40 → inner 38 → content_height 32 → selected=60 落在滚动
+    // 中部(offset=29,窗口 [29,61));修复前 ±5 缓冲窗口 [24,66) 使选中行
+    // 渲染在第 40 行 ≥ 视口 38 行恒不可见,本用例的选中前缀断言必红。
+    for _ in 0..60 {
+        panel.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &mut state);
+    }
+    let content = render_panel_to_string(&mut panel, &state, 120, 40);
+
+    assert!(
+        content.contains("显示"),
+        "滚动中部总数提示行应渲染在视口内, got: {}",
+        &content[..content.len().min(400)]
+    );
+    // 选中行可见(行级锚定,对齐 log_panel_test 范式):EventStream 过滤索引
+    // 正序,filtered[60] = latest_events[60] = src-0060;带方括号标记全帧唯一
+    let selected_line = content
+        .lines()
+        .find(|l| l.contains("[src-0060] CacheHit"))
+        .expect("选中事件 src-0060 行应渲染在视口内");
+    assert!(
+        selected_line.contains("> "),
+        "滚动中部选中行应带 > 前缀(与提示行同帧可见), got: {selected_line}"
+    );
+}

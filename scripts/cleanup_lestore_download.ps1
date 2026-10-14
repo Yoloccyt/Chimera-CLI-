@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     清理 D:\LeStoreDownload 联想应用商店下载缓存

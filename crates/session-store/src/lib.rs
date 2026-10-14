@@ -9,7 +9,20 @@
 //! session-store — 会话事件流存储（append-only 段 + CBMR 微批写）
 //!
 //! 对应架构层: **L3 Storage**（Phase 2 新增,ADR-141,workspace 第 40 个 crate）
-//! 对应任务: **P2-T2**（手册 W9 T-07 / ADR-108 CBMR 微批写 / v4.0 WI-18 存储面）
+//! 对应任务: **P2-T2 存储面 + P2-T3 归并回放/不变量 均已交付**（手册 W9 T-07 / ADR-108 CBMR 微批写 / ADR-109 k-way 归并 `replay` / v4.0 WI-18 model-visible `to_model_view`）
+//!
+//! > **文档-代码同步（2026-10-06 核验）**：本模块头此前标注「归并本身是 T3,本任务只做存储面 / 不变量打点属于 T3」为 **P2-T2 期陈旧文本**。现 `replay`（k-way BinaryHeap 归并 + from-offset 续读 + fork 前缀链 + 时间戳单调校验/`out_of_order_count` 打点）与 `to_model_view`（白名单投影 + 敏感剔除）**均已实现并测试**，且 replay 已接入 `nexus-app-server`（`with_session_store` 双写 + `replay_since` + 集成测试）。遗留开放项见文末。
+//!
+//! > **装配态再订正（2026-10-10 / v3.5 自查追加，只加注不改写上方历史）**：上句「replay 已接入」
+//! > 与本文末尾的「装配态订正」段同文件共存而未被订正，容易被单独读成生产事实。现明写口径：
+//! > 「已接入」仅指**代码层 + 测试层**（`replay_since` 是 `server.rs:334` 的 pub API，集成测试在
+//! > `server.rs:806` 走它）。**生产装配未启用双写**：`server.rs:634` 是 `#[cfg(test)]` 区起点，
+//! > 而 `AppServer::with_session_store` 的两个调用点均在 `:920` / `:977`（测试区内）；组合根
+//! > `chimera-cli/src/composition.rs:251` 走 `AppServer::with_backend(ctx.server_config, backend)`
+//! > （该文件内无 `with_session_store` 调用），⇒ `store` 字段为 `None`（`server.rs:283`），
+//! > `replay_since` 在仓内**无生产调用方**。
+//! > 因此本 crate 在现行生产链上仍处于 **DORMANT**（声明装配但生产关闭），段文件与树索引
+//! > 在生产路径上不产生数据；收口径选项与需 ADR 的部分见文末「装配态订正」段（不在此重复）。
 //!
 //! # 设计概览（Checkpoint 线性快照 → append-only 段 + 微批写）
 //!
@@ -31,17 +44,38 @@
 //!
 //! - **段文件**:`<session_id>.<segment_index>.jsonl`,长度前缀 + JSON 数据,
 //!   崩溃时截断半条尾部,`append` 返回 Ok 前 fsync（不丢已确认事件）
-//! - **Offset 双键**:`{ seq 全局单调, row 段内行号 }`——P2-T3 k-way 归并
-//!   回放的排序键（ADR-109;归并本身是 T3,本任务只实现追加与 Offset 语义）
+//! - **Offset 双键**:`{ seq 全局单调, row 段内行号 }`——`replay` k-way 归并
+//!   回放的排序键（seq 主序 + row 次序；ADR-109，已交付）
 //! - **CBMR 微批写**:SQLite 写操作从 N 次（单条直写）降为 ceil(N/64) 次,
 //!   基准输出 `syscall_reduction_pct`（T8/T9 模式固定 n 单次采样）
-//! - **model-visible 不变量打点**:属于 T3,本任务只做存储面
+//! - **model-visible 不变量打点**:`to_model_view` 白名单投影（WI-18）+ 投影时映射表
+//!   `MODEL_VISIBLE_MAPPING`（ADR-201 D1）;**生产消费者已接线**（`nexus-app-server::
+//!   model_visible_context`,ADR-201 D2/WI-G11）,logged ≠ model-visible 语义已在 `model_view` 文档固化
 //!
-//! # 已知约束（T3 承接）
+//! # 崩溃恢复（T3 已承接）
 //!
-//! 段 fsync 与索引 insert 非原子;崩溃后索引重建/续写幂等由 P2-T3
-//! k-way 归并回放承接,T2 边界内「已确认 = 段 fsync」语义成立
-//! （详见 [`writer::CbmrWriter::flush_sync`] 的 WHY 注释）。
+//! 段 fsync 与索引 insert 非原子；崩溃后「已确认 = 段 fsync」语义下，回放走**纯段文件扫描**
+//! （`replay` 只读路径不经 SQLite），索引缺失/陈旧不影响回放正确性——段文件为权威源。
+//!
+//! # 遗留开放项（需设计决策，非存储面缺陷）
+//!
+//! 原「`turn.submit` 不在白名单、接线须先对齐分类学」开放项已由 **ADR-201 裁决闭合**
+//! （D1 投影时映射 `turn.submit→model.request`;D2 首个生产消费方
+//! `AppServer::model_visible_context`）——追加映射行仍须评审（映射表为显式常量 + 测试锁）。
+//! 存留项:`model_view` 对中文/混淆键名的敏感启发式边界（`model_view.rs` 文档注明,维持现状）。
+//!
+//! > **装配态订正（2026-10-08 / v3.5 W6-1 全栈取证）**：上方“D2 首个生产消费方
+//! > `AppServer::model_visible_context`”仅在**代码层**成立，**生产链目前未启用双写**：
+//! > `AppServer::with_session_store` 的唯一调用点在 `server.rs` 的 `#[cfg(test)]` 区之后，
+//! > 而组合根 `chimera-cli/src/composition.rs::build_app_server` 走 `AppServer::with_backend(...)`
+//! > ⇒ `store` 字段为 `None`，`persist_turn`/`model_visible_context` 均直接返回
+//! > `ServerError::StoreNotConfigured`。后果：段文件与树索引在现行生产路径上不会产生数据，
+//! > “崩溃恢复靠段文件”这条红线也尚未在生产态被检验过（而 `nexus-app-server` 对本 crate 是**硬依赖**）。
+//! > 两条收口径已列为待裁决策（不得两值并存）：① 组合根接 `with_session_store` 使双写真生效
+//! > （新增 `chimera-cli|session-store` 边 ⇒ 触 `dep_edge_freeze.txt` 登记，且必须先定义存储不可用时的
+//! > N-4 降级姿态，现仅 Err 无降级）；② 降为 `optional` 并把对外表述从“生产后端”改为“诊断面”，
+//! > 同步 CRATE-CONTRACT 的 CONSUMERS/MATURITY 语义（需 ADR：`MATURITY` 是由 crate 内自陈标签
+//! > **机器派生**的字段，手写改值会被 G-59 拒）。本段只陈述装配态，不改机器字段。
 //!
 //! # 红线遵守
 //!

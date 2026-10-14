@@ -20,6 +20,8 @@ pub const SEED_KEYS: &[&str] = &[
     "panel.monitor.title",
     // PS-2 U-4:退化尺寸统一提示
     "panel.too_small",
+    // F-17(B5-U):六面板共用页脚文案(原 render.rs FOOTER_TEXT 常量迁键)
+    "panel.footer",
     // PS-2 批次2:GQEP 覆盖率无事件载体,如实标注未上报
     "panel.metrics.coverage_unreported",
     "panel.log.title",
@@ -53,6 +55,29 @@ pub const SEED_KEYS: &[&str] = &[
     // Phase 10 §15.2b/§15.3:经验卡片可视化 + 注入策略面板
     "panel.border.experience_card_viz",
     "panel.border.injection_strategy",
+    // v2.3 §(b.6):/bench 基准面板(复用 criterion 117/46 + 门触发率 + 检索延迟 + 一致率)
+    "panel.border.bench",
+    "panel.bench.subtitle",
+    "panel.bench.awaiting",
+    "panel.bench.total_benches",
+    "panel.bench.slo_breaches",
+    "panel.bench.retrieval_p99",
+    "panel.bench.agreement",
+    "panel.bench.certifiable",
+    "panel.bench.slo_thresholds_total",
+    "panel.bench.unavailable",
+    // v2.3 §(b.6)/§(b.4):审查队列面板(AdversarialReview 可视化；仅 Certify 渲染为已认证)
+    "panel.border.review_queue",
+    "panel.review.subtitle",
+    "panel.review.certified",
+    "panel.review.claim_pending",
+    "panel.review.retracted",
+    "panel.review.none",
+    // v2.3 §(b.6)/§(b.2):黑板浏览面板(MLC 协作态投影按 epistemic 过滤)
+    "panel.border.blackboard",
+    "panel.blackboard.subtitle",
+    "panel.blackboard.none",
+    "panel.blackboard.filter",
     // 面板正文标签(U-3:i18n 从 chrome 扩展到面板正文)
     "panel.budget.title",
     "panel.budget.tier",
@@ -104,6 +129,13 @@ pub const SEED_KEYS: &[&str] = &[
     "help.sc.bottom",
     "help.sc.fkeys",
     "help.sc.panel_actions",
+    // F-17/F-46(B5-U):Help 面板滚动提示/命令语法说明/品牌行迁键
+    // (zh/en 同值的 help.brand 亦走键表,豁免棘轮移除后由扫描门守护增量)
+    "help.scroll_hint",
+    "help.commands.line1",
+    "help.commands.line2",
+    "help.commands.line3",
+    "help.brand",
     // Health 面板体(M2 i18n Slice 4)+ 共享图表标题
     "health.events",
     "health.slow_consumers",
@@ -201,6 +233,10 @@ pub const SEED_KEYS: &[&str] = &[
     "panel.overwindow.loaded",
     "panel.overwindow.discarded",
     "panel.overwindow.more",
+    // F-30(B5-U):DAG 面板标题/等待提示/截断提示
+    "panel.dag.title",
+    "panel.dag.awaiting",
+    "panel.dag.more",
     // U-3 第二波:Quest 面板正文
     "panel.quest.body_title",
     "panel.quest.no_active",
@@ -270,15 +306,60 @@ pub const SEED_KEYS: &[&str] = &[
     "panel.quest.batch_pause",
     "panel.quest.batch_cancel",
     "panel.quest.quests",
+    // B4-I(F-04):src/app 层用户可见文案迁入(状态栏/弹窗 prompt);
+    // panel.border.pvl_score 同批(pvl_score 边框改走键表)
+    "panel.border.pvl_score",
+    "status.monitor_paused",
+    "status.monitor_resumed",
+    "status.monitor_window",
+    "status.clv_range_autoscale",
+    "status.clv_range_fixed",
+    "status.clv_range",
+    "status.no_viz_dimension",
+    "status.no_saved_view",
+    "status.view_applied",
+    "status.jumped_eventstream_no_quest",
+    "status.jumped_eventstream_multi_quest",
+    "status.filter_requires_arg",
+    "status.invalid_topic",
+    "status.level_requires_arg",
+    "status.invalid_level",
+    "status.panel_requires_name",
+    "status.unknown_panel",
+    "status.action_timeout",
+    "status.invalid_vote_cmd",
+    "status.export_csv_prompt",
+    "status.export_failed",
+    "status.export_blocked",
+    // B4-I(F-65 补口):导出成功 + 窗格技术标签(focus_pane 提示)
+    "status.exported",
+    "status.pane.none",
+    "status.pane.main",
+    "status.pane.nth",
+    "status.request_published",
+    "status.publish_failed",
+    "status.event_bus_unavailable",
+    "status.pause_quest",
+    "status.resume_quest",
+    "status.cancel_quest",
+    "status.terminate_quest",
+    "status.vote_on_proposal",
+    "status.tick_interval_set",
+    "status.jumped_eventstream_filtered",
+    "status.tick_restart_hint",
+    "status.panel_not_registered",
+    "status.data_source_unavailable",
     // 通用
     "common.none",
 ];
 
-/// 查找中文译文;未命中返回 `None`(由 `i18n::tr` 回退到 key 本身)
+/// 译文表的第 1 段（键域 `app.name` … `status.view_dashboard`）
 ///
-/// WHY `match` 而非 HashMap:编译期常量表,`match` 零运行时初始化开销且
-/// 无需 `once_cell`/`phf` 依赖;分支数 < 500 时编译器可高效跳转表优化。
-pub fn lookup(key: &str) -> Option<&'static str> {
+/// WHY 分段：`pub fn lookup` 原本单函数 >600 行，破「单函数 ≤200 行」红线
+///（G-48 / `scripts/fnlen_baseline.txt`）。分段表**保持原表序与分派机制不变**：
+/// 每段仍是同形 `match`，由 `lookup` 依序短路尝试 ⇒ 匹配语义逐字等价。
+/// （段内行数不写死在此——无门校验它，写了就是下一个漂移项。）
+fn lookup_table_1(key: &str) -> Option<&'static str> {
     let v = match key {
         "app.name" => "Chimera 交互式终端",
         "panel.quest.title" => "任务",
@@ -316,6 +397,62 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         // Phase 10 §15.2b/§15.3:经验卡片可视化 + 注入策略面板
         "panel.border.experience_card_viz" => " 经验卡片 ",
         "panel.border.injection_strategy" => " 注入策略 ",
+        "panel.border.bench" => " 基准 ",
+        "panel.bench.subtitle" => "基准摘要（criterion 数据先行）",
+        "panel.bench.awaiting" => "等待基准数据源接入（criterion 管道未接线）",
+        "panel.bench.total_benches" => "已登记基准数",
+        "panel.bench.slo_breaches" => "SLO 违约数",
+        "panel.bench.retrieval_p99" => "检索 P99（毫秒）",
+        "panel.bench.agreement" => "裁判一致率",
+        "panel.bench.certifiable" => "自动化结果可认证",
+        "panel.bench.slo_thresholds_total" => "SLO 阈值总数",
+        "panel.bench.unavailable" => "N/A（数据源未接线）",
+        "panel.border.review_queue" => " 审查队列 ",
+        "panel.review.subtitle" => "对抗审查队列",
+        "panel.review.certified" => "已认证",
+        "panel.review.claim_pending" => "认领（未认证）",
+        "panel.review.retracted" => "已撤回（未认证）",
+        "panel.review.none" => "无审查项",
+        "panel.border.blackboard" => " 黑板 ",
+        // B4-I(F-04):pvl_score 边框键补齐(原 PanelId::title() 硬编码英文,未入键表)
+        "panel.border.pvl_score" => " PVL 评分 ",
+        // B4-I(F-65):panel.name.* 30 键 — tab 栏/状态栏面板名动态查表
+        // (PanelId::name_key() 匹配返回键名,值与 panel.border.* 文案对齐、去边框空格;
+        //  键经运行时变量传入 t!(),无静态调用点,故不入 SEED_KEYS,
+        //  zh/en 对齐由 i18n_completeness_test 的专项守护断言承担)
+        "panel.name.quest" => "任务",
+        "panel.name.parliament" => "议会",
+        "panel.name.budget" => "预算",
+        "panel.name.memory" => "内存",
+        "panel.name.security" => "安全",
+        "panel.name.health" => "健康",
+        "panel.name.log" => "系统日志",
+        "panel.name.help" => "帮助",
+        "panel.name.decay" => "衰减",
+        "panel.name.eventstream" => "事件流",
+        "panel.name.router" => "路由统计",
+        "panel.name.mcp" => "MCP 节点 (MCP Nodes)",
+        "panel.name.chtc" => "CHTC 适配器",
+        "panel.name.timeline" => "时间线",
+        "panel.name.osa" => "OSA 稀疏",
+        "panel.name.clv" => "CLV 向量",
+        "panel.name.resources" => "资源",
+        "panel.name.metrics" => "指标仪表盘",
+        "panel.name.sysinfo" => "系统信息",
+        "panel.name.task" => "任务管理",
+        "panel.name.chat" => "对话",
+        "panel.name.self_assessment" => "自我评估",
+        "panel.name.dag_viz" => "DAG 可视化",
+        "panel.name.pvl_score" => "PVL 评分",
+        "panel.name.overwindow" => "超窗兜底",
+        "panel.name.experience_card_viz" => "经验卡片",
+        "panel.name.injection_strategy" => "注入策略",
+        "panel.name.bench" => "基准",
+        "panel.name.review_queue" => "审查队列",
+        "panel.name.blackboard" => "黑板",
+        "panel.blackboard.subtitle" => "黑板协作态（按认识类型）",
+        "panel.blackboard.none" => "无黑板条目",
+        "panel.blackboard.filter" => "认识类型过滤",
         "panel.budget.title" => "预算",
         "panel.budget.tier" => "当前档位",
         "panel.budget.coefficient" => "系数",
@@ -375,6 +512,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "slash.view.filter" => "主题过滤",
         "slash.view.level" => "级别过滤",
         "slash.view.panel" => "切换面板",
+        "slash.view.bench" => "基准面板",
         "slash.system.status" => "状态总览",
         "slash.system.doctor" => "配置健康自检",
         "slash.system.audit" => "审计日志查询",
@@ -398,6 +536,19 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "chat.composer_hint" => "按 i 开始输入,或按 / 打开命令",
         "status.view_chat" => "已切换到会话模式(\\ 切回仪表盘)",
         "status.view_dashboard" => "已切换到仪表盘模式(\\ 切回会话)",
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// 译文表的第 2 段（键域 `chat.plan_card.title` … `status.data_source_unavailable`）
+///
+/// WHY 分段：`pub fn lookup` 原本单函数 >600 行，破「单函数 ≤200 行」红线
+///（G-48 / `scripts/fnlen_baseline.txt`）。分段表**保持原表序与分派机制不变**：
+/// 每段仍是同形 `match`，由 `lookup` 依序短路尝试 ⇒ 匹配语义逐字等价。
+/// （段内行数不写死在此——无门校验它，写了就是下一个漂移项。）
+fn lookup_table_2(key: &str) -> Option<&'static str> {
+    let v = match key {
         // Concord W3 T3.3:会话流内嵌卡片
         "chat.plan_card.title" => "计划：",
         "chat.reflection_card.title" => "失败复盘",
@@ -427,14 +578,12 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "shortcut.switch_panel" => "切换面板",
         "shortcut.select_dimension" => "选择维度",
         "shortcut.jump_event_stream" => "跳转事件流",
-        "shortcut.time_jump" => "时间跳转",
         "shortcut.show_help" => "显示帮助",
         "shortcut.send" => "发送",
         "shortcut.input_message" => "输入消息",
         "shortcut.exit_input" => "退出输入",
         "shortcut.scroll" => "滚动",
         "shortcut.top_bottom" => "跳顶/贴底",
-        "shortcut.clear_selection" => "清除选择",
         "shortcut.multi_select" => "多选",
         "shortcut.select_all" => "全选",
         "shortcut.pause" => "暂停",
@@ -490,6 +639,15 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "help.sc.bottom" => "滚动到底部",
         "help.sc.fkeys" => "跳转到面板(F 键)",
         "help.sc.panel_actions" => "面板动作菜单",
+        // F-17/F-46(B5-U):滚动提示/命令语法说明/品牌行
+        // (命令名 find/filter/... 为 slash 命令协议面,不译)
+        "help.scroll_hint" => "↑/↓ 滚动  g/G 跳顶/跳底",
+        "help.commands.line1" => "命令: find <k>, filter <topic>, level <severity>,",
+        "help.commands.line2" => "          pause <quest>, resume <quest>,",
+        "help.commands.line3" => "          vote <yes|no|abstain> <proposal>, refresh, quit",
+        "help.brand" => "Chimera CLI NEXUS-OMEGA",
+        // F-17(B5-U):六面板共用页脚
+        "panel.footer" => "按 Tab 切换面板,':' 输入命令,'q' 退出。",
         "health.events" => "事件/秒: ",
         "health.slow_consumers" => "慢消费者: ",
         "health.avg_latency" => "平均延迟: ",
@@ -515,6 +673,66 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "status.quit_confirm" => "确认退出 Chimera? [←/→ 切换,Enter 确认]",
         // FC-A(2026-09-06 复评):投票诚实降级(L8 治理通道未接线)
         "status.vote_unwired" => "投票: L8 Parliament 治理通道未接线(预留),请求未发布",
+        // B4-I(F-04):src/app 层状态栏/弹窗文案迁移(原硬编码散落 event_loop/
+        // key_dispatch/state,{} 为单占位符,消费点按 task_manager 的 replacen 范式替换)
+        "status.monitor_paused" => "监控采样已暂停(显示冻结)",
+        "status.monitor_resumed" => "监控采样已恢复",
+        "status.monitor_window" => "监控时间窗: 最近 {} 点",
+        "status.clv_range_autoscale" => "自适应(按实际值域)",
+        "status.clv_range_fixed" => "固定 [-1, 1]",
+        "status.clv_range" => "CLV 热图值域: {}",
+        "status.no_viz_dimension" => "{}: 当前面板暂无可切换维度",
+        "status.no_saved_view" => "无已保存的视图(退出时自动保存布局)",
+        "status.view_applied" => "已应用保存的视图",
+        "status.jumped_eventstream_no_quest" => "已切换事件流(当前无 Quest)",
+        "status.jumped_eventstream_multi_quest" => {
+            "已切换事件流(多 Quest;Quest 面板选中后 Enter 可精确跳转)"
+        }
+        "status.filter_requires_arg" => "filter 需要参数",
+        "status.invalid_topic" => {
+            "无效 topic '{}': 可选 quest|security|memory|health|parliament|budget|system"
+        }
+        "status.level_requires_arg" => "level 需要参数",
+        "status.invalid_level" => "无效 level '{}': 可选 info|warn|error|critical",
+        "status.panel_requires_name" => "panel 需要面板名",
+        "status.unknown_panel" => "未知面板 '{}'",
+        "status.action_timeout" => "动作编排器未接线;请求可能未执行",
+        "status.invalid_vote_cmd" => "确认命令中的投票值无效: {}",
+        "status.export_csv_prompt" => "导出为 CSV?",
+        "status.export_failed" => "导出失败: {}",
+        "status.export_blocked" => "无法导出: {}",
+        // B4-I(F-65 补口):导出成功提示(单词级英文硬编码收口)
+        "status.exported" => "已导出: {}",
+        // B4-I:窗格技术标签(focus_pane 状态提示)
+        "status.pane.none" => "无",
+        "status.pane.main" => "主区",
+        "status.pane.nth" => "窗格",
+        "status.request_published" => "{} 请求已发布",
+        "status.publish_failed" => "发布 {} 失败: {}",
+        "status.event_bus_unavailable" => "事件总线不可用",
+        "status.pause_quest" => "暂停 Quest",
+        "status.resume_quest" => "恢复 Quest",
+        "status.cancel_quest" => "取消 Quest",
+        "status.terminate_quest" => "终止 Quest",
+        "status.vote_on_proposal" => "对提案投票: {}",
+        "status.tick_interval_set" => "Tick 间隔已设为 {}ms (下次会话生效)",
+        "status.jumped_eventstream_filtered" => "已跳转事件流, 过滤: {}",
+        "status.tick_restart_hint" => "{}ms (重启生效)",
+        "status.panel_not_registered" => "面板未注册: {}",
+        "status.data_source_unavailable" => "数据源不可用: {}",
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// 译文表的第 3 段（键域 `slash.unwired.fork` … `panel.osa.sparsity_history`）
+///
+/// WHY 分段：`pub fn lookup` 原本单函数 >600 行，破「单函数 ≤200 行」红线
+///（G-48 / `scripts/fnlen_baseline.txt`）。分段表**保持原表序与分派机制不变**：
+/// 每段仍是同形 `match`，由 `lookup` 依序短路尝试 ⇒ 匹配语义逐字等价。
+/// （段内行数不写死在此——无门校验它，写了就是下一个漂移项。）
+fn lookup_table_3(key: &str) -> Option<&'static str> {
+    let v = match key {
         // B1(2026-09-06 复评):未接线命令的具体指引
         "slash.unwired.fork" => "分叉:多会话存储未接线(预留)",
         "slash.unwired.undo" => "撤销:消息级撤销未接线,可用 Esc-Esc 回退",
@@ -573,7 +791,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.overwindow.title" => " 超窗兜底 ",
         "panel.overwindow.body_title" => "超窗兜底(RAG 检索)",
         "panel.overwindow.empty" => "尚未触发超窗兜底",
-        "panel.overwindow.hint" => "运行 :overwindow run <词> 触发检索链",
+        "panel.overwindow.hint" => "经命令面板(Ctrl+P)选择 overwindow.run 并输入检索词触发检索链",
         "panel.overwindow.corpus" => "语料",
         "panel.overwindow.window" => "窗口",
         "panel.overwindow.candidates" => "候选",
@@ -682,21 +900,21 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.osa.no_context_files" => "暂无活跃上下文文件",
         "panel.osa.showing_files" => "... 显示 {} / {} 文件",
         "panel.osa.sparsity_history" => "稀疏度历史",
-        // mcp_nodes 面板
-        "panel.mcp.alert_offline" => "[ALERT] 节点 {} 离线 (offline)",
-        "panel.mcp.no_nodes" => "暂无 MCP 节点接入 (No MCP nodes connected)",
-        "panel.mcp.detail_node_id" => "节点 ID:",
-        "panel.mcp.detail_status_label" => "状态:",
-        "panel.mcp.status_online" => "在线 (Online)",
-        "panel.mcp.status_degraded" => "降级 (Degraded)",
-        "panel.mcp.status_offline" => "离线 (Offline)",
-        "panel.mcp.detail_throughput" => "吞吐:",
-        "panel.mcp.detail_last_seen" => "最后心跳 (Last Seen):",
-        "panel.mcp.detail_heartbeat_age" => "心跳年龄 (Heartbeat Age):",
-        "panel.mcp.detail_timeout_warning" => "警告 (Warning): 心跳超时 (>{}s 阈值)",
-        "panel.mcp.detail_last_seen_never" => "最后心跳 (Last Seen): (从未)",
-        "panel.mcp.detail_no_heartbeat" => "警告 (Warning): 未收到心跳",
-        "panel.mcp.popup_title" => "节点 {} 详情",
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// 译文表的第 4 段（键域 `panel.self_assessment.body_title` … `common.none`）
+///
+/// WHY 分段：`pub fn lookup` 原本单函数 >600 行，破「单函数 ≤200 行」红线
+///（G-48 / `scripts/fnlen_baseline.txt`）。分段表**保持原表序与分派机制不变**：
+/// 每段仍是同形 `match`，由 `lookup` 依序短路尝试 ⇒ 匹配语义逐字等价。
+/// （段内行数不写死在此——无门校验它，写了就是下一个漂移项。）
+fn lookup_table_4(key: &str) -> Option<&'static str> {
+    let v = match key {
+        // F-45(B5-U):原 panel.mcp.* 死键 14 条已删除(生产零消费,在用键族为
+        // panel.mcp_nodes.*;死键残留会误导改错表,见 R5 报告 F-45)
         // self_assessment 面板
         "panel.self_assessment.body_title" => "Harness 自我评估 (Qoder 五维)",
         "panel.self_assessment.dim_comprehension" => "理解力",
@@ -711,6 +929,10 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.self_assessment.no_findings" => "暂无发现",
         // pvl_score 面板
         "panel.too_small" => "面板区域过小",
+        // F-30(B5-U):面板标题/等待提示/截断提示迁键(原 :97/:114/:156 硬编码)
+        "panel.dag.title" => "Quest 任务 DAG(按深度缩进)",
+        "panel.dag.awaiting" => "等待 QuestListUpdated...",
+        "panel.dag.more" => "... 另有 {} 个 Quest(见 Quest 面板)",
         "panel.dag.unwired" => "谱系 DAG:未接线(GSOE 未装配)",
         "panel.pvl.unwired" => "九维评分:未接线(PVL 循环未装配)",
         "panel.pvl.unwired_hint" => "生产装配面未实例化 PVL 循环,原数据源恒回退全 1.0,故不展示评分",
@@ -769,6 +991,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.task.sort_created_at" => "创建时间",
         "panel.task.no_matching" => "暂无匹配任务",
         "panel.task.status_summary" => "待处理:{} | 执行中:{} | 已暂停:{} | 已完成:{}",
+        "panel.task.selected_count" => " | 已选中:{}",
         "panel.task.quadrants_label" => "四象限: ",
         "panel.task.quadrant_q1" => "Q1(实现): A={} T={} WSJF={}",
         "panel.task.quadrant_q2" => "Q2(集成): A={} T={} WSJF={}",
@@ -783,9 +1006,84 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.task.batch_pause_confirm" => "批量暂停 (Batch pause) {} 个任务",
         "panel.task.batch_terminate_confirm" => "批量终止 (Batch terminate) {} 个任务",
         "panel.task.batch_resume_confirm" => "批量恢复 (Batch resume) {} 个任务",
+        // ====================================================================
+        // B6-M(2026-10-04):六面板(chtc/clv_vector/sysinfo/experience_card_viz/
+        // resource_monitor/metrics_dashboard)正文英文全量迁移,EXEMPT_ENGLISH_
+        // PREFIXES 对应六条随迁移除(只减不增)。占位符均为 {},消费点按
+        // replacen 范式替换(多占位符链式,见 injection_strategy cache_line 先例)。
+        // ====================================================================
+        // chtc 面板(正文表头复用 panel.border.chtc 经 trim 消除双源;空态
+        // "(none)" 复用 common.none)
+        "panel.chtc.status_online" => "在线",
+        "panel.chtc.status_offline" => "离线",
+        "panel.chtc.no_adapters" => "未接入任何 CHTC 适配器",
+        "panel.chtc.awaiting_events" => "等待 chtc-bridge 的 ChtcAdapterStatus 事件...",
+        "panel.chtc.detail_id" => "适配器 ID: {}",
+        "panel.chtc.detail_type" => "类型: {}",
+        "panel.chtc.detail_score" => "兼容性评分: {}/100",
+        "panel.chtc.detail_status" => "状态: {}",
+        "panel.chtc.detail_score_warning" => "警告: 评分低于 {}(存在兼容性风险)",
+        "panel.chtc.detail_requests" => "最近请求:",
+        "panel.chtc.requests_label" => "  请求: ",
+        "panel.chtc.detail_title" => "CHTC 适配器: {}",
+        // clv_vector 面板(块标号 "B{}"、dim=/value= 为语言无关技术标识,不迁)
+        "panel.clv.l2_norm_label" => " L2 范数: {} ",
+        "panel.clv.block_means_title" => "块均值(8 × 64 维分块):",
+        "panel.clv.block_waiting" => "等待数据...",
+        "panel.clv.top_dims_title" => "Top 维度(按 |值|):",
+        "panel.clv.no_top_dims" => "暂无 Top 维度数据。",
+        "panel.clv.awaiting_encoder" => "等待 NMC 编码器数据...",
+        "panel.clv.showing_dims" => "... 显示 {} / {} 个维度",
+        // sysinfo 面板(GB/MB/B 为国际单位符号、UTC 时间戳后缀语言无关,不迁)
+        "panel.sysinfo.line_os" => "系统: {}  |  {}  |  架构: {}",
+        "panel.sysinfo.line_cpu" => "CPU: {}  |  核心数: {}",
+        "panel.sysinfo.line_memory" => "内存总量: {}",
+        "panel.sysinfo.line_boot" => "启动时间: {}",
+        "panel.sysinfo.line_process" => "Chimera 进程: PID {}  |  常驻内存: {}",
+        "panel.sysinfo.refresh_hint" => "按 'r' 刷新进程信息",
+        "panel.sysinfo.na" => "无",
+        "panel.sysinfo.unknown" => "未知",
+        // experience_card_viz 面板
+        "panel.exp_card.body_title" => "经验卡片可视化(OpenMLE)",
+        "panel.exp_card.awaiting_provider" => "等待统计提供者接入...",
+        "panel.exp_card.stats_summary" => "总卡片: {} | 已评估: {} | 唯一错误: {}",
+        "panel.exp_card.scores_summary" => "最佳分: {} | 平均分: {}",
+        "panel.exp_card.method_dist_title" => "方法分布:",
+        "panel.exp_card.no_cards" => "暂无卡片记录。",
+        // resource_monitor 面板(每核标签 "C{i}:" 为语言无关技术标识,不迁)
+        "panel.resources.cpu_title" => " CPU: {}{} ",
+        "panel.resources.paused_tag" => " [已暂停]",
+        "panel.resources.ram_title" => " 内存: {}/{} GB ({}) ",
+        "panel.resources.swap_title" => " 交换分区: {}/{} GB",
+        "panel.resources.disk_title" => " 磁盘: 读 {}MB/s  写 {}MB/s ",
+        "panel.resources.net_title" => " 网络: 收 {}MB/s  发 {}MB/s ",
+        // metrics_dashboard 面板(cell 标题 b{i} 类目标签为语言无关技术标识,不迁;
+        // gqep_summary 的 per_op=/global=/orphan= 为协议字段名,两表同形保留)
+        "panel.metrics.cell_metric" => "指标",
+        "panel.metrics.cell_heatmap" => "热力图",
+        "panel.metrics.cell_bar" => "柱状图",
+        "panel.metrics.cell_util" => "利用率",
+        "panel.metrics.cell_latency" => "延迟",
+        "panel.metrics.empty_title" => " (空) ",
+        "panel.metrics.unbound" => "(未绑定)",
+        "panel.metrics.gqep_summary" => "GQEP 超时: per_op={}  global={}  orphan={}  {}",
         // 通用
         "common.none" => "(无)",
         _ => return None,
     };
     Some(v)
+}
+
+/// 查找中文译文;未命中返回 `None`(由 `i18n::tr` 回退到 key 本身)
+///
+/// WHY `match` 而非 HashMap:编译期常量表,`match` 零运行时初始化开销且
+/// 无需 `once_cell`/`phf` 依赖;分支数 < 500 时编译器可高效跳转表优化。
+///
+/// WHY 逐段尝试:段序 = 原巨型 `match` 的臂序,故首个命中者仍是原首个命中者;
+/// 未命中时多走几次跳转表分派(常数级,且本 crate 无在册 i18n bench,不作性能主张)。
+pub fn lookup(key: &str) -> Option<&'static str> {
+    lookup_table_1(key)
+        .or_else(|| lookup_table_2(key))
+        .or_else(|| lookup_table_3(key))
+        .or_else(|| lookup_table_4(key))
 }

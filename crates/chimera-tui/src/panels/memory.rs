@@ -15,7 +15,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::panels::Panel;
-use crate::render::{self, FOOTER_TEXT};
+use crate::render;
 use crate::types::{PanelId, TuiCommand, TuiState};
 use event_bus::NexusEvent;
 
@@ -114,7 +114,7 @@ impl MemoryPanel {
                 }
             },
             Line::from(""),
-            Line::from(FOOTER_TEXT),
+            Line::from(crate::t!("panel.footer")),
         ];
         Text::from(lines)
     }

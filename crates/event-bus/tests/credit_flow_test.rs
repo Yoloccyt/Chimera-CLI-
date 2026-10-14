@@ -12,10 +12,10 @@
 //! - release_credit 手动归还(含封顶防膨胀)
 //! - 高优等待经 EventBus::credit_flow 接入(Notify 唤醒)
 //! - 混沌:慢消费者(订阅者阻塞不消费)下 publish_critical_blocking 的
-//!   13 变体全部送达(mpsc 有界 4096 内),broadcast 普通事件 Lagged 丢弃
+//!   14 变体全部送达(mpsc 有界 4096 内),broadcast 普通事件 Lagged 丢弃
 //!   但出 SlowConsumerDropped 告警
-//! - 公共常量断言:CRITICAL_MPSC_VARIANTS(13)/ CRITICAL_TOTAL(17)/
-//!   LANE_FORBIDDEN_SHARD(17 名字,分片禁区声明)
+//! - 公共常量断言:CRITICAL_MPSC_VARIANTS(16)/ CRITICAL_TOTAL(20)/
+//!   LANE_FORBIDDEN_SHARD(20 名字,分片禁区声明)
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::collections::HashSet;
@@ -144,6 +144,19 @@ fn all_mpsc_critical_variants() -> Vec<NexusEvent> {
             counterexample: "s".into(),
             generation: 1,
         },
+        // v2.3 (b.1)/(b.4): Certify 与 FailureRegistry 进 mpsc 旁路清单
+        NexusEvent::CertifyIssued {
+            metadata: EventMetadata::new("t"),
+            claim_ref: "c".into(),
+            subject: "s".into(),
+            verifier: "GovernanceGate".into(),
+        },
+        NexusEvent::FailureRegistered {
+            metadata: EventMetadata::new("t"),
+            signature: "sig".into(),
+            affected_component: "crate".into(),
+            fix_status: "Open".into(),
+        },
     ]
 }
 
@@ -153,17 +166,17 @@ fn all_mpsc_critical_variants() -> Vec<NexusEvent> {
 
 #[test]
 fn test_public_d8_constants_consistent() {
-    // 常量口径:14(mpsc 旁路)+ 4(历史 broadcast-only)= 18(Critical 总数)
-    assert_eq!(CRITICAL_MPSC_VARIANTS, 14);
-    assert_eq!(CRITICAL_TOTAL, 18);
-    assert_eq!(LANE_FORBIDDEN_SHARD.len(), 18, "分片禁区必须恰好 18 个名字");
-    // LANE_FORBIDDEN_SHARD 与全量 14 变体名一一覆盖(14 ⊆ 18)
+    // 常量口径:16(mpsc 旁路)+ 4(历史 broadcast-only)= 20(Critical 总数)
+    assert_eq!(CRITICAL_MPSC_VARIANTS, 16);
+    assert_eq!(CRITICAL_TOTAL, 20);
+    assert_eq!(LANE_FORBIDDEN_SHARD.len(), 20, "分片禁区必须恰好 20 个名字");
+    // LANE_FORBIDDEN_SHARD 与全量 16 变体名一一覆盖(16 ⊆ 20)
     let forbidden: HashSet<&str> = LANE_FORBIDDEN_SHARD.iter().copied().collect();
-    assert_eq!(forbidden.len(), 18, "LANE_FORBIDDEN_SHARD 名字必须唯一");
+    assert_eq!(forbidden.len(), 20, "LANE_FORBIDDEN_SHARD 名字必须唯一");
     for ev in all_mpsc_critical_variants() {
         assert!(
             forbidden.contains(ev.type_name()),
-            "mpsc 变体 {} 未声明在分片禁区(14 ⊆ 18 违反)",
+            "mpsc 变体 {} 未声明在分片禁区(16 ⊆ 20 违反)",
             ev.type_name()
         );
         assert_eq!(ev.severity(), EventSeverity::Critical);
@@ -421,7 +434,7 @@ async fn test_chaos_slow_consumer_critical_zero_loss() {
         bus.publish_blocking(make_event(i)).unwrap();
     }
 
-    // 3) Critical 零丢失:mpsc 旁路全部收到 14 个(有界 4096 内,不受慢消费者影响)
+    // 3) Critical 零丢失:mpsc 旁路全部收到 16 个(有界 4096 内,不受慢消费者影响)
     let mut received = Vec::with_capacity(CRITICAL_MPSC_VARIANTS);
     for _ in 0..CRITICAL_MPSC_VARIANTS {
         let ev = tokio::time::timeout(Duration::from_secs(2), critical_rx.recv())

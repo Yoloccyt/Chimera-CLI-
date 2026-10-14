@@ -61,8 +61,8 @@ fn tab_click_switches_to_clicked_panel() {
     render_once(&mut app);
     assert_eq!(app.current_panel(), PanelId::Quest);
 
-    // 26 面板(FC-05 下线 InjectionStrategy)下 80 列 / 26 = tab_width 3;
-    // 点击第 2 个 tab(column 3-5)→ Parliament
+    // 29 面板(本批新增 Bench/ReviewQueue/Blackboard 环尾注册,前 7 位不变)
+    // 下 80 列 / 29 = tab_width 2;点击第 2 个 tab(column 2-3)→ Parliament
     app.handle_mouse_event(left_down(3, 1));
     assert_eq!(
         app.current_panel(),
@@ -70,8 +70,8 @@ fn tab_click_switches_to_clicked_panel() {
         "点击第 2 个 tab 应切到 Parliament"
     );
 
-    // 点击第 3 个 tab(column 6-8)→ Budget
-    app.handle_mouse_event(left_down(7, 1));
+    // 点击第 3 个 tab(column 4-5)→ Budget
+    app.handle_mouse_event(left_down(4, 1));
     assert_eq!(
         app.current_panel(),
         PanelId::Budget,

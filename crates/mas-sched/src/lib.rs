@@ -3,7 +3,7 @@
 //! ROLE:     mas-sched — 多代理调度器控制面（P3-T2，v4.0 WI-29）
 //! BACKEND:  memory
 //! PRODUCERS: 0 -
-//! CONSUMERS: 0 -
+//! CONSUMERS: 1 chimera-cli
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! mas-sched — 多代理调度器控制面（P3-T2，v4.0 WI-29）
@@ -34,11 +34,18 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+/// v2.3 §(b.4)(2)：Broker 频率护栏 — 认领制「防轮询风暴」硬上限
+pub mod broker_guardrail;
+/// v2.3 §(b.4)(2) D#1：认领制 feature-gated 试点（默认 off）——
+/// 纯控制面消费者目标池 + broker 护栏 + 转正/回滚双判据预演。
+#[cfg(feature = "claim_pilot")]
+pub mod claim_pilot;
 pub mod error;
 pub mod scheduler;
 pub mod shadow;
 pub mod types;
 
+pub use broker_guardrail::ClaimRateGovernor;
 pub use error::SchedError;
 pub use scheduler::{PeerScheduler, SimplePeerScheduler};
 pub use shadow::{ShadowDecision, ShadowLog, ShadowScheduler};

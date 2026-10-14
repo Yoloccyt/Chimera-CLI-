@@ -27,6 +27,14 @@
 //!   事件执行实际迁移)+ 四层统计事件(CapabilityTierStatsReported)
 //! - M10(ADR-160 偿还):LSCT 策略装配闭环(spawn_lsct_policy 订阅 QuestCreated,
 //!   reconcile 种子 + handle_quest_created 出策略,补齐决策腿)
+//!   ⚠ 装配态订正(2026-10-09 v3.5 W6-4):“两腿齐备”仅在 **crate 内**成立——
+//!   `spawn_lsct_policy` / `spawn_lsct_subscriber` 的调用点全在
+//!   `tests/lsct_policy.rs` 与文档示例里；`CmtCoordinator::new*` 在
+//!   `crates/*/src` 的非测试作用域内**零构造点**（2026-10-09 实测：仅 coordinator.rs
+//!   自身 `#[cfg(test)]` 与本文档示例）。`CONSUMERS: 1 chimera-cli` 的实指消费面是
+//!   `ExperienceCardStorage`（`chimera-cli/src/experience_loop.rs:29`），**不是** coordinator。
+//!   ⇒ 本行应读作“落盘/迁移/经验卡片持久化已交付，**分层决策闭环未接线**”，
+//!   而不是“决策腿已在线上跑”。接线属行为变更，需先定 N-4 型降级姿态并同批改台账。
 //! - Phase 3 §8.1:金字塔存储映射(pyramid_storage,MemoryPyramidLevel→热温冷冰
 //!   + 分层采样 25/25/50/0 + INV-8 迁移单调性)
 //! - Phase 3 §8.2:经验卡片持久化(experience_card_storage,SQLite 五复合索引
@@ -70,7 +78,14 @@ pub mod error;
 pub mod experience_card_storage;
 pub mod hot;
 pub mod ice;
-/// LSCT 任务感知策略装配(cmt → lsct 生产边,ADR-160 孤岛偿还 M10)
+/// LSCT 任务感知策略子模块(ADR-193 架构减法:原独立 crate `lsct-tiering` 整并)
+///
+/// 自 ADR-160(M10)起 lsct 的唯一生产消费方就是本 crate 的 `spawn_lsct_policy`
+/// 装配腿;整并后 Tier 类型统一为 `crate::types::Tier` 单一实现,
+/// 跨 crate 双向转换守护层(`to_lsct_tier`/`from_lsct_tier`)随之退役。
+/// 子模块完整契约见 `lsct/mod.rs` MODULE-CONTRACT 头。
+pub mod lsct;
+/// LSCT 策略装配(`cmt → lsct` 由跨 crate 生产边变为同 crate 模块装配,ADR-193)
 ///
 /// `spawn_lsct_policy` 装配决策腿(QuestCreated → LSCT 策略),
 /// 与既有 `spawn_lsct_subscriber`(执行腿)组成完整闭环。
@@ -130,6 +145,23 @@ pub struct TierDistribution {
     pub cold: u64,
     /// 冰层条目数(Ice Tier: 归档只读文件,无容量上限)
     pub frozen: u64,
+}
+
+/// v2.3 §(b.5) 落盘扫描策略(本 crate 单一口径)。
+///
+/// 只拦截硬载荷（私钥 PEM / 云凭证 / 服务令牌 = `Block`），高熵串与键名
+/// 启发式降为 `Pass` 防误报（误报会让正常能力被无声丢弃）。
+///
+/// WHY 单源：此前本 crate 的 warm/cold/ice/experience_card_storage 各自逐字
+/// 复制同一匿名结构体（五份）。策略一旦分叉，“各层同口径”只能靠人记住，
+/// 而 G-84 升入口级后需要逐入口插桩——插桩点数增加必然放大复制风险。
+/// 以 `pub(crate)` 收口：对外 API 零变化，仅 crate 内部共享。
+pub(crate) fn hard_payload_scan_policy() -> nexus_contracts::sensitive::ScanPolicy {
+    nexus_contracts::sensitive::ScanPolicy {
+        on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+        on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+        ..Default::default()
+    }
 }
 
 /// 预导入模块 — 提供最常用类型

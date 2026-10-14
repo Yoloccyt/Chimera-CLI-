@@ -23,9 +23,9 @@ use setup::{
     setup_week6_pipeline,
 };
 
-// WHY lsct_tiering::Tier(M10, ADR-160 偿还批次):lsct 已自有 Tier 类型
+// WHY cmt_tiering::lsct::Tier(ADR-193 整并后与 CMT 共用单一 Tier 实现)
 // (解除 cmt 复用、防 cmt↔lsct 生产依赖环),LSCT API 一律使用本类型
-use lsct_tiering::{TaskType, Tier};
+use cmt_tiering::lsct::{TaskType, Tier};
 
 // ============================================================
 // 测试 1:文本输入→NMC→SSRA→CHTC 全链路(< 400ms)

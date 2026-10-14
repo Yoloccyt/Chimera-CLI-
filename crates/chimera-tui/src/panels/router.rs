@@ -20,7 +20,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::panels::Panel;
-use crate::render::{self, FOOTER_TEXT};
+use crate::render;
 use crate::types::{PanelId, RouterStatsInfo, TuiCommand, TuiState};
 
 /// 命中率低水位阈值:低于此值(60%)的命中率以黄色高亮提醒运维关注。
@@ -114,7 +114,7 @@ impl RouterPanel {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(FOOTER_TEXT));
+        lines.push(Line::from(crate::t!("panel.footer")));
 
         Text::from(lines)
     }

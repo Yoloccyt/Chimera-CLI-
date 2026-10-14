@@ -168,6 +168,11 @@ pub struct UtilizationSampler {
     samples: AtomicUsize,
     /// 采样窗口内峰值（以千分位整数存,避免 f64 原子）
     peak_milli: AtomicUsize,
+    /// 上一次已上报事件的超阈观测数（`u64::MAX` = 尚未报过 / 已回落复位）
+    ///
+    /// WHY 用 saturation 而非 degradation 作基线：默认 Observe 策略下降级数恒为 0,
+    /// 若拿它去抖会“首次报了就不再报”；而超阈观测数在三种策略下都单调增长。
+    last_reported_saturation: std::sync::atomic::AtomicU64,
 }
 
 impl Default for UtilizationSampler {
@@ -184,6 +189,121 @@ impl UtilizationSampler {
             sum: AtomicUsize::new(0),
             samples: AtomicUsize::new(0),
             peak_milli: AtomicUsize::new(0),
+            last_reported_saturation: std::sync::atomic::AtomicU64::new(u64::MAX),
+        }
+    }
+
+    /// 采一次双口径快照并累计到自身（ADR-197）
+    ///
+    /// 无 tokio runtime 时 `tokio` 侧为 None,`combined_utilization()` 按既有口径
+    /// 退化为 rayon 单侧 —— 该降级已在 [`UtilizationSnapshot::combined_utilization`] 文档中声明。
+    #[must_use]
+    pub fn snapshot_and_record(&self) -> UtilizationSnapshot {
+        let snap = UtilizationSnapshot {
+            sampled_at: Instant::now(),
+            tokio: TokioProbe::sample(),
+            rayon: super::bridge::bridge().rayon_probe(),
+        };
+        self.record(&snap);
+        snap
+    }
+
+    /// 采样 + 累计 + 超阈时发布 `ComputePoolSaturated`（ADR-197 A5 的事件面）
+    ///
+    /// WHY 由采样器承担上报而不是 `spawn_compute*` 热路径：本方法只在周期报告器里被调;
+    /// `ComputeBridge` 不持 `EventBus` 句柄（避免给纳秒级热路径引入 IO 侧依赖）。
+    ///
+    /// 返回值供测试与后续指标导出取用，不是必须消费项（故不加 `#[must_use]`）。
+    pub fn sample_and_report(&self, bus: &event_bus::EventBus) -> UtilizationSnapshot {
+        let snap = self.snapshot_and_record();
+        let b = super::bridge::bridge();
+        let published = self.report_from(
+            bus,
+            &snap,
+            b.is_saturated(),
+            b.saturation_threshold_bp(),
+            b.saturation_observations(),
+            b.saturation_degradations(),
+            b.saturation_hottest_kind(),
+        );
+        if !published {
+            // 常态只留可定位的日志与累计值（指标由 `mean`/`peak` 经导出面取用）
+            tracing::trace!(
+                combined_bp = (snap.combined_utilization() * 1000.0).round() as u32,
+                mean = self.mean(),
+                samples = self.count(),
+                "计算池利用率已采样（本轮未达上报条件）"
+            );
+        }
+        snap
+    }
+
+    /// 上报判定与发布 —— 与"从哪取运行时状态"解耦的分离面
+    ///
+    /// WHY 拆开（先例 [`decide`](super::bridge::decide)）：若把判定与真桥状态绑在一起,
+    /// 就只能靠"占满真池 + 等定时周期"来测去抖,在慢机上必飘;拆成本方法后可确定性单测。
+    ///
+    /// # 参数
+    /// - `saturated` / `threshold_bp`:本次是否超阈与生效阈值（由调用方从桥取得）；
+    /// - `saturation_count`:累计超阈观测数（去抖基线，`Observe` 下也增长）；
+    /// - `degraded_count`:累计实际降级数（事件字段，`Observe` 下不增长）。
+    ///
+    /// # 返回
+    /// `true` = 本次已发布事件;`false` = 未饱和、去抖命中或发布失败（失败已 `warn!`）。
+    #[must_use]
+    #[allow(clippy::too_many_arguments)] // 入参都是上报必需的最小事实集;套 builder 会让"发一条观测事件"变重
+    pub fn report_from(
+        &self,
+        bus: &event_bus::EventBus,
+        snap: &UtilizationSnapshot,
+        saturated: bool,
+        threshold_bp: u32,
+        saturation_count: u64,
+        degraded_count: u64,
+        hottest_kind: String,
+    ) -> bool {
+        use super::telemetry::saturation_ratio_bp;
+        use event_bus::{EventMetadata, NexusEvent};
+
+        let ratio_bp = saturation_ratio_bp(snap.rayon.active_tasks, snap.rayon.pool_threads);
+        if !saturated {
+            // 回落:复位去抖基线,下次超阈重新上报一次
+            self.last_reported_saturation
+                .store(u64::MAX, Ordering::Relaxed);
+            tracing::debug!(
+                active_tasks = snap.rayon.active_tasks,
+                pool_threads = snap.rayon.pool_threads,
+                ratio_bp,
+                threshold_bp,
+                "计算池占用未达阈值"
+            );
+            return false;
+        }
+        let previous = self
+            .last_reported_saturation
+            .swap(saturation_count, Ordering::Relaxed);
+        if !super::telemetry::report_needed(ratio_bp, threshold_bp, saturation_count, previous) {
+            return false;
+        }
+        let combined_bp = (snap.combined_utilization() * 1000.0).clamp(0.0, u32::MAX as f64) as u32;
+        let event = NexusEvent::ComputePoolSaturated {
+            metadata: EventMetadata::new("nexus-core"),
+            active_tasks: snap.rayon.active_tasks,
+            pool_threads: snap.rayon.pool_threads,
+            saturation_ratio_bp: ratio_bp,
+            combined_utilization_bp: combined_bp,
+            threshold_bp,
+            saturation_count,
+            degraded_count,
+            hottest_kind,
+        };
+        match bus.publish_blocking(event) {
+            Ok(()) => true,
+            Err(e) => {
+                // 观测面不阻断计算（与 `ClvSnapshotReported` 同取向）
+                tracing::warn!(error = %e, "ComputePoolSaturated 发布失败(不阻断计算)");
+                false
+            }
         }
     }
 
@@ -237,6 +357,72 @@ impl UtilizationSampler {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    /// 双口径采样 — `snapshot_and_record` 返回快照并计入聚合（ADR-197）
+    #[test]
+    fn snapshot_and_record_accumulates() {
+        let s = UtilizationSampler::new();
+        assert_eq!(s.count(), 0, "新建采样器不得凭空有样本");
+        let snap = s.snapshot_and_record();
+        assert_eq!(s.count(), 1, "每次采样必须计入聚合");
+        assert!(snap.rayon.pool_threads >= 1, "桥线程数快照不得为 0");
+        // 无 runtime 时 tokio 侧为 None，combined 按既有口径退化为 rayon 单侧
+        let fallback = UtilizationSnapshot {
+            sampled_at: Instant::now(),
+            tokio: None,
+            rayon: RayonProbe {
+                pool_threads: 4,
+                active_tasks: 2,
+            },
+        };
+        assert!(
+            (fallback.combined_utilization() - 0.5).abs() < 1e-9,
+            "退化口径必须等于 rayon active_ratio（双权重口径的已知下限）"
+        );
+    }
+
+    /// 上报去抖 — 未饱和不发、首次超阈发、同计数不重发、递增再发、回落复位
+    ///
+    /// WHY 走 `report_from` 而不是驱动真桥：单测里无法稳定把全局池占用拉到阈值以上
+    /// （池 = num_cpus−2），而改全局状态会污染同批其他用例；`report_from` 是显式
+    /// 注入判定输入的分离面。
+    #[test]
+    fn report_from_debounce_and_reset() {
+        let bus = event_bus::EventBus::new();
+        let s = UtilizationSampler::new();
+        let mk = |active: usize| UtilizationSnapshot {
+            sampled_at: Instant::now(),
+            tokio: None,
+            rayon: RayonProbe {
+                pool_threads: 2,
+                active_tasks: active,
+            },
+        };
+        let (hot, idle) = (mk(2), mk(0));
+
+        assert!(
+            !s.report_from(&bus, &idle, false, 900, 0, 0, "Unknown".into()),
+            "未饱和不得发事件"
+        );
+        assert!(
+            s.report_from(&bus, &hot, true, 900, 1, 0, "Generic".into()),
+            "首次超阈必须发（1000‰ ≥ 900‰）"
+        );
+        assert!(
+            !s.report_from(&bus, &hot, true, 900, 1, 0, "Generic".into()),
+            "同一超阈期内观测数未变必须去抖"
+        );
+        assert!(
+            s.report_from(&bus, &hot, true, 900, 2, 0, "Generic".into()),
+            "观测数递增必须再发"
+        );
+        // 回落一次后基线复位:同一观测数也必须重新上报，否则退化为漏报
+        assert!(!s.report_from(&bus, &idle, false, 900, 2, 0, "Generic".into()));
+        assert!(s.report_from(&bus, &hot, true, 900, 2, 0, "Generic".into()));
+        assert_eq!(s.count(), 0, "report_from 不负责采样累计（单一职责）");
+        // Observe 策略下 degraded_count 恒为 0 仍应持续上报（去抖基线是观测数而非降级数）
+        assert!(s.report_from(&bus, &hot, true, 900, 3, 0, "Generic".into()));
+    }
 
     /// ActiveCounter 增减配对 — enter 后 active=1,drop 后归零
     #[test]

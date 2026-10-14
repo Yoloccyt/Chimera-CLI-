@@ -27,6 +27,8 @@ use hnsw_rs::hnsw::Hnsw;
 use hnsw_rs::prelude::DistCosine;
 use nexus_core::CLV;
 
+use crate::types::MemoryId;
+
 /// 每节点语义边的近邻数上界(边数 = O(n·k))
 const SEMANTIC_EDGE_TOP_K: usize = 8;
 
@@ -216,6 +218,9 @@ impl MemoryGraph {
         // WHY parallel_insert:hnsw_rs 内置 rayon 多核并行建索引,10K 规模下
         // 相比串行 insert 有显著加速(建索引是本路径主要耗时)。需物化 Vec<f32>
         // (parallel_insert 要求 &Vec 引用),10K×512×4B≈20MB 可接受。
+        // ⚠ 纪律④ 桥接唯一例外:parallel_insert 走 hnsw_rs 内置 rayon 全局池,
+        // 不经 ComputeBridge 专用池;破口登记与接线前迁桥/长期例外决策见
+        // `nexus-core/src/compute/bridge.rs`「骨架边界 · hnsw_rs 全局池例外」（第三轮 T2.5）。
         let vectors: Vec<Vec<f32>> = ids
             .iter()
             .map(|id| self.nodes[id].embedding.as_slice().to_vec())
@@ -230,6 +235,7 @@ impl MemoryGraph {
 
         // 并行查询全部节点近邻(复用已物化的 vectors,rayon 多核加速)。
         // 返回顺序与 vectors 一致:results[dataid] = 节点 dataid 的近邻表。
+        // ⚠ 同上 parallel_search 亦走 hnsw_rs 全局池(纪律④ 例外,见 bridge.rs 骨架边界）。
         let results = hnsw.parallel_search(&vectors, fetch_k, ef);
 
         // 先收集边(避免查询借用与 self 可变借用冲突)
@@ -350,6 +356,27 @@ impl MemoryGraph {
             }
         }
         results
+    }
+
+    /// 图扩召回 → 融合就绪 id 序（WI-G9：接 `MlcEngine::recall_hybrid` 第四路）
+    ///
+    /// 与 [`recall_with_graph`](Self::recall_with_graph) **同序**（seed 首位 + BFS 序，
+    /// 位置即 rank）;仅把 `&MemoryNode` 物化为 `MemoryId` 序，供
+    /// `recall_hybrid(query, quest_id, Some(&ids), top_k, tuning)` 的
+    /// `extra_path_ids` 直接消费。图与引擎同属 L2（mlc-engine），映射纪律
+    /// （node_id → MemoryId、序保真）收口一处，防两处漂移。
+    /// 零算法改动（BFS 序 = rank 序），`memory_graph_recall` 既有性能面不受影响。
+    #[must_use]
+    pub fn recall_with_graph_ids(
+        &self,
+        query: &CLV,
+        depth: u32,
+        max_results: usize,
+    ) -> Vec<MemoryId> {
+        self.recall_with_graph(query, depth, max_results)
+            .into_iter()
+            .map(|n| MemoryId::from(n.node_id.clone()))
+            .collect()
     }
 }
 

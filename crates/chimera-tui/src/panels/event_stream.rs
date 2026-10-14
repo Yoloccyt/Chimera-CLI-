@@ -28,7 +28,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
-use crate::render::{virtual_scroll_window, FOOTER_TEXT};
+use crate::render::scroll_offset_window;
 use crate::types::{PanelId, TuiCommand, TuiState};
 use event_bus::{EventSeverity, NexusEvent};
 
@@ -117,7 +117,7 @@ impl EventStreamPanel {
     /// 确保过滤缓存与当前状态一致(命中则零分配直取,键失效则重建索引)
     ///
     /// WHY P-B:render 每帧调用,命中时仅借用缓存内 `Vec<usize>`,不做任何
-    /// O(n) 分配;渲染窗口由调用方经 `virtual_scroll_window` 计算后,
+    /// O(n) 分配;渲染窗口由 render_window 按可见行数计算后,
     /// 仅对窗口内索引解析原事件(O(visible) 分配)。
     fn ensure_filter_cache(&mut self, state: &TuiState) {
         if crate::panels::filter_cache::FilterCache::enabled(state)
@@ -156,8 +156,9 @@ impl EventStreamPanel {
     ///
     /// WHY 独立内部方法:将"渲染哪些行"与"如何渲染每行"解耦,
     /// content 方法用默认行数,render 方法用实际终端高度,逻辑共享避免重复。
-    /// 使用 `virtual_scroll_window` 仅构造可见区域 + 上下缓冲的 Text,
-    /// 确保万级事件下 Text 构造也是 O(visible + 2×BUFFER)。
+    /// 窗口基直接取 scroll_offset(无 ±缓冲,窗口算术见 render.rs
+    /// scroll_offset_window 文档),
+    /// 确保万级事件下 Text 构造也是 O(visible)。
     ///
     /// WHY 索引入参(P-B):`filtered_indices` 为过滤后事件在 `latest_events`
     /// 中的正序下标;窗口范围计算后仅对窗口内索引解析原事件,
@@ -207,7 +208,21 @@ impl EventStreamPanel {
         if filtered_indices.is_empty() {
             lines.push(Line::from(crate::t!("panel.event_stream.no_events")));
         } else {
-            let (start, end) = virtual_scroll_window(total, scroll_offset, visible_rows);
+            let (start, end) = scroll_offset_window(total, scroll_offset, visible_rows);
+
+            // F-22 修复:总数提示行前置到事件行之前 —— 原追加在窗口尾部,叠加
+            // 缓冲行后 Text 总行数超出 inner,提示行与页脚被裁剪;前置后紧贴
+            // 头部,任何滚动位置都可见。
+            if total > visible_rows {
+                lines.push(Line::from(format!(
+                    "... {} {} {} {} {}",
+                    crate::t!("panel.event_stream.showing"),
+                    end.saturating_sub(start),
+                    crate::t!("panel.event_stream.of"),
+                    total,
+                    crate::t!("panel.event_stream.events")
+                )));
+            }
 
             for (idx, &event_idx) in filtered_indices.iter().enumerate().take(end).skip(start) {
                 // P-B:仅窗口内索引解析原事件(窗口外不触碰)
@@ -237,23 +252,9 @@ impl EventStreamPanel {
                     Span::styled(event_type.to_string(), style),
                 ]));
             }
-
-            // 虚拟滚动提示:当总事件数 > 可见窗口时显示总数
-            // 组装范式与 log.rs showing/of/events 一致(三键拼接,zh 为
-            // "显示 N / M 条事件"语序)
-            if total > visible_rows {
-                lines.push(Line::from(format!(
-                    "... {} {} {} {} {}",
-                    crate::t!("panel.event_stream.showing"),
-                    end.saturating_sub(start),
-                    crate::t!("panel.event_stream.of"),
-                    total,
-                    crate::t!("panel.event_stream.events")
-                )));
-            }
         }
 
-        lines.push(Line::from(FOOTER_TEXT));
+        lines.push(Line::from(crate::t!("panel.footer")));
         Text::from(lines)
     }
 }
@@ -305,14 +306,17 @@ impl Panel for EventStreamPanel {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        // 内部高度需扣除:标题(2 行) + 截断/提示行(1 行) + 页脚(1 行) + auto_scroll 提示(1 行)
-        // WHY saturating_sub(5):保守估计额外占用 5 行,避免内容溢出边框
-        let content_height = inner.height.saturating_sub(5) as usize;
+        // 内部高度需扣除:标题(2 行) + Critical 丢弃告警(1 行,条件) +
+        // auto_scroll 提示(1 行,条件) + 总数提示行(1 行,条件) + 页脚(1 行)
+        // WHY saturating_sub(6):与三个条件行的最坏组合对齐(F-22),保证
+        // 任意条件行组合下 Text 恰好不溢出 inner、页脚不被裁剪
+        let content_height = inner.height.saturating_sub(6) as usize;
         self.scroll_offset =
             list_state::adjust_scroll(self.selected, self.scroll_offset, content_height);
 
-        // 虚拟滚动:render_window 内部已通过 virtual_scroll_window 仅构造可见区域 + 上下缓冲
-        // WHY 不使用 Paragraph::scroll:render_window 返回的 Text 已只包含可见行(含缓冲),
+        // 虚拟滚动:render_window 内部按 scroll_offset 构造恰好可见的窗口(F-22 起
+        // 不再含 ±缓冲,见 render_window 注)
+        // WHY 不使用 Paragraph::scroll:render_window 返回的 Text 已只包含可见行,
         // 再用 Paragraph::scroll 会导致二次滚动 — 当 scroll_offset > Text 行数时显示空白。
         // 此前实现用 content() + Paragraph::scroll 的组合在万级事件下会出现空白屏,
         // 改为直接传 content_height 给 render_window,让虚拟滚动窗口与实际终端高度对齐。

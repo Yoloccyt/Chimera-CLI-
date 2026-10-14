@@ -122,8 +122,8 @@ fn test_switch_panel_prev() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
     app.switch_panel_prev();
     // Concord T1.4:FocusManager 注册序派生自 PanelId::REGISTERED_FOCUS_ORDER;
-    // FC-05:Quest 的上一个 = 环尾 ExperienceCardViz(InjectionStrategy 已下线)。
-    assert_eq!(app.current_panel(), PanelId::ExperienceCardViz);
+    // v2.3 §(b.6):Quest 的上一个 = 环尾 Blackboard(InjectionStrategy 已下线)。
+    assert_eq!(app.current_panel(), PanelId::Blackboard);
     Ok(())
 }
 
@@ -293,6 +293,25 @@ fn test_handle_key_esc_cancels_command_mode() -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
+/// F-08(B5-T):slash_registry 构造期缓存与现场构造内容逐项一致
+/// (render/补全/提交/导航四处消费点改 self 共享后行为不变的守护断言)
+#[test]
+fn slash_registry_field_matches_fresh_construction() -> Result<(), Box<dyn std::error::Error>> {
+    let app = make_app()?;
+    let fresh = crate::actions::SlashCommandRegistry::with_builtin_commands();
+    assert_eq!(
+        app.slash_registry.all(),
+        fresh.all(),
+        "构造期缓存的斜杠注册表应与现场构造逐项一致"
+    );
+    // get 走 name/别名 HashMap 索引路径,与 all() 的 Vec 顺序路径互补
+    assert!(
+        app.slash_registry.get("new").is_some(),
+        "缓存注册表 get 查询应可用"
+    );
+    Ok(())
+}
+
 #[test]
 fn test_handle_key_question_mark_shows_help_overlay() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
@@ -422,6 +441,11 @@ fn test_confirm_popup_no_dismisses() -> Result<(), Box<dyn std::error::Error>> {
 fn test_render_produces_output() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
     let backend = TestBackend::new(80, 24);
+    // i18n(B4-I):面板名经 t!(name_key()) 随 locale 切换,期望串与渲染同源经
+    // t! 求值、locale 无关;持 guard 串行化但不写全局 locale——不新增 En 窗口,
+    // 避免污染同二进制内其余依赖默认中文的测试
+    let _locale_guard = crate::i18n::locale_test_guard();
+    let panel_label = crate::t!(PanelId::Quest.name_key());
     let mut terminal = Terminal::new(backend)?;
     terminal.draw(|f| app.render(f))?;
 
@@ -431,8 +455,10 @@ fn test_render_produces_output() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect();
+    // WHY 压缩空白:TestBackend 逐格渲染 CJK 时字符间含空格
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("Panel:") || content.contains("Quest"),
+        compact.contains(panel_label),
         "rendered output should contain panel info"
     );
     Ok(())
@@ -444,6 +470,10 @@ fn test_render_switches_panel_content() -> Result<(), Box<dyn std::error::Error>
     app.switch_panel_next(); // Quest → Parliament
 
     let backend = TestBackend::new(80, 24);
+    // i18n(B4-I):期望串与渲染同源经 t! 求值,locale 无关;不写全局 locale
+    // (WHY 见 test_render_produces_output 注)
+    let _locale_guard = crate::i18n::locale_test_guard();
+    let panel_label = crate::t!(PanelId::Parliament.name_key());
     let mut terminal = Terminal::new(backend)?;
     terminal.draw(|f| app.render(f))?;
 
@@ -453,8 +483,9 @@ fn test_render_switches_panel_content() -> Result<(), Box<dyn std::error::Error>
         .iter()
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect();
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("Parliament"),
+        compact.contains(panel_label),
         "rendered output should contain Parliament panel"
     );
     Ok(())
@@ -466,6 +497,10 @@ fn test_render_memory_panel() -> Result<(), Box<dyn std::error::Error>> {
     app.switch_panel_to(PanelId::Memory);
 
     let backend = TestBackend::new(80, 24);
+    // i18n(B4-I):期望串与渲染同源经 t! 求值,locale 无关;不写全局 locale
+    // (WHY 见 test_render_produces_output 注)
+    let _locale_guard = crate::i18n::locale_test_guard();
+    let panel_label = crate::t!(PanelId::Memory.name_key());
     let mut terminal = Terminal::new(backend)?;
     terminal.draw(|f| app.render(f))?;
 
@@ -475,8 +510,9 @@ fn test_render_memory_panel() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect();
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("Memory") || content.contains("Cache Hit Rate"),
+        compact.contains(panel_label),
         "rendered output should contain Memory panel"
     );
     Ok(())
@@ -488,6 +524,10 @@ fn test_render_security_panel() -> Result<(), Box<dyn std::error::Error>> {
     app.switch_panel_to(PanelId::Security);
 
     let backend = TestBackend::new(80, 24);
+    // i18n(B4-I):期望串与渲染同源经 t! 求值,locale 无关;不写全局 locale
+    // (WHY 见 test_render_produces_output 注)
+    let _locale_guard = crate::i18n::locale_test_guard();
+    let panel_label = crate::t!(PanelId::Security.name_key());
     let mut terminal = Terminal::new(backend)?;
     terminal.draw(|f| app.render(f))?;
 
@@ -497,8 +537,9 @@ fn test_render_security_panel() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect();
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("Security") || content.contains("VETO"),
+        compact.contains(panel_label),
         "rendered output should contain Security panel"
     );
     Ok(())
@@ -536,6 +577,10 @@ fn test_render_help_panel() -> Result<(), Box<dyn std::error::Error>> {
     app.switch_panel_to(PanelId::Help);
 
     let backend = TestBackend::new(80, 24);
+    // i18n(B4-I):期望串与渲染同源经 t! 求值,locale 无关;不写全局 locale
+    // (WHY 见 test_render_produces_output 注)
+    let _locale_guard = crate::i18n::locale_test_guard();
+    let panel_label = crate::t!(PanelId::Help.name_key());
     let mut terminal = Terminal::new(backend)?;
     terminal.draw(|f| app.render(f))?;
 
@@ -545,11 +590,117 @@ fn test_render_help_panel() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect();
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("Help") || content.contains("Quit"),
+        compact.contains(panel_label),
         "rendered output should contain Help panel content"
     );
     Ok(())
+}
+
+// ============================================================
+// 快捷键声明-可达性对账(B4 意见4)
+//
+// 背景:F-24/F-27/F-41 均为删除型修复(移除 shortcuts() 中无消费者的死声明),
+// 此前无任何测试锁定——重添死声明不会红。本节遍历全部注册面板的 shortcuts()
+// 键帽,对字母键帽断言真实可达,一次性锁死该承诺复发。
+// ============================================================
+
+/// "消费但无命令"键帽登记 — shortcuts() 声明、且经核读确由面板 handle_key 消费
+/// (面板本地状态变化)但不产出 TuiCommand 的键帽,以及依赖运行期数据才产出
+/// 命令的"条件可达"键帽(空态无选中返回 None)。
+///
+/// WHY 登记制而非断言放宽:两条机器可达路径(handle_key 产出命令 /
+/// InputRouter 全局截获)之外的情形逐条注明理由,只减不增;新增死声明若
+/// 不在清单内,对账测试即红。
+const CONSUMED_NO_COMMAND: &[(PanelId, &str, &str)] = &[
+    (
+        PanelId::Sysinfo,
+        "R",
+        "force_refresh 刷新面板本地快照,无 TuiCommand(F-41 r|R 对齐)",
+    ),
+    (
+        PanelId::MetricsDashboard,
+        "h/j/k",
+        "5×2 网格 cell 导航,消费无命令(F-38 同批口径:l 已全局截获)",
+    ),
+    (PanelId::PvlScore, "j/k", "维度选择导航,消费无命令"),
+    (
+        PanelId::Chat,
+        "↑/↓ j/k",
+        "聊天历史滚动(follow/scroll_offset),消费无命令",
+    ),
+    (
+        PanelId::TaskManager,
+        "f",
+        "进入搜索态(is_searching),消费无命令",
+    ),
+    (
+        PanelId::TaskManager,
+        "S",
+        "排序模式面板本地循环,无 TuiCommand",
+    ),
+    (
+        PanelId::TaskManager,
+        "P",
+        "条件可达:空态无选中返回 None,有选中产出 QuestControl::Pause",
+    ),
+    (PanelId::TaskManager, "B", "条件可达:同 P,批量暂停"),
+    (PanelId::TaskManager, "T", "条件可达:同 P,批量终止"),
+    (PanelId::TaskManager, "R", "条件可达:同 P,批量恢复"),
+    (
+        PanelId::Quest,
+        "v",
+        "条件可达:空态无选中返回 None,有选中产出 OpenPopup 详情",
+    ),
+];
+
+/// 提取键帽中承诺的裸字母键(长度为 1 的字母段)。
+///
+/// WHY 排除组合键帽与多字母词:"Ctrl+A" 类修饰组合的可达性由 codegen
+/// 路由测试域(INV-K)守护,其字母成分不是裸键帽;PgUp/Enter/Tab/Space 等
+/// 多字母词与 "↑/↓" 箭头不是字母键帽。
+fn declared_letter_keys(keycap: &str) -> Vec<char> {
+    if keycap.contains("Ctrl") || keycap.contains("Alt") || keycap.contains("Shift") {
+        return Vec::new();
+    }
+    keycap
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .filter(|run| run.len() == 1)
+        .filter_map(|run| run.chars().next())
+        .collect()
+}
+
+#[test]
+fn declared_letter_keycaps_are_reachable() {
+    for &id in PanelId::REGISTERED_FOCUS_ORDER {
+        let mut panel = make_panel(id);
+        let mut state = TuiState::new();
+        for (keycap, _) in panel.shortcuts() {
+            for c in declared_letter_keys(keycap) {
+                // 可达面一:面板 handle_key 产出 TuiCommand
+                // (仿 budget_panel_test r_key_returns_request_refresh 口径)
+                let ev = KeyEvent::new(KeyCode::Char(c), event::KeyModifiers::NONE);
+                let via_panel = panel.handle_key(ev, &mut state).is_some();
+                // 可达面二:InputRouter Normal 模式全局截获(q/g/G/i/t/数字/codegen
+                // 键位表;g g、G 的滚动语义即由该层等价覆盖,面板 arm 为死键)
+                let ev2 = KeyEvent::new(KeyCode::Char(c), event::KeyModifiers::NONE);
+                let via_router = !matches!(
+                    crate::input::InputRouter::route(crate::input::RouterMode::Normal, ev2),
+                    crate::input::RouteTarget::FocusPanel | crate::input::RouteTarget::Ignored
+                );
+                assert!(
+                    via_panel
+                        || via_router
+                        || CONSUMED_NO_COMMAND
+                            .iter()
+                            .any(|(pid, kc, _)| pid == &id && *kc == keycap),
+                    "{id:?} shortcuts 声明键帽 '{keycap}'(字母 '{c}')不可达:\
+                     handle_key 不产出命令、InputRouter 不截获、且未登记消费豁免"
+                );
+            }
+        }
+    }
 }
 
 // ============================================================
@@ -578,6 +729,47 @@ fn test_theme_fg_light() -> Result<(), Box<dyn std::error::Error>> {
 fn test_theme_accent_dark() -> Result<(), Box<dyn std::error::Error>> {
     let app = make_app()?;
     assert_eq!(app.theme_accent(), Color::Cyan);
+    Ok(())
+}
+
+/// F-37:theme.rs yaml 示例(:173-182)承诺的 `colors.accent` 定制契约,
+/// ColorScheme::resolve 此前生产零调用 —— 本用例锁定
+/// config.colors → theme() → theme_accent 全链路:BrightBlue 覆盖生效,
+/// 未覆盖键沿用主题预设(覆盖只影响指定键,不整族替换)。
+#[test]
+fn test_yaml_accent_override_reaches_theme_accent() -> Result<(), Box<dyn std::error::Error>> {
+    let app = TuiApp::new(TuiConfig {
+        theme: Theme::Dark,
+        colors: crate::config::ColorScheme {
+            accent: Some(crate::config::ColorKind::BrightBlue),
+            ..Default::default()
+        },
+        ..Default::default()
+    })?;
+    assert_eq!(
+        app.theme_accent(),
+        Color::LightBlue,
+        "colors.accent 定制应经 resolve 生效(BrightBlue → ratatui LightBlue)"
+    );
+    assert_eq!(
+        app.theme_fg(),
+        Color::White,
+        "未覆盖的 foreground 沿用 Dark 预设"
+    );
+    Ok(())
+}
+
+/// F-37:resolve 接入后主题默认配色须与旧硬编码 match 逐值等价 ——
+/// HighContrast 预设 accent=BrightYellow 映射即旧值 LightYellow,
+/// 本用例锁定「零视觉漂移」接入(预设或映射任一侧漂移即红)。
+#[test]
+fn test_theme_accent_high_contrast_unchanged() -> Result<(), Box<dyn std::error::Error>> {
+    let app = TuiApp::new(TuiConfig {
+        theme: Theme::HighContrast,
+        ..Default::default()
+    })?;
+    assert_eq!(app.theme_accent(), Color::LightYellow);
+    assert_eq!(app.theme_fg(), Color::White);
     Ok(())
 }
 
@@ -840,6 +1032,8 @@ fn dispatch_viz_switch_dimension_clv_toggles_autoscale() -> Result<(), Box<dyn s
 #[test]
 fn dispatch_viz_switch_dimension_osa_honest_no_toggle() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
+    // i18n:断言中文状态文案,持 locale guard 与 pin En 的渲染测试互斥
+    let _locale_guard = crate::i18n::locale_test_guard();
     app.switch_panel_to(PanelId::OsaSparse);
     app.dispatch_action(
         "viz.switch_dimension",
@@ -930,6 +1124,9 @@ fn dispatch_view_apply_saved_no_file_gives_honest_status() -> Result<(), Box<dyn
     let mut app = make_app()?;
     // 用确定不存在的路径,保证测试确定性(不依赖真实文件)
     app.config.state_file_path = std::path::PathBuf::from("nonexistent_dir_xyz/no_such_view.yaml");
+    // i18n:断言中文文案,须持 locale 序列化 guard——否则与 guard 测试的
+    // En 捕获窗口并行竞态(全量回归实测复现的偶发失败根因)
+    let _locale_guard = crate::i18n::locale_test_guard();
     app.dispatch_action(
         "view.apply_saved",
         "{}".to_string(),
@@ -1017,6 +1214,8 @@ fn dispatch_quest_jump_single_quest_filters_eventstream() -> Result<(), Box<dyn 
 fn dispatch_quest_jump_empty_switches_eventstream_honest() -> Result<(), Box<dyn std::error::Error>>
 {
     let mut app = make_app()?;
+    // i18n:断言中文状态文案,持 locale guard 与 pin En 的渲染测试互斥
+    let _locale_guard = crate::i18n::locale_test_guard();
     app.state.quest_list = vec![];
     app.dispatch_action(
         "quest.jump",
@@ -1033,6 +1232,8 @@ fn dispatch_quest_jump_empty_switches_eventstream_honest() -> Result<(), Box<dyn
 #[test]
 fn dispatch_quest_jump_multi_switches_eventstream_hint() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
+    // i18n:断言中文状态文案,持 locale guard 与 pin En 的渲染测试互斥
+    let _locale_guard = crate::i18n::locale_test_guard();
     app.state.quest_list = vec![sample_quest("q1", "First"), sample_quest("q2", "Second")];
     // §1.3b:焦点切非 Quest 面板(无选中上下文)以测多 Quest 回退路径
     app.switch_panel_to(PanelId::Budget);
@@ -1334,6 +1535,8 @@ fn test_log_panel_content_uses_state() -> Result<(), Box<dyn std::error::Error>>
     app.update();
     app.switch_panel_to(PanelId::Log);
 
+    // 注:本测试前部已持 locale guard(见"断言依赖中文文案"注),此处不重复
+    // 加锁——std Mutex 不可重入,嵌套 locale_test_guard 会自死锁
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend)?;
     terminal.draw(|f| app.render(f))?;
@@ -1657,6 +1860,97 @@ fn responsive_threshold_controls_companion_folding() {
 }
 
 // ============================================================
+// B7-C(F-36):窗格路由与几何单一事实源 —— 折叠判定收敛不变量
+// ============================================================
+
+#[test]
+fn pane_panels_len_matches_pane_rects_len_across_widths() -> Result<(), Box<dyn std::error::Error>>
+{
+    // 不变量:任意宽度下 pane_panels().len() == pane_rects(area).len()。
+    // 修复前 wants_multi_pane 只看 PaneMode 不看宽度,窄视口下路由列表(w 循环 /
+    // 面板级键委托)仍算 2 窗格而渲染几何已折叠为 1 —— 键可落到未被渲染的窗格。
+    let mut app = make_app()?;
+    app.state_mut().layout_mode = LayoutMode::VimSplit;
+    // 造出确定 context:先切 Quest 再切 Parliament → prev=Quest(pane_mode_test 同款)
+    app.switch_panel_to(PanelId::Quest);
+    app.switch_panel_to(PanelId::Parliament);
+
+    // 0 = last_area 哨兵(尚未渲染、无几何,不折叠);99/100/101 跨默认阈值边界
+    for width in [0u16, 1, 40, 59, 60, 80, 99, 100, 101, 120, u16::MAX] {
+        app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, width, 24);
+        let area = ratatui::layout::Rect::new(0, 0, width, 24);
+        let panels = app.pane_panels();
+        let rects = app.pane_rects(area);
+        assert_eq!(
+            panels.len(),
+            rects.len(),
+            "宽 {width}:pane_panels 与 pane_rects 长度必须一致(单一事实源)"
+        );
+        if width > 0 && width < 100 {
+            assert_eq!(
+                panels.len(),
+                1,
+                "宽 {width}:窄视口路由列表应同步折叠为单窗格"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn pane_panels_matches_pane_rects_ide_and_chat_modes() -> Result<(), Box<dyn std::error::Error>> {
+    // IDE 三窗格与 Chat companion opt-in 两条多窗格路径的折叠对拍:
+    // 宽视口两判定同长(3 / 2),窄视口(默认阈值 100)同步折叠为 1。
+    let mut app = make_app()?;
+    app.switch_panel_to(PanelId::Quest);
+    app.switch_panel_to(PanelId::Parliament);
+
+    // Chat PaneMode(Dual)companion 关闭:宽窄视口均为单窗格
+    app.state_mut().layout_mode = LayoutMode::DualPane;
+    app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, 120, 24);
+    assert_eq!(app.pane_panels().len(), 1, "companion 关闭应为单窗格");
+    assert_eq!(
+        app.pane_rects(ratatui::layout::Rect::new(0, 0, 120, 24))
+            .len(),
+        1
+    );
+
+    // companion opt-in:宽视口 2 窗格、窄视口同步折叠 1
+    app.pane_manager.companion_visible = true;
+    assert_eq!(app.pane_panels().len(), 2);
+    assert_eq!(
+        app.pane_rects(ratatui::layout::Rect::new(0, 0, 120, 24))
+            .len(),
+        2
+    );
+    app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, 40, 24);
+    assert_eq!(app.pane_panels().len(), 1, "窄视口路由列表应折叠");
+    assert_eq!(
+        app.pane_rects(ratatui::layout::Rect::new(0, 0, 40, 24))
+            .len(),
+        1
+    );
+
+    // IDE(Triple):宽视口 3 窗格(主 + context + 侧栏)、窄视口折叠 1
+    app.state_mut().layout_mode = LayoutMode::TriplePane;
+    app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, 120, 24);
+    assert_eq!(app.pane_panels().len(), 3, "IDE 宽视口应有 3 逻辑窗格");
+    assert_eq!(
+        app.pane_rects(ratatui::layout::Rect::new(0, 0, 120, 24))
+            .len(),
+        3
+    );
+    app.pane_manager.last_area = ratatui::layout::Rect::new(0, 0, 40, 24);
+    assert_eq!(app.pane_panels().len(), 1, "IDE 窄视口路由列表应折叠");
+    assert_eq!(
+        app.pane_rects(ratatui::layout::Rect::new(0, 0, 40, 24))
+            .len(),
+        1
+    );
+    Ok(())
+}
+
+// ============================================================
 // FC-05: 经验卡片可视化面板接线(组合根 install 路径)
 // ============================================================
 
@@ -1672,6 +1966,12 @@ impl crate::panels::ExperienceCardStatsProvider for MockCardStatsProvider {
 
 #[test]
 fn install_experience_card_provider_wires_real_stats() -> Result<(), TuiError> {
+    // B6-M:ExperienceCardViz 面板文案迁键,期望串经 t! 与渲染同源。
+    // WHY 去空白匹配:Buffer::set_stringn 对宽字符续格调 Cell::reset(),
+    // symbol 重置为空格,zh 文案在逐 cell 收集后必然呈 "等 待 …",直接
+    // contains 永不命中(同 osa_clv_timeline_closure_test 先例口径);
+    // 期望串同步去空白保持与渲染同源。
+    let _locale_guard = crate::i18n::locale_test_guard();
     let mut app = make_app()?;
 
     // 默认(未接线):面板诚实展示等待提示
@@ -1684,11 +1984,19 @@ fn install_experience_card_provider_wires_real_stats() -> Result<(), TuiError> {
         ratatui::layout::Rect::new(0, 0, 60, 10),
         &mut buf,
     );
-    let text: String = buf.content.iter().map(|c| c.symbol()).collect();
-    assert!(
-        text.contains("Awaiting stats provider"),
-        "默认面板应诚实展示等待提示"
-    );
+    let dense: String = buf
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect::<String>()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    let awaiting: String = crate::t!("panel.exp_card.awaiting_provider")
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    assert!(dense.contains(&awaiting), "默认面板应诚实展示等待提示");
 
     // 接线:替换为带提供者实例 → 渲染真实统计
     let provider = Arc::new(MockCardStatsProvider(
@@ -1714,12 +2022,24 @@ fn install_experience_card_provider_wires_real_stats() -> Result<(), TuiError> {
         ratatui::layout::Rect::new(0, 0, 60, 10),
         &mut buf2,
     );
-    let text2: String = buf2.content.iter().map(|c| c.symbol()).collect();
-    assert!(
-        text2.contains("Total: 42"),
-        "接线后应渲染真实统计(Total: 42)"
-    );
-    assert!(!text2.contains("Awaiting stats provider"));
+    let dense2: String = buf2
+        .content
+        .iter()
+        .map(|c| c.symbol())
+        .collect::<String>()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    // 统计行期望串经 t! + 同序 replacen 与渲染完全同源(同步去空白)
+    let expected_stats = crate::t!("panel.exp_card.stats_summary")
+        .replacen("{}", "42", 1)
+        .replacen("{}", "7", 1)
+        .replacen("{}", "2", 1)
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect::<String>();
+    assert!(dense2.contains(&expected_stats), "接线后应渲染真实统计");
+    assert!(!dense2.contains(&awaiting));
     Ok(())
 }
 
@@ -1837,7 +2157,8 @@ fn timeout_reports_and_clears_only_expired() -> Result<(), Box<dyn std::error::E
     );
     let warned = matches!(
         &app.state().status_message,
-        Some((msg, Severity::Warning)) if msg.contains("orchestrator not connected")
+        // B4-I(F-04):断言经 t! 取值,与 locale 无关
+        Some((msg, Severity::Warning)) if msg.contains(crate::t!("status.action_timeout"))
     );
     assert!(warned, "过期应上屏编排器未接线警告");
     Ok(())

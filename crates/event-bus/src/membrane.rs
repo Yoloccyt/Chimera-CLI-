@@ -463,6 +463,8 @@ impl MembraneFilter {
                 | NexusEvent::BenchmarkMetricsCollected { .. }
                 | NexusEvent::HcwRecallReported { .. }
                 | NexusEvent::HcwRecallDegraded { .. }
+                // ADR-197:计算池饱和观测面（只读指标,与召回评测、吞吐量上报同族 → 本地消化）
+                | NexusEvent::ComputePoolSaturated { .. }
                 | NexusEvent::OverWindowFallbackTriggered { .. }
                 // §16.5(Phase 10 Wave 6):L1 吞吐量观测面事件
                 | NexusEvent::BusThroughputReported { .. }

@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "NEXUS-OMEGA L0 契约层 — 纯类型定义，零逻辑，零 crate 依赖（仅 serde 派生）"
+description = "NEXUS-OMEGA L0 契约层 — 纯类型 + 受控纯逻辑，零 workspace 内部依赖（外部仅 serde/chrono/uuid/thiserror）"
 
 [dependencies]
 # ADR-033: nexus-contracts 禁止依赖任何 workspace crate（含 nexus-core）

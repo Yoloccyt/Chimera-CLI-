@@ -22,7 +22,7 @@
 
 # --- 行为变更风险(需先改语义再迁移,单独批次) ---
 ssra-fusion/templates.rs:166        lru_evict              DEFER   全排序 take(to_remove) 选最旧;现依赖 sort 稳定性做同时间戳淘汰选择,迁移前需先加 id tie-break(否则淘汰对象改变=行为变更),ISLAND 降级处理
-scc-cache/prefetch.rs:367           get_predictions        DEFER   概率降序返回,消费侧(mca-gateway CacheAffinityIntegration)是否截断 top-N 未证实;ISLAND,待 T11 接线批次一并判定
+scc-cache/prefetch.rs:367           predict_next           GREEN   WI-G15① 核实完成(2026-10-07,真身=prefetch.rs:352):全序=公开契约(doc 声明+测试锁定);唯一 top-k 消费路径 prefetch_with_policy 已规范化 L0 xts_top_k_by(O(n));mca-gateway CacheAffinityIntegration 仅 should_inject_cache_control 注入、不消费本预测序——原 T11 疑虑解除
 
 # --- top-1 / 小 k 语义(k 恒定小或建议改 max_by,非 select 收益面) ---
 parliament/variant_pool.rs:169      best_by_perf           GRAY    sort 后 next() 取 top-1,正解是 iterator.max_by O(n),不属 #8 的 top-k 族;留待 C14 微清扫

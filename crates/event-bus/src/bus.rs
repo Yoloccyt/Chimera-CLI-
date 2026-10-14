@@ -43,24 +43,32 @@ pub const CRITICAL_CHANNEL_CAPACITY: usize = 4096;
 ///
 /// WHY 常量而非硬编码:双清单同步红线(MCA M0 起)要求新增 Critical 事件
 /// 必须同时修改 severity() 与 is_critical_mpsc_event 两处;此常量供
-/// 守护测试断言旁路清单规模不回退(14 ⊆ 18)。
+/// 守护测试断言旁路清单规模不回退(16 ⊆ 20)。
+/// 常量规模本身由 `test_critical_double_list_d8_counts` +
+/// `mpsc_bypass_exact_*` + `credit_flow_test` 三处机器锁定;而正文里
+/// 「当前 N 类」这类自由文本计数、以及「常量 == `is_critical_mpsc_event` 臂数」
+/// 两个子断言,自 2026-10-09 起由 `check_perf_redlines.py` 的 **I8c** 锁死。
+/// 此前那是已知盲区(I8/I8b 只校验「N 个 Critical 事件」措辞 == `CRITICAL_TOTAL`,
+/// 不校验 mpsc 旁路子数),第三轮 T1.3 因此只能人工把散落的旧值 13/14/17/18
+/// 纠为 16/20;I8c 落地当日即抓到一处残留旧值(backpressure_test.rs 注释),
+/// 说明该盲区真实会咬人而不是理论风险。
 /// L4 深度优化 P1-1:FormalVerificationFailed 升入旁路(13 → 14)——
 /// 验证器否决候选若丢失则违规候选继续进入后续阶段,与 FormalViolation 同语义。
-pub const CRITICAL_MPSC_VARIANTS: usize = 14;
+pub const CRITICAL_MPSC_VARIANTS: usize = 16;
 
 /// severity() 返回 Critical 的变体总数 — D-8 口径
 ///
-/// 18 = 14(mpsc 旁路)+ 4(历史 Critical 只走 broadcast:
+/// 20 = 16(mpsc 旁路)+ 4(历史 Critical 只走 broadcast:
 /// CheckpointSaved / ConsensusReached / SlowConsumerDropped / OrphanCallDetected)。
 /// 本任务不改变 4 个历史 Critical 事件的通道归属(既定设计,推演 D-8 裁决)。
-pub const CRITICAL_TOTAL: usize = 18;
+pub const CRITICAL_TOTAL: usize = 20;
 
-/// 分片禁区声明 — 18 个 Critical 变体名清单(T12 分片时使用)
+/// 分片禁区声明 — 20 个 Critical 变体名清单(T12 分片时使用)
 ///
 /// WHY 声明但不实现:T12 分片改造(SPSC 环阵列 + 分片总线)将按此清单
 /// 禁止把 Critical 单流切片 —— Critical 分片会破坏"发布方 → 订阅方"的
 /// 全序投递语义与 mpsc 旁路免背压保证(推演 9:Critical 背压 = 死锁源)。
-/// 本任务只声明常量 + 测试守护(断言 18 个名字与 severity() Critical 清单
+/// 本任务只声明常量 + 测试守护(断言 20 个名字与 severity() Critical 清单
 /// 一一对应),不实现分片总线。
 pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
     "CheckpointSaved",
@@ -82,7 +90,25 @@ pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
     "ErrorSignatureMatched",
     // L4 深度优化 P1-1:验证器失败升入 Critical(双清单同步)
     "FormalVerificationFailed",
+    // v2.3 (b.1)/(b.4): Certify 与 FailureRegistry 进分片禁区(Critical)
+    "CertifyIssued",
+    "FailureRegistered",
 ];
+
+/// §(b.1) 裁决权外置·消费辅助:供 UI/下游**只读**提取 CertifyIssued 的 claim_ref,
+/// 无需在允许白名单外的 crate 里拼写 `NexusEvent::CertifyIssued { field }`(那会被
+/// Certify 白名单门误判为构造/签发)。定义于 event-bus(白名单成员),为合法的
+/// 封装访问器。非 Certify 事件返回 `None`。
+impl NexusEvent {
+    /// 若本事件为 `CertifyIssued`,返回其被认证的 `claim_ref`。
+    #[must_use]
+    pub fn certify_claim_ref(&self) -> Option<&str> {
+        match self {
+            NexusEvent::CertifyIssued { claim_ref, .. } => Some(claim_ref),
+            _ => None,
+        }
+    }
+}
 
 /// 判断事件是否走 mpsc 旁路通道(Critical 安全/治理告警事件)
 ///
@@ -92,11 +118,11 @@ pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
 /// - `severity()` 是事件总线背压级别(同步函数,不依赖运行时值;
 ///   AsaIntervention 自 P1-W2.1.4 起统一返回 Critical,见 registry.rs 注册表定级)
 /// - `is_critical_mpsc_event` 是 mpsc 旁路通道判定,权威清单即下方 matches! 臂,
-///   规模锚定 [`CRITICAL_MPSC_VARIANTS`](当前 14)
+///   规模锚定 [`CRITICAL_MPSC_VARIANTS`](当前 16)
 ///
 /// WHY 单独定义:AsaIntervention 的 severity() 曾返回 Normal(P1-W2.1.4 修复前),
 /// 旁路判定因此独立于 severity() 存在;修复后两清单语义已对齐,由 D-8/R7
-/// 互锁测试守护(14 ⊆ 18)。
+/// 互锁测试守护(16 ⊆ 20)。
 ///
 /// # 双清单同步红线(MCA M0 起显式声明)
 /// 本函数与 `NexusEvent::severity()` 是两张独立清单:新增 Critical 事件
@@ -147,6 +173,11 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
             // 验证器否决候选必须确保投递(丢失则违规候选继续进入后续阶段,
             // 与 FormalViolation 同语义;双清单同步红线,registry.rs 定级对齐)
             | NexusEvent::FormalVerificationFailed { .. }
+            // v2.3 (b.1)/(b.4): Certify 与 FailureRegistry 走 mpsc 旁路(必达;
+            // 双清单同步——registry.rs severity() 已定 Critical,此处补齐旁路清单)
+            // 第三轮 T1.3 纠漂:下方全量覆盖断言旧写 14,未计入本两变体 ⇒ 16
+            | NexusEvent::CertifyIssued { .. }
+            | NexusEvent::FailureRegistered { .. }
     )
 }
 
@@ -196,7 +227,7 @@ impl DsRuntime {
 ///
 /// # Critical 事件双通道(§6.2 红线,2026-06-29)
 /// Critical 安全/治理告警事件(权威清单 = [`is_critical_mpsc_event`],
-/// 规模锚定 [`CRITICAL_MPSC_VARIANTS`],当前 14 类)额外走 mpsc 旁路通道,
+/// 规模锚定 [`CRITICAL_MPSC_VARIANTS`],当前 16 类)额外走 mpsc 旁路通道,
 /// 确保在 broadcast Lagged 场景下仍能被订阅者接收。订阅者通过
 /// [`subscribe_critical_events`](Self::subscribe_critical_events)
 /// 获取 mpsc Receiver。旁路通道按需初始化(首次订阅时创建),无订阅者时
@@ -362,7 +393,8 @@ pub struct EventBus {
 /// 供运维观测接线覆盖率。Normal 级静默丢弃,避免日志噪声。
 ///
 /// # §6.2 红线双通道(2026-06-29)
-/// Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 14 类)
+/// Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 16 类;第三轮
+/// T1.3 纠漂——旧值 14 未计入 v2.3 的 CertifyIssued/FailureRegistered)
 /// 额外走 mpsc 旁路通道,确保在 broadcast Lagged 场景下
 /// 仍能被 `subscribe_critical_events` 订阅者接收。旁路通道未初始化时
 /// (无 Critical 订阅者)投递到保底 sink(B-a,M0;原为 warn 告警后放弃)。
@@ -377,6 +409,16 @@ macro_rules! dispatch_one_impl {
         // (Err(ev) => event = ev),保证回退事件继续走既有单流路径,
         // 事件永不因分片而丢失(漏发率恒 0)。
         let mut event = $event;
+        // 第三轮 T1.2(F-P2):车道判定单次求值。旧形态在信用分支(原 :421)与
+        // 分片路由分支(原 :434)各调一次 `event_lane(&event)` —— 第二次结果
+        // 被 `matches!` 即时丢弃,而 OrderSensitive 车道会先分配一个
+        // `SessionKey`(session_id/correlation_id/rule_id 的 String clone),
+        // 等于热路径每发布白做 0-2 次堆分配。提升为 `lane` 单值后:
+        //   - event_lane 是纯函数(只读事件,无副作用),两次求值同值 ⇒ 行为等价;
+        //   - `Lane` 为 owned 类型不借事件,`&event` 借位在求值结束即释放(NLL),
+        //     :438 try_shard_publish(event) 的所有权移动不受影响;
+        //   - severity() 保留原位(语义独立的廉价虚调用,不因本改动一并合并判定)。
+        let lane = event_lane(&event);
         // §16.5 吞吐量计数(Phase 10 Wave 6):发布入口递增
         $self.published_total.fetch_add(1, Ordering::Relaxed);
         // P1-T12 前哨:Critical 车道计数(无条件统计 —— 分片启用与否均递增,
@@ -395,7 +437,8 @@ macro_rules! dispatch_one_impl {
         let mut credit_deducted = false;
         if event.severity() != EventSeverity::Critical
             && $self.shard_bus.load().is_some()
-            && matches!(event_lane(&event), Lane::Unordered)
+            // `&lane` 借用匹配:两次 matches! 若按值会第一次就 move 掉 lane
+            && matches!(&lane, &Lane::Unordered)
         {
             credit_deducted = $self.credit_flow.try_acquire(1).is_ok();
         }
@@ -408,7 +451,7 @@ macro_rules! dispatch_one_impl {
         // 由 shadow_stats()/bus_shard_depth 指标承载;log_publish 埋点保留在单流
         // 路径(Critical/OrderSensitive/回退事件),避免双记与热路径额外采样。
         if $self.shard_bus.load().is_some()
-            && matches!(event_lane(&event), Lane::Unordered)
+            && matches!(&lane, &Lane::Unordered)
         {
             match $self.try_shard_publish(event) {
                 Ok(()) => return Ok(()),
@@ -666,6 +709,56 @@ impl EventBus {
     // P1-T12 分片灰度开关 — 默认不启用,零回归
     // ============================================================
 
+    /// 启用分片并把结果显式化（ADR-197 A3）
+    ///
+    /// WHY 统一入口而不是各 crate 各自 `let _ =`：全仓 10 处调用点分布在 9 个 crate，
+    /// 静默忽略 Err 会让“本次运行为何没分片”成为不可归因的性能差异（审计 S-4）。
+    /// 本方法与 [`enable_sharding`](Self::enable_sharding) 的降级方向完全相同
+    /// （Err 不阻断、回落单流），只把结果按类别写进日志并返回是否可用。
+    ///
+    /// # 幂等与噪声控制
+    /// - `ShardingAlreadyEnabled` 属正常幂等（多实例/重复构造）→ `debug!`，返回 `true`；
+    /// - `ShardingRequiresRuntime` 属环境缺位 → 首次 `warn!`，后续同类降为 `debug!`
+    ///   （避免多实例构造刷屏）；其余错误同理。
+    ///
+    /// 本方法的核心价值是**副作用（日志可见）**，返回值仅供调用方自行决定是否
+    /// 追加记录，故不加 `#[must_use]`（避免调用点重新写回 `let _ =`）。
+    pub fn try_enable_sharding(&self, component: &str) -> bool {
+        match self.enable_sharding(crate::shard::DEFAULT_SHARD_COUNT) {
+            Ok(()) => {
+                tracing::debug!(component, "事件分片已启用");
+                true
+            }
+            Err(EventBusError::ShardingAlreadyEnabled) => {
+                // 幂等重复启用：分片事实上已可用，不得记为降级
+                tracing::debug!(component, "事件分片已处于启用态（幂等）");
+                true
+            }
+            Err(e) => {
+                static WARNED_ONCE: std::sync::atomic::AtomicBool =
+                    std::sync::atomic::AtomicBool::new(false);
+                let first = WARNED_ONCE
+                    .compare_exchange(
+                        false,
+                        true,
+                        std::sync::atomic::Ordering::SeqCst,
+                        std::sync::atomic::Ordering::Relaxed,
+                    )
+                    .is_ok();
+                if first {
+                    tracing::warn!(
+                        component,
+                        error = %e,
+                        "事件分片未启用，回落单流（行为不变，仅影响吞吐量与尾延）；后续同类降级降为 debug"
+                    );
+                } else {
+                    tracing::debug!(component, error = %e, "事件分片未启用，回落单流");
+                }
+                false
+            }
+        }
+    }
+
     /// 启用分片(灰度开关,非 feature flag;手册 §8.5 / v4.0 WI-15)
     ///
     /// 启用后:非 Critical 且非顺序敏感的 `Unordered` 事件按 FNV-1a 哈希
@@ -750,9 +843,14 @@ impl EventBus {
     pub fn shadow_stats(&self) -> ShadowStats {
         // F-a:ArcSwapOption 读端(Guard 借用解引用,无锁;统计是观测面,
         // 不再需要原 Mutex 版的 poison 恢复分支 —— ArcSwap 无锁不可中毒)
-        let (sharded_total, merged_total) = match self.shard_bus.load().as_ref() {
-            Some(sb) => (sb.sharded_total(), sb.merged_total()),
-            None => (0, 0),
+        let (sharded_total, merged_total, merge_closed_total) = match self.shard_bus.load().as_ref()
+        {
+            Some(sb) => (
+                sb.sharded_total(),
+                sb.merged_total(),
+                sb.merge_closed_total(),
+            ),
+            None => (0, 0, 0),
         };
         ShadowStats {
             published_total: self.published_total.load(Ordering::Relaxed),
@@ -760,6 +858,7 @@ impl EventBus {
             merged_total,
             shed_total: self.credit_shed_total.load(Ordering::Relaxed),
             critical_total: self.critical_total.load(Ordering::Relaxed),
+            merge_closed_total,
         }
     }
 
@@ -908,13 +1007,21 @@ impl EventBus {
             // 遮蔽为可变:分片回退分支需重新赋值事件所有权(Err(ev) => event = ev),
             // 保证回退事件继续走本循环既有单流逻辑(事件不丢弃,漏发率恒 0)。
             let mut event = event;
-            // P1-T11 CBF 信用流:逐条判定(与 publish 一致,方案 A:仅「分片启用 +
-            // Unordered」扣信用,扣减失败静默;OrderSensitive/Critical/未启用
-            // 分片不扣 —— 见 publish 注释;shed 由 try_shard_publish 统一计数)
+            // 第三轮 T1.2 补丁（F-P2 · 批量路径同病）：车道判定单次求值。
+            // 批量循环不走 `dispatch_one_impl` 宏（手写并行副本），旧形态在信用
+            // 分支（原 :1014）与分片路由分支（原 :1027）各调一次 `event_lane(&event)`——
+            // OrderSensitive 车道会先分配一个 `SessionKey`（session_id/correlation_id/
+            // rule_id 的 String clone），等于每次批量发布白做 0-2 次堆分配。提升为
+            // `lane` 单值后：event_lane 是纯函数（只读事件），两次求值同值⇒行为等价；
+            // `Lane` 为 owned 不借事件，:1028 try_shard_publish(event) 的移动不受影响（NLL）。
+            let lane = event_lane(&event);
+            // P1-T11 CBF 信用流：逐条判定（与 publish 一致，方案 A：仅「分片启用 +
+            // Unordered」扣信用，扣减失败静默；OrderSensitive/Critical/未启用
+            // 分片不扣 —— 见 publish 注释；shed 由 try_shard_publish 统一计数）
             let mut credit_deducted = false;
             if event.severity() != EventSeverity::Critical
                 && self.shard_bus.load().is_some()
-                && matches!(event_lane(&event), Lane::Unordered)
+                && matches!(&lane, &Lane::Unordered)
             {
                 credit_deducted = self.credit_flow.try_acquire(1).is_ok();
             }
@@ -927,7 +1034,7 @@ impl EventBus {
             // 不变量见 try_shard_publish;若先路由后扣信用,worker 会归还未扣过
             // 的信用,破坏守恒语义;若扣信用条件宽于路由条件,则 OrderSensitive/
             // 未入片事件扣而无人归还)
-            if self.shard_bus.load().is_some() && matches!(event_lane(&event), Lane::Unordered) {
+            if self.shard_bus.load().is_some() && matches!(&lane, &Lane::Unordered) {
                 match self.try_shard_publish(event) {
                     Ok(()) => continue,
                     // 回退语义与 publish 一致:重新赋值所有权,继续走既有单流路径
@@ -984,6 +1091,25 @@ impl EventBus {
         self.send_critical_mpsc(&event);
         let _ = self.sender.send(event);
         Ok(())
+    }
+
+    /// v2.3 (b.1)②:裁决权分离的语义发布 API —— Claim(宣布)走普通广播。
+    ///
+    /// WHY 独立 API:为「Certify 白名单治理门」提供可静态检索的调用面 token。
+    /// 本方法不做运行时 ACL(agent 越权认证由静态门拦截,与 `publish_critical`
+    /// 现状一致 —— 编译期写隔离不可得,见 §(b.1) 修正②)。
+    pub async fn publish_claim(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        self.publish(event).await
+    }
+
+    /// v2.3 (b.1)②:验证器签发 Certify —— 走 Critical 双通道(必达,验证器语义独占)。
+    pub async fn publish_certify(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        self.publish_critical(event).await
+    }
+
+    /// v2.3 (b.1)②:agent 撤回此前 Claim(广播级,审计完整性)。
+    pub async fn publish_declaim(&self, event: NexusEvent) -> Result<(), EventBusError> {
+        self.publish(event).await
     }
 
     /// 显式同步发布 Critical 事件到双通道(broadcast + mpsc 旁路)
@@ -1213,7 +1339,8 @@ impl EventBus {
         // WHY 在 retain 之前采样:retain 闭包内会 fetch_add 多次(每个满 Sender 一次),
         // 闭包后用差值得到本次发送的总丢弃数,单次 warn 记录避免日志噪声
         let dropped_before = self.critical_dropped_count.load(Ordering::Relaxed);
-        // 优先级采样丢弃:遍历所有 Sender,try_send 失败时按错误类型处理
+        // 遍历所有 Sender,try_send 失败时按错误类型处理（无优先级选择:容量满即丢,
+        // 丢弃数经 critical_dropped_count 计数可见）
         // - Full:递增丢弃计数,保留 Sender(临时满载)
         // - Closed:移除 Sender(receiver 已 drop)
         // delivered:本次成功投递到的活跃订阅者数(B-a 用于 stale 检测)
@@ -1224,7 +1351,7 @@ impl EventBus {
                 true // 投递成功,保留
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
-                // 容量满:按优先级采样丢弃,递增计数,保留 Sender
+                // 容量满:丢弃本条（无优先级判定）,递增计数,保留 Sender 待后续
                 // WHY fetch_add 而非 store(load + 1):原子操作避免读改写竞态
                 self.critical_dropped_count.fetch_add(1, Ordering::Relaxed);
                 true // 保留 Sender(临时满载,下次可能成功)
@@ -1378,7 +1505,7 @@ impl EventBus {
     ///
     /// 返回 [`CriticalSubscriberBuilder`](crate::subscriber::CriticalSubscriberBuilder)`<Unsubscribed>`,
     /// 用于订阅 §6.2 红线定义的 Critical 安全/治理告警事件(is_critical_mpsc_event
-    /// 清单,当前 14 类)的 mpsc 旁路通道。
+    /// 清单,当前 16 类;第三轮 T1.3 纠漂)的 mpsc 旁路通道。
     ///
     /// 与 [`subscriber`](Self::subscriber) 区别:返回 `mpsc::Receiver` 而非 `EventReceiver`,
     /// 确保在 broadcast Lagged 场景下仍能收到 Critical 事件。
@@ -1494,11 +1621,23 @@ pub fn spawn_throughput_reporter(bus: EventBus, interval_secs: u64) -> tokio::ta
         let mut interval = tokio::time::interval(Duration::from_secs(window_secs));
         interval.tick().await; // 基线采样:跳过首个立即 tick
         let mut prev = bus.published_total();
+        // 第三轮 T1.1:shadow_stats 的首个生产消费者 —— 零订阅丢弃以窗口限速
+        // 浮出(≤1 warn/窗口;worker 侧仅首见 warn 一次,长期静默会掩盖持续增长)
+        let mut prev_closed = bus.shadow_stats().merge_closed_total;
         loop {
             interval.tick().await;
             let now = bus.published_total();
             let events_per_sec = (now.saturating_sub(prev)) as f64 / window_secs as f64;
             prev = now;
+            let closed_now = bus.shadow_stats().merge_closed_total;
+            if closed_now > prev_closed {
+                warn!(
+                    window_delta = closed_now - prev_closed,
+                    merge_closed_total = closed_now,
+                    "分片汇入零订阅者丢弃增长:merged_total 含此类丢弃,送达观测见 ShadowStats"
+                );
+                prev_closed = closed_now;
+            }
             let event = NexusEvent::BusThroughputReported {
                 metadata: EventMetadata::new("event-bus"),
                 published_total: now,
@@ -1788,8 +1927,8 @@ pub fn deserialize_json(s: &str) -> Result<NexusEvent, EventBusError> {
 
 /// Critical 变体构造测试辅助(D-8 口径)
 ///
-/// WHY pub(crate):shard.rs 的 Lane 判定全量断言(18 Critical → Critical)
-/// 复用本模块构造事件,避免两处维护 18 个变体构造代码漂移(新增 Critical
+/// WHY pub(crate):shard.rs 的 Lane 判定全量断言(20 Critical → Critical)
+/// 复用本模块构造事件,避免两处维护 20 个变体构造代码漂移(新增 Critical
 /// 事件时只需改此处一处,三处清单同步守护见 test_critical_double_list_d8_counts)。
 /// 仅测试构建存在(cfg(test)),生产零足迹。
 #[cfg(test)]
@@ -1797,9 +1936,22 @@ pub fn deserialize_json(s: &str) -> Result<NexusEvent, EventBusError> {
 pub(crate) mod tests_helpers {
     use super::*;
 
-    /// 全量 14 个 mpsc 旁路变体构造(D-8 口径,双清单同步红线)
+    /// 全量 16 个 mpsc 旁路变体构造(D-8 口径,双清单同步红线)
     pub fn all_mpsc_critical_variants() -> Vec<NexusEvent> {
         vec![
+            // v2.3 (b.1)/(b.4): Certify 与 FailureRegistry 进 mpsc 旁路清单(D-8 口径)
+            NexusEvent::CertifyIssued {
+                metadata: EventMetadata::new("t"),
+                claim_ref: "c".into(),
+                subject: "s".into(),
+                verifier: "GovernanceGate".into(),
+            },
+            NexusEvent::FailureRegistered {
+                metadata: EventMetadata::new("t"),
+                signature: "sig".into(),
+                affected_component: "crate".into(),
+                fix_status: "Open".into(),
+            },
             NexusEvent::SkepticVeto {
                 metadata: EventMetadata::new("t"),
                 quest_id: "q".into(),
@@ -1894,9 +2046,9 @@ pub(crate) mod tests_helpers {
         ]
     }
 
-    /// 全量 18 个 severity() Critical 变体构造(D-8 口径)
+    /// 全量 20 个 severity() Critical 变体构造(D-8 口径)
     ///
-    /// 18 = 14(mpsc 旁路,见 [`all_mpsc_critical_variants`])
+    /// 20 = 16(mpsc 旁路,见 [`all_mpsc_critical_variants`])
     ///   + 4(历史 Critical 只走 broadcast:CheckpointSaved/ConsensusReached/
     ///     SlowConsumerDropped/OrphanCallDetected,按既定设计不回退通道归属)。
     pub fn all_severity_critical_variants() -> Vec<NexusEvent> {
@@ -2252,7 +2404,7 @@ mod tests {
         assert_eq!(
             mpsc_required.len(),
             14,
-            "旁路清单应覆盖全量 14 个事件,新增 Critical 必须显式加入(双清单同步红线)"
+            "本安全/资源子集 14 个必投事件须齐全(权威全量 16 见 test_critical_double_list_d8_counts;\n             此为 MCA M0 子集不回退锁,非全量清单——第三轮 T1.3 注:旧误称'全量')"
         );
         for event in &mpsc_required {
             assert!(
@@ -2269,8 +2421,10 @@ mod tests {
         }
     }
 
-    /// D-8 双清单计数守护(P1-T11):CRITICAL_MPSC_VARIANTS(14)、
-    /// CRITICAL_TOTAL(18)、14 ⊆ 18、LANE_FORBIDDEN_SHARD 一一对应
+    /// D-8 双清单计数守护(P1-T11):CRITICAL_MPSC_VARIANTS(16)、
+    /// CRITICAL_TOTAL(20)、16 ⊆ 20、LANE_FORBIDDEN_SHARD 一一对应
+    /// (第三轮 T1.3 纠漂:旧注 14/18 为 v2.3 补入 CertifyIssued/FailureRegistered
+    ///  前的滞后值;断言体以常量为准故恒绿,漂移仅存于此注 —— I8 盲区见上方常量注)
     #[test]
     fn test_critical_double_list_d8_counts() {
         // 口径断言:两清单规模与常量一致(常量是 D-8 裁决的编译期锚点)
@@ -2289,7 +2443,7 @@ mod tests {
             "severity() Critical 变体数必须等于 CRITICAL_TOTAL({CRITICAL_TOTAL})"
         );
 
-        // 14 个 mpsc 变体:is_critical_mpsc_event 必中 + severity() Critical
+        // 16 个 mpsc 变体:is_critical_mpsc_event 必中 + severity() Critical
         for event in &mpsc_variants {
             assert!(
                 is_critical_mpsc_event(event),
@@ -2303,27 +2457,27 @@ mod tests {
                 event.type_name()
             );
         }
-        // 18 个 Critical 变体:severity() 全部为 Critical(18 口径)
+        // 20 个 Critical 变体:severity() 全部为 Critical(20 口径)
         for event in &critical_variants {
             assert_eq!(
                 event.severity(),
                 EventSeverity::Critical,
-                "{} 应命中 severity() Critical 清单(18 口径)",
+                "{} 应命中 severity() Critical 清单(20 口径)",
                 event.type_name()
             );
         }
 
-        // 14 ⊆ 18:每个 mpsc 变体的名字必须在 severity() Critical 清单中
+        // 16 ⊆ 20:每个 mpsc 变体的名字必须在 severity() Critical 清单中
         let mpsc_names: Vec<&str> = mpsc_variants.iter().map(|e| e.type_name()).collect();
         let critical_names: Vec<&str> = critical_variants.iter().map(|e| e.type_name()).collect();
         for name in &mpsc_names {
             assert!(
                 critical_names.contains(name),
-                "mpsc 变体 {name} 不在 severity() Critical 清单中(14 ⊆ 18 违反)"
+                "mpsc 变体 {name} 不在 severity() Critical 清单中(16 ⊆ 20 违反)"
             );
         }
 
-        // LANE_FORBIDDEN_SHARD 分片禁区声明:18 个名字与 Critical 清单一一对应
+        // LANE_FORBIDDEN_SHARD 分片禁区声明:20 个名字与 Critical 清单一一对应
         // WHY 双向断言:T12 分片实现将按此清单禁止切片 Critical 单流;
         // 任一方向缺失都意味着声明与实际清单漂移
         assert_eq!(
@@ -2364,8 +2518,8 @@ mod tests {
         let mpsc_variants = tests_helpers::all_mpsc_critical_variants();
         let severity_variants = tests_helpers::all_severity_critical_variants();
 
-        // 现实值核验:14(mpsc 旁路)/ 18(severity Critical,含 4 个历史广播级)。
-        // WHY 锚定常量而非硬编码 14/18:常量是 D-8 裁决的编译期锚点,清单规模
+        // 现实值核验:16(mpsc 旁路)/ 20(severity Critical,含 4 个历史广播级)。
+        // WHY 锚定常量而非硬编码 16/20:常量是 D-8 裁决的编译期锚点,清单规模
         // 一旦回退(误删)此测试即红。
         assert_eq!(
             mpsc_variants.len(),
@@ -2429,7 +2583,7 @@ mod tests {
         for name in &mpsc_names {
             assert!(
                 severity_by_name.contains_key(name),
-                "mpsc 变体 {name} 不在 severity() Critical 清单中(14 ⊆ 18 违反)"
+                "mpsc 变体 {name} 不在 severity() Critical 清单中(16 ⊆ 20 违反)"
             );
         }
 
@@ -2777,6 +2931,32 @@ mod tests {
         }
     }
 
+    /// 第三轮 T1.2 结构判据：`event_lane` 在每条发布路径**只求值一次**。
+    ///
+    /// WHY 结构断言而非行为断言：`event_lane` 是纯函数，双份求值与单份求值
+    /// **行为完全等价**（`recv==sent` 抓不到），回归只会表现为热路径多做的
+    /// OrderSensitive `SessionKey` String clone（F-P2）——故只能以源码形态锁定。
+    /// 不变式：全文件禁止在 `matches!` 里内联求值 `event_lane(&event)`（计数 0），
+    /// 且单发宏 `dispatch_one_impl` 与批量 `publish_batch` 两条路径各恰好
+    /// `let lane = event_lane(&event);` 提升一次（计数 2）。新增发布路径须显式更新计数。
+    #[test]
+    fn dispatch_paths_hoist_lane_exactly_once() {
+        // 只扫描生产区（`mod tests {` 之前）——否则 include_str! 会把本测试自己的
+        // 字面量（包含待匹配串）也数进去，造成自引用假阳性。
+        let src = include_str!("bus.rs");
+        let prod = src.split("mod tests {").next().unwrap_or(src);
+        let inline_eval = prod.matches("matches!(event_lane(&event)").count();
+        let hoisted = prod.matches("let lane = event_lane(&event);").count();
+        assert_eq!(
+            inline_eval, 0,
+            "禁止在 matches! 内联求值 event_lane（双份求值 = F-P2 热路径 clone 回归）"
+        );
+        assert_eq!(
+            hoisted, 2,
+            "两条发布路径（单发宏 + 批量循环）应各提升一次 lane；实测 {hoisted}（新增发布路径请显式复核本计数）"
+        );
+    }
+
     #[test]
     fn test_sharding_default_off_zero_regression() {
         // 灰度默认关:EventBus::new() 行为与 v2.27.1 完全一致(零回归)
@@ -2892,6 +3072,32 @@ mod tests {
             "入片数 == 汇入数(影子双跑漏发率 = 0)"
         );
         assert_eq!(stats.shed_total, 0, "容量内发布不应触发 shed");
+    }
+
+    #[tokio::test]
+    async fn test_zero_subscriber_merged_total_counts_entry_not_delivery() {
+        // 第三轮 T1.4/F-A2 显式锁测:零订阅者时 worker `send` 恒返 Err(Closed),
+        // 但 `merged_total` 仍 == `sharded_total`——该等式的口径是「入汇入通道」
+        // 而非「送达」;「入通道即丢弃」全部归因到 T1.1 新增的 `merge_closed_total`。
+        // 本测同锁两件事:① merged==sharded 等式不因零订阅而破;② 零订阅下
+        // merge_closed_total==merged_total(逐条都丢)。
+        let bus = EventBus::new();
+        bus.enable_sharding(64).unwrap();
+        // 故意不 subscribe:broadcast 无订阅者 → worker send 恒 Err(Closed)
+        const N: usize = 50;
+        for _ in 0..N {
+            bus.publish(make_test_event()).await.unwrap();
+        }
+        let stats = wait_merged_equals_sharded(&bus, 2000).await;
+        assert_eq!(stats.sharded_total, N as u64, "零订阅不影响入分片");
+        assert_eq!(
+            stats.merged_total, stats.sharded_total,
+            "零订阅下 merged==sharded 等式仍成立(证「入通道」非「送达」)"
+        );
+        assert_eq!(
+            stats.merge_closed_total, stats.merged_total,
+            "T1.1:零订阅者时全部汇入丢弃,merge_closed_total==merged_total"
+        );
     }
 
     #[tokio::test]
@@ -3030,15 +3236,17 @@ mod tests {
         );
     }
 
-    /// T17(a) 顺序红线守护:is_critical_mpsc_event() 必须**恰好命中 14 个** mpsc 旁路
+    /// T17(a) 顺序红线守护:is_critical_mpsc_event() 必须**恰好命中 16 个** mpsc 旁路
     /// 变体(规模由 `CRITICAL_MPSC_VARIANTS` 锁定,广播专属 Critical 计数由
     /// `CRITICAL_TOTAL` 锁定)。防「全 Critical 一律进旁路」旧口径回潮:
     /// 4 个广播专属 Critical(CheckpointSaved/ConsensusReached/SlowConsumerDropped/
     /// OrphanCallDetected)按既定设计只走 broadcast,误捕即回潮破裂。
     #[test]
+    // 函数名 exact_13_not_17 为历史标签(T17 立测时的旧规模),现值以
+    // CRITICAL_MPSC_VARIANTS=16 为准(第三轮 T1.3 注;改名留 T3)
     fn mpsc_bypass_exact_13_not_17() {
         let mpsc = tests_helpers::all_mpsc_critical_variants();
-        assert_eq!(mpsc.len(), CRITICAL_MPSC_VARIANTS, "13 名单规模锁定");
+        assert_eq!(mpsc.len(), CRITICAL_MPSC_VARIANTS, "16 名单规模锁定");
         for ev in &mpsc {
             assert!(
                 is_critical_mpsc_event(ev),
@@ -3047,7 +3255,7 @@ mod tests {
             );
         }
 
-        // 4 个广播专属 Critical 不得被 mpsc 旁路误捕(14 ⊆ 18,差集恒为 4)
+        // 4 个广播专属 Critical 不得被 mpsc 旁路误捕(16 ⊆ 20,差集恒为 4)
         let severity_critical = tests_helpers::all_severity_critical_variants();
         let mpsc_names: std::collections::HashSet<&str> =
             mpsc.iter().map(|e| e.type_name()).collect();
@@ -3058,7 +3266,7 @@ mod tests {
             }
             assert!(
                 !is_critical_mpsc_event(ev),
-                "{} 属广播专属 Critical,不得被 mpsc 误捕(17 口径回潮)",
+                "{} 属广播专属 Critical,不得被 mpsc 误捕(全 Critical 进旁路的旧口径回潮)",
                 ev.type_name()
             );
             broadcast_only += 1;
@@ -3066,11 +3274,11 @@ mod tests {
         assert_eq!(
             broadcast_only,
             CRITICAL_TOTAL - CRITICAL_MPSC_VARIANTS,
-            "差集 18-14 = {CRITICAL_TOTAL}-{CRITICAL_MPSC_VARIANTS} = 4 个广播专属 Critical"
+            "差集 20-16 = {CRITICAL_TOTAL}-{CRITICAL_MPSC_VARIANTS} = 4 个广播专属 Critical"
         );
     }
 
-    /// T17(b) 分片红线:14 个 mpsc 旁路变体全部判定为 Critical 车道(永不进分片,
+    /// T17(b) 分片红线:16 个 mpsc 旁路变体全部判定为 Critical 车道(永不进分片,
     /// 单流旁路投递)—— 分片(shard)仅服务非 Critical,与 event_lane/§11.2 对齐。
     #[test]
     fn mpsc_critical_variants_are_single_stream_never_sharded() {

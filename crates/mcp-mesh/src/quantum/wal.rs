@@ -99,6 +99,19 @@ impl WalStore {
         let entry_bytes = serde_json::to_vec(entry).map_err(|e| McpError::WalIoError {
             reason: format!("WAL entry 序列化失败: {e}"),
         })?;
+        // v2.3 §(b.5): WAL 落盘前拦截私钥/凭证/令牌类硬载荷(Block;高熵/键名 Pass 防误报)。
+        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            ..Default::default()
+        };
+        if nexus_contracts::sensitive::scan(&String::from_utf8_lossy(&entry_bytes), &scan_policy)
+            .is_blocked()
+        {
+            return Err(McpError::WalIoError {
+                reason: "WAL 事务条目含敏感硬载荷(私钥/凭证/令牌),拒绝落盘".into(),
+            });
+        }
         // WHY clone entry 用于日志(不能借用进 spawn_blocking,因 spawn_blocking 要求 'static)
         let entry_clone = entry.clone();
 

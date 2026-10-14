@@ -272,7 +272,7 @@ fn test_tui_input_mode_circular_navigation() {
     // WHY 循环导航:验证 Tab/Shift+Tab 沿焦点环完整循环一周回到原点。
     // Concord T1.4:期望序列不再手写(避免测试成为第三处顺序源),而是派生
     // 自 PanelId::REGISTERED_FOCUS_ORDER 单一事实源:Tab 沿环正向逐位,
-    // Shift+Tab 逆向逐位;26 面板全部注册(FC-05 下线 InjectionStrategy)。
+    // Shift+Tab 逆向逐位;29 面板全部注册(FC-05 下线 InjectionStrategy;v2.3 §(b.6) 新增 Bench/ReviewQueue/Blackboard)。
     let mut app = make_app();
     let order = PanelId::REGISTERED_FOCUS_ORDER;
     let n = order.len();
@@ -1016,6 +1016,9 @@ fn test_refresh_command_publishes_request() {
     let bus = EventBus::new();
     let mut rx = bus.subscribe();
     let mut app = TuiApp::with_event_bus(app, bus);
+    // B5-G(评审 #2):断言经 t! 取值仍有 locale 翻转窗口,持 guard 全程互斥
+    // (先例:src/app/tests.rs dispatch_viz_switch_dimension_osa_honest_no_toggle)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
 
     app.state_mut().filter_keyword = Some("old".into());
     app.state_mut().filter_topic = Some("security".into());
@@ -1039,7 +1042,13 @@ fn test_refresh_command_publishes_request() {
         .as_ref()
         .unwrap()
         .0
-        .contains("RefreshStateRequested request published"));
+        // B4-I(F-04):断言经 t! 键期望串构造;读值仍随当前 locale,非与 locale 无关
+        // (B5-G 已在测试入口补 locale_test_guard 消除翻转窗口)
+        .contains(&chimera_tui::t!("status.request_published").replacen(
+            "{}",
+            "RefreshStateRequested",
+            1
+        )));
     // 过滤器保持原状,由上游订阅者决定是否响应刷新请求
     assert!(app.state().filter_keyword.is_some());
     assert!(app.state().filter_topic.is_some());

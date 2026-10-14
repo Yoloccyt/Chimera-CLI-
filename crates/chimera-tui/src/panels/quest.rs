@@ -19,7 +19,6 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
-use crate::render::FOOTER_TEXT;
 use crate::types::{PanelId, TuiCommand, TuiState};
 use nexus_contracts::domain::ThinkingMode;
 use nexus_core::{Quest, TaskStatus};
@@ -45,8 +44,13 @@ pub struct QuestPanel {
     selected: usize,
     /// 列表滚动偏移
     scroll_offset: usize,
-    /// 多选索引集合(批量操作用)
-    selected_indices: HashSet<usize>,
+    /// 多选集合(批量操作用,存 quest_id)
+    ///
+    /// WHY 存 quest_id 而非过滤后下标(F-12):下标是"过滤后列表"的视图坐标,
+    /// 过滤词/列表变化后同批下标会错位重映射到其他 Quest,批量操作可能作用于
+    /// 用户未勾选的条目;quest_id 是领域恒等键,选择集随过滤/排序变化保持指向
+    /// 原勾选项。
+    selected_ids: HashSet<String>,
     /// M4 二期:渲染内容缓存键(命中时复用 `cached_text`)
     cached_key: Option<QuestRenderKey>,
     /// M4 二期:缓存的渲染文本(命中时仅 clone 供渲染,跳过重建开销)
@@ -55,9 +59,9 @@ pub struct QuestPanel {
     cached_count: usize,
 }
 
-/// 自定义 PartialEq:忽略 selected_indices,避免同一面板状态在不同选择集合下被判不等
+/// 自定义 PartialEq:忽略多选集合,避免同一面板状态在不同选择集合下被判不等
 ///
-/// WHY:多选索引是瞬时 UI 状态,不影响面板的功能等价性。
+/// WHY:多选集合是瞬时 UI 状态,不影响面板的功能等价性。
 /// 两个 QuestPanel 若光标位置与滚动偏移相同即视为等价。
 impl PartialEq for QuestPanel {
     fn eq(&self, other: &Self) -> bool {
@@ -70,28 +74,28 @@ impl PartialEq for QuestPanel {
 /// 覆盖所有影响输出文本的状态:
 /// - `revision`:快照数据(Quest 列表/任务进度)变化;
 /// - `keyword`:关键字过滤器(同时影响标题与列表内容);
-/// - `selected` / `selected_indices`:光标与多选(影响前缀符号与样式);
+/// - `selected` / `selected_ids`:光标与多选(影响前缀符号与样式);
 /// - `locale`:全局语言(`Ctrl+L` 切换中英)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct QuestRenderKey {
     revision: u64,
     keyword: Option<String>,
     selected: usize,
-    selected_indices: Vec<usize>,
+    selected_ids: Vec<String>,
     locale: u8,
 }
 
 impl QuestRenderKey {
-    /// 以当前状态与面板选择构造缓存键
-    fn new(state: &TuiState, selected: usize, selected_indices: &HashSet<usize>) -> Self {
+    /// 以当前状态与面板多选集合构造缓存键
+    fn new(state: &TuiState, selected: usize, selected_ids: &HashSet<String>) -> Self {
         // 排序保证同一集合的不同插入顺序得到相同键
-        let mut indices: Vec<usize> = selected_indices.iter().copied().collect();
-        indices.sort_unstable();
+        let mut ids: Vec<String> = selected_ids.iter().cloned().collect();
+        ids.sort_unstable();
         Self {
             revision: state.last_snapshot_revision,
             keyword: state.filter_keyword.clone(),
             selected,
-            selected_indices: indices,
+            selected_ids: ids,
             // `as_u8` 为 i18n 模块私有,此处以匹配保持缓存键稳定(仅两种 locale)
             locale: match crate::i18n::current_locale() {
                 crate::i18n::Locale::Zh => 0,
@@ -105,7 +109,7 @@ impl QuestPanel {
     /// 创建新的 Quest 面板
     pub fn new() -> Self {
         Self {
-            selected_indices: HashSet::new(),
+            selected_ids: HashSet::new(),
             ..Default::default()
         }
     }
@@ -141,11 +145,12 @@ impl QuestPanel {
     /// # 参数
     /// - `state`:TUI 共享状态
     /// - `cursor`:当前光标所在的 Quest 索引
-    /// - `selected_indices`:批量选中的索引集合
+    /// - `selected_ids`:批量选中的 quest_id 集合(F-12:按 id 判定勾选,
+    ///   不随过滤/排序变化错位)
     pub fn content(
         state: &TuiState,
         cursor: usize,
-        selected_indices: &HashSet<usize>,
+        selected_ids: &HashSet<String>,
     ) -> Text<'static> {
         let mut lines: Vec<Line<'static>> = vec![
             Line::from(crate::t!("panel.quest.body_title")),
@@ -160,7 +165,7 @@ impl QuestPanel {
             let quest_count = quests.len();
             for (idx, quest) in quests.iter().enumerate() {
                 let is_cursor = idx == cursor;
-                let is_checked = selected_indices.contains(&idx);
+                let is_checked = selected_ids.contains(&quest.quest_id);
 
                 // 标题行:前缀 + 序号 + 标题 + mini gauge
                 let title_prefix = match (is_cursor, is_checked) {
@@ -287,8 +292,31 @@ impl QuestPanel {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(FOOTER_TEXT));
+        lines.push(Line::from(crate::t!("panel.footer")));
         Text::from(lines)
+    }
+
+    /// 解析批量操作目标 quest_id 列表(F-12)
+    ///
+    /// WHY 对全量 `quest_list` 求存在性而非 `filtered_quests`:选择集按
+    /// quest_id 标识,过滤/排序变化后仍指向原勾选项;被过滤隐藏但仍存在的
+    /// 勾选项须照常纳入批量目标,仅剔除已从列表消失的 Quest。
+    /// WHY 排序:选择集为 HashSet 无稳定迭代序,排序让确认弹窗明细与
+    /// on_confirm 串在相同选择集下逐字节确定(可断言、可复现)。
+    fn resolve_batch_ids(&self, state: &TuiState) -> Vec<String> {
+        let existing: HashSet<&str> = state
+            .quest_list
+            .iter()
+            .map(|q| q.quest_id.as_str())
+            .collect();
+        let mut ids: Vec<String> = self
+            .selected_ids
+            .iter()
+            .filter(|id| existing.contains(id.as_str()))
+            .cloned()
+            .collect();
+        ids.sort_unstable();
+        ids
     }
 
     /// 构建 Quest 详情弹窗内容
@@ -355,6 +383,25 @@ fn quest_matches_keyword(quest: &Quest, keyword: &str) -> bool {
         t.description.to_lowercase().contains(&keyword)
             || t.task_id.to_lowercase().contains(&keyword)
     })
+}
+
+/// Quest 列表头部固定行数(body 标题 + 分隔线,见 [`QuestPanel::content`])
+const QUEST_HEADER_ROWS: usize = 2;
+
+/// 每个 Quest 占用的文本行数(标题 / 元信息 / 任务摘要 / 空行)
+///
+/// 末条 Quest 无尾随空行(文本总行数少 1),但不影响标题行定位公式。
+const QUEST_ROWS_PER_ITEM: usize = 4;
+
+/// 选中 Quest 的标题行号(0-based 文本行,即滚动单位)
+///
+/// WHY 行换算:`selected` 是 Quest 索引,而 [`list_state::adjust_scroll`] 与
+/// `Paragraph::scroll` 均以"1 单位 = 1 文本行"工作;直传索引造成单位错配
+/// (F-10)——超首屏后选中高亮永久丢失,空格多选/批操作作用于不可见条目。
+/// 公式按 `content()` 行结构推导,并由
+/// `selected_title_row_matches_content_layout` 单测对照真实输出锁定。
+fn selected_title_row(selected: usize) -> usize {
+    QUEST_HEADER_ROWS + selected * QUEST_ROWS_PER_ITEM
 }
 
 /// 构造带过滤器指示器的标题
@@ -426,7 +473,7 @@ impl Panel for QuestPanel {
         // M4 二期:键未变时直接复用缓存(免过滤/格式化/i18n),仅把缓存文本
         // clone 给 Paragraph 写入本帧 buffer;revision == 0(测试桩)禁用缓存,
         // 避免状态被就地修改时读到陈旧内容。
-        let mut key = QuestRenderKey::new(state, self.selected, &self.selected_indices);
+        let mut key = QuestRenderKey::new(state, self.selected, &self.selected_ids);
         let enable_cache = state.last_snapshot_revision != 0;
         let hit = enable_cache && self.cached_key.as_ref() == Some(&key);
         let count = if hit {
@@ -435,12 +482,14 @@ impl Panel for QuestPanel {
             Self::filtered_quests(state).len()
         };
         self.selected = list_state::clamp_selected(self.selected, count);
+        // F-10:scroll 单位是文本行,selected 是 Quest 索引 —— 先换算为选中标题行号
+        let selected_row = selected_title_row(self.selected);
         self.scroll_offset =
-            list_state::adjust_scroll(self.selected, self.scroll_offset, content_height);
+            list_state::adjust_scroll(selected_row, self.scroll_offset, content_height);
 
         if !hit {
             key.selected = self.selected;
-            self.cached_text = Self::content(state, self.selected, &self.selected_indices);
+            self.cached_text = Self::content(state, self.selected, &self.selected_ids);
             self.cached_count = count;
             self.cached_key = if enable_cache { Some(key) } else { None };
         }
@@ -475,10 +524,14 @@ impl Panel for QuestPanel {
                     return None;
                 }
                 let idx = list_state::clamp_selected(self.selected, quests.len());
-                if self.selected_indices.contains(&idx) {
-                    self.selected_indices.remove(&idx);
-                } else {
-                    self.selected_indices.insert(idx);
+                // F-12:按 quest_id 切换多选,选择集不随过滤/排序变化错位
+                if let Some(quest) = quests.get(idx) {
+                    let id = quest.quest_id.clone();
+                    if self.selected_ids.contains(&id) {
+                        self.selected_ids.remove(&id);
+                    } else {
+                        self.selected_ids.insert(id);
+                    }
                 }
                 None
             }
@@ -486,9 +539,8 @@ impl Panel for QuestPanel {
             //
             // WHY Ctrl+A:与编辑器全选语义一致,减少逐项选择的操作成本。
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let quests = Self::filtered_quests(state);
-                for i in 0..quests.len() {
-                    self.selected_indices.insert(i);
+                for quest in Self::filtered_quests(state) {
+                    self.selected_ids.insert(quest.quest_id.clone());
                 }
                 None
             }
@@ -496,7 +548,7 @@ impl Panel for QuestPanel {
             //
             // WHY Ctrl+D:对称于 Ctrl+A,同时不与现有 `d`(单条取消)冲突。
             KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.selected_indices.clear();
+                self.selected_ids.clear();
                 None
             }
             // `p` 键:暂停 Quest(批量优先;无多选时暂停当前光标项)
@@ -504,14 +556,9 @@ impl Panel for QuestPanel {
             // WHY 批量优先:若操作员已勾选多个 Quest,`p` 应暂停全部而非仅当前项,
             // 减少操作员的认知负担。多选时弹出批量确认弹窗;无多选时回退到单选暂停。
             KeyCode::Char('p') => {
-                if !self.selected_indices.is_empty() {
-                    let quests = Self::filtered_quests(state);
-                    let quest_ids: Vec<String> = self
-                        .selected_indices
-                        .iter()
-                        .filter_map(|&i| quests.get(i))
-                        .map(|q| q.quest_id.clone())
-                        .collect();
+                if !self.selected_ids.is_empty() {
+                    // F-12:目标按 quest_id 解析,选择集不随过滤变化错位
+                    let quest_ids = self.resolve_batch_ids(state);
                     if quest_ids.is_empty() {
                         return None;
                     }
@@ -539,14 +586,9 @@ impl Panel for QuestPanel {
             // 避免操作员因肌肉记忆按 `d` 时意外触发批量操作。
             // 多选时弹出批量确认弹窗;无多选时 `c` 为 no-op(单条取消请用 `d`)。
             KeyCode::Char('c') => {
-                if !self.selected_indices.is_empty() {
-                    let quests = Self::filtered_quests(state);
-                    let quest_ids: Vec<String> = self
-                        .selected_indices
-                        .iter()
-                        .filter_map(|&i| quests.get(i))
-                        .map(|q| q.quest_id.clone())
-                        .collect();
+                if !self.selected_ids.is_empty() {
+                    // F-12:目标按 quest_id 解析,选择集不随过滤变化错位
+                    let quest_ids = self.resolve_batch_ids(state);
                     if quest_ids.is_empty() {
                         return None;
                     }
@@ -656,7 +698,12 @@ impl Panel for QuestPanel {
     fn scroll_to_bottom(&mut self, state: &mut TuiState) {
         let count = Self::filtered_quests(state).len();
         self.selected = if count == 0 { 0 } else { count - 1 };
-        self.scroll_offset = self.selected;
+        // F-10:offset 单位为文本行;空列表不滚动以保持标题可见
+        self.scroll_offset = if count == 0 {
+            0
+        } else {
+            selected_title_row(self.selected)
+        };
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
@@ -720,6 +767,11 @@ mod tests {
 
     #[test]
     fn test_quest_panel_empty_state() {
+        // i18n:断言默认中文文案,持 locale guard 并显式 pin Zh——guard 只保证
+        // 写入互斥,不阻止既有非持锁 En 窗口已写入的瞬时值,显式 pin 才使
+        // 读取确定(2026-10-02 全量回归实测 flake 根因)
+        let _locale_guard = crate::i18n::locale_test_guard();
+        crate::i18n::set_locale(crate::i18n::Locale::Zh);
         let state = TuiState::new();
         let content = QuestPanel::content(&state, 0, &HashSet::new()).to_string();
         assert!(content.contains("任务列表"));
@@ -1065,23 +1117,73 @@ mod tests {
         );
     }
 
+    /// 行换算公式与 content() 真实布局对照(F-10)
+    ///
+    /// 逐 cursor 定位 `> [N]` 标题行在 Text 中的实际行号,锁定
+    /// `selected_title_row` 公式;content() 行结构变化时本测试先行红灯,
+    /// 防止公式静默漂移。
+    #[test]
+    fn selected_title_row_matches_content_layout() {
+        let mut state = TuiState::new();
+        state.quest_list = (0..5)
+            .map(|i| sample_quest(&format!("q{}", i + 1), &format!("Quest {}", i + 1)))
+            .collect();
+        for cursor in 0..5usize {
+            let text = QuestPanel::content(&state, cursor, &HashSet::new()).to_string();
+            let title_row = text
+                .lines()
+                .position(|l| l.contains(&format!("> [{}]", cursor + 1)))
+                .expect("cursor 标题行应存在于 content() 输出中");
+            assert_eq!(
+                title_row,
+                selected_title_row(cursor),
+                "cursor={cursor} 标题行号与换算公式不符"
+            );
+        }
+    }
+
+    // F-10 滚动不变量(属性测试):任意 selected/视口高度/历史偏移组合下,
+    // 行单位换算后选中标题行必属 [scroll, scroll+content_height) 视口区间。
+    // WHY proptest 而非抽样用例:pre_offset 决定 adjust_scroll 走向上/向下/
+    // 已可见哪个分支,不变量须覆盖任意组合(仓库先例:本文件 M4 缓存键 proptest)。
+    proptest! {
+        #[test]
+        fn quest_scroll_invariant_keeps_selected_title_row_visible(
+            selected in 0usize..300,
+            viewport_rows in 1usize..40,
+            pre_offset in 0usize..1200,
+        ) {
+            let count = selected + 1; // 选中项必存在
+            let clamped = list_state::clamp_selected(selected, count);
+            prop_assert_eq!(clamped, selected, "选中项存在时 clamp 不应改变索引");
+            let row = selected_title_row(clamped);
+            let scroll = list_state::adjust_scroll(row, pre_offset, viewport_rows);
+            prop_assert!(
+                scroll <= row && row < scroll + viewport_rows,
+                "选中标题行 {row} 应属视口 [{scroll}, {})",
+                scroll + viewport_rows
+            );
+        }
+    }
+
     // M4 二期属性测试:缓存键与多选集合的迭代顺序无关,且对选中项敏感。
     // WHY locale guard:QuestRenderKey 含全局 locale 字段,并行测试切换语言会
     // 在 key_a/key_b 构造之间改变 locale 导致断言偶发失败(flaky,2026-08-07)。
+    // F-12:多选集合已改存 quest_id,本测试同步以字符串集合驱动。
     proptest! {
         #[test]
         fn quest_render_key_ignores_hashset_iteration_order(
-            indices in proptest::collection::vec(0usize..50, 0..20),
+            ids in proptest::collection::vec("[a-z]{1,8}", 0..20),
         ) {
             let _locale_guard = crate::i18n::locale_test_guard();
             let mut state = TuiState::new();
             state.last_snapshot_revision = 7;
             state.filter_keyword = Some("kw".into());
 
-            let forward: HashSet<usize> = indices.iter().copied().collect();
-            let mut reversed = indices.clone();
+            let forward: HashSet<String> = ids.iter().cloned().collect();
+            let mut reversed = ids.clone();
             reversed.reverse();
-            let backward: HashSet<usize> = reversed.into_iter().collect();
+            let backward: HashSet<String> = reversed.into_iter().collect();
 
             let key_a = QuestRenderKey::new(&state, 3, &forward);
             let key_b = QuestRenderKey::new(&state, 3, &backward);
@@ -1093,5 +1195,38 @@ mod tests {
                 "选中索引变化必须改变缓存键"
             );
         }
+    }
+
+    // F-12:多选集合按 quest_id 标识后的批量目标解析语义。
+    #[test]
+    fn resolve_batch_ids_keeps_hidden_but_keeps_existing() {
+        // 选择集含 q1(仍存在,但被过滤隐藏)与 q3(已从列表删除):
+        // q1 须保留(过滤不影响批量目标),q3 须剔除(不操作已消失的 Quest)
+        let mut panel = QuestPanel::new();
+        panel.selected_ids = ["q1".to_string(), "q3".to_string()].into_iter().collect();
+        let mut state = TuiState::new();
+        state.quest_list = vec![sample_quest("q1", "Alpha"), sample_quest("q2", "Beta")];
+        state.filter_keyword = Some("beta".into()); // q1 被过滤隐藏但仍存在
+
+        let ids = panel.resolve_batch_ids(&state);
+        assert_eq!(
+            ids,
+            vec!["q1".to_string()],
+            "被过滤隐藏但仍存在的勾选项应保留"
+        );
+    }
+
+    #[test]
+    fn resolve_batch_ids_drops_deleted_and_sorts() {
+        // 选择集含已删除的 q9 与乱序插入的 q2/q1:q9 剔除,输出按 id 排序确定
+        let mut panel = QuestPanel::new();
+        panel.selected_ids = ["q9".to_string(), "q2".to_string(), "q1".to_string()]
+            .into_iter()
+            .collect();
+        let mut state = TuiState::new();
+        state.quest_list = vec![sample_quest("q1", "A"), sample_quest("q2", "B")];
+
+        let ids = panel.resolve_batch_ids(&state);
+        assert_eq!(ids, vec!["q1".to_string(), "q2".to_string()]);
     }
 }

@@ -45,6 +45,37 @@ fn parallel_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var("CHIMERA_NO_PARALLEL_GSOE").is_err())
 }
 
+/// 合并并行结果与串行基准 —— 失败回退到同式串行值，绝不折算成 0 分
+///
+/// WHY 不取 `unwrap_or(0.0)`（审计 S-3）：适应度 0 与"真的最差"在数值上不可区分，
+/// 一次池内 panic 就会把候选变体误判为最差并参与精英选择；而本处的串行表达式
+/// 是同一算式的无副作用版本，回退后仍保证“并行与串行逐元素一致”的既有契约。
+///
+/// 长度与输入一一对应（调用方按下标索引，不得丢项）。
+#[must_use]
+fn merge_with_serial(
+    results: Vec<Result<f32, nexus_core::compute::ComputeError>>,
+    samples: &[FitnessSample],
+    serial: &[f32],
+) -> Vec<f32> {
+    results
+        .into_iter()
+        .zip(serial.iter().copied())
+        .enumerate()
+        .map(|(idx, (r, fallback))| {
+            r.unwrap_or_else(|err| {
+                tracing::warn!(
+                    variant_id = %samples[idx].variant_id,
+                    error = %err,
+                    fallback,
+                    "并行适应度评分失败，回退串行同式值（不计 0 分）"
+                );
+                fallback
+            })
+        })
+        .collect()
+}
+
 /// 批量适应度评分 — 串/并行双路径，结果逐元素一致
 ///
 /// 综合分 = 0.6·成功率 + 0.4·置信度（纯计算，无 IO/await——rayon 契约）。
@@ -71,8 +102,9 @@ pub fn score_batch(samples: &[FitnessSample]) -> Vec<f32> {
                 .cloned()
                 .map(|s| move || 0.6 * s.success_rate + 0.4 * s.confidence);
             let results = bridge().spawn_compute_batch(kind, closures);
-            // 与串行逐元素一致（确定性；并行仅加速，不改语义）
-            results.into_iter().map(|r| r.unwrap_or(0.0)).collect()
+            // 与串行逐元素一致（确定性；并行仅加速，不改语义）；
+            // 失败项回退串行同式值而不是 0.0（见 [`merge_with_serial`]）
+            merge_with_serial(results, samples, &scores)
         }
         _ => scores,
     }
@@ -140,6 +172,33 @@ mod tests {
                 "并行必须与串行逐元素一致"
             );
         }
+    }
+
+    /// A2/审计 S-3：并行失败必须回退串行同式值，不得折算成 0 分
+    #[test]
+    fn merge_falls_back_to_serial_not_zero() {
+        use nexus_core::compute::ComputeError;
+
+        let s = samples(3);
+        let serial: Vec<f32> = s
+            .iter()
+            .map(|x| 0.6 * x.success_rate + 0.4 * x.confidence)
+            .collect();
+        let results = vec![
+            Ok(0.9),
+            Err(ComputeError::Panicked),
+            Err(ComputeError::Saturated),
+        ];
+        let merged = merge_with_serial(results, &s, &serial);
+
+        assert_eq!(merged.len(), 3, "长度必须与输入对齐（调用方按下标索引）");
+        assert!((merged[0] - 0.9).abs() < 1e-6, "成功项保留并行值");
+        assert!(
+            (merged[1] - serial[1]).abs() < 1e-6 && (merged[2] - serial[2]).abs() < 1e-6,
+            "失败项回退串行同式值,不得为 0.0"
+        );
+        // 串行值本身非零 —— 证明回退不会退化为"最差候选"
+        assert!(merged[1] > 0.0 && merged[2] > 0.0);
     }
 
     #[test]

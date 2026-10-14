@@ -322,7 +322,10 @@ fn quest_jump_sets_status_message() {
         "status message should contain quest_id, got: {msg}"
     );
     assert!(
-        msg.contains("EventStream"),
+        // B4-I(F-04):断言经 t! 键期望串构造,与 locale 无关
+        msg.contains(
+            &chimera_tui::t!("status.jumped_eventstream_filtered").replacen("{}", "q-test", 1)
+        ),
         "status message should mention EventStream, got: {msg}"
     );
     assert_eq!(*severity, chimera_tui::Severity::Info);

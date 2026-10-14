@@ -5,10 +5,10 @@
 //!
 //! # 设计目标
 //! - 定义统一的 WAL 接口(`WalTrait`),解耦 SCC 缓存与底层持久化实现
-//! - 本周提供**占位实现**(`InMemoryWal`),仅用内存缓冲验证接口契约
-//! - 真实 SQLite WAL 持久化留待 Week 8 接入(见 §3.2 非范围)
+//! - 实现:`InMemoryWal`(内存缓冲契约验证) + `SqliteWal`(真实持久化,C-02 批次已交付,异步 API 见文件尾自述)
+//! - 旧「占位实现/Week 8 接入」叙事已废止(WI-G14⑦ 校正;时点为历史计划叙事)
 //!
-//! # WHY 占位实现而非真实持久化
+//! # WHY 占位实现而非真实持久化（历史决策叙事,已废止——见上）
 //! - Week 7 关键路径在 4 crate 联调与性能基准,WAL 持久化非阻塞验收项
 //! - 真实 SQLite WAL 需引入 rusqlite 依赖 + 文件 I/O + 崩溃恢复测试,
 //!   工作量与 Week 7 剩余预算不匹配(参见 spec.md §3.2 明确"本周不做")
@@ -426,6 +426,20 @@ impl SqliteWal {
     /// `spawn_blocking` 闭包需要 `'static + Send`,借用 `&WalEntry` 无法跨线程
     /// 转移。调用方需在调用前 `clone()`(WalEntry 已实现 Clone)。
     pub async fn write_ahead_log(&self, entry: WalEntry) -> Result<(), SccError> {
+        // v2.3 §(b.5): WAL 落盘前拦截私钥/凭证/令牌类硬载荷(Block)。
+        // 高熵/键名启发式设 Pass 防误报;benign 条目零影响;命中即拒绝写预写日志。
+        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            ..Default::default()
+        };
+        if nexus_contracts::sensitive::scan(&String::from_utf8_lossy(&entry.payload), &scan_policy)
+            .is_blocked()
+        {
+            return Err(SccError::WalError {
+                reason: format!("WAL entry {} 含敏感硬载荷,拒绝写入预写日志", entry.entry_id),
+            });
+        }
         let conn = self.conn.clone();
         spawn_blocking(move || -> Result<(), SccError> {
             let conn = conn.lock().map_err(|p| SccError::WalError {

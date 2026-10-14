@@ -137,7 +137,7 @@ async fn test_engine_recall_by_clv() {
         .await
         .unwrap();
 
-    let results = engine.recall_by_clv(&query, 10).await.unwrap();
+    let results = engine.recall_by_clv(&query, 10, None).await.unwrap();
     assert!(!results.is_empty());
 }
 
@@ -650,4 +650,39 @@ async fn test_concurrent_migrate_same_id_no_duplication() {
         l1_count, 0,
         "源层 L1 应为空(条目已迁移到 L0),实际 = {l1_count}"
     );
+}
+
+// ============================================================
+// WI-G10 四路入口直调面（semantic/episodic/epistemic 入口直达;
+// graph 路经 recall_with_graph_ids → recall_hybrid 见 recall_hybrid_test.rs）
+// ============================================================
+
+/// 情节路入口（`recall_by_quest` → `l1.query_by_quest`）直调可用
+#[tokio::test]
+async fn test_episodic_path_entry_direct() {
+    use mlc_engine::QuestId;
+    let engine = MlcEngine::new_in_memory(EventBus::new()).unwrap();
+    let mut e = make_entry("e-1", MemoryTier::L1Episodic);
+    e.quest_id = Some(QuestId::new("q-1"));
+    engine.store(e).await.unwrap();
+
+    let got = engine.recall_by_quest("q-1").await.unwrap();
+    assert_eq!(got.len(), 1, "quest 关联条目应经情节路入口可召回");
+    assert_eq!(got[0].id.as_str(), "e-1");
+    assert!(engine.recall_by_quest("q-none").await.unwrap().is_empty());
+}
+
+/// 认识路入口（`partition_by_epistemic` 纯静态分库）直调可用
+#[tokio::test]
+async fn test_epistemic_path_entry_direct() {
+    use nexus_contracts::EpistemicType;
+    let obs = MemoryEntry::new("o-1", "归纳结论", MemoryTier::L2Semantic)
+        .with_epistemic(EpistemicType::Observation);
+    let fact = MemoryEntry::new("f-1", "原始事实", MemoryTier::L2Semantic);
+    let entries = vec![obs, fact];
+    let (observations, facts) = MlcEngine::partition_by_epistemic(&entries);
+    assert_eq!(observations.len(), 1);
+    assert_eq!(observations[0].id.as_str(), "o-1");
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0].id.as_str(), "f-1");
 }

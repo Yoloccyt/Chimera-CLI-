@@ -1,0 +1,60 @@
+# =============================================================================
+# NMC model asset manifest (WI-C2; ADR-196 D4 preflight -- "assets, not code")
+# =============================================================================
+# Discipline:
+#   * Model binaries are NEVER committed (license/size). This manifest is the
+#     single source of truth for HOW to obtain them: url + version + SHA-256.
+#   * scripts/fetch_nmc_assets.ps1 / .sh read THIS file (parity pair; both are
+#     ASCII-only on purpose -- G-85/PS5.1 discipline). They are dry-run by
+#     default and only download with -Apply / --apply.
+#   * LOCK: crates/nmc-encoder/tests/asset_pipeline.rs pins every (model_type,
+#     file) pair to the code authority (NmcConfig defaults / loader literal).
+#     A rename on either side turns the test RED -- no silent drift.
+#   * STATUS: url/sha256 stay empty until the owner adjudicates the asset
+#     source and license (plan W4 open item "NMC real asset source and
+#     license"). PENDING rows are skipped by -Apply with an explicit message;
+#     a half-filled row (only one of url/sha256 set) is a manifest ERROR.
+#
+# [[model]] row keys: model_type (Image|Video|Audio|Text), file, version,
+#                     url, sha256, size_bytes, notes
+# =============================================================================
+
+[manifest]
+schema = 1
+updated = "2026-10-07"
+
+[[model]]
+model_type = "Image"
+file = "clip-vit-b32.onnx"
+version = ""
+url = ""
+sha256 = ""
+size_bytes = 0
+notes = "CLIP ViT-B/32 image encoder; file must equal NmcConfig.image_model default"
+
+[[model]]
+model_type = "Video"
+file = "videomae-base.onnx"
+version = ""
+url = ""
+sha256 = ""
+size_bytes = 0
+notes = "VideoMAE video encoder; file must equal NmcConfig.video_model default"
+
+[[model]]
+model_type = "Audio"
+file = "whisper-encoder.onnx"
+version = ""
+url = ""
+sha256 = ""
+size_bytes = 0
+notes = "Whisper encoder; file must equal NmcConfig.audio_model default"
+
+[[model]]
+model_type = "Text"
+file = "all-MiniLM-L6-v2.onnx"
+version = ""
+url = ""
+sha256 = ""
+size_bytes = 0
+notes = "all-MiniLM-L6-v2 text encoder (opt-in via NmcConfig.text_model); loader literal at perceptors/onnx_backend.rs get_model_filename (Text arm)"

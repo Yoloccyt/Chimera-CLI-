@@ -96,9 +96,15 @@ fn test_security_panel_renders_events() {
     app.update();
     app.switch_panel_to(PanelId::Security);
 
+    // i18n(B4-I):面板名随 locale 切换,期望串与渲染同源经 t! 求值、locale 无关;
+    // 持 guard 串行化但不写全局 locale——不新增 En 窗口。VETO/事件原因等面板
+    // 正文为 locale 无关的既有渲染,断言保持原文(raw content)。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let panel_label = chimera_tui::t!(PanelId::Security.name_key());
     let content = render_to_string(&mut app, 80, 24);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("Security"),
+        compact.contains(panel_label),
         "Security panel title should be rendered"
     );
     assert!(content.contains("VETO"), "Skeptic veto should be rendered");
@@ -168,8 +174,13 @@ fn test_security_panel_down_navigation() {
         app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
     }
 
+    // i18n(B4-I):期望串与渲染同源经 t! 求值,locale 无关;不写全局 locale
+    // (WHY 见 test_security_panel_renders_events 注)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let panel_label = chimera_tui::t!(PanelId::Security.name_key());
     let content = render_to_string(&mut app, 80, 24);
-    assert!(content.contains("Security"));
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
+    assert!(compact.contains(panel_label));
 }
 
 #[test]
@@ -191,6 +202,9 @@ fn test_security_panel_empty_state() {
     app.update();
     app.switch_panel_to(PanelId::Security);
 
+    // i18n:断言默认中文文案,持 locale guard 与同二进制内 pin En 的测试互斥
+    // (i18n::set_locale 文档 2026-08-17 互斥口径)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let content = render_to_string(&mut app, 80, 24);
     let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(

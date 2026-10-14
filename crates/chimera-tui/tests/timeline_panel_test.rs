@@ -360,7 +360,12 @@ fn render_panel_to_string(panel: &mut TimelinePanel, state: &TuiState, w: u16, h
     panel.render(state, area, &mut buf);
     let mut out = String::new();
     let mut prev_wide = false;
-    for cell in buf.content().iter() {
+    // 按 buffer 列宽插 '\n'(对齐 log_panel_test render_to_string 的 join("\n")
+    // 口径),使输出有行结构支撑行级锚定断言(lines().find 定位选中行)
+    for (i, cell) in buf.content().iter().enumerate() {
+        if i > 0 && i % w as usize == 0 {
+            out.push('\n');
+        }
         if cell.skip {
             continue;
         }
@@ -392,4 +397,81 @@ fn test_timeline_panel_zh_locale_renders_chinese_copy() {
         content.contains("暂无快照"),
         "Zh locale 下 Timeline 空状态应显示中文提示,实际: {content}"
     );
+}
+
+// ============================================================
+// F-22:滚动中部,总数提示行不再被裁剪(修复前主路径恒不可见)
+// ============================================================
+
+#[test]
+fn test_timeline_panel_showing_line_visible_when_scrolling() {
+    // WHY pin Zh:断言 zh 提示行文案 "... 显示 N / M 快照";render_panel_to_string
+    // 的宽字符感知收集保证 CJK 连续(跳过续格)。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+
+    let mut panel = TimelinePanel::new();
+    let mut state = TuiState::new();
+    for i in 0..100 {
+        state.timeline_snapshots.push(make_snapshot(i, i * 10));
+    }
+
+    // WHY Down×20 而非贴底:贴底(scroll_to_bottom)时窗口塌缩成窄带,修复前
+    // 提示行反而可见(无判别力,R5 复核已注明);Down×20 落在滚动中部
+    // (80x24 → 列表区 13 行 → visible_rows=12 → offset=9),修复前 ±5 缓冲使
+    // Text = 22 快照行 + 1 提示行 = 23 行超出列表区,提示行恒被裁。
+    for _ in 0..20 {
+        panel.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &mut state);
+    }
+    let content = render_panel_to_string(&mut panel, &state, 80, 24);
+
+    assert!(
+        content.contains("显示"),
+        "总数提示行应渲染在列表区内(F-22 修复前主路径恒被裁剪), got: {content}"
+    );
+    assert!(content.contains("ev/s:"), "快照行应渲染, got: {content}");
+}
+
+// ============================================================
+// B3-T:贴底格子(选中前缀 + 提示行),补齐「贴底+中部 × 提示行+选中项」矩阵
+// ============================================================
+
+#[test]
+fn test_timeline_panel_selected_and_showing_visible_at_bottom() {
+    // WHY pin Zh:同上方滚动中部用例口径(断言 zh 提示行文案)。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
+
+    let mut panel = TimelinePanel::new();
+    let mut state = TuiState::new();
+    for i in 0..100 {
+        state.timeline_snapshots.push(make_snapshot(i, i * 10));
+    }
+
+    // 贴底主路径:scroll_to_bottom 置 selected=scroll_offset=99,窗口塌缩为
+    // [99,100) 窄带,由窗口末端回填扩为 [88,100),选中行回入可视带。
+    // WHY 无修复前判别力:贴底窄带下修复前 ±5 缓冲窗口 [94,100) 仅 6 行,
+    // 选中行同样可见(R5 复核已注明,与滚动中部用例互为补充的回归锁定格)。
+    panel.scroll_to_bottom(&mut state);
+    let content = render_panel_to_string(&mut panel, &state, 80, 24);
+
+    assert!(
+        content.contains("> "),
+        "贴底选中行应带 > 前缀(回填窗口内可见), got: {content}"
+    );
+    assert!(
+        content.contains("显示"),
+        "贴底总数提示行应渲染在列表区内, got: {content}"
+    );
+    // 选中行可见(行级锚定,对齐 log_panel_test 范式):scroll_to_bottom 置
+    // selected=99,该行 index+1=100、event_rate=990,"ev/s: 990" 全帧唯一
+    let selected_line = content
+        .lines()
+        .find(|l| l.contains("ev/s: 990"))
+        .expect("选中快照行(ev/s:990)应渲染在视口内");
+    assert!(
+        selected_line.contains("> "),
+        "贴底选中行应带 > 前缀(回填窗口内可见), got: {selected_line}"
+    );
+    assert!(content.contains("ev/s:"), "快照行应渲染, got: {content}");
 }

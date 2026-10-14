@@ -1,4 +1,4 @@
-# 影子双跑长跑驱动包装（P4-T7）
+﻿# 影子双跑长跑驱动包装（P4-T7）
 # 用法: powershell -File scripts/run_shadow_sojourn.ps1 [-Days 7]
 # 语义: 运行 event-bus shadow_sojourn 驱动（注入时钟多天双跑记账）,
 #       校验快照 JSON 落盘且 go_ready_at_7 = true（RK-P20 时间加速等价）。

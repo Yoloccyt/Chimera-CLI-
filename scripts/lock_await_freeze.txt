@@ -39,17 +39,19 @@ crates/nexus-app-server/src/transport.rs:169  # DESIGN stdio reader: read_line m
 crates/nexus-app-server/src/transport.rs:186  # DESIGN stdio writer: NDJSON frame written as one atomic unit
 crates/nexus-app-server/src/transport.rs:206  # DESIGN stdio writer: NDJSON error frame written as one atomic unit (send_decode_error)
 crates/nexus-app-server/src/sse.rs:121        # DESIGN SSE writer: single-connection frame atomicity
-crates/mlc-engine/src/engine.rs:912           # DESIGN migration_locks: one MemoryId migration = atomic txn incl. its completion event
 
 # --- (B) SCANNER-DEBT: value extracted from the lock, not a guard ------------
 # If check_lock_await.sh ever learns to see through value extraction, delete
 # these lines and re-run the gate.
-# (pipeline re-keyed 2026-09-15 with the main merge, same .take() shape;
-#  re-keyed again 2026-09-20: acquisition line 891 -> 892, one line of
-#  unrelated code above shifted it. Semantics re-verified: `.take()` at
-#  pipeline.rs:897 moves the EventSubscriber VALUE out and the MutexGuard is a
-#  temporary dropped at that statement's end, so the await at :899 holds no lock.)
-crates/chimera-tui/src/data/pipeline.rs:892   # SCANNER-DEBT `.take()` moves the EventSubscriber out; guard drops at stmt end
+# (REPAID 2026-10-08 / v3.5 W6-1 gate-debt batch: the long-lived
+#  `crates/chimera-tui/src/data/pipeline.rs:892` entry - re-keyed twice before,
+#  891 -> 892, purely because unrelated code above shifted - is gone. The call
+#  site was refactored into `DataPipeline::take_locked()`, so the guard dies at
+#  that helper's return and no await statement contains a locking expression.
+#  Both this line and its await_guard_allowlist.txt twin were deleted in the
+#  same batch (G-27 machine-checks the two key sets 1:1). Tooth check: reverting
+#  shutdown() to the multi-line ".lock()...take()" chain must redden
+#  G-27/G-35.)
 crates/decb-governor/src/governor.rs:564      # SCANNER-DEBT `current_total` is `*total` copy; state guard already block-scoped
 crates/mcp-mesh/src/quantum/participant_client.rs:556 # SCANNER-DEBT `pooled` is a TcpStream removed from the pool; guard dies in and_then
 crates/pvl-layer/src/producer.rs:123          # SCANNER-DEBT `strategy` is `*read()` Copy value; read guard dies at stmt end

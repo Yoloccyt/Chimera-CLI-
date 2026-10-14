@@ -2,7 +2,7 @@
 # 语义：每行一个变体 + 实测证据。判据来自 scripts/check_event_ownership.py：
 #   prod_ctor=0 表示 crates/**/src 的生产作用域内没有 `NexusEvent::V { ... }` 构造点
 #   （`#[cfg(test)]` 与 tests/ 下的夹具不计入 —— event-bus 的 variant_count_test /
-#    shard.rs 测试工厂会构造全部 146 个变体，计入即等于永远全绿）。
+#    shard.rs 测试工厂会构造全部 152 个变体，计入即等于永远全绿）。
 # ⚠ 这不等于"该事件不可达"：NexusEvent 派生 Serialize/Deserialize(tag="type")，
 #   外部进程仍可经线帧反序列化物化任何变体。因此**不得**据本账本删事件契约，
 #   只能据它决定"要不要在本仓接一个 emit 点"。语义出处：ADR-188 决策 1 措辞边界。
@@ -22,4 +22,15 @@ RouterStatsReported  # prod_ctor=0 test_ctor=5 consumers=crates/chimera-tui/src/
 TuiActionProgressed  # prod_ctor=0 test_ctor=6 consumers=crates/chimera-cli/src/commands/chat.rs
 UserIntentEncoded  # prod_ctor=0 test_ctor=10 consumers=crates/chimera-tui/src/panels/event_stream.rs,crates/chimera-tui/src/panels/log.rs,crates/event-bus/src/membrane.rs
 VoteCastRequested  # HONEST-DEGRADE FC-A(CHANGELOG:61)：chimera-tui/app/event_loop.rs:1280 publish_vote 刻意不发(L8 消费通道未落地,注释在 :1274)；prod_ctor=0 test_ctor=5 consumers=-
-# total 146 variant(s): 133 owned / 13 without a production ctor
+BlackboardEntry  # v2.3 (b.2): 黑板条目契约已落 Wave 1;写入侧落 MLC 索引属 Wave 3 转正;当前无生产态构造,经 wire 帧可物化;prod_ctor=0 test_ctor=1 consumers=-
+# ---- 以下 4 行：2026-10-09 v3.5 修复本门判据缺陷后新暴露的既存债（非新增债）----
+# 旧 MOD_HEAD 只认 `pub mod`，而 event-bus/src/bus.rs:1934 是
+# `#[cfg(test)] #[allow(...)] pub(crate) mod tests_helpers`（一次性构造全部 16 个 mpsc
+# 旁路 Critical 变体）——整段测试夹具因此被划成**生产作用域**，这 4 个零生产 ctor 的
+# 治理事件长期被判 owned（假绿）。修复扫描器后它们如实入账；接生产者属行为变更，
+# 需按 N-6/N-8 走 ADR（R2/R1 面另需 ADR-053 rev4 批次判定），不得为让门绿而造无消费者构造点。
+R2FreezeViolation  # prod_ctor=0 test_ctor=13 consumers=crates/event-bus/src/bus.rs,crates/event-bus/src/membrane.rs；types.rs:1994 自述发布方应为 AsaAuditor 进化路径扫描，但全仓零生产构造点（2026-10-09 实测）
+R2FreezeRollbackFailed  # prod_ctor=0 test_ctor=11 consumers=crates/event-bus/src/bus.rs,crates/event-bus/src/membrane.rs；同 R2FreezeViolation（回滚失败告警无生产发出点）
+R1ShadowRollbackFailed  # prod_ctor=0 test_ctor=8 consumers=crates/event-bus/src/bus.rs,crates/event-bus/src/membrane.rs；影子回滚告警无生产发出点（ShadowModeOrchestrator 本身也零生产构造，见 N-6）
+FailureRegistered  # prod_ctor=0 test_ctor=3 consumers=crates/event-bus/src/bus.rs；mpsc 旁路清单在册但无生产者；TUI 侧已如实判 NotForTui（event_coverage_drift_test.rs:157）
+# total 152 variant(s): 134 owned / 18 without a production ctor

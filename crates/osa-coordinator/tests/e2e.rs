@@ -216,6 +216,37 @@ async fn test_e2e_full_flow_no_panic() {
 }
 
 // ============================================================
+// 性能测试的共享辅助：分位数与双阈值断言
+// ============================================================
+
+/// 排序后取 P50/P99（100 次样本的下标 50/99）。
+///
+/// WHY 抽成函数：五个点位都是「warmup → 100 次 → sort → `[50]`/`[99]`」同形代码；
+/// 分位下标与样本数集中在单一处，才不会“改了采样次数忘了改下标”。
+/// 注：CMT Ice 点位故意只取 10 次中位数（文件 I/O 耗时），**不**走本函数。
+fn p50_p99(latencies: &mut [f64]) -> (f64, f64) {
+    latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    (latencies[50], latencies[99])
+}
+
+/// 断言 P50 < 阈值且 P99 < 2× 阈值（五个点位同形判据）。
+///
+/// WHY 抽成函数：“P99 放宽到 2×”这个系数在每处逐字重复，一旦某处要调就是
+/// 隐性放宽（只有改到的那一处会报不同文案）；收进单点后，失败文案仍带
+/// 点位标签（与原逐处写法同形），可定位性不变。
+fn assert_p50_p99(label: &str, p50: f64, p99: f64, threshold_ns: f64) {
+    assert!(
+        p50 < threshold_ns,
+        "{label} P50 延迟 {p50}ns 超过 {threshold_ns}ns"
+    );
+    let p99_limit_ns = threshold_ns * 2.0;
+    assert!(
+        p99 < p99_limit_ns,
+        "{label} P99 延迟 {p99}ns 超过 {p99_limit_ns}ns"
+    );
+}
+
+// ============================================================
 // 测试 2:性能基准验证
 // ============================================================
 
@@ -261,22 +292,8 @@ async fn test_e2e_performance_benchmarks() {
             .expect("OSA 掩码计算");
         latencies.push(start.elapsed().as_nanos() as f64);
     }
-    latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let osa_p50 = latencies[50];
-    let osa_p99 = latencies[99];
-    let osa_threshold_ns = 10_000_000.0_f64; // 10ms
-    assert!(
-        osa_p50 < osa_threshold_ns,
-        "OSA P50 延迟 {}ns 超过 {}ns",
-        osa_p50,
-        osa_threshold_ns
-    );
-    assert!(
-        osa_p99 < osa_threshold_ns * 2.0,
-        "OSA P99 延迟 {}ns 超过 {}ns",
-        osa_p99,
-        osa_threshold_ns * 2.0
-    );
+    let (osa_p50, osa_p99) = p50_p99(&mut latencies);
+    assert_p50_p99("OSA", osa_p50, osa_p99, 10_000_000.0_f64); // 10ms / 20ms
 
     // === HCW 窗口选择 P50 < 1ms, P99 < 2ms ===
     let window = HcwWindow::with_default_config(bus.clone()).expect("HCW 创建");
@@ -291,22 +308,8 @@ async fn test_e2e_performance_benchmarks() {
         let _ = window.select_window(0.6).await.expect("HCW 窗口选择");
         latencies.push(start.elapsed().as_nanos() as f64);
     }
-    latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let hcw_p50 = latencies[50];
-    let hcw_p99 = latencies[99];
-    let hcw_threshold_ns = 1_000_000.0_f64; // 1ms
-    assert!(
-        hcw_p50 < hcw_threshold_ns,
-        "HCW P50 延迟 {}ns 超过 {}ns",
-        hcw_p50,
-        hcw_threshold_ns
-    );
-    assert!(
-        hcw_p99 < hcw_threshold_ns * 2.0,
-        "HCW P99 延迟 {}ns 超过 {}ns",
-        hcw_p99,
-        hcw_threshold_ns * 2.0
-    );
+    let (hcw_p50, hcw_p99) = p50_p99(&mut latencies);
+    assert_p50_p99("HCW", hcw_p50, hcw_p99, 1_000_000.0_f64); // 1ms / 2ms
 
     // === KVBSR 路由 P50 < 2ms, P99 < 4ms ===
     let router = KVBlockSemanticRouter::new(bus.clone());
@@ -324,22 +327,8 @@ async fn test_e2e_performance_benchmarks() {
         let _ = router.route(&clv).await.expect("KVBSR 路由");
         latencies.push(start.elapsed().as_nanos() as f64);
     }
-    latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let kvbsr_p50 = latencies[50];
-    let kvbsr_p99 = latencies[99];
-    let kvbsr_threshold_ns = 2_000_000.0_f64; // 2ms
-    assert!(
-        kvbsr_p50 < kvbsr_threshold_ns,
-        "KVBSR P50 延迟 {}ns 超过 {}ns",
-        kvbsr_p50,
-        kvbsr_threshold_ns
-    );
-    assert!(
-        kvbsr_p99 < kvbsr_threshold_ns * 2.0,
-        "KVBSR P99 延迟 {}ns 超过 {}ns",
-        kvbsr_p99,
-        kvbsr_threshold_ns * 2.0
-    );
+    let (kvbsr_p50, kvbsr_p99) = p50_p99(&mut latencies);
+    assert_p50_p99("KVBSR", kvbsr_p50, kvbsr_p99, 2_000_000.0_f64); // 2ms / 4ms
 
     // === MLC Top-10 召回 P50 < 5ms, P99 < 10ms ===
     let engine = MlcEngine::new_in_memory(bus.clone()).expect("MLC 创建");
@@ -356,31 +345,23 @@ async fn test_e2e_performance_benchmarks() {
     let query = make_clv();
     // Warmup(10 次)
     for _ in 0..10 {
-        let _ = engine.recall_by_clv(&query, 10).await.expect("MLC 召回");
+        let _ = engine
+            .recall_by_clv(&query, 10, None)
+            .await
+            .expect("MLC 召回");
     }
     // 正式测量(100 次)
     let mut latencies = Vec::with_capacity(100);
     for _ in 0..100 {
         let start = Instant::now();
-        let _ = engine.recall_by_clv(&query, 10).await.expect("MLC 召回");
+        let _ = engine
+            .recall_by_clv(&query, 10, None)
+            .await
+            .expect("MLC 召回");
         latencies.push(start.elapsed().as_nanos() as f64);
     }
-    latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let mlc_p50 = latencies[50];
-    let mlc_p99 = latencies[99];
-    let mlc_threshold_ns = 5_000_000.0_f64; // 5ms
-    assert!(
-        mlc_p50 < mlc_threshold_ns,
-        "MLC P50 延迟 {}ns 超过 {}ns",
-        mlc_p50,
-        mlc_threshold_ns
-    );
-    assert!(
-        mlc_p99 < mlc_threshold_ns * 2.0,
-        "MLC P99 延迟 {}ns 超过 {}ns",
-        mlc_p99,
-        mlc_threshold_ns * 2.0
-    );
+    let (mlc_p50, mlc_p99) = p50_p99(&mut latencies);
+    assert_p50_p99("MLC", mlc_p50, mlc_p99, 5_000_000.0_f64); // 5ms / 10ms
 
     // === CMT Hot 层查询 P50 < 50ms, P99 < 100ms ===
     let cmt = CmtCoordinator::new_in_memory(CmtConfig::default(), bus.clone()).expect("CMT 创建");
@@ -402,22 +383,8 @@ async fn test_e2e_performance_benchmarks() {
         let _ = cmt.get("perf-cap-hot").await.expect("CMT Hot 查询");
         latencies.push(start.elapsed().as_nanos() as f64);
     }
-    latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let cmt_hot_p50 = latencies[50];
-    let cmt_hot_p99 = latencies[99];
-    let cmt_hot_threshold_ns = 50_000_000.0_f64; // 50ms
-    assert!(
-        cmt_hot_p50 < cmt_hot_threshold_ns,
-        "CMT Hot P50 延迟 {}ns 超过 {}ns",
-        cmt_hot_p50,
-        cmt_hot_threshold_ns
-    );
-    assert!(
-        cmt_hot_p99 < cmt_hot_threshold_ns * 2.0,
-        "CMT Hot P99 延迟 {}ns 超过 {}ns",
-        cmt_hot_p99,
-        cmt_hot_threshold_ns * 2.0
-    );
+    let (cmt_hot_p50, cmt_hot_p99) = p50_p99(&mut latencies);
+    assert_p50_p99("CMT Hot", cmt_hot_p50, cmt_hot_p99, 50_000_000.0_f64); // 50ms / 100ms
 
     // === CMT Ice 层查询 P50 < 500ms, P99 < 1000ms ===
     // 直接归档到 Ice 层,绕过 Hot(模拟冷数据查询)

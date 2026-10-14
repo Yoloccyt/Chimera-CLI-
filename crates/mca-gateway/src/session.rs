@@ -161,9 +161,25 @@ impl SessionStore {
         turn_index: u64,
         msg: &AffinityMessage,
     ) -> Result<(), AffinityError> {
+        // v2.3 §(b.5) tier-2 写入敏感扫描门:会话轮次落库前拦截用户可能粘贴的
+        // 私钥/云凭证/服务令牌类硬载荷(Block)。高熵/键名启发式设 Pass 以降误报
+        // (会话正文常含 base64 片段与键名字符串);命中即拒绝入库(不阻断正常会话)。
+        let scan_view = serde_json::to_string(&msg.blocks).unwrap_or_default();
+        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            ..Default::default()
+        };
+        if nexus_contracts::sensitive::scan(&scan_view, &scan_policy).is_blocked() {
+            return Err(AffinityError::Unknown {
+                raw: "session turn blocked: sensitive credential detected".into(),
+            });
+        }
         let session_id = session_id.to_string();
         let role = role_str(msg.role).to_string();
-        let blocks = rmp_serde::to_vec(&msg.blocks).map_err(|e| AffinityError::Unknown {
+        // Class A 持久化面:blocks 落 SQLite 会话库并在下方 from_slice 回读(ADR-213 R8.1)
+        // ⇒ 具名 map,避免位置式在同类字段换序时静默改值。
+        let blocks = rmp_serde::to_vec_named(&msg.blocks).map_err(|e| AffinityError::Unknown {
             raw: format!("serialize blocks: {e}"),
         })?;
         let conn = Arc::clone(&self.conn);
@@ -363,6 +379,28 @@ mod tests {
         }
         let history = store.history(sid).await.unwrap();
         assert_eq!(history, turns, "会话往返必须逐字保真且保序");
+    }
+
+    #[tokio::test]
+    async fn record_turn_blocks_private_key() {
+        // v2.3 §(b.5) tier-2:含私钥 PEM 的会话轮次必须拒绝落库(Block)
+        let store = SessionStore::open(":memory:").await.unwrap();
+        let leaky = AffinityMessage {
+            role: MessageRole::User,
+            blocks: vec![text(
+                "-----BEGIN RSA PRIVATE KEY-----\nMIIEvQ…\n-----END PRIVATE KEY-----",
+            )],
+        };
+        let err = store
+            .record_turn("sess-x", 0, &leaky)
+            .await
+            .expect_err("私钥会话应被拦截");
+        assert!(
+            matches!(err, AffinityError::Unknown { .. }),
+            "应返回拦截错误, got: {err:?}"
+        );
+        // 拦截后不得落库
+        assert!(store.history("sess-x").await.unwrap().is_empty());
     }
 
     #[tokio::test]

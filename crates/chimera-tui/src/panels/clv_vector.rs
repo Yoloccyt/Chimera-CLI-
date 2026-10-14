@@ -226,9 +226,9 @@ impl Panel for ClvVectorPanel {
             None => (0.0, Color::DarkGray),
         };
         let l2_label = if summary.is_some() {
-            format!(" L2 Norm: {:.4} ", l2_norm)
+            crate::t!("panel.clv.l2_norm_label").replacen("{}", &format!("{:.4}", l2_norm), 1)
         } else {
-            " L2 Norm: -- ".to_string()
+            crate::t!("panel.clv.l2_norm_label").replacen("{}", "--", 1)
         };
         let l2_gauge = render::gauge(l2_norm as f64, 10.0, &l2_label, l2_color);
         l2_gauge.render(chunks[0], buf);
@@ -236,7 +236,7 @@ impl Panel for ClvVectorPanel {
         // === 中部:8 分块 heat_bar 热图 ===
         let mut heatmap_lines: Vec<Line<'static>> = Vec::with_capacity(9);
         heatmap_lines.push(Line::from(Span::styled(
-            "Block Means (8 x 64-dim blocks):",
+            crate::t!("panel.clv.block_means_title"),
             Style::default().add_modifier(Modifier::BOLD),
         )));
 
@@ -274,7 +274,10 @@ impl Panel for ClvVectorPanel {
                         Span::styled(format!("B{} ", i), Style::default().fg(Color::DarkGray)),
                         Span::styled("·".repeat(20), Style::default().fg(Color::DarkGray)),
                         Span::raw("  "),
-                        Span::styled("waiting...", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            crate::t!("panel.clv.block_waiting"),
+                            Style::default().fg(Color::DarkGray),
+                        ),
                     ]);
                     heatmap_lines.push(row);
                 }
@@ -300,7 +303,7 @@ impl Panel for ClvVectorPanel {
 
         let mut dim_lines: Vec<Line<'static>> = Vec::new();
         dim_lines.push(Line::from(Span::styled(
-            "Top Dimensions (by |value|):",
+            crate::t!("panel.clv.top_dims_title"),
             Style::default().add_modifier(Modifier::BOLD),
         )));
 
@@ -308,17 +311,15 @@ impl Panel for ClvVectorPanel {
             // 空状态:无 Top 维度数据
             dim_lines.push(Line::from(Span::styled(
                 if summary.is_some() {
-                    "No top dimensions available."
+                    crate::t!("panel.clv.no_top_dims")
                 } else {
-                    "Waiting for NMC encoder..."
+                    crate::t!("panel.clv.awaiting_encoder")
                 },
                 Style::default().fg(Color::DarkGray),
             )));
         } else {
-            // WHY 复用 virtual_scroll_window:Top-8 最多 8 项,虽不需要虚拟滚动性能优化,
-            // 但沿用 Timeline/EventStream 模式保持一致性,且为未来扩展更多维度预留
             let (start, end) =
-                render::virtual_scroll_window(count, self.scroll_offset, visible_rows);
+                render::scroll_offset_window(count, self.scroll_offset, visible_rows);
             for idx in start..end {
                 if let Some((dim, value)) = top_dims.get(idx) {
                     dim_lines.push(Self::format_top_dim_line(
@@ -332,11 +333,9 @@ impl Panel for ClvVectorPanel {
             // 虚拟滚动提示:总维度数 > 可见窗口时显示总数
             if count > visible_rows {
                 dim_lines.push(Line::from(Span::styled(
-                    format!(
-                        "... showing {} of {} dimensions",
-                        end.saturating_sub(start),
-                        count
-                    ),
+                    crate::t!("panel.clv.showing_dims")
+                        .replacen("{}", &(end.saturating_sub(start)).to_string(), 1)
+                        .replacen("{}", &count.to_string(), 1),
                     Style::default().fg(Color::DarkGray),
                 )));
             }
@@ -408,10 +407,6 @@ impl Panel for ClvVectorPanel {
             self.selected = new_selected;
         }
         None
-    }
-
-    fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![("R", crate::t!("shortcut.refresh"))]
     }
 }
 

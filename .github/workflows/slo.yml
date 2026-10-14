@@ -76,6 +76,11 @@ jobs:
         with:
           persist-credentials: false
 
+      # WHY 钉定工具链:本 workflow 是 p95 延迟红线门,阈值是绝对毫秒数——
+      # 编译器版本直接改变内联/向量化决策,浮动 stable 会让"红线"随 runner 镜像漂移。
+      # 与 ci.yml 同口径钉 1.97.1,使 A1 红线的红/绿可归因到代码而非工具链。
+      - uses: dtolnay/rust-toolchain@1.97.1
+
       - uses: Swatinem/rust-cache@v2 # zizmor: ignore[cache-poisoning]
         with:
           workspaces: '.'
@@ -166,6 +171,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      # WHY 钉定工具链:本 workflow 是 p95 延迟红线门,阈值是绝对毫秒数——
+      # 编译器版本直接改变内联/向量化决策,浮动 stable 会让"红线"随 runner 镜像漂移。
+      # 与 ci.yml 同口径钉 1.97.1,使 A1 红线的红/绿可归因到代码而非工具链。
+      - uses: dtolnay/rust-toolchain@1.97.1
 
       - uses: Swatinem/rust-cache@v2 # zizmor: ignore[cache-poisoning]
         with:

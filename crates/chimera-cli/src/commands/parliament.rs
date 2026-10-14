@@ -23,7 +23,9 @@
 
 use anyhow::Result;
 use nexus_core::{MultimodalInput, UserIntent};
-use parliament::{Consensus, Parliament, ParliamentConfig, Proposal};
+use parliament::{
+    Consensus, CrossVendorDebate, CrossVendorFallback, Parliament, ParliamentConfig, Proposal,
+};
 use uuid::Uuid;
 
 use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET};
@@ -75,7 +77,22 @@ pub async fn execute_with_ctx(
     //    OperationTimedOut 事件(本层超时兜底)。
     let bus = &ctx.bus;
     let engine = &ctx.engine;
-    let parliament = Parliament::new(ParliamentConfig::default(), bus.clone());
+    // WI-D1：默认主干恒绿（cross_vendor_debate: None）；仅当组合根给出激活输入
+    // (config.model_router.cross_vendor_debate=true 且去重 provider>=2) 时才注入
+    // 跨厂商辩论。from_provider_names 内部 fail-safe（不足/去相关失败→None）。
+    let base_parliament = Parliament::new(ParliamentConfig::default(), bus.clone());
+    let parliament = match &ctx.cross_vendor_providers {
+        Some(names) => match CrossVendorDebate::from_provider_names(
+            names,
+            CrossVendorFallback::FallbackToSame,
+            bus.clone(),
+        ) {
+            Some(cvd) => base_parliament.with_cross_vendor(cvd),
+            // fail-safe：无法构建则退回未启用（与 None 同义）。
+            None => base_parliament,
+        },
+        None => base_parliament,
+    };
 
     // 2. 将 proposal 封装为 UserIntent,经 QuestEngine 分解为 Quest
     //    WHY 先分解:Parliament::deliberate 需要 &Quest 上下文(任务数、思考模式)

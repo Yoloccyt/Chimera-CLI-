@@ -332,7 +332,12 @@ impl TuiApp {
             ),
             (
                 crate::t!("status.tick").to_string(),
-                format!("{}ms (重启生效)", self.config.tick_interval_ms),
+                // B4-I(F-04):值文案与同函数 :325/:329 的 t!() 标签统一走键表
+                crate::t!("status.tick_restart_hint").replacen(
+                    "{}",
+                    &self.config.tick_interval_ms.to_string(),
+                    1,
+                ),
             ),
         ]
     }
@@ -418,8 +423,8 @@ impl TuiApp {
                 self.state.slash_selected = 0;
             }
             RouteTarget::PaletteMove { down } => {
-                let reg = crate::actions::SlashCommandRegistry::with_builtin_commands();
-                let count = crate::slash_surface::candidates(&reg, &self.state.input_buffer).len();
+                let reg = &self.slash_registry;
+                let count = crate::slash_surface::candidates(reg, &self.state.input_buffer).len();
                 if count > 0 {
                     let sel = self.state.slash_selected;
                     self.state.slash_selected = if down {
@@ -532,10 +537,12 @@ impl TuiApp {
                 if !text.is_empty() {
                     // Concord W6 T6.2:提交入史(去重/容量语义在导航器内)
                     self.commit_input_history(&text);
-                    // 以 `/` 开头视为斜杠命令,提取命令名(首个空白前的词)
-                    let slash_command = text
-                        .strip_prefix('/')
-                        .map(|rest| rest.split_whitespace().next().unwrap_or("").to_string());
+                    // B4-S(F-57)契约收窄:不再提取/填充 slash_command。下游
+                    // 编排器(chimera-cli action_orchestrator)从未消费该字段
+                    // (解构 `..` 忽略,只写不读),chat 内以 `/` 开头的输入按
+                    // 普通对话交 QuestEngine 分解;字段文档已同步收窄(event-bus
+                    // types.rs TuiChatSubmitted)。若未来启用 chat 内斜杠分流,
+                    // 需同时恢复填充、编排器消费与两端测试,消除半途契约。
                     // O-4: 交互请求起源种 trace_id（ensure_trace_id），下游 child_of 继承→整链可关联
                     let mut chat_meta = EventMetadata::new("chimera-tui");
                     chat_meta.ensure_trace_id();
@@ -544,7 +551,7 @@ impl TuiApp {
                         // Task 1.15.4:chat_session_id 移至 chat_session
                         session_id: self.chat_session.chat_session_id.clone(),
                         query: text,
-                        slash_command,
+                        slash_command: None,
                     });
                     // Concord W3 T3.2:Chat 模式下会话流已全屏,不再切面板;
                     // Dashboard 模式保持原行为(提交后自动切到 Chat 面板)
@@ -822,8 +829,10 @@ impl TuiApp {
         } else if self.panel_index(id).is_none() {
             // 未注册面板的跳转不再静默失败:状态栏提示,避免死键无感知
             // (如 g5 → Timeline,TimelinePanel 有实现但未进入面板循环)。
-            self.state
-                .set_status(format!("Panel {id:?} is not registered"), Severity::Warning);
+            self.state.set_status(
+                crate::t!("status.panel_not_registered").replacen("{}", &format!("{id:?}"), 1),
+                Severity::Warning,
+            );
         } else {
             self.switch_panel_to(id);
         }
@@ -853,8 +862,16 @@ impl TuiApp {
 
     /// 执行 ScrollTop/ScrollBottom 目标(滚动当前焦点面板)
     fn route_execute_scroll(&mut self, target: RouteTarget, _key: KeyEvent) {
-        let focused = self.focus_manager.focused();
-        if let Some(idx) = self.panel_index(focused) {
+        // F-03:Chat 视图全屏渲染会话流(render_chat_mode 直取 Chat 实例),与焦点
+        // 面板脱钩;委托焦点面板会把 gg/G 落在被会话流遮挡的不可见面板(静默无反馈)。
+        // 与鼠标滚轮(mouse.rs)同口径直取 Chat 面板;j/k 的同款修复在
+        // delegate_key_to_active_panel(FocusPanel 委托链)。
+        let panel = if self.state.view_mode == crate::types::ViewMode::Chat {
+            PanelId::Chat
+        } else {
+            self.focus_manager.focused()
+        };
+        if let Some(idx) = self.panel_index(panel) {
             match target {
                 RouteTarget::ScrollTop => self.panels[idx].scroll_to_top(&mut self.state),
                 RouteTarget::ScrollBottom => self.panels[idx].scroll_to_bottom(&mut self.state),
@@ -1276,19 +1293,19 @@ mod tests {
         );
     }
 
-    /// 27 面板 × 常用键:每面板实例对每个常用键都给出确定性响应
+    /// 30 面板 × 常用键:每面板实例对每个常用键都给出确定性响应
     /// (Option<TuiCommand> —— 展示型面板返回 None 亦是合法路由,即"已路由到
     /// 面板且面板决定无操作",与"空路由/静默丢弃"不同);同时逐键断言应用层
     /// Normal 路由不产生 Ignored —— 所有面板经 FocusPanel 委托获得按键。
     ///
-    /// PanelId::ALL 为 27 变体穷举清单(新增变体时 types.rs 穷举 match 编译失败);
+    /// PanelId::ALL 为 30 变体穷举清单(新增变体时 types.rs 穷举 match 编译失败);
     /// Esc/q 不在常用键集合内 —— Normal 全局表将它们路由为 Quit(既有语义),
     /// 面板委托权被全局键截获。
     #[test]
     fn all_27_panels_common_keys_deterministic_route() {
         assert_eq!(
             PanelId::ALL.len(),
-            27,
+            30,
             "PanelId 变体数锚定(ALL 清单与 enum 的同步由 types.rs 穷举测试守护)"
         );
         // 跨面板通用交互键:导航/选中/翻页/触发(与 InputRouter Normal 表正交,
@@ -1323,8 +1340,8 @@ mod tests {
             );
         }
 
-        // 面板层:27 面板 × 常用键全量过键(不 panic/不挂起 = 确定性响应;
-        // make_panel 穷举 27 变体,未注册面板(InjectionStrategy)亦有实现可构造)
+        // 面板层:30 面板 × 常用键全量过键(不 panic/不挂起 = 确定性响应;
+        // make_panel 穷举 30 变体,未注册面板(InjectionStrategy)亦有实现可构造)
         for pid in PanelId::ALL {
             let mut panel = super::super::make_panel(*pid);
             let mut state = TuiState::new();

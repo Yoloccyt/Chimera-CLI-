@@ -22,11 +22,12 @@ use crate::data::{StubDataSource, TuiDataSource};
 use crate::error::TuiError;
 use crate::focus::FocusManager;
 use crate::panels::{
-    BudgetPanel, ChatPanel, ChtcPanel, ClvVectorPanel, DagVizPanel, DecayPanel, EventStreamPanel,
-    ExperienceCardVizPanel, HealthPanel, HelpPanel, InjectionStrategyPanel, LogPanel,
-    McpNodesPanel, MemoryPanel, MetricsDashboardPanel, OsaSparsePanel, OverWindowPanel, Panel,
-    ParliamentPanel, PvlScorePanel, QuestPanel, ResourceMonitorPanel, RouterPanel, SecurityPanel,
-    SelfAssessmentPanel, SysinfoPanel, TaskManagerPanel, TimelinePanel,
+    BenchPanel, BlackboardPanel, BudgetPanel, ChatPanel, ChtcPanel, ClvVectorPanel, DagVizPanel,
+    DecayPanel, EventStreamPanel, ExperienceCardVizPanel, HealthPanel, HelpPanel,
+    InjectionStrategyPanel, LogPanel, McpNodesPanel, MemoryPanel, MetricsDashboardPanel,
+    OsaSparsePanel, OverWindowPanel, Panel, ParliamentPanel, PvlScorePanel, QuestPanel,
+    ResourceMonitorPanel, ReviewQueuePanel, RouterPanel, SecurityPanel, SelfAssessmentPanel,
+    SysinfoPanel, TaskManagerPanel, TimelinePanel,
 };
 use crate::types::{PanelId, TuiState};
 use event_bus::EventBus;
@@ -170,11 +171,38 @@ pub struct TuiApp {
     /// WHY 可观测:每进入 `render_frame_v3` 计 1;测试据此断言渲染次数不超过
     /// 事件轮询次数(帧预算节流时会小于事件数)。无 cfg:统计字段恒 0 安全。
     v3_render_count: u64,
+    /// 最近一帧实际参与 diff 比较的行数(F-49 seam:可测性指标)
+    ///
+    /// WHY 可观测:P-2 行级跳过依赖静默帧 dirty 构造为"clear 后仅 mark 状态行";
+    /// 若构造回归为全脏(R5 F-49:DirtyTracker::new 初始全脏而未 clear),
+    /// diff 的 Change 集合与输出字节完全不变(内容本就相同),唯一可观测差异
+    /// 就是参与比较的行数 —— 测试据此断言该值等于状态行数而非整帧高度。
+    /// 无 cfg:统计字段恒 0 安全,赋值 O(h) 开销可忽略。
+    v3_quiescent_dirty_rows: u16,
     /// 上一次真实渲染的时刻(PS-1 帧预算节流用)
     ///
     /// WHY `Option`:首帧必须立即渲染(`None` 视为"到期"),避免启动后黑屏到
     /// 第一个帧预算到期。节流语义见 `event_loop.rs` 的 `MIN_FRAME_MS`。
     last_render_at: Option<std::time::Instant>,
+    /// ActionRegistry 缓存(B4-S F-13)— 供帮助路径快捷键自动派生共享
+    ///
+    /// WHY 构造期缓存:render.rs 的 help_context 注入(焦点变化时)与
+    /// open_help_action(`?` 键)两条帮助路径此前各自 `ActionRegistry::
+    /// with_builtin_domains()` 现场构造;渲染路径虽只在焦点变化时重建快照,
+    /// 但 registry 构造含全 domain 扫描,放渲染调用链内与 F-08 反模式同源。
+    /// 缓存后两条路径经同一实例调用 `shortcuts_with_registry`,与
+    /// panels/mod.rs `shortcuts_with_registry` 契约文档(调用方应优先使用
+    /// 本方法)同源成立。
+    action_registry: crate::actions::ActionRegistry,
+    /// SlashCommandRegistry 缓存(F-08)— 斜杠补全/解析/导航共享
+    ///
+    /// WHY 构造期缓存:render_slash_overlay 每渲染帧、slash_tab_complete /
+    /// submit_slash / handle_slash_key 每次调用此前各自
+    /// `with_builtin_commands()` 现场重建(内建命令逐条 register,含
+    /// name/别名 HashMap 双键插入)。注册表为编译期静态表
+    /// (`BUILTIN_COMMANDS`)派生的纯数据,无内部可变性,四处消费点全部
+    /// 只读——构造期建一次存字段,消费点经 `&self.slash_registry` 共享。
+    slash_registry: crate::actions::SlashCommandRegistry,
 }
 
 /// 按 PanelId 构造面板实例 — 注册序驱动的面板工厂(Concord T1.4)
@@ -215,6 +243,12 @@ fn make_panel(id: PanelId) -> Box<dyn Panel> {
         // Phase 10 §15.2b/§15.3:经验卡片可视化 + 注入策略面板接线(trait 注入,默认未接线诚实展示)
         PanelId::ExperienceCardViz => Box::new(ExperienceCardVizPanel::new()),
         PanelId::InjectionStrategy => Box::new(InjectionStrategyPanel::new()),
+        // v2.3 §(b.6):/bench 基准面板接线(未接线时诚实展示,数据经 provider 注入)
+        PanelId::Bench => Box::new(BenchPanel::new()),
+        // v2.3 §(b.6)/§(b.4):审查队列面板接线(仅 Certify 渲染为已认证;数据经 provider 注入)
+        PanelId::ReviewQueue => Box::new(ReviewQueuePanel::new()),
+        // v2.3 §(b.6)/§(b.2):黑板浏览面板接线(按 epistemic 过滤;数据经 provider 注入)
+        PanelId::Blackboard => Box::new(BlackboardPanel::new()),
     }
 }
 
@@ -236,7 +270,7 @@ impl TuiApp {
     ) -> Result<Self, TuiError> {
         config.validate()?;
         // Concord T1.4(P5① 收口):面板注册序派生自 PanelId::REGISTERED_FOCUS_ORDER
-        // 单一事实源;26 面板全部注册(FC-05 下线 InjectionStrategy)。
+        // 单一事实源;29 面板全部注册(FC-05 下线 InjectionStrategy;v2.3 §(b.6) 新增 Bench/ReviewQueue/Blackboard)。
         // FocusManager 遍历序 == PanelId::next/prev 静态环,由 INV-F 不变量测试守护。
         let panels: Vec<Box<dyn Panel>> = PanelId::REGISTERED_FOCUS_ORDER
             .iter()
@@ -258,7 +292,7 @@ impl TuiApp {
 
         // Task 1.15.4:先取出 main_panel_ratio,避免 config 在结构体字面量中被 move 后再使用
         let main_panel_ratio = config.main_panel_ratio;
-        Ok(Self {
+        let mut app = Self {
             config,
             state,
             data_source,
@@ -284,8 +318,30 @@ impl TuiApp {
             v3_frame_writer: None,
             v3_silent_hits: 0,
             v3_render_count: 0,
+            v3_quiescent_dirty_rows: 0,
             last_render_at: None,
-        })
+            // B4-S(F-13):帮助路径共享的 registry(构造期一次,渲染路径零重建)
+            action_registry: crate::actions::ActionRegistry::with_builtin_domains(),
+            // F-08:斜杠注册表构造期一次,四处消费点(补全/提交/导航/渲染)零重建
+            slash_registry: crate::actions::SlashCommandRegistry::with_builtin_commands(),
+        };
+        // F-37:主题强调色装配期注入 —— 面板层仅持 &TuiState 不可达 TuiApp 主题
+        // (见 Panel::set_accent),切主题时亦经此广播(cycle_theme_action)。
+        app.broadcast_accent();
+        Ok(app)
+    }
+
+    /// 将主题强调色广播到全部面板(F-37)
+    ///
+    /// WHY 广播:主题色归 `TuiApp`(config.colors.resolve),面板层仅持
+    /// `&TuiState`;`Panel::set_accent` 默认 no-op,仅消费 accent 的面板
+    /// (现 MetricsDashboard 选中格)覆盖生效,其余面板零改动。
+    /// 调用点:装配期(`with_data_source`)与 `cycle_theme_action` 切主题后。
+    fn broadcast_accent(&mut self) {
+        let accent = self.theme_accent();
+        for panel in &mut self.panels {
+            panel.set_accent(accent);
+        }
     }
 
     /// 将 EventBus 绑定到已有 TUI 应用
@@ -314,6 +370,19 @@ impl TuiApp {
             self.panels[idx] = Box::new(crate::panels::ExperienceCardVizPanel::with_provider(
                 provider,
             ));
+        }
+    }
+
+    /// WI(/bench 一期)：安装基准统计提供者（chimera-cli build.rs 静态计数 provider）。
+    ///
+    /// 与 `install_experience_card_provider` 同构（运行期按面板索引替换为带提供者实例）；
+    /// 未安装时 `BenchPanel` 维持 awaiting 诚实态。`PanelId::Bench` 已在面板集内，不新增面板。
+    pub fn install_bench_provider(
+        &mut self,
+        provider: std::sync::Arc<dyn crate::panels::BenchStatsProvider>,
+    ) {
+        if let Some(idx) = self.panel_index(crate::types::PanelId::Bench) {
+            self.panels[idx] = Box::new(crate::panels::BenchPanel::with_provider(provider));
         }
     }
 
@@ -381,6 +450,16 @@ impl TuiApp {
     #[cfg(all(test, feature = "v3-engine"))]
     pub(crate) fn render_count(&self) -> u64 {
         self.v3_render_count
+    }
+
+    /// 返回最近一帧实际参与 diff 比较的行数(F-49 测试 seam:可测性指标)
+    ///
+    /// WHY 可观测:验证 P-2 行级跳过真生效(静默帧该值 = 状态行数);
+    /// 全脏回归时 = 整帧高度,输出与 Change 均无差异,唯有此值可检。
+    /// WHY `test` 门控:同 `silent_hit_count`,仅测试消费。
+    #[cfg(all(test, feature = "v3-engine"))]
+    pub(crate) fn quiescent_dirty_rows(&self) -> u16 {
+        self.v3_quiescent_dirty_rows
     }
 
     /// 返回当前缓存帧引用(PS-1 测试 seam:静默帧字节等价性测试用)

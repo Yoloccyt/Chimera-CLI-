@@ -2,7 +2,7 @@
 //! LAYER:    L2
 //! ROLE:     四级潜在记忆引擎  L0-L3 神经形态记忆分级存储与检索
 //! BACKEND:  sqlite
-//! PRODUCERS: 4 GhostMemoryDetected,MemConStrategyAdjusted,MemoryMetricsReported,MemoryTiered
+//! PRODUCERS: 6 BlackboardEntry,GhostMemoryDetected,MemConStrategyAdjusted,MemoryMetricsReported,MemoryTiered…
 //! CONSUMERS: 1 chimera-cli
 //! MATURITY: PLACEHOLDER-CN
 //! CRATE-CONTRACT END
@@ -47,6 +47,8 @@
 #![warn(missing_docs, clippy::all)]
 
 // === 模块声明 ===
+/// v2.3 §(b.2)：黑板→MLC 协作态投影器 — BlackboardEntry 写入落 L1 情节索引（TTL+认识标签）
+pub mod blackboard_projector;
 pub mod config;
 /// Phase 2 §7.2: 双层经验库（MemoHarness 案例级→全局蒸馏，ADR-049 内嵌）
 pub mod dual_experience_bank;
@@ -54,6 +56,8 @@ pub mod engine;
 pub mod error;
 /// Phase 2 §7.1: 经验卡片系统（OpenMLE 案例级 + 全局板 + 三因子父本选择，ADR-049 内嵌）
 pub mod experience_card_system;
+/// v2.3 §(b.3):可移植记忆导出/导入 — Markdown+索引约定格式无损 round-trip
+pub mod export;
 pub mod l0_working;
 pub mod l1_episodic;
 pub mod l2_semantic;
@@ -64,10 +68,16 @@ pub mod mem_con;
 pub mod memory_graph;
 /// 记忆策略学习器持有器 — S2 接缝策略异步下发 + 本地 fallback（P4-W14.1）
 pub mod memory_strategy_learner;
+/// v2.3 §(b.3):MindModel 心智模型缓存 — 固定问题预计算答案 O(1) 读取 + 失效重写
+pub mod mind_model;
+/// v2.3 §(b.3):Observation 归纳结论分库 — 派生与原始事实分离 + 来源标注/反查
+pub mod observation;
 /// Phase 2 §7.1: 按需记忆合成（OpenMLE 懒加载祖先/兄弟 + 算子差异化上下文）
 pub mod on_demand_synthesizer;
 /// Phase 2 §7.3: 记忆金字塔（MSCE + TencentDB 四层 + 检索三方式 + 注入策略 + 降级链）
 pub mod pyramid;
+/// v2.3 §(d)⑨/§(b.3):四路召回 RRF 融合入口(二期启动;算法原语在 L0 recall_fusion)
+pub mod recall_fusion;
 /// P2-T6: RSB 跨轮事件残留系统（手册 T-09 + v4.0 WI-20,三层缓冲 + 相位门控）
 ///
 /// 50+ 轮后早期决策召回保持（与深层 Transformer 梯度消失同构的残差解法）;
@@ -96,7 +106,7 @@ pub use mem_con::{MemConConfig, MemConController};
 pub use storage_impl::PragmaConn;
 pub use types::{
     assert_archive_monotonicity, ExecutionStats, MemoryEntry, MemoryId, MemoryTier,
-    PatternSignature, ProceduralEntry, QuestId, SharedCLV,
+    PatternSignature, ProceduralEntry, QuestId, SharedCLV, TokenBudget,
 };
 
 // L2-P1-1 事件驱动化: 原 Task 3.2 的进程级全局快照(GLOBAL_MEMORY_STAGE /
@@ -132,7 +142,7 @@ pub mod prelude {
     pub use crate::mem_con::{MemConConfig, MemConController};
     pub use crate::types::{
         assert_archive_monotonicity, ExecutionStats, MemoryEntry, MemoryId, MemoryTier,
-        PatternSignature, ProceduralEntry, QuestId,
+        PatternSignature, ProceduralEntry, QuestId, TokenBudget,
     };
     // Phase 2 L2 记忆层五大组件（§7.1-7.5，与顶层导出同集）
     pub use crate::dual_experience_bank::{

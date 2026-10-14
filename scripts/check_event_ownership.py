@@ -76,7 +76,12 @@ VAR_LINE = re.compile(r"^    ([A-Z][A-Za-z0-9]*)\s*[,{]\s*$")
 REG_LINE = re.compile(r"^\s+([A-Z][A-Za-z0-9]*)\s*=>")
 TEST_ATTR = re.compile(r"^#!?\[\s*(tokio::|test_log::)?test(_log)?\s*\]\s*$")
 CFG_TEST = re.compile(r"^\s*#\[cfg\(test\)\]\s*$")
-MOD_HEAD = re.compile(r"^\s*(?:pub\s+)?mod\s+\w+\s*\{")
+# `pub(crate) mod` / `pub(super) mod` 同样常见，必须与 FN_HEAD 同形支持可见性前缀。
+# 真树实测（2026-10-09 v3.5）：`event-bus/src/bus.rs:1934` 是
+# `#[cfg(test)] #[allow(...)] pub(crate) mod tests_helpers`，它一次性构造**全部 16 个
+# mpsc 旁路 Critical 变体**。旧版只认 `pub mod`，于是整段测试夹具被划进生产作用域——
+# 零生产 ctor 的变体（如 StopRulingIssued）因此被判 owned，门在最容易藏红的形状上假绿。
+MOD_HEAD = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{")
 FN_HEAD = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+\w+")
 USE_LINE = re.compile(r"^\s*(?:pub\s+)?use\b")
 # `=>` 只有在变体名**之后**才是匹配臂；在之前它是 match 分支的**返回构造**
@@ -318,6 +323,62 @@ def decide(tally, variants, baseline):
     return unowned, dead, stale
 
 
+# --- 分层可观测性断言（v3.5 W6-3「L2 可观测性」的机器面）-------------------------
+# Spec 要求“L2/L3/L6 各至少 1 个生产事件，作为 Check E 扩展项”。它的前提（“三层事件几乎
+# 缺席”）已被量体否证（L2 有 NmcEncoded/HcwRecall*/Memory*；L3 有 Cache*/Capability*；L6 有
+# RouterStats/ToolsRouted/Expert*/Sesa*），但前提不成立不等于断言可以不当门：这里把它
+# 固定成机器检查，防止日后某个层的发布面被清空而无人报警。
+# 层表不在本文件重写：crate→层唯一权威源是 check_dependency_rules.sh::layer_of()，
+# 这里“派生”而非“抄进”（终局原则 1：层图表必须派生生成，禁手抄）。
+LAYER_EVENT_MIN = (2, 3, 6)
+
+
+def layer_event_presence(layer_of, crates_with_ctor, layers=LAYER_EVENT_MIN):
+    """纯函数：返回“该层没有任何生产态事件构造点”的失败说明列表。
+
+    WHY 纯函数：与 `pressure_latch_next` 同构先例——把判定从文件扫描里抽出来，
+    selftest 就能双向驱动它（含/不含均验），不需要为验证而构造一个假仓库。
+    空层（layer_of 里根本没这层）也算失败：那意味着层表解析错了或被改空，
+    不能让“查不到”变成“通过”。
+    """
+    per_layer = {}
+    for crate, layer in layer_of.items():
+        per_layer.setdefault(layer, set()).add(crate)
+    fails = []
+    for layer in layers:
+        members = per_layer.get(layer) or set()
+        live = sorted(members & set(crates_with_ctor))
+        if not live:
+            fails.append("L%d 无任何带生产态事件构造点的 crate（本层成员：%s）"
+                         % (layer, ",".join(sorted(members)) or "层表缺失"))
+    return fails
+
+
+def crate_layer_map():
+    """从唯一权威源派生 crate→层字典；解析不出来时报错（调用方转为不可判定）。"""
+    if SCRIPTS not in sys.path:
+        sys.path.insert(0, SCRIPTS)
+    import check_layer_map_parity as _par
+    sh = os.path.join(SCRIPTS, "check_dependency_rules.sh")
+    with open(sh, encoding="utf-8", errors="replace") as fh:
+        case, _lst, _exp = _par.parse_sh(fh.read())
+    if not case:
+        raise ValueError("layer_of() 解析出空表（%s）" % sh)
+    return case
+
+
+def crates_with_prod_ctor(tally):
+    """从 census 证据里抽出“有生产态构造点”的 crate 名（路径形如 crates/<name>/src/...:行）。"""
+    out = set()
+    for cell in tally.values():
+        for loc in cell["prod_ctor"]:
+            path = loc.rsplit(":", 1)[0].replace(os.sep, "/")
+            parts = path.split("/")
+            if len(parts) >= 2 and parts[0] == "crates":
+                out.add(parts[1])
+    return out
+
+
 # --- selftest ----------------------------------------------------------------
 
 def _fixture(root):
@@ -354,6 +415,12 @@ pub enum NexusEvent {
     AllowBetweenCfgTest {
         metadata: EventMetadata,
     },
+    PubCrateModCfgTest {
+        metadata: EventMetadata,
+    },
+    PubCrateModProduction {
+        metadata: EventMetadata,
+    },
     BareUnit,
 }
 """)
@@ -370,6 +437,8 @@ define_event_registry! {
     SyncEmit => Normal, System;
     ArmBodyCtor => Normal, System;
     AllowBetweenCfgTest => Normal, System;
+    PubCrateModCfgTest => Normal, System;
+    PubCrateModProduction => Normal, System;
     BareUnit => Normal, System;
 }
 """)
@@ -440,10 +509,32 @@ mod allow_decorated {
         };
     }
 }
+// 真树实测(2026-10-09): bus.rs 用的是 `pub(crate) mod tests_helpers`。
+// 可见性前缀不得把 cfg(test) 夹具漏划成生产作用域（否则零生产 ctor 的变体被判 owned）。
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+pub(crate) mod pubcrate_helpers {
+    use super::*;
+
+    pub fn all_variants() -> Vec<NexusEvent> {
+        vec![NexusEvent::PubCrateModCfgTest { metadata: md() }]
+    }
+}
+
+// 反向夹具（牙齿）:同一个 `pub(crate) mod` 形状但**没有** cfg(test)，必须算生产作用域。
+// 谁把 MOD_HEAD 改宽到“可见性前缀即生产”，这一条立即翻红。
+pub(crate) mod pubcrate_production {
+    use super::*;
+
+    pub fn make() -> NexusEvent {
+        NexusEvent::PubCrateModProduction { metadata: md() }
+    }
+}
 """)
     w("scripts/event_ownership_baseline.txt",
       "TestOnlyProduced  # fixture-made only\n"
       "AllowBetweenCfgTest  # fixture-made only, cfg(test) 与 mod 间有属性行\n"
+      "PubCrateModCfgTest  # 只在 cfg(test) 的 pub(crate) mod 里构造(2026-10-09 判据缺陷回归)\n"
       "ConsumedButNeverSent  # producer retired (ADR-188 决策 1)\n"
       "BareUnit  # 单元变体，只有 matches! 消费\n")
 
@@ -462,8 +553,8 @@ def selftest():
         u = [v for v, _d in unowned]
 
         checks = [
-            ("两把尺基数闭合：enum 9 == registry 9 且集合相等",
-             len(variants) == 9 and sorted(variants) == sorted(reg)),
+            ("两把尺基数闭合：enum 11 == registry 11 且集合相等",
+             len(variants) == 11 and sorted(variants) == sorted(reg)),
             ("非空清单（空清单=判据失能，不许当成干净）", bool(variants) and bool(reg)),
             ("真生产者 OwnedHere 不在红名单", "OwnedHere" not in u),
             ("带 `..` 的部分模式不算生产者 => PatternOnlyLikeCtor 必须红",
@@ -478,6 +569,14 @@ def selftest():
             ("单元变体经 `matches!` 只算消费 => 已登记则放过",
              "BareUnit" not in u and not tally["BareUnit"]["prod_ctor"]
              and bool(tally["BareUnit"]["pattern"])),
+            # 2026-10-09 真树假绿回归：`pub(crate) mod` 必须能被 cfg(test) 划进测试域
+            ("cfg(test) + `pub(crate) mod` 里的夹具不算生产 ctor（已登记则不红）",
+             "PubCrateModCfgTest" not in u
+             and not tally["PubCrateModCfgTest"]["prod_ctor"]
+             and tally["PubCrateModCfgTest"]["test_ctor"] > 0),
+            ("反向牙齿：无 cfg(test) 的 `pub(crate) mod` 必须算生产 ctor（不得登记）",
+             bool(tally["PubCrateModProduction"]["prod_ctor"])
+             and "PubCrateModProduction" not in u),
             ("零构造+零消费+零夹具(注释不算) => 判 DEAD 且不可靠登记逃过",
              [v for v, _ in dead] == ["TotalGhost"]),
             # 两枚真树假阳性回归（2026-09-23：decb-governor / event-bus token_ledger）
@@ -506,6 +605,17 @@ def selftest():
         checks.append(("反证不得引入假 STALE（OwnedHere 本就没有账本行）",
                        [v for v, _ in s2] == []))
         _w(os.path.join(tmp, "crates/alpha/src/lib.rs"), keep)
+
+        # 分层可观测性断言：纯函数双向验（不靠假仓库，而是直接驱动判定本身）
+        lm = {"mlc-engine": 2, "hcw-window": 2, "cmt-tiering": 3,
+              "osa-coordinator": 6, "faae-router": 6}
+        checks.append(("L2/L3/L6 均有发布面时不报失败（真树同构场景）",
+                       layer_event_presence(lm, {"mlc-engine", "cmt-tiering", "faae-router"}) == []))
+        _fl = layer_event_presence(lm, {"mlc-engine", "cmt-tiering"})
+        checks.append(("L6 发布面被清空 ⇒ 必报失败（否则本断言只是装饰）",
+                       len(_fl) == 1 and "L6" in _fl[0]))
+        checks.append(("层表缺失（查不到）不得变成通过，仍算失败",
+                       len(layer_event_presence({}, {"anything"})) == len(LAYER_EVENT_MIN)))
 
         bad = [name for name, ok in checks if not ok]
         for name, ok in checks:
@@ -574,8 +684,25 @@ def main():
     unowned_rows, dead, stale = decide(tally, variants, baseline)
     print("[INFO] variants=%d 有生产态构造=%d 无=%d 账本=%d"
           % (len(variants), len(owned), len(unowned), len(baseline)))
-    if not any((unowned_rows, dead, stale)):
-        print("[OK] 每个事件契约要么有生产态构造者，要么已带证据登记")
+
+    # 分层可观测性（L2/L3/L6 各≥一生产态事件构造点）；层表解析不出来 ⇒ 不可判定，
+    # 不得把“没查到”当成“已满足”（与 F39b 同一取向）。
+    try:
+        _layer_of = crate_layer_map()
+    except Exception as exc:                                   # noqa: BLE001
+        print("[UNDECIDABLE] 层表派生失败（%s）-- 不因此判红也不因此判绿" % exc)
+        return 2
+    _live = crates_with_prod_ctor(tally)
+    layer_fails = layer_event_presence(_layer_of, _live)
+    _per = {}
+    for _c, _l in _layer_of.items():
+        if _c in _live:
+            _per[_l] = _per.get(_l, 0) + 1
+    print("[INFO] 发布面按层统计（有生产态构造点的 crate 数）："
+          + " ".join("L%d=%d" % (l, _per.get(l, 0)) for l in sorted(_per)))
+
+    if not any((unowned_rows, dead, stale)) and not layer_fails:
+        print("[OK] 每个事件契约要么有生产态构造者，要么已带证据登记；L2/L3/L6 发布面均在")
         return 0
     rc = 1
     if unowned_rows:
@@ -593,6 +720,11 @@ def main():
         print("[GAP-S] %d 行账本已失效(删行):" % len(stale))
         for v, detail in stale:
             print("  [GAP-S] %s (%s)" % (v, detail))
+    if layer_fails:
+        print("[GAP-L] %d 个架构层没有任何生产态事件发布点:" % len(layer_fails))
+        for f in layer_fails:
+            print("  [GAP-L] %s" % f)
+        print("  修法是让该层至少有一个真实发布点（优先复用现有变体，不新增事件变体）。")
     return rc
 
 

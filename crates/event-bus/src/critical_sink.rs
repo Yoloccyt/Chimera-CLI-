@@ -145,6 +145,18 @@ impl CriticalSink for FileWalCriticalSink {
                 return;
             }
         };
+        // v2.3 §(b.5): Critical WAL 落盘前拦截私钥/凭证/令牌类硬载荷(Block)。
+        // 命中则跳过该行持久化(事件仍经 mpsc/broadcast 投递),避免秘密驻留审计文件;不 panic。
+        // 高熵/键名启发式设 Pass 防误报。
+        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            ..Default::default()
+        };
+        if nexus_contracts::sensitive::scan(&line, &scan_policy).is_blocked() {
+            tracing::warn!(path = %self.path.display(), "Critical WAL 跳过含敏感硬载荷的事件行(未落盘)");
+            return;
+        }
         match self.writer.lock() {
             Ok(mut w) => {
                 if let Err(e) = writeln!(w, "{line}") {

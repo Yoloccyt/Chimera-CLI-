@@ -628,7 +628,6 @@ dependencies = [
  "gsoe-evolution",
  "hcw-window",
  "kvbsr-router",
- "lsct-tiering",
  "mca-gateway",
  "mcp-mesh",
  "mlc-engine",
@@ -833,7 +832,6 @@ dependencies = [
  "criterion",
  "dashmap",
  "event-bus",
- "lsct-tiering",
  "nexus-contracts",
  "nexus-core",
  "proptest",
@@ -3092,22 +3090,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
-name = "lsct-tiering"
-version = "2.29.0-omega"
-dependencies = [
- "criterion",
- "dashmap",
- "event-bus",
- "proptest",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "mach2"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3229,6 +3211,7 @@ dependencies = [
  "dashmap",
  "event-bus",
  "futures",
+ "nexus-contracts",
  "proptest",
  "serde",
  "serde_json",
@@ -3897,7 +3880,6 @@ dependencies = [
  "omega-learner",
  "proptest",
  "repo-wiki",
- "router-traits",
  "serde",
  "serde_json",
  "sha2",
@@ -4907,15 +4889,6 @@ checksum = "72f81bee8c8ef9b577d1681a70ebbc962c232461e397b22c208c43c04b67a155"
 dependencies = [
  "rmp",
  "serde",
-]
-
-[[package]]
-name = "router-traits"
-version = "2.29.0-omega"
-dependencies = [
- "nexus-contracts",
- "thiserror 1.0.69",
- "tokio",
 ]
 
 [[package]]

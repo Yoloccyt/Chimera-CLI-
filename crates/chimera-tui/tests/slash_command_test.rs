@@ -166,6 +166,8 @@ fn panel_command_switches_panel_by_name() {
 
 #[test]
 fn filter_level_invalid_args_report_errors() {
+    // B5-G(评审 #2):状态文案断言经 t! 取值仍有 locale 翻转窗口,持 guard 互斥
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let mut app = make_app();
     slash_submit(&mut app, "filter bogus_topic");
     let msg = app
@@ -175,7 +177,9 @@ fn filter_level_invalid_args_report_errors() {
         .map(|(m, _)| m.clone())
         .unwrap_or_default();
     assert!(
-        msg.contains("invalid topic"),
+        // B4-I(F-04):断言经 t! 键期望串构造;读值仍随当前 locale,非与 locale 无关
+        // (B5-G 已在测试入口补 locale_test_guard 消除翻转窗口)
+        msg.contains(&chimera_tui::t!("status.invalid_topic").replacen("{}", "bogus_topic", 1)),
         "非法 topic 应报错,got: {msg}"
     );
 
@@ -187,7 +191,7 @@ fn filter_level_invalid_args_report_errors() {
         .map(|(m, _)| m.clone())
         .unwrap_or_default();
     assert!(
-        msg.contains("invalid level"),
+        msg.contains(&chimera_tui::t!("status.invalid_level").replacen("{}", "bogus", 1)),
         "非法 level 应报错,got: {msg}"
     );
 }
@@ -253,6 +257,50 @@ fn unwired_command_gives_honest_todo() {
         msg.contains("接线") || msg.contains("wired"),
         "未接线命令应给诚实反馈,got: {msg}"
     );
+}
+
+// ============================================================
+// C2. Instant 层本地动作接线(B4-S F-56:/export /config 不再落 HonestTodo)
+// ============================================================
+
+#[test]
+fn export_slash_opens_confirm_popup() {
+    let mut app = make_app();
+    slash_submit(&mut app, "export");
+    // /export 应与 Ctrl+E 同效:弹出导出格式确认框(export.run 本地动作),
+    // 确认后经 perform_export 真实执行——而非 HonestTodo「未接线」诚实提示。
+    match app.state().popup_stack.current() {
+        Some(chimera_tui::PopupKind::Confirm { on_confirm, .. }) => {
+            assert_eq!(
+                on_confirm, "export:csv",
+                "确认弹窗应携带 export:csv 确认命令(apply_confirm_command 分发键)"
+            );
+        }
+        other => panic!(
+            "/export 应打开导出确认弹窗, got popup={other:?}, status={:?}",
+            app.state().status_message
+        ),
+    }
+}
+
+#[test]
+fn config_slash_opens_config_menu() {
+    let mut app = make_app();
+    slash_submit(&mut app, "config");
+    // /config 应与 config.edit 本地动作同效:打开配置速调菜单(主题/占比/Tick),
+    // 而非 HonestTodo「未接线」诚实提示。
+    match app.state().popup_stack.current() {
+        Some(chimera_tui::PopupKind::ConfigMenu { entries, .. }) => {
+            assert!(
+                !entries.is_empty(),
+                "配置菜单应含可编辑条目(主题/占比/Tick 三项), got: {entries:?}"
+            );
+        }
+        other => panic!(
+            "/config 应打开配置菜单, got popup={other:?}, status={:?}",
+            app.state().status_message
+        ),
+    }
 }
 
 // ============================================================

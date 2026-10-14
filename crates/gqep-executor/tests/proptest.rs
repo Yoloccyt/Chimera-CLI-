@@ -3,14 +3,15 @@
 //! 对应 SubTask 29.6:为 gqep-executor 补充 proptest
 //!
 //! # 验证的不变量
-//! 1. 聚集 succeeded + failed = total:任意操作数与成功/失败组合,
-//!    `gather` 返回的 `succeeded + failed == total`
-//! 2. 超时操作计入 total:超时的操作也计入总数,且计入 failed
+//! 1. 聚集四段守恒：`succeeded + failed + abandoned + not_started == total`（ADR-202 I5）
+//! 2. 超时操作计入 total：超时的操作也计入总数,且计入 failed
 //!
-//! # 策略
-//! - 生成 N 个 future(N ∈ [0, 20]),每个独立决定成功或失败
-//! - 断言 succeeded + failed == total
-//! - 生成超时 future(短超时 + 长运行),验证计入 total 与 failed
+//! # 关于第 1 条的历史修正（ADR-202 R3 / I9 / I11）
+//! 旧版本文件断言的是两段守恒 `succeeded + failed == total`，它只在
+//! 「无全局超时、无并发上界 backlog」的条件下成立——属**条件成立断言**。
+//! 并发上界引入 `not_started` 后，两段式会把「根本没执行」误归为丢失或漏计，
+//! 故本文件改为四段守恒，并把生成域扩到「含慢 future + 收紧 deadline」。
+//! 纪律：改的是**不变量表达式的完整性**，不是放宽阈值。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
@@ -32,6 +33,18 @@ fn make_success_future(value: &str) -> GqepFuture<String> {
     Box::pin(async move { Ok(value) })
 }
 
+/// 创建带时延的成功 future（用于把全局 deadline 逼进采样空间）
+///
+/// WHY 新增而非只测快 future：两段守恒的漏改止在「有操作未完成」时才暴露，
+/// 全快 future + 宽松 deadline 的生成永远碰不到那个分支（ADR-202 R3）。
+fn make_slow_future(value: &str, delay: Duration) -> GqepFuture<String> {
+    let value = value.to_string();
+    Box::pin(async move {
+        tokio::time::sleep(delay).await;
+        Ok(value)
+    })
+}
+
 /// 创建立即失败的 future
 fn make_failure_future(reason: &str) -> GqepFuture<String> {
     let reason = reason.to_string();
@@ -46,13 +59,15 @@ fn make_failure_future(reason: &str) -> GqepFuture<String> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
-    /// 不变量 1:聚集 succeeded + failed = total
+    /// 不变量 1：聚集四段守恒 succeeded + failed + abandoned + not_started = total
     ///
-    /// 任意操作数与成功/失败组合,gather 返回的 succeeded + failed == total
-    /// WHY:对应架构红线"所有异步操作必须有 GQEP 聚集/超时处理",
-    /// 不允许有操作"消失"(孤儿调用)
+    /// 任意操作数与成功/失败组合，守恒必须成立。
+    /// WHY：对应架构红线"所有异步操作必须有 GQEP 聚集/超时处理"，
+    /// 不允许有操作"消失"（孤儿调用）——并发上界下「消失」有两条路径：
+    /// 已入流被放弃（abandoned，有 OrphanGuard）与从未入流（not_started，无孤儿事件），
+    /// 两段式只能遮住前者。
     #[test]
-    fn test_gather_succeeded_plus_failed_equals_total(
+    fn test_gather_four_segment_conservation(
         n_success in 0u32..=15,
         n_failure in 0u32..=10,
     ) {
@@ -70,23 +85,96 @@ proptest! {
 
         let result: GatherResult = rt.block_on(executor.gather(futures));
 
-        // 核心不变量:succeeded + failed == total(无操作丢失)
+        // 核心不变量：四段守恒（任何一段漏计即说明有操作静默消失）
         prop_assert_eq!(
-            result.succeeded + result.failed,
+            result.succeeded + result.failed + result.abandoned + result.not_started,
             result.total,
-            "succeeded({}) + failed({}) != total({})",
+            "四段不守恒：succeeded({}) failed({}) abandoned({}) not_started({}) != total({})",
             result.succeeded,
             result.failed,
-            result.total
+            result.abandoned,
+            result.not_started,
+            result.total,
         );
         prop_assert_eq!(result.total, total_expected);
         prop_assert_eq!(result.succeeded, n_success);
         prop_assert_eq!(result.failed, n_failure);
-        // 错误列表长度 == failed
+        // 全快 future + 默认宽松 deadline 的强条件：无放弃、无未启动，
+        // 且错误列表长度 == failed——这三条就是旧断言的**完整保留**，
+        // 不因改成四段而丢掉原有的强语义（I9：不得为过而放宽）。
+        prop_assert_eq!(result.abandoned, 0, "本生成域不应有放弃项");
+        prop_assert_eq!(result.not_started, 0, "bound=100 ≥ N≤25 应单波全部入流");
         prop_assert_eq!(
             result.errors.len() as u32,
             result.failed,
             "errors 长度应等于 failed"
+        );
+    }
+
+    /// 不变量 1b（ADR-202 I5/I9/I11）：限流 + 全局超时同时发生时守恒仍成立
+    ///
+    /// WHY 新增一条而不是改上面的：上面那条故意用「全快 + 宽松 deadline」，
+    /// 守的是向后兼容强条件；本条用「慢 future + 紧 deadline + 小 bound」，
+    /// 守的是新分支。两者合起来才能既不让旧语义静默退化，也不让新分支无人管。
+    #[test]
+    fn test_gather_four_segment_conservation_under_bound_and_deadline(
+        n_fast in 0u32..=6,
+        n_slow in 1u32..=12,
+        bound in 1usize..=8,
+        deadline_ms in 20u64..=120,
+    ) {
+        let rt = tokio::runtime::Runtime::new().map_err(fail)?;
+        let executor = GqepExecutor::new(
+            GqepConfig {
+                max_concurrency: bound,
+                gather_deadline_ms: deadline_ms,
+                // 单操作超时放宽，确保只考察**全局** deadline 分支
+                default_timeout_ms: 5_000,
+                ..GqepConfig::default()
+            },
+            EventBus::new(),
+        );
+
+        let mut futures: Vec<GqepFuture<String>> = Vec::new();
+        for i in 0..n_fast {
+            futures.push(make_success_future(&format!("fast-{i}")));
+        }
+        for i in 0..n_slow {
+            // 比最宽 deadline 还慢，必定落入 abandoned / not_started 两段之一
+            futures.push(make_slow_future(
+                &format!("slow-{i}"),
+                Duration::from_millis(200),
+            ));
+        }
+        let total_expected = n_fast + n_slow;
+
+        let result: GatherResult = rt.block_on(executor.gather(futures));
+
+        prop_assert_eq!(result.total, total_expected);
+        // 主断言：四段守恒在最恶劣的组合下仍成立
+        prop_assert_eq!(
+            result.succeeded + result.failed + result.abandoned + result.not_started,
+            result.total,
+            "限流+超时下四段不守恒：succeeded({}) failed({}) abandoned({}) not_started({}) != total({})",
+            result.succeeded,
+            result.failed,
+            result.abandoned,
+            result.not_started,
+            result.total,
+        );
+        // 慢 future 存在 ⇒ 必有未完成项（否则说明超时根本没生效，测试失去意义）
+        prop_assert!(
+            result.abandoned + result.not_started > 0,
+            "慢 future + 紧 deadline 下应至少有未完成项，实际全完成→本用例退化为空转"
+        );
+        // errors 长度只能为 failed 或 failed+1（后者含一条 GlobalTimedOut）
+        // ——这正是 types.rs 已自陈、但旧断言看不到的例外（R3）。
+        prop_assert!(
+            result.errors.len() as u32 == result.failed
+                || result.errors.len() as u32 == result.failed + 1,
+            "errors 长度应为 failed 或 failed+1，实际 len={} failed={}",
+            result.errors.len(),
+            result.failed,
         );
     }
 

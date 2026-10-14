@@ -12,10 +12,15 @@ linker = "gcc"
 # (clippy -D warnings 通过)。禁用 incremental 根治该 ICE,同时与 CLAUDE.md §9
 # clippy OOM 缓解(CARGO_INCREMENTAL=0)对齐,避免开发者重复设置环境变量。
 # 代价:日常增量编译速度变慢,但项目规模(35 crates)下全量 check 仅 ~7s,可接受。
-# (2026-09-04 工具链诊断注:当前 rustc 已为 1.97.1,该 ICE 是否仍在待复测;
-#  保守保持 false,本注释为历史记录而非当前断言。)
+# ✅ **2026-09-28 复测结案**:1.97.1 上该 ICE 不复现(证据见文件末 incremental 块)——
+# 故本行保留为**全局安全默认**(CI 与 release 面),dev 档已按需放开,test 档显式继承本值。
 [build]
-incremental = false
+# ⚠ **本键刻意不设 incremental**——2026-09-28 实测的优先级陷阱:
+#   `[build] incremental` 会**压制** config 层的 `[profile.<name>] incremental`。
+#   实证:留着本键 = false 时,下方 `[profile.dev] incremental = true` 静默失效
+#   (删掉该 crate 的增量缓存后 dev 构建不重建它);移除本键后立即生效。
+#   故 incremental 一律由下方 profile 块分档管理;确需全局关闭时用环境变量
+#   `CARGO_INCREMENTAL=0`(env 优先级高于 config,CI 四个 Rust job 即走此路径)。
 
 # WHY 固化 jobs = 4(2026-09-04 工具链诊断,C1 实施实录故障的根因修复):
 # 诊断实验实测(见 docs/reports/toolchain-diagnosis-report-2026-09-04.md):
@@ -54,6 +59,9 @@ RUST_MIN_STACK = "33554432"
 opt-level = 0
 codegen-units = 16
 debug = 0
+# WHY 显式关闭而非继承:dev 档已放开 incremental(见文件末),而 test 档是全量冷编
+# (无重编收益)且正处在 jobs = 4 所保护的 OOM 敏感路径上,不引入额外内存开销。
+incremental = false
 
 # WHY:build-override 应用到 build script 与 proc-macro 编译。
 # 默认 build script 继承 host profile(dev),debug=2 全量符号拖慢编译。
@@ -62,3 +70,38 @@ debug = 0
 [profile.test.build-override]
 opt-level = 0
 debug = 0
+
+# 已实测否定,勿重复尝试(2026-09-28):曾为 dev profile 增设
+# debug = "line-tables-only"(+ 依赖 debug = false),假设是省构建 I/O 与
+# target/ 体积。A/B 实测(同机、独立 target-dir、各冷编一次
+# `cargo build -p repo-wiki`,2026-09-28):
+#   旧(debug=2)          301.1s / 1.47GB
+#   新(line-tables-only)  330.3s / 1.42GB
+# 结论:耗时反向 +9.7%,体积仅 -3.4%,不构成收益;且 dev profile 的
+# package 级覆盖在 config 层是否生效未获独立证实。故整块回退——
+# 项目红线"性能可证伪,不接受主观判断"。若要重试,须先复现该 A/B
+# 并给出正向证据,再决定是否落配置。
+
+# ============================================================
+# incremental 按档放开(2026-09-28 复测结案)
+#
+# 背景:[build] incremental = false 的**唯一**理由是 rustc 1.96.0 + Windows GNU 的
+# rmeta ICE,而该行注释本身写明"1.97.1 上是否仍在待复测"。本轮按同一口径复测:
+#   · 同一工作树连跑两次 `cargo check --workspace --all-targets`(CARGO_INCREMENTAL=1),
+#     并刻意 touch 原报告点名的 mlc-engine / mcp-mesh / chimera-cli 三个 crate
+#     ⇒ **NO ICE**、WARNING_LINES=0(即连"伪 warning"也未复现);
+#   · 同一 touch 集合下的 A/B(唯一变量是 incremental 开关):
+#       关闭 **125.7s**  →  开启 **80.1s**   (**-36%**)
+#   · 代价实测:target/debug/incremental **+2.77 GB**。
+# 决策:病因既已不复现而收益可量化,即按**档位**放开,不做全局放开——
+#   · dev 档开:日常 `cargo check` / `cargo build` / `cargo run` 是"一次冷编 + 多次
+#     重编"的形态,增量编译正为此设计;
+#   · test 档关(见上方 [profile.test] 的 incremental=false):全量冷编无重编收益,
+#     且处于 jobs=4 保护的 OOM 敏感路径;
+#   · CI 不受影响:4 个 Rust job 显式注入 CARGO_INCREMENTAL=0,且以 clean-runner 为准。
+# 回退路径:若 ICE 复现(症状 = `rmeta/encoder.rs` panic "no entry found for key",
+# 或 cargo check 报出源码中不存在的伪 warning),删掉本块 `[profile.dev]` 两行即回到原状,
+# 并按上方"已实测否定"的范式把新证据写回本文件。
+# ============================================================
+[profile.dev]
+incremental = true

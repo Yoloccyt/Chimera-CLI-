@@ -128,9 +128,15 @@ fn test_decay_panel_renders_title() {
     app.update();
     app.switch_panel_to(PanelId::Decay);
 
+    // i18n(B4-I):面板名随 locale 切换,期望串与渲染同源经 t! 求值、locale 无关;
+    // 持 guard 串行化但不写全局 locale——不新增 En 窗口,避免污染同二进制内
+    // 断言中文文案的并行测试
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let panel_label = chimera_tui::t!(PanelId::Decay.name_key());
     let content = render_to_string(&mut app, 80, 24);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("Decay"),
+        compact.contains(panel_label),
         "Decay panel title should be rendered, got: {}",
         &content[..content.len().min(200)]
     );
@@ -263,9 +269,14 @@ fn test_decay_panel_default_state_renders() {
     app.switch_panel_to(PanelId::Decay);
 
     // 默认状态应能渲染,不 panic
+    // i18n(B4-I):期望串与渲染同源经 t! 求值,locale 无关;不写全局 locale
+    // (WHY 见 test_decay_panel_renders_title 注)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let panel_label = chimera_tui::t!(PanelId::Decay.name_key());
     let content = render_to_string(&mut app, 80, 24);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("Decay"),
+        compact.contains(panel_label),
         "Decay panel should render title in default state"
     );
     // 默认 coefficient = 1.0 应显示
@@ -300,9 +311,14 @@ fn test_decay_panel_empty_history_renders() {
     app.update();
     app.switch_panel_to(PanelId::Decay);
 
+    // i18n(B4-I):期望串与渲染同源经 t! 求值,locale 无关;不写全局 locale
+    // (WHY 见 test_decay_panel_renders_title 注)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let panel_label = chimera_tui::t!(PanelId::Decay.name_key());
     let content = render_to_string(&mut app, 80, 24);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("Decay"),
+        compact.contains(panel_label),
         "Decay panel should render with empty history"
     );
 }
@@ -326,6 +342,9 @@ fn test_decay_panel_renders_history_sparkline() {
     app.switch_panel_to(PanelId::Decay);
 
     // 渲染应包含 sparkline 标题或历史区域
+    // i18n:断言默认中文文案,持 locale guard 与同二进制内 pin En 的测试互斥
+    // (i18n::set_locale 文档 2026-08-17 互斥口径)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let content = render_to_string(&mut app, 80, 24);
     // WHY 压缩空白:TestBackend 逐格渲染中文时汉字间含空格("衰 减 历 史"),
     // 断言前先去掉空白使 CJK 文案可按原文匹配
@@ -350,6 +369,8 @@ fn test_decay_panel_renders_cycle_start() {
     app.update();
     app.switch_panel_to(PanelId::Decay);
 
+    // i18n:断言默认中文文案,持 locale guard 与同二进制内 pin En 的测试互斥
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let content = render_to_string(&mut app, 80, 24);
     let compact: String = content.chars().filter(|c| *c != ' ').collect();
     // cycle_start 时间戳应显示(检查日期格式的一部分)
@@ -382,6 +403,8 @@ fn test_decay_panel_no_breaker_event_shows_na() {
     app.update();
     app.switch_panel_to(PanelId::Decay);
 
+    // i18n:断言默认中文文案,持 locale guard 与同二进制内 pin En 的测试互斥
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let content = render_to_string(&mut app, 80, 30);
     let compact: String = content.chars().filter(|c| *c != ' ').collect();
     // 面板应包含 "熔断:" 行且值为 N/A

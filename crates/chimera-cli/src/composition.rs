@@ -102,9 +102,17 @@ pub struct AppContext {
     pub gea: Arc<gea_activator::GeaActivator>,
     /// GQEP 聚集执行器（M12 / ADR-185 D3；doctor 探针并行 gather 复用）
     pub gqep: Arc<gqep_executor::GqepExecutor>,
+    /// 多代理调度控制面（P1 候选③ / ADR-211 Accepted 2026-10-12；
+    /// `agent spawn` 前 claim 准入——claim/lease/quota，单任务即有真实语义）。
+    /// `with_rate_limit` 护栏随批装配（ephemeral 进程内生效；跨进程留待常驻宿主）。
+    pub sched: Arc<mas_sched::SimplePeerScheduler>,
     /// 推测上下文缓存（M13 / ADR-161 路径①；SccCache Clone=Arc 共享,
     /// doctor scc_cache 探针经此真实消费 stats()）
     pub scc: scc_cache::SccCache,
+    /// WI-D1：跨厂商辩论激活输入。`None`=未启用（默认，主干恒绿）；
+    /// `Some(names)`=组合根从 `config.model_router` 解析出的去重 provider 通道名，
+    /// 供 `chimera parliament` 命令经 `CrossVendorDebate::from_provider_names` 注入。
+    pub cross_vendor_providers: Option<Vec<String>>,
     /// R2 解冻阶段③ 前置：进化编排器（封装 evolve_with_formal_verification 主路径）
     #[cfg(feature = "r2_unfreeze")]
     pub evolution_orchestrator: Option<EvolutionOrchestrator>,
@@ -171,6 +179,11 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
     // E01-E08 静态编制 → gea 动态画像(幂等,启动期一次性)
     chimera_mas::gea_bridge::register_mas_experts(&gea);
     let gqep = gqep_executor::GqepExecutor::new(gqep_executor::GqepConfig::default(), bus.clone());
+    // P1 候选③（ADR-211 Accepted 2026-10-12）:mas-sched claim 准入调度器。
+    // WHY with_rate_limit: broker 护栏（防轮询风暴）随批携带；ephemeral 进程内
+    // 单次 claim 不触发阈值，跨进程防护留待常驻宿主（serve/tui）复用同一实例。
+    // 运行期开关为 env 三态 CHIMERA_SCHED_CLAIM（off 默认），非 feature。
+    let sched = mas_sched::SimplePeerScheduler::with_rate_limit(60, 60_000);
     // M13(ADR-161 路径①):scc-cache 组合根装配——默认配置(容量 256,零 IO 轻构造),
     // 与 bus 同生命周期;doctor scc_cache 探针每次运行经 ctx.scc 真实消费
     // stats()(非"构造即丢弃");CacheHit/Miss 事件仅由真实缓存访问触发,
@@ -195,13 +208,38 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
         version = %config.nexus.version,
         "AppContext assembled at composition root (C12, critical bypass wired, gea+gqep+scc wired)"
     );
+    // WI-D1：跨厂商辩论激活输入（opt-in，默认 None）。
+    // 启用条件：config.model_router.cross_vendor_debate == true 且去重后 provider >= 2；
+    // 否则保持 None（Parliament 走默认，行为与本字段引入前一致）。
+    // 仅在此存名字列表（provider id 字符串），把 ProviderId 亲和映射留在 parliament(L8)。
+    let cross_vendor_providers = if config.model_router.cross_vendor_debate {
+        let mut names: Vec<String> = Vec::new();
+        for p in &config.model_router.providers {
+            if !names.iter().any(|n| n == &p.id) {
+                names.push(p.id.clone());
+            }
+        }
+        if names.len() >= 2 {
+            Some(names)
+        } else {
+            tracing::warn!(
+                distinct = names.len(),
+                "cross_vendor_debate 已启用但去重 provider 不足 2，本次不激活"
+            );
+            None
+        }
+    } else {
+        None
+    };
     Ok(AppContext {
         bus,
         engine,
         server_config: AppServerConfig::default(),
         gea: Arc::new(gea),
         gqep: Arc::new(gqep),
+        sched: Arc::new(sched),
         scc,
+        cross_vendor_providers,
         #[cfg(feature = "r2_unfreeze")]
         evolution_orchestrator,
         #[cfg(not(feature = "r2_unfreeze"))]
@@ -279,6 +317,33 @@ mod tests {
 
     fn make_ctx() -> AppContext {
         build(&ChimeraConfig::default()).expect("装配应成功")
+    }
+
+    /// WI-D1 验收：默认（cross_vendor_debate off）→ cross_vendor_providers 为 None，
+    /// 行为与字段引入前完全一致（主干恒绿）。
+    /// #[tokio::test]：`build()` 内部 `spawn_critical_subscriber` 调 `tokio::spawn`，需运行时上下文。
+    #[tokio::test]
+    async fn composition_cross_vendor_opt_in_default_off() {
+        let ctx = build(&ChimeraConfig::default()).expect("装配应成功");
+        assert!(
+            ctx.cross_vendor_providers.is_none(),
+            "默认 off → 不应激活跨厂商"
+        );
+    }
+
+    /// WI-D1 验收：启用且默认 5 provider（去重 >=2）→ Some(去重名列表)。
+    #[tokio::test]
+    async fn composition_cross_vendor_opt_in_on_produces_names() {
+        let mut cfg = ChimeraConfig::default();
+        cfg.model_router.cross_vendor_debate = true;
+        let ctx = build(&cfg).expect("装配应成功");
+        let names = ctx
+            .cross_vendor_providers
+            .expect("启用且有 >=2 provider 应 Some");
+        assert!(
+            names.len() >= 2,
+            "应解析出去重后 >=2 provider，实际 {names:?}"
+        );
     }
 
     /// 构造已装配的 AppServer，并返回 bus 探针（Clone 共享内核状态，

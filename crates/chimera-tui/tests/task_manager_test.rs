@@ -360,3 +360,223 @@ fn test_cycle_sort_mode_key_s_advances_to_next() {
     assert!(cmd3.is_none(), "S 键不应产生任何 TuiCommand");
     assert_eq!(panel.sort_mode(), SortMode::Priority);
 }
+
+/// F-28:TaskManagerPanel 须覆写 `Panel::selected_context_id`,使命令面板/
+/// 动作菜单派发的 quest.pause/resume/cancel 经富化(enrich_payload_with_focused_quest)
+/// 精确定位焦点面板选中项(修复前恒 None,quest_id 注入失效)。
+#[test]
+fn selected_context_id_returns_selected_quest_id() {
+    let mut panel = TaskManagerPanel::new();
+
+    // 空列表边界:无选中上下文 → None
+    assert_eq!(
+        panel.selected_context_id(&TuiState::new()),
+        None,
+        "空 Quest 列表应返回 None"
+    );
+
+    // 默认 Priority 降序排序:顶部选中项为 q-high(priority=8)
+    let state = state_with_quests();
+    assert_eq!(
+        panel.selected_context_id(&state).as_deref(),
+        Some("q-high"),
+        "默认排序下应返回选中项 q-high"
+    );
+
+    // ↓ 导航移动选中项后,访问器实时返回新选中项(富化实时性)
+    let mut state_after = state_with_quests();
+    panel.handle_key(
+        KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+        &mut state_after,
+    );
+    assert_eq!(
+        panel.selected_context_id(&state_after).as_deref(),
+        Some("q-mid"),
+        "Down 导航后应返回第二选中项 q-mid"
+    );
+}
+
+// ============================================================
+// F-23:多选集合按 quest_id 标识 — 排序/过滤变化后批量目标与选择集一致
+// ============================================================
+
+/// F-23 场景 1:多选后改变过滤关键字,B 批量目标仍为原勾选 Quest
+///
+/// 修复前(位置型选择集):Space 选中排序后位置 0 的 q-apple,过滤词 "ban"
+/// 生效后位置 0 变为 q-banana,B 键按当前位置 filter_map 重映射,批量暂停
+/// 静默错位作用于用户未勾选的 q-banana。按 id 方案后 on_confirm 必须仍为
+/// q-apple(该断言同时证明选择集未随过滤清空——清空则 B 会回退单选暂停,
+/// 返回 QuestControl 而非批量弹窗)。
+#[test]
+fn test_multi_select_batch_pause_targets_survive_filter_change() {
+    let mut panel = TaskManagerPanel::new();
+    let mut state = TuiState::new();
+    // Priority 降序排序后:[q-apple(5), q-banana(3), q-cherry(1)]
+    state.quest_list = vec![
+        sample_quest("q-apple", "Apple", 5),
+        sample_quest("q-banana", "Banana", 3),
+        sample_quest("q-cherry", "Cherry", 1),
+    ];
+
+    // Space:选中位置 0 → {"q-apple"}
+    panel.handle_key(
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+        &mut state,
+    );
+
+    // f 进入搜索,逐字符输入 "ban",Enter 退出搜索(保留关键字)
+    panel.handle_key(
+        KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE),
+        &mut state,
+    );
+    for c in "ban".chars() {
+        panel.handle_key(
+            KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+            &mut state,
+        );
+    }
+    panel.handle_key(
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        &mut state,
+    );
+
+    // 过滤后列表只剩 q-banana(经渲染文本验证),光标被 clamp 到位置 0
+    let filtered_text = panel.render_text(&state);
+    assert!(
+        filtered_text.contains("q-banana")
+            && !filtered_text.contains("q-apple")
+            && !filtered_text.contains("q-cherry"),
+        "过滤词 'ban' 应只保留 q-banana:\n{filtered_text}"
+    );
+
+    // B 批量暂停:目标必须与选择集一致(q-apple),而非错位到可见的 q-banana
+    let cmd = panel.handle_key(
+        KeyEvent::new(KeyCode::Char('B'), KeyModifiers::NONE),
+        &mut state,
+    );
+    match cmd {
+        Some(TuiCommand::OpenPopup(chimera_tui::PopupKind::Confirm { on_confirm, .. })) => {
+            assert_eq!(
+                on_confirm, "batch_pause:q-apple",
+                "过滤变化后批量目标必须仍为原勾选项 q-apple"
+            );
+        }
+        other => panic!("expected batch pause confirm popup, got {other:?}"),
+    }
+}
+
+/// F-23 场景 2:多选后切换排序模式,T 批量终止目标仍为原勾选 Quest
+///
+/// 修复前(位置型选择集):Space 选中 Priority 排序位置 1 的 q-mid,切到
+/// Status 排序(全 Pending → 按 quest_id 字典序)后位置 1 变为 q-low,
+/// T 键按当前位置重映射,批量终止错位作用于未勾选的 q-low。
+#[test]
+fn test_multi_select_batch_terminate_targets_survive_sort_change() {
+    let mut panel = TaskManagerPanel::new();
+    let mut state = TuiState::new();
+    // Priority 降序排序后:[q-high(8), q-mid(5), q-low(2)]
+    state.quest_list = vec![
+        sample_quest("q-low", "Low", 2),
+        sample_quest("q-mid", "Mid", 5),
+        sample_quest("q-high", "High", 8),
+    ];
+
+    // Down + Space:选中位置 1(q-mid)
+    panel.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &mut state);
+    panel.handle_key(
+        KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+        &mut state,
+    );
+
+    // S:Priority → Status;全部 Pending → 按 quest_id 字典序 [q-high, q-low, q-mid]
+    panel.handle_key(
+        KeyEvent::new(KeyCode::Char('S'), KeyModifiers::NONE),
+        &mut state,
+    );
+    assert_eq!(
+        panel
+            .sorted_with_mode(&state, SortMode::Status)
+            .iter()
+            .map(|q| q.quest_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["q-high", "q-low", "q-mid"],
+        "Status 模式下应按 quest_id 字典序(位置 1 已变为 q-low)"
+    );
+
+    // T 批量终止:目标必须与选择集一致(q-mid),而非错位到同位置的 q-low
+    let cmd = panel.handle_key(
+        KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE),
+        &mut state,
+    );
+    match cmd {
+        Some(TuiCommand::OpenPopup(chimera_tui::PopupKind::Confirm { on_confirm, .. })) => {
+            assert_eq!(
+                on_confirm, "batch_terminate:q-mid",
+                "排序变化后批量目标必须仍为原勾选项 q-mid"
+            );
+        }
+        other => panic!("expected batch terminate confirm popup, got {other:?}"),
+    }
+}
+
+// ============================================================
+// F-32:优先级双单位展示 P{用户面} ({内部值}) — 行内与详情统一
+// ============================================================
+
+/// F-32 场景 1:列表行优先级刻度必须为双单位,不得裸显内部 0-255 值
+///
+/// 修复前:format 直显 `P{priority}`(0-255 内部值),而 +/- 键经
+/// `user_priority_from_internal` 按 0-10 步进——按一次 + 列表行显示
+/// P125→P150,视觉上像一次跳 25 级,系统性误导优先级语义。
+#[test]
+fn test_priority_scale_renders_dual_units_in_list_row() {
+    let panel = TaskManagerPanel::new();
+    let mut state = TuiState::new();
+    // 内部 125 → 用户面 5(125/25);内部 255 → 用户面 10(min 饱和钳制)
+    state.quest_list = vec![
+        sample_quest("q-125", "Mid", 125),
+        sample_quest("q-255", "Max", 255),
+    ];
+
+    let text = panel.render_text(&state);
+    // 双单位刻度逐项断言(Priority 降序后两行都渲染)
+    assert!(
+        text.contains("P10 (255)"),
+        "内部 255 应显示 P10 (255)(用户面 10 饱和钳制):\n{text}"
+    );
+    assert!(
+        text.contains("P5 (125)"),
+        "内部 125 应显示 P5 (125):\n{text}"
+    );
+    // 负断言:裸内部值刻度不得再出现("P125"/"P255" 不是双单位串的子串,
+    // 断言可精确区分双单位与旧行为)
+    assert!(!text.contains("P255"), "列表行不得裸显内部值 P255:\n{text}");
+    assert!(!text.contains("P125"), "列表行不得裸显内部值 P125:\n{text}");
+}
+
+/// F-32 场景 2:详情弹窗优先级行同样双单位展示,与列表行口径一致
+#[test]
+fn test_priority_scale_renders_dual_units_in_detail_popup() {
+    let mut panel = TaskManagerPanel::new();
+    let mut state = TuiState::new();
+    state.quest_list = vec![sample_quest("q-1", "Alpha", 125)];
+
+    // Enter:打开详情弹窗
+    let cmd = panel.handle_key(
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        &mut state,
+    );
+    match cmd {
+        Some(TuiCommand::OpenPopup(chimera_tui::PopupKind::Detail { content, .. })) => {
+            assert!(
+                content.contains("P5 (125)"),
+                "详情弹窗应显示双单位 P5 (125):\n{content}"
+            );
+            assert!(
+                !content.contains("P125"),
+                "详情弹窗不得裸显内部值 P125:\n{content}"
+            );
+        }
+        other => panic!("expected detail popup command, got {other:?}"),
+    }
+}

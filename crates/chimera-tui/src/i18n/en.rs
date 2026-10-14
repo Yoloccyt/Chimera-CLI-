@@ -6,10 +6,13 @@
 //! 与 `zh.rs` 一一对应,覆盖 `zh::SEED_KEYS` 全部 key。新增文案时两表必须
 //! 同步添加,由 `i18n` 单测强制校验对齐。
 
-/// 查找英文译文;未命中返回 `None`(由 `i18n::tr` 回退到 key 本身)
+/// 译文表的第 1 段（键域 `app.name` … `status.view_dashboard`）
 ///
-/// WHY 与 zh 表结构一致:同 `match` 静态映射,便于逐行比对中英对齐。
-pub fn lookup(key: &str) -> Option<&'static str> {
+/// WHY 分段：`pub fn lookup` 原本单函数 >600 行，破「单函数 ≤200 行」红线
+///（G-48 / `scripts/fnlen_baseline.txt`）。分段表**保持原表序与分派机制不变**：
+/// 每段仍是同形 `match`，由 `lookup` 依序短路尝试 ⇒ 匹配语义逐字等价。
+/// （段内行数不写死在此——无门校验它，写了就是下一个漂移项。）
+fn lookup_table_1(key: &str) -> Option<&'static str> {
     let v = match key {
         "app.name" => "Chimera Interactive Terminal",
         "panel.quest.title" => "Quests",
@@ -48,6 +51,64 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         // Phase 10 §15.2b/§15.3: 经验卡片可视化 + 注入策略面板
         "panel.border.experience_card_viz" => " Card Viz ",
         "panel.border.injection_strategy" => " Injection ",
+        // v2.3 §(b.6):/bench 基准面板
+        "panel.border.bench" => " Bench ",
+        "panel.bench.subtitle" => "Benchmark summary (criterion data first)",
+        "panel.bench.awaiting" => "Awaiting bench provider (criterion pipeline not wired)",
+        "panel.bench.total_benches" => "Benches registered",
+        "panel.bench.slo_breaches" => "SLO breaches",
+        "panel.bench.retrieval_p99" => "Retrieval P99 (ms)",
+        "panel.bench.agreement" => "Judge agreement rate",
+        "panel.bench.certifiable" => "Auto-grade certifiable",
+        "panel.bench.slo_thresholds_total" => "SLO thresholds total",
+        "panel.bench.unavailable" => "N/A (source not wired)",
+        // v2.3 §(b.6)/§(b.4):审查队列面板
+        "panel.border.review_queue" => " Review Queue ",
+        "panel.review.subtitle" => "Adversarial review queue",
+        "panel.review.certified" => "Certified",
+        "panel.review.claim_pending" => "Claim (not certified)",
+        "panel.review.retracted" => "Retracted",
+        "panel.review.none" => "No review items",
+        // v2.3 §(b.6)/§(b.2):黑板浏览面板
+        "panel.border.blackboard" => " Blackboard ",
+        // B4-I(F-04): pvl_score border key (was hardcoded in PanelId::title())
+        "panel.border.pvl_score" => " PVL Score ",
+        // B4-I(F-65): panel.name.* — 30 keys for tab bar/status bar panel names,
+        // resolved at runtime via PanelId::name_key() (see zh.rs for why these
+        // are not in SEED_KEYS; alignment guarded by i18n_completeness_test)
+        "panel.name.quest" => "Quest Tasks",
+        "panel.name.parliament" => "Parliament",
+        "panel.name.budget" => "Budget",
+        "panel.name.memory" => "Memory",
+        "panel.name.security" => "Security",
+        "panel.name.health" => "Health",
+        "panel.name.log" => "System Log",
+        "panel.name.help" => "Help",
+        "panel.name.decay" => "Decay",
+        "panel.name.eventstream" => "Event Stream",
+        "panel.name.router" => "Router Stats",
+        "panel.name.mcp" => "MCP Nodes",
+        "panel.name.chtc" => "CHTC Adapters",
+        "panel.name.timeline" => "Timeline",
+        "panel.name.osa" => "OSA Sparse",
+        "panel.name.clv" => "CLV Vector",
+        "panel.name.resources" => "Resources",
+        "panel.name.metrics" => "Metrics Dashboard",
+        "panel.name.sysinfo" => "System Info",
+        "panel.name.task" => "Task Manager",
+        "panel.name.chat" => "Chat",
+        "panel.name.self_assessment" => "Self Assessment",
+        "panel.name.dag_viz" => "DAG Viz",
+        "panel.name.pvl_score" => "PVL Score",
+        "panel.name.overwindow" => "OverWindow",
+        "panel.name.experience_card_viz" => "Card Viz",
+        "panel.name.injection_strategy" => "Injection",
+        "panel.name.bench" => "Bench",
+        "panel.name.review_queue" => "Review Queue",
+        "panel.name.blackboard" => "Blackboard",
+        "panel.blackboard.subtitle" => "Blackboard collaboration state (by epistemic)",
+        "panel.blackboard.none" => "No board entries",
+        "panel.blackboard.filter" => "epistemic filter",
         "panel.budget.title" => "Budget",
         "panel.budget.tier" => "Current Tier",
         "panel.budget.coefficient" => "Coefficient",
@@ -107,6 +168,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "slash.view.filter" => "Topic filter",
         "slash.view.level" => "Level filter",
         "slash.view.panel" => "Switch panel",
+        "slash.view.bench" => "Bench panel",
         "slash.system.status" => "Status overview",
         "slash.system.doctor" => "Config health check",
         "slash.system.audit" => "Audit log query",
@@ -132,6 +194,19 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "chat.composer_hint" => "Press i to type, or / for commands",
         "status.view_chat" => "Switched to chat mode (\\ for dashboard)",
         "status.view_dashboard" => "Switched to dashboard mode (\\ for chat)",
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// 译文表的第 2 段（键域 `chat.plan_card.title` … `status.data_source_unavailable`）
+///
+/// WHY 分段：`pub fn lookup` 原本单函数 >600 行，破「单函数 ≤200 行」红线
+///（G-48 / `scripts/fnlen_baseline.txt`）。分段表**保持原表序与分派机制不变**：
+/// 每段仍是同形 `match`，由 `lookup` 依序短路尝试 ⇒ 匹配语义逐字等价。
+/// （段内行数不写死在此——无门校验它，写了就是下一个漂移项。）
+fn lookup_table_2(key: &str) -> Option<&'static str> {
+    let v = match key {
         // Concord W3 T3.3:chat stream embedded cards
         "chat.plan_card.title" => "Plan: ",
         "chat.reflection_card.title" => "Failure Reflection",
@@ -161,14 +236,12 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "shortcut.switch_panel" => "Switch panel",
         "shortcut.select_dimension" => "Select dimension",
         "shortcut.jump_event_stream" => "Jump to event stream",
-        "shortcut.time_jump" => "Time jump",
         "shortcut.show_help" => "Show help",
         "shortcut.send" => "Send",
         "shortcut.input_message" => "Type message",
         "shortcut.exit_input" => "Exit input",
         "shortcut.scroll" => "Scroll",
         "shortcut.top_bottom" => "Top/Bottom",
-        "shortcut.clear_selection" => "Clear selection",
         "shortcut.multi_select" => "Multi-select",
         "shortcut.select_all" => "Select all",
         "shortcut.pause" => "Pause",
@@ -224,6 +297,14 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "help.sc.bottom" => "Scroll to bottom",
         "help.sc.fkeys" => "Jump to panel (F-keys)",
         "help.sc.panel_actions" => "Panel action menu",
+        // F-17/F-46(B5-U):scroll hint / command syntax / brand line
+        "help.scroll_hint" => "↑/↓ scroll  g/G top/bottom",
+        "help.commands.line1" => "Commands: find <k>, filter <topic>, level <severity>,",
+        "help.commands.line2" => "          pause <quest>, resume <quest>,",
+        "help.commands.line3" => "          vote <yes|no|abstain> <proposal>, refresh, quit",
+        "help.brand" => "Chimera CLI NEXUS-OMEGA",
+        // F-17(B5-U):shared six-panel footer
+        "panel.footer" => "Press Tab to switch panels, ':' for commands, 'q' to quit.",
         "health.events" => "Events/sec: ",
         "health.slow_consumers" => "Slow Consumers: ",
         "health.avg_latency" => "Avg Latency: ",
@@ -249,6 +330,64 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "status.handshake.refused" => "Handshake refused: version irreconcilable; orchestrated commands read-only",
         // FC-A(2026-09-06 复评):投票诚实降级(L8 治理通道未接线)
         "status.vote_unwired" => "Vote: L8 Parliament governance channel not wired (reserved), request not published",
+        // B4-I(F-04): src/app status bar / popup prompt copy migration
+        // ({} = single placeholder, replaced at call sites via the replacen idiom)
+        "status.monitor_paused" => "Monitor sampling paused (display frozen)",
+        "status.monitor_resumed" => "Monitor sampling resumed",
+        "status.monitor_window" => "Monitor window: last {} points",
+        "status.clv_range_autoscale" => "Autoscale (by actual value range)",
+        "status.clv_range_fixed" => "Fixed [-1, 1]",
+        "status.clv_range" => "CLV heatmap range: {}",
+        "status.no_viz_dimension" => "{}: no switchable dimension for this panel",
+        "status.no_saved_view" => "No saved view (layout auto-saves on exit)",
+        "status.view_applied" => "Saved view applied",
+        "status.jumped_eventstream_no_quest" => "Switched to EventStream (no Quest)",
+        "status.jumped_eventstream_multi_quest" => {
+            "Switched to EventStream (multiple Quests; select in Quest panel then Enter for precise jump)"
+        }
+        "status.filter_requires_arg" => "filter requires an argument",
+        "status.invalid_topic" => "invalid topic '{}': expected quest|security|memory|health|parliament|budget|system",
+        "status.level_requires_arg" => "level requires an argument",
+        "status.invalid_level" => "invalid level '{}': expected info|warn|error|critical",
+        "status.panel_requires_name" => "panel requires a panel name",
+        "status.unknown_panel" => "unknown panel '{}'",
+        "status.action_timeout" => "action orchestrator not connected; request may not have executed",
+        "status.invalid_vote_cmd" => "invalid vote in confirm command: {}",
+        "status.export_csv_prompt" => "Export as CSV?",
+        "status.export_failed" => "Export failed: {}",
+        "status.export_blocked" => "Cannot export: {}",
+        // B4-I(F-65 补口):导出成功提示(单词级英文硬编码收口)
+        "status.exported" => "Exported: {}",
+        // B4-I:窗格技术标签(focus_pane 状态提示;zh 侧译为 无/主区/窗格)
+        "status.pane.none" => "n/a",
+        "status.pane.main" => "main",
+        "status.pane.nth" => "pane",
+        "status.request_published" => "{} request published",
+        "status.publish_failed" => "failed to publish {}: {}",
+        "status.event_bus_unavailable" => "event bus not available",
+        "status.pause_quest" => "Pause quest",
+        "status.resume_quest" => "Resume quest",
+        "status.cancel_quest" => "Cancel quest",
+        "status.terminate_quest" => "Terminate quest",
+        "status.vote_on_proposal" => "Vote {} on proposal",
+        "status.tick_interval_set" => "Tick interval set to {}ms (applies next session)",
+        "status.jumped_eventstream_filtered" => "Jumped to EventStream, filter: {}",
+        "status.tick_restart_hint" => "{}ms (restart required)",
+        "status.panel_not_registered" => "Panel not registered: {}",
+        "status.data_source_unavailable" => "data source unavailable: {}",
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// 译文表的第 3 段（键域 `slash.unwired.fork` … `panel.osa.sparsity_history`）
+///
+/// WHY 分段：`pub fn lookup` 原本单函数 >600 行，破「单函数 ≤200 行」红线
+///（G-48 / `scripts/fnlen_baseline.txt`）。分段表**保持原表序与分派机制不变**：
+/// 每段仍是同形 `match`，由 `lookup` 依序短路尝试 ⇒ 匹配语义逐字等价。
+/// （段内行数不写死在此——无门校验它，写了就是下一个漂移项。）
+fn lookup_table_3(key: &str) -> Option<&'static str> {
+    let v = match key {
         // B1(2026-09-06 复评):未接线命令的具体指引
         "slash.unwired.fork" => "Fork: multi-session storage not wired (reserved)",
         "slash.unwired.undo" => "Undo: message-level undo not wired; use Esc-Esc rewind",
@@ -311,7 +450,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.overwindow.title" => " OverWindow ",
         "panel.overwindow.body_title" => "OverWindow Fallback (RAG retrieval)",
         "panel.overwindow.empty" => "No overwindow fallback triggered yet",
-        "panel.overwindow.hint" => "Run :overwindow run <query> to exercise the retrieval chain",
+        "panel.overwindow.hint" => "Open the command palette (Ctrl+P), pick overwindow.run and enter a query to exercise the retrieval chain",
         "panel.overwindow.corpus" => "corpus",
         "panel.overwindow.window" => "window",
         "panel.overwindow.candidates" => "candidates",
@@ -420,21 +559,21 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.osa.no_context_files" => "No active context files. Waiting for OSA coordinator...",
         "panel.osa.showing_files" => "... showing {} of {} files",
         "panel.osa.sparsity_history" => "Sparsity History",
-        // mcp_nodes 面板
-        "panel.mcp.alert_offline" => "[ALERT] Node {} offline",
-        "panel.mcp.no_nodes" => "No MCP nodes connected",
-        "panel.mcp.detail_node_id" => "Node ID:",
-        "panel.mcp.detail_status_label" => "Status:",
-        "panel.mcp.status_online" => "Online",
-        "panel.mcp.status_degraded" => "Degraded",
-        "panel.mcp.status_offline" => "Offline",
-        "panel.mcp.detail_throughput" => "Throughput:",
-        "panel.mcp.detail_last_seen" => "Last Seen:",
-        "panel.mcp.detail_heartbeat_age" => "Heartbeat Age:",
-        "panel.mcp.detail_timeout_warning" => "Warning: Heartbeat timed out (>{}s threshold)",
-        "panel.mcp.detail_last_seen_never" => "Last Seen: (never)",
-        "panel.mcp.detail_no_heartbeat" => "Warning: No heartbeat received",
-        "panel.mcp.popup_title" => "Node {} Detail",
+        _ => return None,
+    };
+    Some(v)
+}
+
+/// 译文表的第 4 段（键域 `panel.self_assessment.body_title` … `common.none`）
+///
+/// WHY 分段：`pub fn lookup` 原本单函数 >600 行，破「单函数 ≤200 行」红线
+///（G-48 / `scripts/fnlen_baseline.txt`）。分段表**保持原表序与分派机制不变**：
+/// 每段仍是同形 `match`，由 `lookup` 依序短路尝试 ⇒ 匹配语义逐字等价。
+/// （段内行数不写死在此——无门校验它，写了就是下一个漂移项。）
+fn lookup_table_4(key: &str) -> Option<&'static str> {
+    let v = match key {
+        // F-45(B5-U):dead panel.mcp.* keys (14) removed — zero production
+        // consumers; the live key family is panel.mcp_nodes.* (R5 report F-45)
         // self_assessment 面板
         "panel.self_assessment.body_title" => "Harness Self Assessment (Qoder 5-Dim)",
         "panel.self_assessment.dim_comprehension" => "Comprehension",
@@ -449,6 +588,10 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.self_assessment.no_findings" => "No findings yet.",
         // pvl_score 面板
         "panel.too_small" => "Panel area too small",
+        // F-30(B5-U):panel title / awaiting hint / truncation hint
+        "panel.dag.title" => "Quest Task DAG (depth-indented)",
+        "panel.dag.awaiting" => "Awaiting QuestListUpdated...",
+        "panel.dag.more" => "... {} more quests (see Quest panel)",
         "panel.dag.unwired" => "Spec DAG: not wired (GSOE not assembled)",
         "panel.pvl.unwired" => "Nine-dim score: not wired (PVL loop not assembled)",
         "panel.pvl.unwired_hint" => "PVL loop is never instantiated in production; its source falls back to all-1.0, so no score is shown",
@@ -504,6 +647,7 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.task.sort_created_at" => "CreatedAt",
         "panel.task.no_matching" => "No matching quests",
         "panel.task.status_summary" => "Pending:{} | Running:{} | Paused:{} | Completed:{}",
+        "panel.task.selected_count" => " | Selected:{}",
         "panel.task.quadrants_label" => "Quadrants: ",
         "panel.task.quadrant_q1" => "Q1(Impl): A={} T={} WSJF={}",
         "panel.task.quadrant_q2" => "Q2(Int): A={} T={} WSJF={}",
@@ -520,9 +664,88 @@ pub fn lookup(key: &str) -> Option<&'static str> {
         "panel.task.batch_pause_confirm" => "Batch pause {} quests",
         "panel.task.batch_terminate_confirm" => "Batch terminate {} quests",
         "panel.task.batch_resume_confirm" => "Batch resume {} quests",
+        // ====================================================================
+        // B6-M(2026-10-04): six-panel English migration (chtc/clv_vector/
+        // sysinfo/experience_card_viz/resource_monitor/metrics_dashboard);
+        // EXEMPT_ENGLISH_PREFIXES entries for these files removed with it.
+        // Placeholders are {} and replaced at call sites via the replacen
+        // idiom (chained for multiple, see injection cache_line precedent).
+        // ====================================================================
+        // chtc panel (body header reuses panel.border.chtc via trim; empty
+        // "(none)" reuses common.none)
+        "panel.chtc.status_online" => "online",
+        "panel.chtc.status_offline" => "offline",
+        "panel.chtc.no_adapters" => "No CHTC adapters connected",
+        "panel.chtc.awaiting_events" => "Waiting for ChtcAdapterStatus events from chtc-bridge...",
+        "panel.chtc.detail_id" => "Adapter ID: {}",
+        "panel.chtc.detail_type" => "Type: {}",
+        "panel.chtc.detail_score" => "Compatibility Score: {}/100",
+        "panel.chtc.detail_status" => "Status: {}",
+        "panel.chtc.detail_score_warning" => "Warning: score below {} (compatibility risk)",
+        "panel.chtc.detail_requests" => "Recent Requests:",
+        "panel.chtc.requests_label" => "  Requests: ",
+        "panel.chtc.detail_title" => "CHTC Adapter: {}",
+        // clv_vector panel ("B{}" block ids, dim=/value= are locale-neutral
+        // technical identifiers, not migrated)
+        "panel.clv.l2_norm_label" => " L2 Norm: {} ",
+        "panel.clv.block_means_title" => "Block Means (8 x 64-dim blocks):",
+        "panel.clv.block_waiting" => "waiting...",
+        "panel.clv.top_dims_title" => "Top Dimensions (by |value|):",
+        "panel.clv.no_top_dims" => "No top dimensions available.",
+        "panel.clv.awaiting_encoder" => "Waiting for NMC encoder...",
+        "panel.clv.showing_dims" => "... showing {} of {} dimensions",
+        // sysinfo panel (GB/MB/B are SI unit symbols, UTC timestamp suffix
+        // locale-neutral, not migrated)
+        "panel.sysinfo.line_os" => "OS: {}  |  {}  |  arch: {}",
+        "panel.sysinfo.line_cpu" => "CPU: {}  |  cores: {}",
+        "panel.sysinfo.line_memory" => "Memory Total: {}",
+        "panel.sysinfo.line_boot" => "Boot: {}",
+        "panel.sysinfo.line_process" => "Chimera: PID {}  |  RSS: {}",
+        "panel.sysinfo.refresh_hint" => "Press 'r' to refresh process info",
+        "panel.sysinfo.na" => "n/a",
+        "panel.sysinfo.unknown" => "unknown",
+        // experience_card_viz panel
+        "panel.exp_card.body_title" => "Experience Card Viz (OpenMLE)",
+        "panel.exp_card.awaiting_provider" => "Awaiting stats provider...",
+        "panel.exp_card.stats_summary" => "Total: {} | Evaluated: {} | Unique errors: {}",
+        "panel.exp_card.scores_summary" => "Best score: {} | Average score: {}",
+        "panel.exp_card.method_dist_title" => "Method distribution:",
+        "panel.exp_card.no_cards" => "No cards recorded yet.",
+        // resource_monitor panel (per-core label "C{i}:" is locale-neutral,
+        // not migrated)
+        "panel.resources.cpu_title" => " CPU: {}{} ",
+        "panel.resources.paused_tag" => " [PAUSED]",
+        "panel.resources.ram_title" => " RAM: {}/{} GB ({}) ",
+        "panel.resources.swap_title" => " Swap: {}/{} GB",
+        "panel.resources.disk_title" => " Disk: R {}MB/s  W {}MB/s ",
+        "panel.resources.net_title" => " Net: RX {}MB/s  TX {}MB/s ",
+        // metrics_dashboard panel (cell "b{i}" category labels are
+        // locale-neutral; per_op=/global=/orphan= are protocol field names
+        // kept identical in both tables)
+        "panel.metrics.cell_metric" => "Metric",
+        "panel.metrics.cell_heatmap" => "Heatmap",
+        "panel.metrics.cell_bar" => "Bar",
+        "panel.metrics.cell_util" => "Util",
+        "panel.metrics.cell_latency" => "Latency",
+        "panel.metrics.empty_title" => " (empty) ",
+        "panel.metrics.unbound" => "(unbound)",
+        "panel.metrics.gqep_summary" => "GQEP Timeout: per_op={}  global={}  orphan={}  {}",
         // Common
         "common.none" => "(none)",
         _ => return None,
     };
     Some(v)
+}
+
+/// 查找英文译文;未命中返回 `None`(由 `i18n::tr` 回退到 key 本身)
+///
+/// WHY 与 zh 表结构一致:同 `match` 静态映射,便于逐行比对中英对齐。
+///
+/// WHY 逐段尝试:段序 = 原巨型 `match` 的臂序,故首个命中者仍是原首个命中者;
+/// 未命中时多走几次跳转表分派(常数级,且本 crate 无在册 i18n bench,不作性能主张)。
+pub fn lookup(key: &str) -> Option<&'static str> {
+    lookup_table_1(key)
+        .or_else(|| lookup_table_2(key))
+        .or_else(|| lookup_table_3(key))
+        .or_else(|| lookup_table_4(key))
 }

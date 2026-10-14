@@ -166,8 +166,13 @@ fn v3_pipeline_quiet(c: &mut Criterion) {
         let mut app = make_app();
         let mut out = V3Output::new();
         let mut term = Terminal::new(TestBackend::new(w, h)).expect("Terminal 构造失败");
-        // 首帧全量(diffed 内部处理),后续帧仅 status_bar 行比较
+        // 首帧全量(diffed 内部处理),后续帧仅 status_bar 行比较。
+        // WHY clear:DirtyTracker::new 初始全脏(engine/buffer.rs),不清则下方
+        // mark 是无操作,整组实际退化为全脏路径,度量不到 F-49 行级跳过收益。
+        // 生产 quiescent 分支同语义:先 clear 再 mark 状态行(event_loop.rs
+        // render_frame_v3),本组须与之构造一致才可作对照基准。
         let mut dirty = DirtyTracker::new(h);
+        dirty.clear();
         if h >= 2 {
             dirty.mark(h - 2);
         }
@@ -211,7 +216,10 @@ fn v3_pipeline_quiescent_reuse(c: &mut Criterion) {
         out.render_diffed(&cached, &full, &mut prime)
             .expect("首帧全量");
         // P-2:仅状态行(Dashboard status 行 = h-2)参与 compat+diff
+        // WHY clear:同 v3_pipeline_quiet —— new 初始全脏,不清则此组同为
+        // 全脏路径,复刻的"单行 dirty"静默构造名存实亡。
         let mut dirty = DirtyTracker::new(h);
+        dirty.clear();
         if h >= 2 {
             dirty.mark(h - 2);
         }

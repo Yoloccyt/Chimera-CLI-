@@ -25,12 +25,13 @@ use super::dispatch::TaskKind;
 /// HTS 阈值表条目 — 手册 §8.4 单行记录
 ///
 /// WHY 全 Copy:热路径 `route()` 每调用一次仅读取本结构的一个快照副本,
-/// 无堆分配、无借用逃逸（`[Entry; 6]` 数组索引拷贝）。
+/// 无堆分配、无借用逃逸（`[Entry; TaskKind::COUNT]` 数组索引拷贝）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Entry {
     /// 并行调度阈值（items）:条目数 >= 阈值时进 L-a rayon 池
     pub threshold: usize,
-    /// 并行块大小（chunk）:批量计算的分块粒度（T14 并行化接线消费）
+    /// 并行块大小（chunk）:分块粒度；当前无并行接线消费者（ADR-196 D2-ter /
+    /// C3：[`calibration`](super::calibration) 写表时回读现值即唯一读点）
     pub chunk: usize,
     /// 阈值来源 — 诚实数据红线:阈值必须可溯源（ADR-103 三重来源）
     pub source: ThresholdSource,
@@ -64,10 +65,10 @@ pub enum ThresholdSource {
     ConservativeDefault,
 }
 
-/// HTS 动态阈值表 — 按 [`TaskKind`] 六类登记阈值与块大小（手册 §8.4）
+/// HTS 动态阈值表 — 按 [`TaskKind`] 十类登记阈值与块大小（手册 §8.4 + ADR-196 C1 拆位）
 ///
 /// # 存储
-/// `[Entry; 6]` 定长数组（六类任务,与 [`dispatch::TaskKind`] 穷举对应）:
+/// `[Entry; TaskKind::COUNT]` 定长数组（长度由 [`TaskKind::ALL`] 单源派生,非硬编码）:
 /// - 读:`get(kind)` 经 `kind_index` 数组索引,**零分配、零锁**（在 ArcSwap 快照内）;
 /// - 写:`update` 改快照副本,由持有方（`ComputeBridge`）RCU store 全表替换。
 ///
@@ -75,66 +76,112 @@ pub enum ThresholdSource {
 /// `ComputeBridge` 以 `ArcSwap<HtsTable>` 持有本表;`update` 为运行期更新接口
 /// （T1 测定值灌入 + T14 序贯检验校准用）。
 ///
-/// # 初始值来源
-/// 迁移自 [`dispatch::TaskKind::threshold`] 静态表（T8）,并补充块大小 chunk:
-/// ClvSimilarity=1000/64、OsaMask=100/16、KnnSearch=5000/256、GsoeEvaluate=500/8、
-/// CscCollapseScore=200/32、Generic=10000/64（手册 §8.4,标注"S9 离线测定,W1 复测"）。
+/// # 初始值来源（E1 单源收敛）
+/// 每类初始值唯一登记在 [`HtsTable::default_entry`];[`Default`] 经
+/// `TaskKind::ALL.map(default_entry)` 派生（数量/顺序与枚举清单编译期绑定）。
+/// 值:ClvSimilarity=1000/64、OsaMask=100/16、KnnSearch=5000/256、GsoeEvaluate=500/8、
+/// CscCollapseScore=200/32、Generic=10000/64、HcwEntryScore=200/32、NmcEncode=1000/64、
+/// ExpertScore=10000/64、DecayBatch=10000/64（手册 §8.4,标注"S9 离线测定,W1 复测"）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HtsTable {
-    /// 六类登记项,索引与 [`kind_index`] 一致（Clv=0, Osa=1, Knn=2, Gsoe=3, Csc=4, Gen=5）
-    entries: [Entry; 6],
+    /// 全登记类表项,索引与 [`kind_index`] 一致（Clv=0, Osa=1, Knn=2, Gsoe=3, Csc=4, Gen=5,
+    /// Hcw=6, Nmc=7, Expert=8, Decay=9）— 长度由 `TaskKind::COUNT` 单源绑定
+    entries: [Entry; TaskKind::COUNT],
 }
 
 impl Default for HtsTable {
-    /// 初始表 — 迁移 dispatch.rs 静态值（S9 离线测定预填,W1 复测）;
-    /// 五类标注 [`OfflineMeasured`](ThresholdSource::OfflineMeasured)（measured_at=0 预填占位）,
-    /// [`Generic`](TaskKind::Generic) 为 [`ConservativeDefault`](ThresholdSource::ConservativeDefault)
+    /// 初始表 — E1 单源派生自 [`HtsTable::default_entry`]（与旧手写表逐项一致）:
+    /// 条目序列 = `TaskKind::ALL.map(default_entry)`——数量与顺序由枚举清单锁定,
+    /// `ALL` 长度变化而派生未同步时赋值即编译错（编译期断言）;
+    /// 顺序恒等另由 `tests::kind_index_bijective` 运行期复核。
+    ///
+    /// 七类标注 [`OfflineMeasured`](ThresholdSource::OfflineMeasured)（measured_at=0 预填占位）,
+    /// Generic/ExpertScore/DecayBatch 三类为 [`ConservativeDefault`](ThresholdSource::ConservativeDefault)
     /// （10,000,未测定兜底,来源标注见手册 §8.4）。
     fn default() -> Self {
         Self {
-            entries: [
-                // ClvSimilarity:S9 离线测定初值,W1 复测（chunk=64 并行分块）
-                Entry {
-                    threshold: 1_000,
-                    chunk: 64,
-                    source: ThresholdSource::OfflineMeasured { measured_at: 0 },
-                },
-                // OsaMask:S9 离线测定初值,W1 复测（chunk=16）
-                Entry {
-                    threshold: 100,
-                    chunk: 16,
-                    source: ThresholdSource::OfflineMeasured { measured_at: 0 },
-                },
-                // KnnSearch:S9 离线测定初值,W1 复测（chunk=256）
-                Entry {
-                    threshold: 5_000,
-                    chunk: 256,
-                    source: ThresholdSource::OfflineMeasured { measured_at: 0 },
-                },
-                // GsoeEvaluate:S9 离线测定初值,W1 复测（chunk=8,离线通道,R2 约束不动）
-                Entry {
-                    threshold: 500,
-                    chunk: 8,
-                    source: ThresholdSource::OfflineMeasured { measured_at: 0 },
-                },
-                // CscCollapseScore:S9 离线测定初值,W1 复测（chunk=32）
-                Entry {
-                    threshold: 200,
-                    chunk: 32,
-                    source: ThresholdSource::OfflineMeasured { measured_at: 0 },
-                },
-                // Generic:保守默认兜底（未测定,不作已校准结论）
-                Entry {
-                    threshold: 10_000,
-                    chunk: 64,
-                    source: ThresholdSource::ConservativeDefault,
-                },
-            ],
+            entries: TaskKind::ALL.map(Self::default_entry),
         }
     }
 }
 
 impl HtsTable {
+    /// 单类默认表项 — 全登记类初始阈值/chunk/来源的**唯一登记点**（E1 单源收敛）
+    ///
+    /// WHY 收敛到单点:此前 `Default` 手写十条目 + `dispatch::threshold()` 各自维护
+    /// 同名值表（两处人工同步,靠测试跨锁）;现在值的唯一登记点在本函数——`Default` 经
+    /// `TaskKind::ALL.map` 派生、`TaskKind::threshold()` 委托投影。新增登记类时只需改
+    /// 本函数（match 穷举,漏臂即编译错）+ `TaskKind::ALL`。
+    ///
+    /// 来源标注（诚实数据红线,ADR-103）:七类为 S9 离线测定预填
+    /// （`measured_at = 0`,未 W1 复测不作已校准结论）;Generic/ExpertScore/DecayBatch
+    /// 三类为保守默认（10,000,未测定兜底）。
+    #[must_use]
+    pub(crate) const fn default_entry(kind: TaskKind) -> Entry {
+        match kind {
+            // ClvSimilarity:S9 离线测定初值,W1 复测（chunk=64 并行分块）
+            TaskKind::ClvSimilarity => Entry {
+                threshold: 1_000,
+                chunk: 64,
+                source: ThresholdSource::OfflineMeasured { measured_at: 0 },
+            },
+            // OsaMask:S9 离线测定初值,W1 复测（chunk=16）
+            TaskKind::OsaMask => Entry {
+                threshold: 100,
+                chunk: 16,
+                source: ThresholdSource::OfflineMeasured { measured_at: 0 },
+            },
+            // KnnSearch:S9 离线测定初值,W1 复测（chunk=256）
+            TaskKind::KnnSearch => Entry {
+                threshold: 5_000,
+                chunk: 256,
+                source: ThresholdSource::OfflineMeasured { measured_at: 0 },
+            },
+            // GsoeEvaluate:S9 离线测定初值,W1 复测（chunk=8,离线通道,R2 约束不动）
+            TaskKind::GsoeEvaluate => Entry {
+                threshold: 500,
+                chunk: 8,
+                source: ThresholdSource::OfflineMeasured { measured_at: 0 },
+            },
+            // CscCollapseScore:S9 离线测定初值,W1 复测（chunk=32）
+            TaskKind::CscCollapseScore => Entry {
+                threshold: 200,
+                chunk: 32,
+                source: ThresholdSource::OfflineMeasured { measured_at: 0 },
+            },
+            // Generic:保守默认兜底（未测定,不作已校准结论）
+            TaskKind::Generic => Entry {
+                threshold: 10_000,
+                chunk: 64,
+                source: ThresholdSource::ConservativeDefault,
+            },
+            // HcwEntryScore（ADR-196 C1 拆自 CscCollapseScore）:200/32 原值迁移,阈值零漂移
+            TaskKind::HcwEntryScore => Entry {
+                threshold: 200,
+                chunk: 32,
+                source: ThresholdSource::OfflineMeasured { measured_at: 0 },
+            },
+            // NmcEncode（拆自 ClvSimilarity）:1000/64 原值迁移
+            TaskKind::NmcEncode => Entry {
+                threshold: 1_000,
+                chunk: 64,
+                source: ThresholdSource::OfflineMeasured { measured_at: 0 },
+            },
+            // ExpertScore（从 Generic 拆出 faae）:10000/64 保守默认
+            TaskKind::ExpertScore => Entry {
+                threshold: 10_000,
+                chunk: 64,
+                source: ThresholdSource::ConservativeDefault,
+            },
+            // DecayBatch（从 Generic 拆出 decay）:10000/64 保守默认
+            TaskKind::DecayBatch => Entry {
+                threshold: 10_000,
+                chunk: 64,
+                source: ThresholdSource::ConservativeDefault,
+            },
+        }
+    }
+
     /// 查询单条目 — 热路径核心读操作
     ///
     /// WHY 返回 `Entry` 副本而非引用:`Entry` 全 Copy（阈值/块大小/来源都是值语义）,
@@ -169,10 +216,10 @@ impl HtsTable {
 
 /// [`TaskKind`] → 数组索引 — 与 [`HtsTable`] 的 `entries` 布局唯一对应
 ///
-/// WHY 不用 HashMap:六类登记可穷举 match,索引 O(1) 且零哈希开销;
-/// match 穷举性在 [`TaskKind`] 新增变体时编译报错（六类不变的红线由编译期兜底）。
+/// WHY 不用 HashMap:十类登记可穷举 match,索引 O(1) 且零哈希开销;
+/// match 穷举性在 [`TaskKind`] 新增变体时编译报错（新增登记位漏改由编译期兜底）。
 #[must_use]
-const fn kind_index(kind: TaskKind) -> usize {
+pub(crate) const fn kind_index(kind: TaskKind) -> usize {
     match kind {
         TaskKind::ClvSimilarity => 0,
         TaskKind::OsaMask => 1,
@@ -180,6 +227,10 @@ const fn kind_index(kind: TaskKind) -> usize {
         TaskKind::GsoeEvaluate => 3,
         TaskKind::CscCollapseScore => 4,
         TaskKind::Generic => 5,
+        TaskKind::HcwEntryScore => 6,
+        TaskKind::NmcEncode => 7,
+        TaskKind::ExpertScore => 8,
+        TaskKind::DecayBatch => 9,
     }
 }
 
@@ -649,6 +700,10 @@ mod tests {
             (TaskKind::GsoeEvaluate, 500, 8),
             (TaskKind::CscCollapseScore, 200, 32),
             (TaskKind::Generic, 10_000, 64),
+            (TaskKind::HcwEntryScore, 200, 32),
+            (TaskKind::NmcEncode, 1_000, 64),
+            (TaskKind::ExpertScore, 10_000, 64),
+            (TaskKind::DecayBatch, 10_000, 64),
         ];
         for (kind, want_threshold, want_chunk) in expect {
             let e = table.get(kind);
@@ -657,20 +712,34 @@ mod tests {
         }
     }
 
-    /// 初始值 == dispatch.rs 静态表（迁移等价性）— 保证 T8 测试继续通过
+    /// 动态表初值与 dispatch 静态参照一致 — T9/E1 迁移等价性
+    ///
+    /// E1 后 `Default` 由 `TaskKind::ALL.map(default_entry)` 派生、`threshold()` 委托
+    /// `default_entry`——本测试从**双路径**验证同一值：
+    /// ① `get(kind)`（经 kind_index 槽位）= `default_entry(kind)`（直取）——槽位错位在此被抓
+    /// （对值互异的 kind 对；值相同的 kind 对由 `kind_index_bijective` 恒等断言兜捕）;
+    /// ② `get(kind).threshold` = `threshold()`——静态参照面（route 测试边界值来源）不漂。
     #[test]
     fn default_table_matches_dispatch_static() {
         let table = HtsTable::default();
         for kind in TaskKind::ALL {
             assert_eq!(
+                table.get(kind),
+                HtsTable::default_entry(kind),
+                "{kind:?} 表槽位值与 default_entry 不一致（槽位/派生错位）"
+            );
+            assert_eq!(
                 table.get(kind).threshold,
                 kind.threshold(),
-                "{kind:?} 动态表初值须与 dispatch 静态表一致（迁移等价性）"
+                "{kind:?} 动态表初值须与 dispatch 静态参照一致（迁移等价性）"
             );
         }
     }
 
-    /// 初始来源标记 — 五类 OfflineMeasured 预填 + Generic 保守默认（诚实数据红线）
+    /// 初始来源标记 — 七类 OfflineMeasured 预填 + 三类保守默认(Generic/ExpertScore/DecayBatch)（诚实数据红线）
+    ///
+    /// E1 收敛后扩展为**全十类**逐项校验（旧版仅查 5+1 类,Hcw/Nmc/Expert/Decay 的
+    /// 来源标注未被覆盖）——每类的 source 必须与 default_entry 单点登记一致。
     #[test]
     fn initial_sources_are_honest() {
         let table = HtsTable::default();
@@ -680,6 +749,8 @@ mod tests {
             TaskKind::KnnSearch,
             TaskKind::GsoeEvaluate,
             TaskKind::CscCollapseScore,
+            TaskKind::HcwEntryScore,
+            TaskKind::NmcEncode,
         ] {
             assert_eq!(
                 table.get(kind).source,
@@ -687,10 +758,17 @@ mod tests {
                 "{kind:?} 应为 S9 预填占位（measured_at=0,未复测不作已校准结论）"
             );
         }
-        assert_eq!(
-            table.get(TaskKind::Generic).source,
-            ThresholdSource::ConservativeDefault
-        );
+        for kind in [
+            TaskKind::Generic,
+            TaskKind::ExpertScore,
+            TaskKind::DecayBatch,
+        ] {
+            assert_eq!(
+                table.get(kind).source,
+                ThresholdSource::ConservativeDefault,
+                "{kind:?} 应为保守默认（未测定兜底,不得标为已测定）"
+            );
+        }
     }
 
     /// update 后 get 反映新值 — 运行期更新接口基础语义
@@ -1041,16 +1119,78 @@ mod tests {
         }
     }
 
-    /// kind_index — 六类映射互斥且覆盖 ALL（布局一致性防御）
+    /// kind_index — 与 `TaskKind::ALL` 顺序恒等且全覆盖（布局一致性防御,E1 强化）
+    ///
+    /// 强化自 B2 的单射断言:**逐臂交换不破坏单射**（两值仍互异）,只有恒等断言
+    /// （`kind_index(ALL[i]) == i`）能抓槽位错位——而槽位错位会让 `get()` 命中
+    /// 错误表项且不报错。数组长度绑定由 `[Entry; TaskKind::COUNT]` 编译期锁定,
+    /// 本测试复核顺序与覆盖（运行期断言面）。
     #[test]
     fn kind_index_bijective() {
         use std::collections::HashSet;
         let mut seen = HashSet::new();
-        for kind in TaskKind::ALL {
-            let idx = kind_index(kind);
-            assert!(idx < 6, "索引越界");
+        for (i, kind) in TaskKind::ALL.iter().enumerate() {
+            let idx = kind_index(*kind);
+            assert_eq!(
+                idx, i,
+                "kind_index(TaskKind::ALL[{i}]) 必须为 {i}（槽位错位）"
+            );
+            assert!(idx < TaskKind::COUNT, "索引越界（须 < TaskKind::COUNT）");
             assert!(seen.insert(idx), "索引重复:kind_index 非单射");
         }
-        assert_eq!(seen.len(), 6, "六类必须映射到六个不同索引");
+        assert_eq!(
+            seen.len(),
+            TaskKind::COUNT,
+            "全部登记类必须映射到唯一条目（覆盖完整性）"
+        );
+    }
+
+    /// B2 价值证明(spec §7-3):faae(`ExpertScore`) 与 decay(`DecayBatch`) 从共享
+    /// `Generic` 解耦为**独立表项** —— 更新其一的阈值绝不影响另一的路由决策。
+    /// 这正是四维审计 §1.1 / ADR-196 要消除的「SPRT 连带升降」缺陷的回归锁。
+    #[test]
+    fn expert_score_and_decay_batch_entries_are_decoupled() {
+        // 解耦前提:两者落在不同 kind_index(共享 Generic 时会是同一索引)。
+        assert_ne!(
+            kind_index(TaskKind::ExpertScore),
+            kind_index(TaskKind::DecayBatch),
+            "ExpertScore 与 DecayBatch 必须是不同表项(解耦)"
+        );
+        let mut table = HtsTable::default();
+        assert_eq!(table.get(TaskKind::ExpertScore).threshold, 10_000);
+        assert_eq!(table.get(TaskKind::DecayBatch).threshold, 10_000);
+        // 只下调 ExpertScore 阈值 → DecayBatch 表项纹丝不动。
+        table.update(
+            TaskKind::ExpertScore,
+            5_000,
+            64,
+            ThresholdSource::ConservativeDefault,
+        );
+        assert_eq!(
+            table.get(TaskKind::ExpertScore).threshold,
+            5_000,
+            "ExpertScore 应被更新"
+        );
+        assert_eq!(
+            table.get(TaskKind::DecayBatch).threshold,
+            10_000,
+            "DecayBatch 不得被 ExpertScore 的写入连带影响(解耦核心断言)"
+        );
+        // 路由因此可独立标定:n=7_000 一侧 Rayon、另一侧仍 Inline。
+        assert_eq!(
+            decide(TaskKind::ExpertScore, false, 5_000, 7_000),
+            DispatchPlan::Rayon,
+            "ExpertScore 降阈值后 n=7000 应入 Rayon"
+        );
+        assert_eq!(
+            decide(
+                TaskKind::DecayBatch,
+                false,
+                table.get(TaskKind::DecayBatch).threshold,
+                7_000
+            ),
+            DispatchPlan::Inline,
+            "DecayBatch 保持 10_000,n=7000 应仍 Inline"
+        );
     }
 }

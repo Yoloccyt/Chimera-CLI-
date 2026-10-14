@@ -98,22 +98,22 @@ impl HelpPanel {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(
-            "Commands: find <k>, filter <topic>, level <severity>,",
-        ));
-        lines.push(Line::from("          pause <quest>, resume <quest>,"));
-        lines.push(Line::from(
-            "          vote <yes|no|abstain> <proposal>, refresh, quit",
-        ));
+        // F-46:命令语法说明迁键;命令名(find/filter/...)为 slash 命令协议面
+        // 不译,键值 zh 仅 "Commands:" 标签本地化,三键对应原三行排版
+        lines.push(Line::from(crate::t!("help.commands.line1")));
+        lines.push(Line::from(crate::t!("help.commands.line2")));
+        lines.push(Line::from(crate::t!("help.commands.line3")));
 
         // 如果提供了上下文,追加面板专属快捷键
         if let Some(panel_id) = context {
             if !panel_shortcuts.is_empty() {
                 lines.push(Line::from(""));
                 lines.push(Line::from(format!(
+                    // B4-I(F-65 补口):面板名与 tab 栏同源走 name_key() 键表,
+                    // 不再用 as_str() 硬编码英文——zh 模式随 Ctrl+L 切换
                     "{} — {}",
                     crate::t!("help.section.panel"),
-                    panel_id.as_str()
+                    crate::t!(panel_id.name_key())
                 )));
                 lines.push(Line::from("─────────────"));
                 for (key, desc) in panel_shortcuts {
@@ -123,7 +123,9 @@ impl HelpPanel {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from("Chimera CLI NEXUS-OMEGA"));
+        // F-46:品牌行走键表(zh/en 同值——品牌名不译,入表只为纳入键表单一
+        // 真值源,使 help.rs 可从英文豁免清单出清)
+        lines.push(Line::from(crate::t!("help.brand")));
 
         Text::from(lines)
     }
@@ -157,7 +159,10 @@ impl Panel for HelpPanel {
         };
         let mut content = Self::content(context, shortcuts);
         // U-N3:滚动提示行(仅在内容确实超出一屏时有意义,恒置末尾)
-        content.lines.push(Line::from("↑/↓ scroll  g/G top/bottom"));
+        // F-46:提示文案迁 help.scroll_hint 键
+        content
+            .lines
+            .push(Line::from(crate::t!("help.scroll_hint")));
         let inner_h = area.height.saturating_sub(2) as usize; // Block 上下边框
                                                               // 渲染期精钳:handle_key 无终端尺寸,偏移上限在此按内容行数收敛
         let max_offset = content.lines.len().saturating_sub(inner_h);

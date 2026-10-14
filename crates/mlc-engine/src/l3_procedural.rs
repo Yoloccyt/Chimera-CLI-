@@ -43,6 +43,21 @@ use tracing::{debug, trace};
 use crate::error::MlcError;
 use crate::types::{ExecutionStats, PatternSignature, ProceduralEntry};
 
+/// v2.3 §(b.5) L3 写入扫描策略(本模块单一口径)。
+///
+/// 只拦截硬敏感载荷(私钥 PEM / 云凭证 / 服务令牌 → `Block`);高熵与键名启发式
+/// 刻意设为 `Pass`,避免误伤 `context_hash` 等合法高熵串。
+///
+/// WHY 抽函数:`insert` 与 `insert_batch` 两个入口必须同口径。入口级插桩(G-84)
+/// 下,策略若逐入口手抄，“同口径”就只是注释里的约定。
+fn hard_payload_scan_policy() -> nexus_contracts::sensitive::ScanPolicy {
+    nexus_contracts::sensitive::ScanPolicy {
+        on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+        on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+        ..Default::default()
+    }
+}
+
 /// L3 程序记忆 — SQLite 持久化的可复用执行模式
 ///
 /// 封装 `Arc<Mutex<Connection>>`,提供线程安全的程序记忆 CRUD。
@@ -129,6 +144,17 @@ impl ProceduralMemory {
                 .map_err(|e| MlcError::StorageError(format!("L3 mutex poisoned: {e}")))?;
 
             let pattern_key = entry.pattern_signature.to_key()?;
+
+            // v2.3 §(b.5) 写入敏感扫描门(首个记忆面写点插桩):程序记忆 output 落库前
+            // 拦截硬敏感载荷(私钥 PEM / 云凭证 / 服务令牌 → Block)。
+            // 口径见 `hard_payload_scan_policy()`。命中即拒绝入库。见 nexus-contracts::sensitive。
+            let scan_policy = hard_payload_scan_policy();
+            if nexus_contracts::sensitive::scan(&entry.output, &scan_policy).is_blocked() {
+                return Err(MlcError::StorageError(format!(
+                    "L3 写入被敏感扫描拦截:pattern_key={pattern_key} 含私钥/凭证/令牌类敏感载荷"
+                )));
+            }
+
             let tool_seq_json = serde_json::to_string(&entry.pattern_signature.tool_sequence)?;
             let stats_json = serde_json::to_string(&entry.execution_stats)?;
             let created_iso = entry.created_at.to_rfc3339();
@@ -194,6 +220,21 @@ impl ProceduralMemory {
     pub async fn insert_batch(&self, entries: Vec<ProceduralEntry>) -> Result<(), MlcError> {
         let conn = self.conn.clone();
         spawn_blocking(move || {
+            // v2.3 §(b.5) 入口级补齐:批量入口原未插桩——单条 `insert` 有守卫而本函数没有,
+            // 等价于给 L3 记忆面留了一条绕过扫描的旁路(G-84 由文件级升入口级时实测抓出)。
+            // 处置与单条同口径:任一条命中即整批拒绝。WHY 整批拒绝而非逐条跳过:本函数以
+            // 单事务写入且主键冲突即回滚全部(见下方 `Transaction` 注释),“部分落盘”不是它的语义。
+            // 扫描不需持锁,故置于 `lock()` 之前,不延长临界区。
+            let scan_policy = hard_payload_scan_policy();
+            for (idx, entry) in entries.iter().enumerate() {
+                if nexus_contracts::sensitive::scan(&entry.output, &scan_policy).is_blocked() {
+                    return Err(MlcError::StorageError(format!(
+                        "L3 批量写入被敏感扫描拦截:index={idx} context_hash={} 含私钥/凭证/令牌类敏感载荷",
+                        entry.pattern_signature.context_hash
+                    )));
+                }
+            }
+
             let mut conn = conn
                 .lock()
                 .map_err(|e| MlcError::StorageError(format!("L3 mutex poisoned: {e}")))?;
@@ -514,6 +555,56 @@ mod tests {
         let entry2 = ProceduralEntry::new(sig.clone(), "output-2");
         let err = mem.insert(&entry2).await.unwrap_err();
         assert!(matches!(err, MlcError::PatternConflict { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_insert_blocks_sensitive_output() {
+        // v2.3 §(b.5): 含私钥标记的 output 应被写入敏感扫描拦截,且不落库
+        let mem = ProceduralMemory::open_in_memory().unwrap();
+        let sig = make_signature("secret");
+        let entry = ProceduralEntry::new(sig, "-----BEGIN RSA PRIVATE KEY-----\nMIIBowe8...");
+        let err = mem.insert(&entry).await.unwrap_err();
+        assert!(
+            matches!(err, MlcError::StorageError(_)),
+            "敏感载荷应被拦截返回 StorageError,实际 {err:?}"
+        );
+        assert_eq!(mem.count().await.unwrap(), 0, "被拦截载荷不得落库");
+    }
+
+    #[tokio::test]
+    async fn test_insert_batch_blocks_sensitive_output() {
+        // 入口级守卫的双向牙齿:批量入口曾绕过单条 insert 的扫描门。
+        let mem = ProceduralMemory::open_in_memory().unwrap();
+
+        // 反向:全为正常 output 的批次必须照常落库(防扫描误伤)。
+        let benign = vec![
+            ProceduralEntry::new(make_signature("b-1"), "output-b1"),
+            ProceduralEntry::new(make_signature("b-2"), "output-b2"),
+        ];
+        mem.insert_batch(benign).await.unwrap();
+        assert_eq!(mem.count().await.unwrap(), 2, "正常批量条目不得被扫描误伤");
+
+        // 正向:批内含私钥 PEM → 整批拒绝,同批 benign 条目也不得落库。
+        let dirty = vec![
+            ProceduralEntry::new(make_signature("b-3"), "output-b3"),
+            ProceduralEntry::new(
+                make_signature("secret"),
+                "-----BEGIN RSA PRIVATE KEY-----\nMIIBowe8...",
+            ),
+        ];
+        let err = mem
+            .insert_batch(dirty)
+            .await
+            .expect_err("批内含敏感载荷应整批拒绝");
+        assert!(
+            matches!(err, MlcError::StorageError(_)),
+            "应报 StorageError,实测 {err:?}"
+        );
+        assert_eq!(
+            mem.count().await.unwrap(),
+            2,
+            "整批拒绝:同批的 b-3 也不得落库"
+        );
     }
 
     #[tokio::test]

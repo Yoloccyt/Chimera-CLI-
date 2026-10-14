@@ -42,6 +42,10 @@ pub fn shortcuts_from_domain(
         .collect()
 }
 
+/// v2.3 §(b.6):/bench 基准面板(criterion 数据先行,trait 注入)
+pub mod bench;
+/// v2.3 §(b.6)/§(b.2):黑板浏览面板(MLC 协作态投影按 epistemic 过滤)
+pub mod blackboard;
 pub mod budget;
 pub mod chat;
 pub mod chtc;
@@ -72,6 +76,8 @@ pub mod parliament;
 pub mod pvl_score;
 pub mod quest;
 pub mod resource_monitor;
+/// v2.3 §(b.6)/§(b.4):审查队列面板(AdversarialReview 可视化;仅 Certify 渲染为已认证)
+pub mod review_queue;
 pub mod router;
 pub mod security;
 /// polish-v2.7 P1-5:自评仪表盘面板(五维度 Harness 自我评估,ADR-049)
@@ -80,6 +86,8 @@ pub mod sysinfo;
 pub mod task_manager;
 pub mod timeline;
 
+pub use bench::{BenchPanel, BenchStats, BenchStatsProvider};
+pub use blackboard::{BlackboardPanel, BoardItem};
 pub use budget::BudgetPanel;
 pub use chat::ChatPanel;
 pub use chtc::ChtcPanel;
@@ -105,6 +113,7 @@ pub use parliament::ParliamentPanel;
 pub use pvl_score::PvlScorePanel;
 pub use quest::QuestPanel;
 pub use resource_monitor::ResourceMonitorPanel;
+pub use review_queue::{ReviewItem, ReviewQueuePanel, ReviewStage};
 pub use router::RouterPanel;
 pub use security::SecurityPanel;
 pub use self_assessment::SelfAssessmentPanel;
@@ -158,6 +167,17 @@ pub trait Panel: Send {
     /// 默认空实现;列表型面板应覆盖以将选中项移到最后一项。
     /// 需要 `state` 参数的原因同 `scroll_to_top`。
     fn scroll_to_bottom(&mut self, _state: &mut TuiState) {}
+
+    /// 注入主题强调色(F-37)
+    ///
+    /// 默认空实现;需要 accent 高亮的面板(现 MetricsDashboard 选中格)覆盖
+    /// 暂存并在渲染时消费。
+    ///
+    /// WHY 广播注入而非面板自取:主题色归 `TuiApp`(config.colors.resolve),
+    /// 面板层仅持 `&TuiState` 不可达(metrics_dashboard.rs 批次四登记);
+    /// `TuiApp` 在装配期与切主题时经 `broadcast_accent` 广播。默认 no-op
+    /// 使其余面板零改动(与 focus/scroll_to_* 默认实现同模式)。
+    fn set_accent(&mut self, _accent: ratatui::style::Color) {}
 
     /// 返回当前面板支持的快捷键列表（键名, 描述）
     ///

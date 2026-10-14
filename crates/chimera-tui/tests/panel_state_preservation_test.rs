@@ -58,6 +58,50 @@ fn render_content(app: &mut TuiApp, width: u16, height: u16) -> String {
 }
 
 // ============================================================
+// F-10 回归 — Quest 滚动单位错配修复
+// ============================================================
+
+/// 10 个 Quest 在 80x24 连按 Down 至第 8 项,选中行始终可见
+///
+/// 旧实现把 selected(Quest 索引)直传 adjust_scroll / Paragraph::scroll
+/// (两者均以"1 单位 = 1 文本行"工作),而每个 Quest 占 4 文本行 —— 稳态后
+/// 选区每步走 4 行而视口只滚 1 行,选中高亮永久丢失(小列表用例无法暴露)。
+/// 修复后选中 Quest 先换算为标题行号(row = 2 + 4×selected)再以行单位滚动。
+/// WHY 逐步断言:任务书要求"选中行始终可见",每步渲染均验证新选中项的
+/// "> [N]" 前缀在视口内,而非只验终态。
+#[test]
+fn quest_panel_scrolling_keeps_cursor_visible_on_10_quests() {
+    let snapshot = chimera_tui::DataSnapshot {
+        quest_list: (1..=10)
+            .map(|i| sample_quest(&format!("q{i}"), &format!("Quest Number {i}")))
+            .collect(),
+        ..Default::default()
+    };
+
+    let mut app = TuiApp::with_data_source(
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(MockDataSource::new(snapshot)),
+    )
+    .unwrap();
+    app.update();
+    assert_eq!(app.current_panel(), chimera_tui::PanelId::Quest);
+
+    // 连按 Down 至第 8 项([8]);每按一次都断言新选中项标题行可见
+    for n in 2..=8usize {
+        app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let content = render_content(&mut app, 80, 24);
+        assert!(
+            content.contains(&format!("> [{n}]")),
+            "第 {n} 项被选中后其标题行应在视口内可见, got: {content}"
+        );
+    }
+}
+
+// ============================================================
 // Quest 面板 selected 保留测试
 // ============================================================
 

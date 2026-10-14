@@ -201,7 +201,7 @@ async fn route_action(
             Ok(format!("已取消 Quest {qid}"))
         }
         // 超窗兜底检索(P1,ADR-072):真实执行 kvbsr→repo-wiki→hcw 两级检索链。
-        // 需 query(命令栏 `:overwindow run <词>`);palette 无参派发时明确失败。
+        // 需 query(命令面板 Ctrl+P 选中 overwindow.run 后输入);palette 无参派发时明确失败。
         "overwindow.run" => {
             let handle = overwindow.ok_or_else(|| {
                 "overwindow.run 未启用(未注入 OverWindowBridge,见 ADR-072)".to_string()
@@ -209,7 +209,9 @@ async fn route_action(
             let query = payload_str(payload, "query")
                 .filter(|q| !q.is_empty())
                 .ok_or_else(|| {
-                    format!("{action_id} 需提供 query 参数(如 :overwindow run 检索词)")
+                    // B4-S(F-55):指引指向真实入口(命令面板);原 ":overwindow run"
+                    // 命令栏/斜杠入口不存在,照旧提示操作必撞 unknown command
+                    format!("{action_id} 需提供 query 参数(经命令面板 Ctrl+P 选中后输入检索词)")
                 })?;
             let corpus = (handle.corpus_provider)();
             if corpus.trim().is_empty() {

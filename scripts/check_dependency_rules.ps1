@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # check_dependency_rules.ps1 - Architecture dependency-iron-law audit (P9-T10)
 # =============================================================================
 # Purpose: enforce the three dependency iron laws of the NEXUS-OMEGA 10-layer
@@ -82,7 +82,7 @@ $layerMap = @{
     # L2 Memory
     'nmc-encoder' = 2; 'hcw-window' = 2; 'mlc-engine' = 2
     # L3 Storage
-    'scc-cache' = 3; 'lsct-tiering' = 3; 'cmt-tiering' = 3
+    'scc-cache' = 3; 'cmt-tiering' = 3
     # P2-T2 (2026-08-24): session-store session persistence (L3, 40th crate)
     'session-store' = 3
     # L4 Security
@@ -95,9 +95,6 @@ $layerMap = @{
     # (二者均零外部生产依赖方, 移动经 grep 核实无 Check-B 影响)
     'osa-coordinator' = 6; 'kvbsr-router' = 6; 'faae-router' = 6
     'sesa-router' = 6; 'omega-learner' = 6
-    # 架构减法批次 (2026-09-20): router-traits L6 trait 抽象 crate
-    # (星型耦合消除;osa-coordinator 实现方,依赖 L0/L1 合规向下)
-    'router-traits' = 6
     # L7 Execution
     'pvl-layer' = 7; 'gqep-executor' = 7; 'mtpe-executor' = 7
     'ssra-fusion' = 7
@@ -122,12 +119,13 @@ $layerMap = @{
 # Expected total crate count (workspace members). Static completeness bound.
 # ADR-182 (2026-09-16, M10): acb-governor 退役,43 -> 42
 # 架构减法批次 (2026-09-20): +router-traits -> 43
+# ADR-193 (2026-09-27): router-traits 整 crate 退役,-router-traits -> 40
 # B0-6 (2026-09-20): auto-dpo / model-router 两个层图历史条目出表。原注"保留以支撑
 #   selftest mock 断言基线"经核实只对 model-router 半真（mock 图确实借用过它造
 #   GAP-B），且解法不该是让生产层图钉住已删 crate —— 改为让 mock 借用同为 L1 的
 #   现存 event-bus。auto-dpo 从未出现在任何 mock 中。
 # 口径：此值必须等于 Cargo.toml workspace.members 实测数，勿硬编码追数。
-$expectedCrates = 41
+$expectedCrates = 39
 
 # Inner-ring whitelist ($innerRing) and L0/L1 base ($innerBase) tables were
 # removed together with Check A by ADR-187 (2026-09-24); they were referenced

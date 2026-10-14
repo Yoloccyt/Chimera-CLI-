@@ -143,6 +143,23 @@ pub enum PanelId {
     /// 展示动态卡片/人格摘要/缓存统计，数据经 InjectionSnapshotProvider
     /// trait 注入（D-1 同款依赖倒置）。
     InjectionStrategy,
+    /// 基准面板 — `/bench` 数据先行(v2.3 §(b.6))
+    ///
+    /// 展示 criterion 基准总数/SLO 违约/检索 P99/裁判一致率/自动化可认证性,
+    /// 数据经 `BenchStatsProvider` trait 注入(未接线时诚实展示等待提示)。
+    Bench,
+    /// 审查队列面板 — AdversarialReview 待审/在审/已认证队列(v2.3 §(b.6)/§(b.4))
+    ///
+    /// 展示 Claim 的对抗审查进展;§(b.1) 铁律：**仅经 Certify 通过的项才渲染为已认证**,
+    /// 数据从 `latest_events` 派生(Claim/Certify/Retract 事件聚合,零管道侵入;
+    /// 无 Provider trait —— F-72 文档修正,原 `ReviewQueueProvider` 全仓无定义)。
+    ReviewQueue,
+    /// 黑板浏览面板 — MLC 协作态投影的按认识类型过滤浏览(v2.3 §(b.6)/§(b.2))
+    ///
+    /// 展示 BlackboardEntry 投影到记忆索引的协作态条目,按 epistemic 类型过滤;
+    /// 数据从 `latest_events` 派生(零管道侵入;无 Provider trait —— F-72 文档修正,
+    /// 原 `BlackboardBrowseProvider` 全仓无定义)。
+    Blackboard,
 }
 
 impl PanelId {
@@ -176,6 +193,52 @@ impl PanelId {
             PanelId::OverWindow => "OverWindow",
             PanelId::ExperienceCardViz => "ExperienceCardViz",
             PanelId::InjectionStrategy => "InjectionStrategy",
+            PanelId::Bench => "Bench",
+            PanelId::ReviewQueue => "ReviewQueue",
+            PanelId::Blackboard => "Blackboard",
+        }
+    }
+
+    /// 返回面板名 i18n 键(`panel.name.*`,经 `t!()` 按当前 locale 解析)
+    ///
+    /// B4-I(F-65):tab 栏/状态栏的面板名由硬编码 `as_str()` 改走键表,
+    /// Ctrl+L 切换语言随动。键名 match 返回 `&'static str` 而非运行时
+    /// `format!` 派生:`i18n::tr` 契约是 `&'static str`(零分配、缺键回退
+    /// 键名),沿用 slash_parser.rs 的 match 键范式;后缀与 `panel.border.*`
+    /// 对齐(28 个共有 + pvl_score/overwindow),便于键表对账,对齐由
+    /// i18n_completeness_test 专项断言守护。
+    pub fn name_key(&self) -> &'static str {
+        match self {
+            PanelId::Quest => "panel.name.quest",
+            PanelId::Parliament => "panel.name.parliament",
+            PanelId::Budget => "panel.name.budget",
+            PanelId::Memory => "panel.name.memory",
+            PanelId::Security => "panel.name.security",
+            PanelId::Health => "panel.name.health",
+            PanelId::Log => "panel.name.log",
+            PanelId::Help => "panel.name.help",
+            PanelId::Decay => "panel.name.decay",
+            PanelId::EventStream => "panel.name.eventstream",
+            PanelId::Router => "panel.name.router",
+            PanelId::McpNodes => "panel.name.mcp",
+            PanelId::Chtc => "panel.name.chtc",
+            PanelId::Timeline => "panel.name.timeline",
+            PanelId::OsaSparse => "panel.name.osa",
+            PanelId::ClvVector => "panel.name.clv",
+            PanelId::ResourceMonitor => "panel.name.resources",
+            PanelId::MetricsDashboard => "panel.name.metrics",
+            PanelId::Sysinfo => "panel.name.sysinfo",
+            PanelId::Chat => "panel.name.chat",
+            PanelId::SelfAssessment => "panel.name.self_assessment",
+            PanelId::DagViz => "panel.name.dag_viz",
+            PanelId::PvlScore => "panel.name.pvl_score",
+            PanelId::TaskManager => "panel.name.task",
+            PanelId::OverWindow => "panel.name.overwindow",
+            PanelId::ExperienceCardViz => "panel.name.experience_card_viz",
+            PanelId::InjectionStrategy => "panel.name.injection_strategy",
+            PanelId::Bench => "panel.name.bench",
+            PanelId::ReviewQueue => "panel.name.review_queue",
+            PanelId::Blackboard => "panel.name.blackboard",
         }
     }
 
@@ -209,6 +272,9 @@ impl PanelId {
             PanelId::OverWindow => " OverWindow ",
             PanelId::ExperienceCardViz => " Card Viz ",
             PanelId::InjectionStrategy => " Injection ",
+            PanelId::Bench => " Bench ",
+            PanelId::ReviewQueue => " Review Queue ",
+            PanelId::Blackboard => " Blackboard ",
         }
     }
 
@@ -251,9 +317,15 @@ impl PanelId {
         // (FC-05,2026-09-06 评估):无运行期数据源(mlc-engine 注入策略生产不
         // 构造),未列入本表 = 不参与焦点环,trait 注入桩保留代码可复测。
         PanelId::ExperienceCardViz,
+        // v2.3 §(b.6):/bench 基准面板注册(环尾,criterion 数据先行)
+        PanelId::Bench,
+        // v2.3 §(b.6)/§(b.4):审查队列面板注册(新环尾,AdversarialReview 可视化)
+        PanelId::ReviewQueue,
+        // v2.3 §(b.6)/§(b.2):黑板浏览面板注册(新环尾,MLC 协作态投影按 epistemic 过滤)
+        PanelId::Blackboard,
     ];
 
-    /// 全部 PanelId 变体清单(27 个)—— 完整性断言的穷举驱动源(M6 派发表治理)
+    /// 全部 PanelId 变体清单(30 个)—— 完整性断言的穷举驱动源(M6 派发表治理)
     ///
     /// WHY 手工清单而非编译期反射:工具链 rustc 1.97.1 的
     /// `std::mem::variant_count` 仍未稳定(实测 E0658),无法编译期取变体数;
@@ -289,6 +361,9 @@ impl PanelId {
         PanelId::TaskManager,
         PanelId::OverWindow,
         PanelId::ExperienceCardViz,
+        PanelId::Bench,
+        PanelId::ReviewQueue,
+        PanelId::Blackboard,
         PanelId::InjectionStrategy,
     ];
 
@@ -1032,6 +1107,11 @@ pub struct TuiState {
     pub sys_metrics: SystemMetrics,
     /// 系统资源指标历史(sparkline: CPU 使用率 × 10 的 u64 表示)
     pub sys_metrics_history: Vec<u64>,
+    /// 网络 RX 速率历史(KB/s,F-39 喂数接线;DataSnapshot 同名字段同步,
+    /// ResourceMonitor 面板网络 sparkline fallback 消费)
+    pub net_rx_history: Vec<u64>,
+    /// 网络 TX 速率历史(KB/s,与 `net_rx_history` 成对推进)
+    pub net_tx_history: Vec<u64>,
     /// 当前 tick 模式(Normal/Eco),状态栏展示用
     #[serde(default)]
     pub tick_mode: TickMode,
@@ -1261,6 +1341,20 @@ pub struct ParliamentState {
     pub strategy_cap: Option<StrategyCapState>,
 }
 
+/// v2.3 §(b.5) 持久面落盘扫描策略：只拦截硬载荷（私钥 PEM / 云凭证 / 服务令牌
+/// = `Block`），高熵串与键名启发式降为 `Pass` 防误报。
+///
+/// WHY 单点定义：本 crate 两处持久面（`TuiState::save_to_file` 与
+/// `DataSnapshot::export_quests_*`）共用一套判定，口径与
+/// `cmt-tiering/src/ice.rs`、`repo-wiki/src/store.rs` 逐字一致，避免 triage 分歧。
+pub(crate) fn persist_scan_policy() -> nexus_contracts::sensitive::ScanPolicy {
+    nexus_contracts::sensitive::ScanPolicy {
+        on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+        on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+        ..Default::default()
+    }
+}
+
 impl TuiState {
     /// 创建新的初始状态(默认 Quest 面板,运行中)
     pub fn new() -> Self {
@@ -1324,6 +1418,8 @@ impl TuiState {
             // P8 ResourceMonitor 面板默认值
             sys_metrics: SystemMetrics::default(),
             sys_metrics_history: Vec::new(),
+            net_rx_history: Vec::new(),
+            net_tx_history: Vec::new(),
             tick_mode: TickMode::default(),
             // M3b Chat 面板默认值(空历史 + 空闲状态)
             chat_messages: Vec::new(),
@@ -1355,14 +1451,33 @@ impl TuiState {
     ///
     /// WHY 只保存布局字段:运行时数据(quest_list/latest_events/metrics)由
     /// DataPipeline 从 event-bus 重新填充,无需持久化。
+    ///
+    /// ⚠ 上述“只保存布局字段”与实现不一致：本函数 `serde_yaml::to_string(self)`
+    /// 序列化**整只**状态（`input_history`/`history_draft`/`input_buffer`/`quest_list`/
+    /// `latest_events`/`status_message`/`filter_keyword` 均无 `serde(skip)`，仅
+    /// `help_context` 有）。这些运行字段含用户输入与会话原文，故本函数必须做
+    /// 落盘前扫描（下行）。字段裁剪属行为变更（会去掉跨会话历史回读能力），
+    /// 已在 v3.4 方案 D-4 登记待裁决，本轮不动。
     pub fn save_to_file(&self, path: &std::path::Path) -> Result<(), TuiError> {
-        // 创建父目录（最佳努力,目录已存在时忽略错误）
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
         let yaml = serde_yaml::to_string(self).map_err(|e| TuiError::ConfigError {
             detail: format!("YAML serialize failed: {e}"),
         })?;
+        // v2.3 §(b.5) tier-2:状态文件携带用户输入与会话事件原文(退出时一次性
+        // 写入,非每帧热路径),命中硬敏感载荷则**整份拒写**。
+        // WHY 整份拒写而非部分脱敏:YAML 是单一文档,`redact()` 会把空白归一为
+        // 单空格从而压平多行会话内容;拒写保留既有文件且由调用方 warn,
+        // 不会把敏感值写进家目录。
+        if nexus_contracts::sensitive::scan(&yaml, &persist_scan_policy()).is_blocked() {
+            return Err(TuiError::SensitiveContent {
+                detail: "TuiState 含敏感硬载荷(私钥/凭证/令牌),拒写状态文件(既有文件保持不变)"
+                    .into(),
+            });
+        }
+        // 创建父目录（最佳努力,目录已存在时忽略错误）
+        // WHY 在扫描之后:拒写路径不应留下建目录副作用
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok();
+        }
         std::fs::write(path, yaml).map_err(|e| TuiError::ConfigError {
             detail: format!("write state file failed: {e}"),
         })?;
@@ -1651,11 +1766,14 @@ mod tests {
             | PanelId::TaskManager
             | PanelId::OverWindow
             | PanelId::ExperienceCardViz
+            | PanelId::Bench
+            | PanelId::ReviewQueue
+            | PanelId::Blackboard
             | PanelId::InjectionStrategy => {}
         }
 
-        // 27 变体锚定(当前实测数;上方穷举 match 保证清单与 enum 同步)
-        assert_eq!(PanelId::ALL.len(), 27, "PanelId::ALL 应穷举 27 个变体");
+        // 30 变体锚定(当前实测数;上方穷举 match 保证清单与 enum 同步)
+        assert_eq!(PanelId::ALL.len(), 30, "PanelId::ALL 应穷举 30 个变体");
 
         // ALL 与焦点环的集合关系:ALL == REGISTERED_FOCUS_ORDER ∪ {InjectionStrategy}
         // (无重复、无遗漏;InjectionStrategy 为 FC-05 下线的唯一未注册变体)
@@ -1697,12 +1815,8 @@ mod tests {
         }
         // 关键边抽查(循环闭合 + 历史接入点)
         assert_eq!(PanelId::Quest.next(), PanelId::Parliament);
-        // FC-05:环尾(ExperienceCardViz)回到环首 Quest,环必须闭合
-        assert_eq!(
-            PanelId::ExperienceCardViz.next(),
-            PanelId::Quest,
-            "环必须闭合"
-        );
+        // FC-05/v2.3 §(b.6):环尾(Blackboard)回到环首 Quest,环必须闭合
+        assert_eq!(PanelId::Blackboard.next(), PanelId::Quest, "环必须闭合");
         // InjectionStrategy 已下线(ADR,2026-09-06):未注册变体回退环首
         assert_eq!(
             PanelId::InjectionStrategy.next(),
@@ -1732,8 +1846,8 @@ mod tests {
             );
         }
         // 关键边抽查(循环闭合)
-        // FC-05:环尾由 ExperienceCardViz 闭合(Quest 的 prev = 环尾)
-        assert_eq!(PanelId::Quest.prev(), PanelId::ExperienceCardViz);
+        // FC-05/v2.3 §(b.6):环尾由 Blackboard 闭合(Quest 的 prev = 环尾 Blackboard)
+        assert_eq!(PanelId::Quest.prev(), PanelId::Blackboard);
         assert_eq!(PanelId::Timeline.prev(), PanelId::Chtc);
     }
 
@@ -1772,6 +1886,12 @@ mod tests {
             // Phase 10:ExperienceCardViz 加入往返验证;InjectionStrategy 已下线
             // (FC-05,2026-09-06 评估,未注册变体不参与循环)
             PanelId::ExperienceCardViz,
+            // v2.3 §(b.6):/bench 基准面板加入往返验证(环尾)
+            PanelId::Bench,
+            // v2.3 §(b.6):审查队列面板加入往返验证(新环尾)
+            PanelId::ReviewQueue,
+            // v2.3 §(b.6):黑板浏览面板加入往返验证(新环尾)
+            PanelId::Blackboard,
         ] {
             assert_eq!(panel.next().prev(), panel);
             assert_eq!(panel.prev().next(), panel);
@@ -2120,9 +2240,40 @@ mod state_persistence_tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("tui_state.yaml");
         std::fs::write(&path, "{{{ invalid yaml").unwrap();
-
         let state = TuiState::load_from_file(&path);
         assert!(state.running);
         assert_eq!(state.layout_mode, LayoutMode::DualPane);
+    }
+
+    /// v2.3 §(b.5) tier-2（W5-1 R-1）：状态文件含硬敏感载荷时整份拒写。
+    ///
+    /// WHY 断“文件不存在 + 父目录不存在”：拒写路径既不该落盘敏感值，也不该
+    /// 留下建目录副作用。反向对照（清空敏感输入后同一状态可存）证明守卫只拦
+    /// 硬载荷，不会把正常状态持久化整体打断。
+    ///
+    /// 本测试同时钉住一个事实：`save_to_file` 写的是整只状态（含 `input_history`
+    /// 等运行字段），而 `load_from_file` 只恢复视图字段——即“写多读少”，落盘
+    /// 即暴露面（v3.4 方案 D-4 已登记字段裁剪待裁决）。
+    #[test]
+    fn test_save_refuses_sensitive_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested").join("tui_state.yaml");
+        let mut state = TuiState::new();
+        state.input_history.push_back(
+            "cat ~/.ssh/id_rsa 输出 -----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN".to_string(),
+        );
+
+        let err = state.save_to_file(&path).unwrap_err();
+        assert!(
+            matches!(err, TuiError::SensitiveContent { .. }),
+            "应报 SensitiveContent，实测 {err:?}"
+        );
+        assert!(!path.exists(), "拒写不得留下状态文件");
+        assert!(!path.parent().unwrap().exists(), "拒写不得留下建目录副作用");
+
+        // 反向对照：同一良性状态可正常落盘
+        state.input_history.clear();
+        state.save_to_file(&path).expect("良性状态应可保存");
+        assert!(path.exists());
     }
 }

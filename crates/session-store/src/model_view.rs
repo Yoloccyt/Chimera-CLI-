@@ -41,6 +41,20 @@ pub const MODEL_VISIBLE_TYPES: [&str; 5] = [
     "state.update",   // 状态同步
 ];
 
+/// 事件类型映射表 — 存储域类型名 → 模型视图规范名（ADR-201 D1）
+///
+/// # 语义（投影时映射，唯一出口）
+/// append-only 段文件保持事件原样（权威源不动）;`to_model_view` 出口先查本表
+/// 归一化 `canonical`，再按 [`MODEL_VISIBLE_TYPES`] 白名单判定，输出 `event_type`
+/// = canonical。映射表是**分类学单源**：写入侧不改类型名（避免存量/新增两种名
+/// 并存），白名单不承载第二套命名轴（避免 `turn.*` 家族侵蚀）。
+///
+/// # 初始 1 条（ADR-201 裁决）
+/// - `turn.submit`（用户回合提交）→ `model.request`（模型请求侧输入，语义等价）；
+///
+/// 扩展须评审（显式常量清单 + 测试锁；本表不预授权新行）。
+pub const MODEL_VISIBLE_MAPPING: [(&str, &str); 1] = [("turn.submit", "model.request")];
+
 /// 敏感载荷标记 — 载荷字节含任一标记（大小写不敏感）即整包过滤
 ///
 /// WHY 保守集合:密钥/凭据类字段命名在业界高度趋同,覆盖常见英文命名;
@@ -76,8 +90,14 @@ pub struct ModelVisibleEvent {
 
 /// 白名单投影 — `SessionEvent` → 模型可见视图
 ///
+/// # 投影时映射（ADR-201 D1）
+/// 1. `canonical = MODEL_VISIBLE_MAPPING.get(type).unwrap_or(type)`（映射表先于白名单）;
+/// 2. `canonical` 不在 [`MODEL_VISIBLE_TYPES`] → `None`;
+/// 3. 输出 `event_type` = **canonical**（映射后规范名）;敏感剔除优先于映射
+///    （含敏感载荷的 `turn.submit` → `payload = None`，与其余类型同规则）。
+///
 /// # 返回
-/// - `Some(view)`:事件类型在白名单且载荷（若含敏感字段）已剔除
+/// - `Some(view)`:事件类型（或其映射名）在白名单且载荷（若含敏感字段）已剔除
 /// - `None`:事件类型不在白名单（模型不可见;事件仍已记录,仅不投影）
 ///
 /// # 「model-visible means logged」注释
@@ -86,7 +106,12 @@ pub struct ModelVisibleEvent {
 /// model-visible ⊂ logged。
 #[must_use]
 pub fn to_model_view(event: &SessionEvent, offset: u64) -> Option<ModelVisibleEvent> {
-    if !MODEL_VISIBLE_TYPES.contains(&event.event_type.as_str()) {
+    let canonical = MODEL_VISIBLE_MAPPING
+        .iter()
+        .find(|(raw, _)| *raw == event.event_type.as_str())
+        .map(|(_, canon)| *canon)
+        .unwrap_or(event.event_type.as_str());
+    if !MODEL_VISIBLE_TYPES.contains(&canonical) {
         return None;
     }
     let payload = event.payload.as_ref().and_then(|p| {
@@ -98,7 +123,7 @@ pub fn to_model_view(event: &SessionEvent, offset: u64) -> Option<ModelVisibleEv
     });
     Some(ModelVisibleEvent {
         offset,
-        event_type: event.event_type.clone(),
+        event_type: canonical.to_string(),
         timestamp_ms: event.metadata.timestamp.timestamp_millis(),
         payload,
     })
@@ -196,5 +221,57 @@ mod tests {
         let ev = SessionEvent::with_payload("state.update", vec![0xFF, 0x00, 0xFE, 0x12]);
         let view = to_model_view(&ev, 2).expect("投影");
         assert!(view.payload.is_some(), "二进制载荷保留(未命中敏感标记)");
+    }
+
+    // ========================================================================
+    // ADR-201 D1 — 映射表 + 投影时映射（WI-G11）
+    // ========================================================================
+
+    /// 映射表常量锁:初始 1 条;扩展须评审（显式清单 + 本测同步）
+    #[test]
+    fn mapping_table_locked() {
+        assert_eq!(
+            MODEL_VISIBLE_MAPPING,
+            [("turn.submit", "model.request")],
+            "映射表定格（ADR-201 D1）；扩表须同批改本锁"
+        );
+        // 映射目标必须在白名单内（否则映射行永不生效——静默死行防御）
+        for (_, canon) in MODEL_VISIBLE_MAPPING {
+            assert!(
+                MODEL_VISIBLE_TYPES.contains(&canon),
+                "映射目标 {canon} 必须在白名单内"
+            );
+        }
+    }
+
+    /// V1:turn.submit → 输出 model.request;既有 5 类 identity 零变化
+    #[test]
+    fn turn_submit_maps_to_model_request() {
+        let ev = SessionEvent::with_payload("turn.submit", br#"{"turn_id":"t-1"}"#.to_vec());
+        let view = to_model_view(&ev, 7).expect("映射后应投影");
+        assert_eq!(view.event_type, "model.request", "映射输出 canonical");
+        assert_eq!(view.offset, 7);
+        assert!(view.payload.is_some(), "非敏感载荷保留");
+
+        // identity:白名单 5 类输出=输入（无映射行）
+        for et in MODEL_VISIBLE_TYPES {
+            let ev = SessionEvent::new(et);
+            let view = to_model_view(&ev, 0).expect("identity 投影");
+            assert_eq!(view.event_type, et, "既有 5 类 identity 零变化");
+        }
+        // 非白名单非映射 → None
+        assert!(to_model_view(&SessionEvent::new("session.flushed"), 0).is_none());
+    }
+
+    /// V4:敏感剔除优先于映射——含 secret 的 turn.submit → payload=None
+    #[test]
+    fn sensitive_turn_submit_payload_stripped() {
+        let ev = SessionEvent::with_payload(
+            "turn.submit",
+            br#"{"authorization":"Bearer sk-x"}"#.to_vec(),
+        );
+        let view = to_model_view(&ev, 9).expect("映射后应投影");
+        assert_eq!(view.event_type, "model.request");
+        assert!(view.payload.is_none(), "敏感剔除优先于映射（ADR-201 D1）");
     }
 }

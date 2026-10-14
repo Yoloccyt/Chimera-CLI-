@@ -4,6 +4,18 @@
 //! 对应架构层:L4 Security
 //! 对应创新点:连续权限流体衰减模型（ADR-002）
 //!
+//! ## 接线三要件（第三轮 T2.4 · 本入口 `parallel_batch` 当前 bench-only、G-87 判 DEAD）
+//! 若未来接线进生产,接线前须逐条满足（负收益红线:不预投不可达点位;G-87 权威判定见
+//! `scripts/compute_offload_reachability_freeze.txt` 行 `decay-engine/src/parallel.rs::decay_batch_parallel|DEAD`;
+//! 台账行见 `scripts/check_dead_contract_apis.py` `DecayEngine::parallel_batch`）:
+//! 1. **错误姿态评审** —— 依 ADR-197 D2 决策表评审 strict/degrade/observe 在真实流量下的
+//!    失败语义;T2.2 已定「降级项数独立计数、拒绝逐项 `active.enter`」,接线时不得把降级
+//!    计入并发占用而触发饱和自屏蔽。
+//! 2. **G-88 同步卸载保护** —— async 上下文裸调本同步阻塞入口须配 `block_in_place`/
+//!    `spawn_blocking` 让出并通过 `check_sync_offload_guard.py` 判 GUARDED。
+//! 3. **逐位断测复核** —— 接线后复跑双路径逐位等价测试（结果序=输入序、panic 逐个隔离、
+//!    Inline/Pool 逐元素一致）,确认行为契约不回退。
+//!
 //! # 注入模式（WI-34 七条纪律 ④桥接唯一 / ⑤逐一回滚 / ⑥IO 不上 rayon）
 //! - **识别热点**:[`crate::DecayEngine`] 的批量衰减路径 —— 对能力注册表内全部
 //!   能力应用衰减（`decay_bench` bulk_decay_throughput / `decay_compute` bulk 实测）:
@@ -17,7 +29,7 @@
 //!   无 IO / await / 持锁）;结果回主线程后**按输入序**串行提交写回 DashMap
 //!   （提交阶段含调试/告警日志,不入 rayon）。
 //! - **挂 ComputeBridge**:[`ComputeBridge::route`](nexus_core::compute::ComputeBridge::route)
-//!   按 `TaskKind::Generic` 三态判定 → `Inline`（n 小于阈值,串行）或 `Rayon`
+//!   按 `TaskKind::DecayBatch` 三态判定 → `Inline`（n 小于阈值,串行）或 `Rayon`
 //!   （[`spawn_compute_batch`](nexus_core::compute::ComputeBridge::spawn_compute_batch)
 //!   批量并行,结果序 = 输入序）。
 //! - **保留回退**:`DecayEngine::parallel_batch` 配置开关 + `CHIMERA_NO_PARALLEL_DECAY`
@@ -28,10 +40,9 @@
 //!   （含顺序断言:结果序 = 输入序）。
 //!
 //! # TaskKind 选择
-//! `TaskKind::Generic`（阈值 10,000,chunk 64）—— 任务约束"不新增 TaskKind 变体";
-//! 批量能力衰减不在六类登记语义内（非 CLV 相似度/掩码/KNN/GSOE/CSC 压缩评分）,
-//! 归入未登记任务的保守默认;≥ 10,000 能力的大批量衰减触发 Rayon
-//! （decay 单次计算微秒级,低于阈值时串行更优——调度开销反超计算量）。
+//! `TaskKind::DecayBatch`（阈值 10,000）—— ADR-196 C1 从 `Generic` 拆出的专用登记位;
+//! ≥ 10,000 能力的大批量衰减触发 Rayon（decay 单次计算微秒级,低于阈值时串行更优——调度开销反超计算量）;
+//! 拆位后与 faae 解耦，各自表项独立校准，SPRT 历史可归属到能力衰减负载。
 //!
 //! # rayon 闭包契约
 //! 闭包捕获 `Arc<Vec<(String, DecaySnapshot)>>` + `Arc<Vec<DecayEventParam>>`
@@ -246,7 +257,7 @@ pub(crate) fn apply_decay_pure(
 ///
 /// 路由判定:
 /// ① `should_parallel(parallel_enabled)` 为 false（配置/env 关闭）→ 串行;
-/// ② `bridge().route(TaskKind::Generic, n)` 为 `Inline` → 串行;
+/// ② `bridge().route(TaskKind::DecayBatch, n)` 为 `Inline` → 串行;
 /// ③ 否则 → `spawn_compute_batch` 并行（CHUNK 分组,段内保序 + 段间按序拼接）。
 ///
 /// 返回 `Vec<Result<DecayOutcome, DecayError>>`,结果序 = 输入序,逐输入独立
@@ -261,7 +272,7 @@ pub(crate) fn decay_batch_core(
 ) -> Vec<Result<DecayOutcome, DecayError>> {
     let n = snapshots.len();
     if !should_parallel(parallel_enabled)
-        || bridge().route(TaskKind::Generic, n) == DispatchPlan::Inline
+        || bridge().route(TaskKind::DecayBatch, n) == DispatchPlan::Inline
     {
         decay_batch_serial(snapshots, events, config, now)
     } else {
@@ -326,7 +337,7 @@ fn decay_batch_parallel(
         })
         .collect();
 
-    let results = bridge().spawn_compute_batch(TaskKind::Generic, tasks);
+    let results = bridge().spawn_compute_batch(TaskKind::DecayBatch, tasks);
 
     // 按段序拼接（段间保序）,总长度 = 输入数
     let mut out = Vec::with_capacity(n);

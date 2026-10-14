@@ -37,9 +37,9 @@ use setup::{
     make_vscode_raw, setup_week7_pipeline,
 };
 
-// WHY lsct_tiering::Tier(M10, ADR-160 偿还批次):lsct 已自有 Tier 类型
+// WHY cmt_tiering::lsct::Tier(ADR-193 整并后与 CMT 共用单一 Tier 实现)
 // (解除 cmt 复用、防 cmt↔lsct 生产依赖环),LSCT API 一律使用本类型
-use lsct_tiering::{TaskType, Tier};
+use cmt_tiering::lsct::{TaskType, Tier};
 
 /// CSA 延迟阈值:500ms(Task 6.5,从 Week 6 的 400ms 上浮 100ms)
 const CSA_THRESHOLD_MS: u128 = 500;

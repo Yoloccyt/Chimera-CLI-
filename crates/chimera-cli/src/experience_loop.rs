@@ -150,34 +150,10 @@ pub async fn spawn_experience_loop(
         };
 
     // 2b. 双流持久化订阅(broadcast + Critical;subscribe-before-spawn 红线)
-    let mut rx_broadcast = card_bus.subscribe();
-    let mut rx_critical = card_bus.subscribe_critical();
-    let storage_for_loop = Arc::clone(&storage);
-    join_handles.push(tokio::spawn(async move {
-        loop {
-            // 两通道任意到达即持久化(Critical 高分卡不再丢失)
-            // WHY 类型差异:broadcast 分流 recv 返回 Result(Lagged 可观测);
-            // Critical 分流为 mpsc::UnboundedReceiver,recv 返回 Option(None=关闭)。
-            let card = tokio::select! {
-                r = rx_broadcast.recv() => match r {
-                    Ok(c) => c,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!(lag = n, "卡片持久化 broadcast Lagged,丢弃 {n} 张");
-                        continue;
-                    }
-                    Err(_) => break,
-                },
-                r = rx_critical.recv() => match r {
-                    Some(c) => c,
-                    None => break,
-                },
-            };
-            let card_id = card.card_id.to_string();
-            if let Err(e) = storage_for_loop.store(&card).await {
-                warn!(card_id, error = %e, "经验卡片持久化失败");
-            }
-        }
-    }));
+    join_handles.push(spawn_card_persistence_subscriber(
+        &card_bus,
+        Arc::clone(&storage),
+    ));
 
     // 3. L2 记忆引擎 + 卡片总线消费(with_card_bus 内部 subscribe 后 spawn)
     let mlc = Arc::new(
@@ -310,6 +286,21 @@ pub async fn spawn_experience_loop(
         ));
     }
 
+    // A1/ADR-197: L1 计算池饱和观测周期报告器 —— 与上面两个报告器同族。
+    // WHY 在装配层启动:nexus-core 拥有池统计但不持 EventBus(热路径不引 IO 侧依赖),
+    // 而本层同时持有二者——零新增跨层依赖边（见 telemetry 模块头说明）。
+    join_handles.push(nexus_core::compute::spawn_saturation_reporter(
+        nexus_bus.clone(),
+        60,
+    ));
+
+    // ADR-200 D1(V5): 因果归因 tap —— 订阅侧常驻,零发布路径改动。
+    // 触发集事件(SlowConsumerDropped/BudgetExceeded)到达时自动产出 5s 窗口
+    // 因果链诊断(可选 JSONL 经 CHIMERA_ATTRIBUTION_DUMP_PATH 门控)。
+    // subscribe-before-spawn 由 spawn_attribution_tap 内部保证;句柄收进
+    // join_handles 同报告器族生命周期纪律(反模式 #7,不 fire-and-forget)。
+    join_handles.push(event_bus::attribution::spawn_attribution_tap(&nexus_bus).into_task());
+
     Ok(ExperienceLoopHandles {
         card_bus,
         mlc,
@@ -318,6 +309,43 @@ pub async fn spawn_experience_loop(
         storage,
         sandbox,
         join_handles,
+    })
+}
+
+/// 2b. 卡片双流持久化订阅器：从 `spawn_experience_loop` 抽出入独立 fn 以守
+/// fn-length 棘轮(≤200)，行为与原内联逐字一致（先同步 subscribe 再 spawn，
+/// 遵 §4.4-3 红线；两个接收端均留在任务内，不上抛）。
+fn spawn_card_persistence_subscriber(
+    card_bus: &Arc<ExperienceCardBus>,
+    storage: Arc<ExperienceCardStorage>,
+) -> JoinHandle<()> {
+    let mut rx_broadcast = card_bus.subscribe();
+    let mut rx_critical = card_bus.subscribe_critical();
+    let storage_for_loop = Arc::clone(&storage);
+    tokio::spawn(async move {
+        loop {
+            // 两通道任意到达即持久化(Critical 高分卡不再丢失)
+            // WHY 类型差异:broadcast 分流 recv 返回 Result(Lagged 可观测);
+            // Critical 分流为 mpsc::UnboundedReceiver,recv 返回 Option(None=关闭)。
+            let card = tokio::select! {
+                r = rx_broadcast.recv() => match r {
+                    Ok(c) => c,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(lag = n, "卡片持久化 broadcast Lagged,丢弃 {n} 张");
+                        continue;
+                    }
+                    Err(_) => break,
+                },
+                r = rx_critical.recv() => match r {
+                    Some(c) => c,
+                    None => break,
+                },
+            };
+            let card_id = card.card_id.to_string();
+            if let Err(e) = storage_for_loop.store(&card).await {
+                warn!(card_id, error = %e, "经验卡片持久化失败");
+            }
+        }
     })
 }
 

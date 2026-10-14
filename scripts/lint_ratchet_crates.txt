@@ -19,7 +19,6 @@ gqep-executor  # opted in, measured clean at registration time
 gsoe-evolution  # opted in, measured clean at registration time
 hcw-window  # opted in, measured clean at registration time
 kvbsr-router  # opted in, measured clean at registration time
-lsct-tiering  # opted in, measured clean at registration time
 mas-sched  # opted in, measured clean at registration time
 mca-gateway  # opted in, measured clean at registration time
 mcp-mesh  # opted in, measured clean at registration time
@@ -38,7 +37,6 @@ pvl-layer  # opted in, measured clean at registration time
 qeep-protocol  # opted in, measured clean at registration time
 quest-engine  # opted in, measured clean at registration time
 repo-wiki  # opted in, measured clean at registration time
-router-traits  # opted in, measured clean at registration time
 scc-cache  # opted in, measured clean at registration time
 seccore  # opted in, measured clean at registration time
 sesa-router  # opted in, measured clean at registration time

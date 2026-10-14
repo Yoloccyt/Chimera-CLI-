@@ -8,7 +8,7 @@
 //! (`compute/hts.rs`) 公共 API 做功能重建。
 //!
 //! # 基准场景
-//! - `hts_table_get`:六类 `TaskKind` 的 [`HtsTable::get`] 热路径查询延迟
+//! - `hts_table_get`:全登记类（`TaskKind::ALL`）的 [`HtsTable::get`] 热路径查询延迟
 //!   (常数数组索引 + 零分配,`Entry` 全 Copy 值返回);
 //! - `hts_table_update`:运行期 [`HtsTable::update`] 校准延迟(T1/T14 低频写)。
 //!
@@ -22,10 +22,10 @@ use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use nexus_core::compute::hts::{HtsTable, ThresholdSource};
 use nexus_core::compute::TaskKind;
 
-/// bench 1:六类任务查表延迟
+/// bench 1:全登记类任务查表延迟
 ///
-/// WHY 穷举六类:get 走 `kind_index` 常数数组索引(零分配、零锁),
-/// 验证每类映射槽位的查表延迟与 cache 布局无关(失败即回归)。
+/// WHY 遍历 `TaskKind::ALL`(单源,新增登记类自动覆盖):get 走 `kind_index`
+/// 常数数组索引(零分配、零锁),验证每类映射槽位的查表延迟与 cache 布局无关(失败即回归)。
 fn hts_table_get(c: &mut Criterion) {
     let table = HtsTable::default();
     let mut group = c.benchmark_group("hts_table_get");

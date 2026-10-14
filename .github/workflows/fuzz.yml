@@ -42,7 +42,7 @@ jobs:
   fuzz:
     name: Fuzz (${{ matrix.target }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45  # WHY: 7 target × 300s + 编译 ≈ 35-45min,45min 兜底防止 fuzz hang 占用 nightly runner
+    timeout-minutes: 45  # WHY: 8 target × 300s + 编译 ≈ 35-45min,45min 兜底防止 fuzz hang 占用 nightly runner
     strategy:
       fail-fast: false
       matrix:
@@ -98,6 +98,9 @@ jobs:
         # WHY: --locked 锁定 Cargo.lock + --version 固定工具自身版本,双重复现:
         #      上游 minor 破坏性变更与版本漂移导致的间歇失败均被封堵(reproducibility 优先)。
         #      0.13.2 = 2026-09-04 crates.io max_stable_version(C5)。
+        # WHY 此处保留源码编译(2026-09-28 效率重构后本仓唯一保留项):cargo-fuzz
+        #      不在 taiki-e/install-action 的 TOOLS.md 预编译清单内(已逐一核对),
+        #      且每周一才跑一次,编译开销不构成 PR 反馈压力。
         run: cargo install cargo-fuzz --locked --version 0.13.2
 
       - name: Run fuzz target (${{ matrix.target }})

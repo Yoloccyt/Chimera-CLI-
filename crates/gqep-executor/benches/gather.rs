@@ -1,6 +1,8 @@
 //! GQEP 聚集性能基准 — criterion 基准测试
 //!
-//! 对应 SubTask 24.6:测量 10/50/100 操作聚集延迟
+//! 对应 SubTask 24.6：测量 10/50/100 操作聚集延迟；
+//! 另含 `gather_bounded_vs_unbounded` 组（ADR-202 §10.3）专测并发上界生效剖面，
+//! 测点故意扩到 `N > bound`——既有 10/50/100 均 ≤ 默认 bound=100，对限流零可观测。
 //!
 //! 运行方式:
 //! ```powershell
@@ -8,7 +10,7 @@
 //! ```
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use event_bus::EventBus;
 use gqep_executor::{GqepConfig, GqepExecutor, GqepFuture};
 use qeep_protocol::{QeepError, QeepProtocol};
@@ -83,5 +85,64 @@ fn bench_entangle_alone(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_gather, bench_entangle_alone);
+/// 基准测试：并发上界生效的开销剖面（ADR-202 §10.3 / perf 会签口径）
+///
+/// WHY 测点必须扩到 `N > bound`：既有 `bench_gather` 的 10/50/100 全部≤默认
+/// bound=100，对「限流是否引入开销」零可观测性——这是 perf 会签点名的盲区，
+/// 不扩测点就等于没测。
+///
+/// 配对口径：同一 group 内 `(N, bound)` 与 `(N, N)` 同轮采样（同进程同会话），
+/// 前者走限流多波路径、后者单波即等价不限流，构成同轮对照；
+/// 跳轮绝对值不可比，只用于看相对差（沿 M3 同轮配对纪律）。
+///
+/// 数值阈值**不在本批入库**：未实测数字禁入 perf 三表（ADR-195 D7 反幽灵门），
+/// 待 CI clean-runner 首跑后再定，见 ADR-202 §11.5-1。
+fn bench_gather_bounded_vs_unbounded(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().expect("创建 tokio runtime 失败");
+
+    let mut group = c.benchmark_group("gather_bounded_vs_unbounded");
+    // 每样本都构造 executor + N 个 future，成本高于 bench_gather，样本数压低
+    group.sample_size(20);
+
+    // (N, bound)：bound < N 覆盖限流多波路径；bound == N 是不限流对照组
+    for &(n, bound) in &[
+        (64usize, 16usize),
+        (64, 64),
+        (200, 50),
+        (200, 200),
+        (256, 100),
+        (256, 256),
+    ] {
+        group.bench_with_input(
+            BenchmarkId::new(format!("n{n}"), format!("bound{bound}")),
+            &bound,
+            |b, &bound| {
+                b.to_async(&rt).iter(|| async move {
+                    let executor = GqepExecutor::new(
+                        GqepConfig {
+                            max_concurrency: bound,
+                            ..GqepConfig::default()
+                        },
+                        EventBus::new(),
+                    );
+                    let futures: Vec<GqepFuture<String>> = (0..n)
+                        .map(|i| {
+                            Box::pin(async move { Ok(format!("result-{i}")) }) as GqepFuture<String>
+                        })
+                        .collect();
+                    executor.gather(futures).await
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_gather,
+    bench_entangle_alone,
+    bench_gather_bounded_vs_unbounded
+);
 criterion_main!(benches);

@@ -36,7 +36,7 @@ use crate::coordination_metrics::{
     CoordinationCostSample, CoordinationMetricsCollector, CoordinationMetricsConfig,
     InferenceGainSample,
 };
-use crate::dag::validate_dag;
+use crate::dag::{sort_tasks_topologically, validate_dag};
 use crate::error::QuestError;
 use crate::metrics_sync::PendingCoordSample;
 use crate::ttg::TtgGovernor;
@@ -313,18 +313,35 @@ impl QuestEngine {
     /// 流程:
     /// 1. 调用 `decompose` 按规则分解任务
     /// 2. `validate_dag` 校验无环
-    /// 3. 生成 quest_id(UUIDv7,时间有序)
-    /// 4. 创建 Quest 实例,默认思考模式 Standard
-    /// 5. 存入 DashMap
-    /// 6. 发布 QuestCreated 事件
+    /// 3. `sort_tasks_topologically` 按依赖定序(把"Vec 序恰好等于依赖序"
+    ///    从分解器的巧合升为显式不变量)
+    /// 4. 生成 quest_id(UUIDv7,时间有序)
+    /// 5. 创建 Quest 实例,默认思考模式 Standard
+    /// 6. TTG 自动模式选择(若已配置)
+    /// 7. 存入 DashMap
+    /// 8. 发布 QuestCreated 事件
     pub async fn create_quest(&self, intent: UserIntent) -> Result<Quest, QuestError> {
         // 1. 分解任务
         let tasks = self.decompose(&intent)?;
         // 2. 校验 DAG 无环(规则分解器产出的线性链理论上无环,但防御性校验)
         validate_dag(&tasks)?;
-        // 3. 生成 quest_id(UUIDv7 时间有序,便于跨进程因果追踪)
+        // 3. 依赖定序:把"quest.tasks 的 Vec 序恰好等于依赖序"从 decompose 的
+        //    巧合升为显式不变量。下游多个消费者直接按 Vec 序取用——
+        //    编号任务列表(commands/quest.rs、chimera-cli/src/orchestrator.rs)、
+        //    TTG 依赖深度(ttg.rs::compute_dependency_depth)、轨迹导出
+        //    (trajectory_exporter.rs)、长任务地图(long_task_map.rs),
+        //    定序后任意生产者给出乱序任务表都能被纠正。
+        //
+        //    WHY 不合并掉上方的 `validate_dag` 走单遍:它当前唯一的生产调用方
+        //    就是本行,删了它即用一个新死 API 换一个旧死 API(本仓
+        //    scripts/check_dead_contract_apis.py / ADR-197 A6 正是要抓这一类)。
+        //    两遍 Kahn 的代价在冷路径上可忽略(任务数受 max_tasks_per_quest
+        //    上限约束,且被 UUIDv7 生成 + DashMap 插入 + TTG await + 事件发布
+        //    完全掩盖);若未来 DAG 规模增长,须以 criterion 证据再合并单遍。
+        let tasks = sort_tasks_topologically(tasks)?;
+        // 4. 生成 quest_id(UUIDv7 时间有序,便于跨进程因果追踪)
         let quest_id = format!("quest-{}", Uuid::now_v7());
-        // 4. 创建 Quest 实例(默认 Standard,TTG 集成后自动选择)
+        // 5. 创建 Quest 实例(默认 Standard,TTG 集成后自动选择)
         let title = extract_title(&intent.raw_text);
         let mut quest = Quest {
             quest_id: quest_id.clone(),
@@ -336,7 +353,7 @@ impl QuestEngine {
         };
         let task_count = quest.tasks.len() as u32;
 
-        // 5. TTG 自动模式选择(若已配置)
+        // 6. TTG 自动模式选择(若已配置)
         //    WHY 在插入 DashMap 前选择:减少锁竞争(不需要先插入再 get_mut 更新)
         //    默认 BudgetTier::LowTier — 新 Quest 尚无预算历史,
         //    LowTier 使 TTG 根据复杂度保守选择:简单→Fast,中等→Standard,复杂→Standard。
@@ -365,14 +382,14 @@ impl QuestEngine {
             }
         }
 
-        // 6. 存入注册表
+        // 7. 存入注册表
         self.quests.insert(quest_id.clone(), quest.clone());
         debug!(
             quest_id = %quest_id,
             task_count,
             "Quest 已创建并注册"
         );
-        // 7. 发布 QuestCreated 事件
+        // 8. 发布 QuestCreated 事件
         let event = NexusEvent::QuestCreated {
             metadata: EventMetadata::new("quest-engine"),
             quest_id: quest_id.clone(),

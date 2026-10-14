@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # check_doc_consistency.ps1 - Architecture document three-way reconciliation
 # =============================================================================
 # Purpose: detect drift between Cargo.toml (code), docs/ (index), CHANGELOG.md (changelog)
@@ -61,7 +61,11 @@ $nuxusRulesRel = if ($null -ne $nuxusRules) { $nuxusRules } else { '.trae/rules/
 # =============================================================================
 
 # A1. canonical crate count: Cargo.toml members == disk crates/*/Cargo.toml
-$cargo = Get-Content 'Cargo.toml' -Raw
+# WHY -Encoding UTF8 on every Get-Content below: Windows PowerShell 5.1 defaults to
+#     ANSI (GBK), which corrupts UTF-8 CJK sequences AND swallows newlines -- that
+#     breaks `(?m)^` line anchors, so the version read silently failed and cascaded
+#     six bogus [GAP-*] entries while the docs themselves were never out of sync.
+$cargo = Get-Content 'Cargo.toml' -Encoding UTF8 -Raw
 $membersBlock = [regex]::Match($cargo, 'members\s*=\s*\[(.*?)\]', 'Singleline').Groups[1].Value
 $nMembers = ([regex]::Matches($membersBlock, '"crates/[^"]+"')).Count
 $nDirs = @(Get-ChildItem 'crates' -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'Cargo.toml') }).Count
@@ -89,7 +93,13 @@ if (-not $verMatch.Success) {
 # B1. main docs contain current crate count (4 docs: README, CODE_WIKI, CLAUDE.md, nuxus-rules)
 # Note: adr_index.md is an ADR index, not a crate index, so it is NOT checked here.
 $b1Docs = @('docs/architecture/README.md', 'docs/architecture/CODE_WIKI.md', '.claude/CLAUDE.md', $nuxusRulesRel)
-$crateTokens = @("$nMembers crate", "${nMembers} crate", "$nMembers Crate", "$nMembers/$nMembers crate", "${nMembers}个crate", "${nMembers} 个crate")
+# The four emphasis variants exist for the same reason as the 4th alternative in
+# check_doc_consistency.sh: a correct document whose count is bolded ("**39** crates")
+# was reported stale purely because the token list matched a literal string instead
+# of the fact. They stay narrow on purpose -- they must not absorb an ordinal usage
+# ("<ordinal> 39 <ge> crate" = "the 39th crate") nor a stale "43 crate", either of
+# which would let a genuinely stale document pass.
+$crateTokens = @("$nMembers crate", "${nMembers} crate", "$nMembers Crate", "$nMembers/$nMembers crate", "${nMembers}个crate", "${nMembers} 个crate", "${nMembers}** crate", "${nMembers}** Crate", "${nMembers}__ crate", "${nMembers}__ Crate")
 # B1/B2 used to be silent on success, so the run reported fewer ids than checks actually
 # executed and the hardcoded "14 checks" total could never be reconciled with observation.
 # Every check must self-report on the green path too (see the derived footer count).
@@ -100,7 +110,7 @@ foreach ($f in $b1Docs) {
     # CI checkout 必然缺失文档 —— 降级为 warn 而非阻断。
     if ($null -eq $f -or $f -eq '' -or $f -like '*not-found*') { $b1Skipped++; $report += '[B1-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)'; continue }
     if (-not (Test-Path $f)) { $b1Skipped++; $report += '[B1-warn] missing document: ' + $f + ' (gitignore *.md 策略,CI 环境无此文档,跳过)'; continue }
-    $content = Get-Content $f -Raw
+    $content = Get-Content $f -Encoding UTF8 -Raw
     $hit = $false
     foreach ($t in $crateTokens) { if ($content.Contains($t)) { $hit = $true; break } }
     if (-not $hit) {
@@ -121,7 +131,7 @@ foreach ($f in $b2Docs) {
     # 2026-08-07 适配: 同 B1 —— gitignore *.md 策略下缺失文档降级为 warn。
     if ($null -eq $f -or $f -eq '' -or $f -like '*not-found*') { $b2Skipped++; $report += '[B2-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)'; continue }
     if (-not (Test-Path $f)) { $b2Skipped++; $report += '[B2-warn] missing document: ' + $f + ' (gitignore *.md 策略,CI 环境无此文档,跳过)'; continue }
-    $content = Get-Content $f -Raw
+    $content = Get-Content $f -Encoding UTF8 -Raw
     if (-not $content.Contains($baselineString)) {
         $report += '[GAP-B2] ' + $f + ' does not contain baseline string (' + $baselineString + ')'
         $status = 1
@@ -144,7 +154,7 @@ if (-not (Test-Path 'CHANGELOG.md')) {
     # CI checkout 必然缺失 —— 降级为 warn 而非阻断。
     $report += '[C1-warn] missing document: CHANGELOG.md (gitignore *.md 策略,仅本地维护,跳过)'
 } else {
-    $changelog = Get-Content 'CHANGELOG.md' -Raw
+    $changelog = Get-Content 'CHANGELOG.md' -Encoding UTF8 -Raw
     $verHeaderPattern = '^##\s+\[?v?' + [regex]::Escape($currentVersion) + '\]?(?=\s|$)'
     if (-not [regex]::IsMatch($changelog, $verHeaderPattern, 'Multiline')) {
         $report += '[GAP-C1] CHANGELOG.md missing ## v' + $currentVersion + ' header (should be first entry)'
@@ -464,7 +474,7 @@ if (Test-Path $eventTypes) {
             # == measured. WARN when declared > measured (possible doc leading edge).
             $codeWiki = 'docs/architecture/CODE_WIKI.md'
             if (Test-Path $codeWiki) {
-                $cw = Get-Content $codeWiki -Raw
+                $cw = Get-Content $codeWiki -Encoding UTF8 -Raw
                 $declMatch = [regex]::Match($cw, '(\d+)\s*NexusEvent')
                 if (-not $declMatch.Success) { $declMatch = [regex]::Match($cw, 'NexusEvent[^0-9]{0,40}(\d+)') }
                 if ($declMatch.Success) {

@@ -71,6 +71,13 @@
 #   batch-P3: mtpe-executor/ssra-fusion/sesa-router/csn-substitutor/mas-sched/nexus-hook wired
 # Ratchet update: frozen 7 -> 0 (all islands repaid), reachable 31 -> 38 (+7)
 # Note: mas-sched/nexus-hook remain GATED (shadow-first reservation per ADR-145/146)
+#
+# ⚠ 订正注记（v3.5 C-48，2026-10-10；历史行不改写）：上面两行对同一对象给出相反结论——
+#   :71 的 "wired" 与 :73 的 "remain GATED" 并存。以现取为准（ADR-188 §5）：
+#   nexus-hook 在除自身外的 crates/*/src 全库零引用，gated_wiring_baseline.txt:15 在册 DECORATIVE，
+#   dep_edge_freeze.txt:183 仅为 optional GATED 声明边。故 :71 的 "wired" 只能读作
+#   "已在 Cargo.toml 声明为 optional 依赖"，**不得读作"已接进启动链"**（那正是风险 R-5
+#   "拿 optional/feature 宣布岛屿清偿"的本族形状）。本订正不改任何计数行，只封误读。
 
 # --- module-level islands (ADR-160 blind spot; R3 F-R3-02) — ALL RETIRED 2026-09-03 ---
 # The 4 dead-module debts (osa-coordinator::cheap_index, hcw-window::CompressionPipeline,

@@ -2,7 +2,7 @@
 //! LAYER:    L8
 //! ROLE:     对抗性议会 — 5 角色对抗性审议与决策治理
 //! BACKEND:  memory
-//! PRODUCERS: 19 AgentTaskCompleted,AgentTaskFailed,AhirtProbeCompleted,BudgetExceeded,CapabilityFrozen…
+//! PRODUCERS: 20 AgentTaskCompleted,AgentTaskFailed,AhirtProbeCompleted,BudgetExceeded,CapabilityFrozen…
 //! CONSUMERS: 2 chimera-cli,chimera-mas
 //! MATURITY: NOT-IMPL-CN|PLACEHOLDER-CN|SIMPLIFIED-CN
 //! CRATE-CONTRACT END
@@ -58,6 +58,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+/// AdversarialReview 协议状态机 — 异构对抗审查 + 非参与者约束(v2.3 §(b.4)(1))
+pub mod adversarial_review;
 pub mod ahirt;
 /// MCA N7 厂商集中度免疫探针 — 供应商锁定的系统级免疫(ADR-067 决策 2)
 ///
