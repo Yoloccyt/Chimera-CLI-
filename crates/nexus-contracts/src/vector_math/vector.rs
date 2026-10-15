@@ -18,8 +18,13 @@
 //!
 //! 抽象出统一的向量存储接口，消除 L5 `repo-wiki::VectorIndex` 的深模块问题（D4）：
 //! 当前 `VectorIndex` 仅支持 ≤1000 entry 的内存 KNN，P3 HCW-Sparse v2.0 精排
-//! 需要 10K-100K entry 的 HNSW 检索。本 trait 让 `MemoryKnnStore`（fallback）
-//! 与 `HnswStore`（生产）可替换，调用方面对统一接口编程。
+//! 需要 10K-100K entry 的 HNSW 检索。本 trait 让**内存 KNN 实现（fallback）**与
+//! **HNSW 近似实现（生产）**可替换，调用方面对统一接口编程。
+//!
+//! WHY 不点实现方类型名（ADR-217 D-38）：L0 文档一旦写死上层具体类型名
+//! （如某 `*Store` / 某 `*Error`），上层重命名即让本契约文档静默失真，
+//! 而现存文档门只查「L0 文档里的符号在工作区是否存在」的**存在性**，
+//! 不查 L0→上层方向的语义对应。故此处一律以**角色**描述。
 //!
 //! # 设计约束（ADR-033）
 //!
@@ -107,11 +112,11 @@ impl VectorHit {
 /// 消除 L5 `repo-wiki::VectorIndex` 深模块问题（D4）：
 /// 当前 `VectorIndex` 仅支持 ≤1000 entry 的内存 KNN，
 /// P3 HCW-Sparse v2.0 精排需要 10K-100K entry 的 HNSW 检索。
-/// 本 trait 抽象出统一接口，让 `MemoryKnnStore`（fallback）与 `HnswStore`（生产）可替换。
+/// 本 trait 抽象出统一接口，让内存 KNN 实现（fallback）与 HNSW 近似实现（生产）可替换。
 ///
 /// # 关联类型
-/// - `Meta`: 元数据类型（由实现方决定，如 `WikiEntry` 摘要 / Agent 上下文片段）
-/// - `Error`: 错误类型（实现方自定义，如 `WikiError` / `HnswError`）
+/// - `Meta`: 元数据类型（由实现方决定，如 wiki 条目摘要 / Agent 上下文片段）
+/// - `Error`: 错误类型（实现方自定义，L0 不预设其形状）
 ///
 /// # 命名空间（`ns` 参数）
 /// `top_k(query, k, ns)` 的 `ns` 参数支持多租户隔离：
@@ -128,9 +133,9 @@ impl VectorHit {
 /// 调用方需用具体类型调用 `default()`，或通过 `VectorStoreExt::backend()`
 /// 在运行时诊断后由工厂函数构造。
 pub trait VectorStore {
-    /// 元数据类型 — 由实现方决定（如 `WikiEntryMeta` / `AgentContextMeta`）
+    /// 元数据类型 — 由实现方决定（wiki 条目摘要、Agent 上下文片段等形态）
     type Meta;
-    /// 错误类型 — 由实现方决定（如 `WikiError` / `HnswError`）
+    /// 错误类型 — 由实现方自定义，L0 不做跨实现假设
     type Error;
 
     /// 插入或更新向量（UPSERT 语义）
@@ -163,8 +168,8 @@ pub trait VectorStore {
     /// 返回默认实现（fallback 路径）
     ///
     /// # 用途
-    /// 当生产实现（如 `HnswStore`）不可用时，调用方降级到 fallback 实现
-    /// （如 `MemoryKnnStore`，≤1000 entry 规模）。
+    /// 当生产实现（HNSW 近似层）不可用时，调用方降级到 fallback 实现
+    /// （内存 KNN 层，≤1000 entry 规模）。
     ///
     /// # trait 对象限制
     /// 此方法返回 `Self`，要求 `Self: Sized`。
@@ -290,17 +295,19 @@ pub trait VectorStoreExt: VectorStore {
     /// - `entries`: `(id, vector, meta)` 三元组列表
     ///
     /// # 实现注意
-    /// - HnswStore: 批量构建 HNSW 图，比逐条 upsert 快 10-100x
-    /// - MemoryKnnStore: 单次写锁，比多次获取写锁快
+    /// - HNSW 近似实现: 批量构建 HNSW 图，比逐条 upsert 快 10-100x
+    /// - 内存 KNN 实现: 单次写锁，比多次获取写锁快
     fn insert_batch(&self, entries: Vec<(String, Vec<f32>, Self::Meta)>)
         -> Result<(), Self::Error>;
 
     /// 压缩索引（碎片整理）
     ///
     /// # 后端行为差异
-    /// - HnswStore: 重建 HNSW 图，消除删除产生的空洞
-    /// - MemoryKnnStore: 无操作（HashMap 无碎片问题），返回 Ok(())
-    /// - SqliteVec: VACUUM 操作
+    /// - HNSW 近似实现: 重建 HNSW 图，消除删除产生的空洞
+    /// - 内存 KNN 实现: 无操作（HashMap 无碎片问题），返回 Ok(())
+    /// - `VectorBackend::SqliteVec` 档: VACUUM 操作 —— **本仓无实现方**
+    ///   （ADR-005 因 sqlite-vec 0.1.9 binding 需 unsafe 而降级为内存检索，
+    ///   `repo-wiki/Cargo.toml` 内该依赖为注释态），此行只描述将来接入该后端时的义务
     ///
     /// # 调用时机
     /// 大量 `remove` 操作后调用，或 `stats().is_near_capacity()` 返回 true 时。
@@ -332,13 +339,13 @@ mod tests {
 
     /// 测试用 mock 实现 — 真实存储数据的内存 HashMap，验证 trait 契约
     ///
-    /// WHY 独立 mock 而非用真实 MemoryKnnStore:
+    /// WHY 独立 mock 而非用上层真实实现（内存 KNN 层）:
     /// L0 nexus-contracts 禁止依赖 workspace crate（含 repo-wiki），
     /// 故契约测试需用本 crate 内的 mock 实现验证 trait 行为。
     ///
     /// 此 mock 真实存储向量并实现 KNN 检索（O(n) 遍历 + 余弦相似度），
     /// 用于验证 trait 契约的语义正确性（UPSERT 幂等、remove 幂等、top_k 排序等）。
-    /// 生产实现（MemoryKnnStore/HnswStore）用 RwLock 替代 RefCell 保证线程安全。
+    /// 生产实现（上层两种形态：内存 KNN / HNSW 近似）用 RwLock 替代 RefCell 保证线程安全。
     pub struct InMemoryVectorStore {
         dim: usize,
         vectors: RefCell<HashMap<String, Vec<f32>>>,

@@ -71,7 +71,11 @@ pub fn scale_timeout(secs: u64) -> u64 {
     scaled.max(if secs == 0 { 0.0 } else { 0.001 }) as u64
 }
 
-/// `scaled_timeout!` 宏 — 接受字面量 secs,返回 `Duration`
+/// `scaled_timeout!` 宏 — 接受 `$secs:expr`（求值后须为 `u64`），返回 `Duration`
+///
+/// WHY 写 `expr` 而非"字面量"（ADR-217 D-38）：matcher 实为 `$secs:expr`，
+/// 内部先绑定为 `let __s: u64 = $secs;`——传变量/函数调用同样合法，
+/// 文档若承诺得更窄会让读者误以为只能写字面量，也会掩盖 `expr` 求值时机这一真实契约。
 ///
 /// 全 workspace 唯一 `scaled_timeout!`(env scale 缩放语义;chimera-tui 测试本地档位放大宏已更名 `build_scaled_timeout!`,勿再同名定义)。
 ///
