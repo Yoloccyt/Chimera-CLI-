@@ -131,7 +131,6 @@ safety/command_validation::new
 safety/errors::to_nexus_error
 safety/sensitive::is_blocked
 safety/sensitive::is_clean
-safety/sensitive::looks_high_entropy
 safety/sensitive::redact
 safety/sensitive::scan
 seams/capability_token::allows_learned

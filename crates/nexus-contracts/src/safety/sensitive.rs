@@ -227,8 +227,11 @@ pub fn scan(text: &str, policy: &ScanPolicy) -> ScanVerdict {
 ///
 /// 规则：长度 ≥ 20，且字符类别（小写/大写/数字/符号）≥ 2 种混合、字母数字占比高，
 /// 视为可疑随机 token。阈值刻意保守以降低误报（误报由上层 `Redact` 消化，不阻断）。
+///
+/// 可见性说明（ADR-215 D-24）：仅供本模块 [`scan`] 内部组合使用，零外部消费
+/// （2026-10-15 全仓实测），故由 pub 收窄为模块私有——pub 面只减棘轮（G-105）方向。
 #[must_use]
-pub fn looks_high_entropy(tok: &str) -> bool {
+fn looks_high_entropy(tok: &str) -> bool {
     let bytes = tok.as_bytes();
     if bytes.len() < 20 {
         return false;

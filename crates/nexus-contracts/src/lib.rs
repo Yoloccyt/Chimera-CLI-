@@ -658,9 +658,9 @@ pub use adjudication::{
     FailureRecord, VerifierKind,
 };
 // v2.3 (b.5): 写入敏感信息扫描引擎（纯函数，零依赖，L0）
+// （looks_high_entropy 经 ADR-215 D-24 收窄为模块私有，不再进入根 re-export）
 pub use sensitive::{
-    looks_high_entropy, redact, scan, ScanHit, ScanPolicy, ScanVerdict, SensitiveDisposition,
-    SensitiveKind,
+    redact, scan, ScanHit, ScanPolicy, ScanVerdict, SensitiveDisposition, SensitiveKind,
 };
 // v2.3 (b.6): 统一价格向量聚合契约（纯类型 + 整数估算，L0）
 pub use event_v2::{
@@ -794,8 +794,7 @@ pub mod prelude {
     };
     // v2.3 (b.5): 写入敏感信息扫描引擎（与顶层导出同集）
     pub use crate::sensitive::{
-        looks_high_entropy, redact, scan, ScanHit, ScanPolicy, ScanVerdict, SensitiveDisposition,
-        SensitiveKind,
+        redact, scan, ScanHit, ScanPolicy, ScanVerdict, SensitiveDisposition, SensitiveKind,
     };
     // v2.3 (b.6): 统一价格向量（与顶层导出同集）
     pub use crate::event_v2::{
