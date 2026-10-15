@@ -195,7 +195,7 @@ L1   Core ─────── nexus-core · event-bus
 | **架构层** | L1 Core |
 | **核心职责** | 定义所有上层共享的领域类型、CLV向量、错误类型、存储trait |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-core/src/lib.rs) · [types.rs](file:///d:/Chimera%20CLI/crates/nexus-core/src/types.rs) · [clv.rs](file:///d:/Chimera%20CLI/crates/nexus-core/src/clv.rs) · [state.rs](file:///d:/Chimera%20CLI/crates/nexus-core/src/state.rs) |
-| **关键类型** | `UserIntent` · `Quest` · `Task` · `TaskStatus` · `Checkpoint` · `ThinkingMode` · `CLV` · `NexusState` · `MultimodalInput` |
+| **关键类型** | `CLV` · `NexusState`（本 crate 权威归属；其余领域类型 `UserIntent`/`Quest`/`Task`/`TaskStatus`/`Checkpoint`/`ThinkingMode`/`MultimodalInput` 权威归属 L0 `nexus-contracts`，此处仅 re-export 汇聚——见 §3.0 L0 行与 agents.md §5.1，ADR-215 D-25 订正本行旧口径） |
 | **关键函数** | `CLV::basis()` · `CLV::cosine_similarity()` · `cosine_similarity_slices()`(定义已下沉 L0 `nexus-contracts::util`,此处 `pub use` 重导出,调用路径不变) |
 | **主要依赖** | ndarray · serde · chrono · uuid · thiserror |
 
