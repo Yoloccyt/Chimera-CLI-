@@ -158,16 +158,46 @@ def type_key(kind, mod, name):
     return "%s|%s::%s" % (kind.upper(), mod, name)
 
 
+CLAIM_RE = re.compile(r"^#\s*CLAIM\s+(.+)$")
+
+
+def claim_text(stats):
+    """The one header line a ledger may assert about itself, in machine form.
+
+    WHY this exists: the prose header of this ledger declared "all 227 rows are
+    closed, because L0 measures ZERO #[non_exhaustive] today" while 56 rows were
+    open and 16 src files carried the attribute (measured 2026-10-15). Prose can
+    outlive the act that made it true; a CLAIM line cannot, because the gate
+    recomputes it from the live tree and the rows on every run.
+    """
+    return "types=%d listed=%d open=%d closed=%d" % (
+        stats["types"], stats["listed"], stats["open"], stats["closed"])
+
+
 def read_ledger(path):
-    """(rows, malformed). Comment/blank lines are not rows."""
+    """(rows, malformed, claim). Comment/blank lines are not rows; CLAIM is captured.
+
+    A second CLAIM line is malformed rather than last-one-wins: two headers is two
+    truths about one ledger, which is the failure class this gate keeps chasing.
+    """
     if not os.path.isfile(path):
-        return [], ["ledger not found: %s" % path]
+        return [], ["ledger not found: %s" % path], None
     rows = []
     malformed = []
+    claim = None
     with open(path, "r", encoding="utf-8") as fh:
         for no, raw in enumerate(fh, 1):
             line = raw.strip()
-            if not line or line.startswith("#"):
+            if not line:
+                continue
+            if line.startswith("#"):
+                cm = CLAIM_RE.match(line)
+                if cm:
+                    if claim is not None:
+                        malformed.append("%s:%d second CLAIM line -- one ledger, "
+                                         "one self-description"
+                                         % (os.path.basename(path), no))
+                    claim = cm.group(1).strip()
                 continue
             m = ROW_RE.match(line)
             if not m:
@@ -222,11 +252,16 @@ def read_ledger(path):
         if k in seen:
             malformed.append("duplicate type row: %s %s" % (k[0], k[1]))
         seen[k] = True
-    return rows, malformed
+    return rows, malformed, claim
 
 
-def evaluate(types, rows):
-    """Pure verdict -> (rc, out_lines, stats). Keys are type_key() strings throughout."""
+def evaluate(types, rows, claim):
+    """Pure verdict -> (rc, out_lines, stats). Keys are type_key() strings throughout.
+
+    `claim` is the ledger's own '# CLAIM' header text, or None when absent. Absent is
+    undecidable (2), not a pass: a ledger that will not describe itself cannot be
+    audited for lying about it.
+    """
     listed = dict(("%s|%s" % (r["_kind"], r["type"]), r) for r in rows)
     live = dict((type_key(kind, mod, name), ne) for (kind, mod, name, ne) in types)
     out = []
@@ -263,6 +298,18 @@ def evaluate(types, rows):
                        "%s -- renames/moves must re-key the row in the same commit" % key)
             fails += 1
 
+    want = claim_text(stats)
+    if claim is None:
+        out.append("[TOOL-ERROR] no '# CLAIM' header line -- a ledger that will not "
+                   "describe itself cannot be audited for lying about it: want '%s'"
+                   % want)
+        return 2, out, stats
+    if claim != want:
+        out.append("[CLAIM] ledger header says '%s' but the live tree and the rows say "
+                   "'%s' -- refresh the header in the SAME commit that moved the rows"
+                   % (claim, want))
+        fails += 1
+
     if fails:
         out.append("L0 extensibility class ledger BROKEN: %d violation(s); types=%d "
                    "listed=%d open=%d closed=%d"
@@ -283,14 +330,19 @@ def emit_and_judge(types):
     """--emit writes a self-consistent baseline ONLY after the floor guard has passed."""
     out_path = os.path.join(ROOT, "tmp", "l0_extensibility_class_candidate.txt")
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    opens = sum(1 for (_k, _m, _n, ne) in types)
+    stats = {"types": len(types), "listed": len(types), "open": opens,
+             "closed": len(types) - opens}
     with open(out_path, "w", encoding="utf-8") as fh:
         fh.write("# emitted from the live tree; class mirrors the CURRENT attribute state,\n")
         fh.write("# so every emitted row agrees with the tree by construction. Review before\n")
         fh.write("# promoting to the real ledger: opening a type is a decision, not a default.\n")
+        fh.write("# CLAIM %s\n" % claim_text(stats))
         for kind, mod, name, ne in sorted(types):
             fh.write("%s | type=%s::%s | class=%s\n"
                      % (kind.upper(), mod, name, "open" if ne else "closed"))
-    print_line("[EMIT] %d type(s) -> %s" % (len(types), repo_rel(out_path)))
+    print_line("[EMIT] %d type(s) -> %s [CLAIM %s]"
+               % (len(types), repo_rel(out_path), claim_text(stats)))
     return 0
 
 
@@ -309,13 +361,13 @@ def run_real():
         return 2
     if "--emit" in sys.argv[1:]:
         return emit_and_judge(types)
-    rows, malformed = read_ledger(LEDGER)
+    rows, malformed, claim = read_ledger(LEDGER)
     if malformed:
         for m in malformed:
             print_line("[TOOL-ERROR][malformed] %s" % m)
         print_line("[TOOL-ERROR] malformed class rows -> undecidable, exit 2")
         return 2
-    rc, out, _stats = evaluate(types, rows)
+    rc, out, _stats = evaluate(types, rows, claim)
     for line in out:
         print_line(line)
     return rc
@@ -368,9 +420,11 @@ def parse_rows(text_rows):
 
 def selftest():
     ok = True
+    n = 0
 
     def add(label, cond):
-        nonlocal ok
+        nonlocal ok, n
+        n += 1
         if cond:
             print_line("[SELFTEST] %s" % label)
         else:
@@ -404,6 +458,7 @@ def selftest():
         add("doc-comment mention does NOT count as an attribute",
             not ne["ENUM|lib::ClosedKind"])
         good = [
+            "# CLAIM types=6 listed=6 open=2 closed=4",
             "ENUM | type=lib::ClosedKind | class=closed",
             "ENUM | type=lib::OpenKind | class=open | reason=display-only format vocabulary, "
             "adding a variant must never break a downstream match",
@@ -413,9 +468,15 @@ def selftest():
             "grow every release; consumers must not build it by literal",
             "ENUM | type=m::InSub | class=closed",
         ]
-        rows, mal = parse_rows(good)
+
+        def cl(t, l, o, c):
+            return claim_text({"types": t, "listed": l, "open": o, "closed": c})
+
+        rows, mal, got_claim = parse_rows(good)
         add("consistent fixture parses cleanly", not mal and len(rows) == 6)
-        rc, _o, st = evaluate(types, rows)
+        add("CLAIM header line is captured off the ledger",
+            got_claim == cl(6, 6, 2, 4))
+        rc, _o, st = evaluate(types, rows, cl(6, 6, 2, 4))
         add("class matches attribute everywhere -> rc 0", rc == 0)
         add("stats count open and closed separately",
             st["open"] == 2 and st["closed"] == 4)
@@ -423,34 +484,51 @@ def selftest():
         # 1. Opening a type without flipping the row must be red.
         flipped = [(k, mo, n, True if (n == "ClosedKind") else v)
                    for (k, mo, n, v) in types]
-        rc, out, _ = evaluate(flipped, rows)
+        rc, out, _ = evaluate(flipped, rows, cl(6, 6, 2, 4))
         add("planted #[non_exhaustive] on a closed row is caught",
             rc == 1 and any("CLASS_MISMATCH" in l and "ClosedKind" in l for l in out))
 
         # 2. Flipping the row without the attribute must be red (the other direction).
-        rows2, _m = parse_rows([r.replace("class=closed", "class=open | reason=long enough "
-                                                          "reviewable reason for opening a type here")
-                                if "ClosedKind" in r and r.startswith("ENUM") else r
-                                for r in good])
-        rc, out, _ = evaluate(types, rows2)
+        rows2, _m, _c2 = parse_rows([r.replace("class=closed", "class=open | reason=long enough "
+                                               "reviewable reason for opening a type here")
+                                     if "ClosedKind" in r and r.startswith("ENUM") else r
+                                     for r in good])
+        rc, out, _ = evaluate(types, rows2, cl(6, 6, 3, 3))
         add("row flipped to open without the attribute is caught",
             rc == 1 and any("one deliberate act" in l or "deliberate act" in l for l in out))
 
         # 3. New type with no row.
-        rc, out, _ = evaluate(types + [("enum", "m", "Fresh", False)], rows)
+        rc, out, _ = evaluate(types + [("enum", "m", "Fresh", False)], rows, cl(7, 6, 2, 4))
         add("public type with no class row is caught",
             rc == 1 and any("[GAP] NEW public type" in l for l in out))
 
         # 4. Row whose type moved/ vanished.
-        rc, out, _ = evaluate([t for t in types if t[2] != "Plain"], rows)
+        rc, out, _ = evaluate([t for t in types if t[2] != "Plain"], rows, cl(5, 6, 2, 4))
         add("renamed/deleted type keeping its row reports STALE",
             rc == 1 and any("[STALE]" in l for l in out))
 
         # 5. Both fixed together -> green again. Rows go through the SAME reader as the
         # real run (handing evaluate raw ledger strings is a TypeError, not a verdict).
-        paired, _m5 = parse_rows([r for r in good if "lib::Plain" not in r])
-        rc, _o, _s = evaluate([t for t in types if t[2] != "Plain"], paired)
+        paired, _m5, _c5 = parse_rows([r for r in good if "lib::Plain" not in r])
+        rc, _o, _s = evaluate([t for t in types if t[2] != "Plain"], paired, cl(5, 5, 2, 3))
         add("paired deletion (row dropped in same commit) -> rc 0", rc == 0)
+
+        # 5b. The CLAIM axis: this is the drift that actually happened to this ledger.
+        # Its prose header asserted "all 227 rows are closed, because L0 measures ZERO
+        # #[non_exhaustive] today" while 56 rows were open and 16 src files carried the
+        # attribute. A header that is never recomputed outlives the act that made it true.
+        rc, out, _ = evaluate(types, rows, None)
+        add("ledger without a CLAIM line is undecidable, not green",
+            rc == 2 and any("no '# CLAIM'" in l for l in out))
+        rc, out, _ = evaluate(types, rows, cl(227, 227, 0, 227))
+        add("stale CLAIM disagreeing with the live tree is red and names both numbers",
+            rc == 1 and any("[CLAIM]" in l for l in out))
+        _dup_rows, dup_mal, _dup_claim = parse_rows(
+            ["# CLAIM types=1 listed=1 open=0 closed=1",
+             "# CLAIM types=2 listed=2 open=0 closed=2",
+             "ENUM | type=a::B | class=closed"])
+        add("a second CLAIM line is malformed (one ledger, one self-description)",
+            bool(dup_mal) and any("second CLAIM" in m for m in dup_mal))
 
         # 6. Undecidable states -> exit 2 via the reader, never a silent pass.
         add("open without a reviewable reason is malformed",
@@ -467,9 +545,22 @@ def selftest():
         real = extract_types(os.path.join(CRATE_DIR, "src"))
         add("TYPES_FLOOR above zero and below the real surface (%d types)" % len(real),
             0 < TYPES_FLOOR <= len(real))
+        # And the shipped ledger must itself satisfy the axis we just added --
+        # otherwise this commit introduces a check it cannot pass.
+        real_rows, real_mal, real_claim = read_ledger(LEDGER)
+        ro = sum(1 for r in real_rows if r["class"] == "open")
+        want_real = cl(len(real), len(real_rows), ro, len(real_rows) - ro)
+        add("the shipped ledger parses without malformed rows", not real_mal)
+        add("the shipped ledger carries a CLAIM line", real_claim is not None)
+        add("the shipped ledger's CLAIM matches the live tree right now",
+            real_claim == want_real)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    print_line("[SELFTEST] %s" % ("ALL ASSERTIONS HELD" if ok else "FAILED"))
+    # The count is SELF-REPORTED, not copied into gate_manifest.toml by hand: that note
+    # used to assert fifteen assertions while the code held seventeen -- the same
+    # hand-copied-number rot the CLAIM axis was just added to stop on the ledger side.
+    print_line("[SELFTEST] %s (%d assertions)"
+               % ("ALL ASSERTIONS HELD" if ok else "FAILED", n))
     return 0 if ok else 1
 
 

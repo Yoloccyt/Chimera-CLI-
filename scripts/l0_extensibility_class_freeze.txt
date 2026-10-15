@@ -25,10 +25,20 @@
 #   NEW public types with no row are red, and a row whose type moved/disappeared is STALE
 #   red -- so a W3-style physical move must re-key rows in the same commit.
 #
-# CURRENT STATE: all 227 rows are closed, because L0 measures ZERO #[non_exhaustive] today
-# (grep -rc over src = 0). Emitting the baseline therefore encodes no new decision; it makes
-# the existing, never-declared default explicit and reviewable, so the first future opening
-# is a choice someone signs rather than a side effect.
+# CLAIM types=227 listed=227 open=56 closed=171
+#
+# CURRENT STATE (machine-verified: G-115 recomputes the CLAIM line above from the live tree
+# plus these rows on every run, so this paragraph can no longer rot in silence -- ADR-218):
+# 56 of the 227 rows are open, i.e. carry #[non_exhaustive]; 171 are closed. The baseline
+# emitted 2026-10-14 genuinely had ZERO open rows, which is why encoding it then "encoded no
+# new decision"; the 56 were opened afterwards, one type at a time, off ADR-215's B0
+# shortlist (21 zero-mention enums + the measured no-literal structs), compile-proven by the
+# 11 E0639s it bit inside L0's own tests/wire_roundtrip.rs before any consumer was touched.
+# WHY the header is now a judgement target: until this line existed, this paragraph still
+# read "all 227 rows are closed, because L0 measures ZERO #[non_exhaustive] today" while 16
+# src files carried the attribute and 56 rows said open. Prose outlives the act that made it
+# true; a recomputed CLAIM cannot. Exactly one CLAIM line is allowed -- two headers is two
+# truths about one ledger.
 #
 # OPENING SHORTLIST (decided later, per type -- deliberately NOT pre-applied here):
 # 21 pub enums have zero textual mention in ANY other crate's src/tests/benches/examples and
