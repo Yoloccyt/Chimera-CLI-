@@ -13,8 +13,9 @@
 //! 2. **同族完备**：某 leaf 模块只要在 prelude 里有**任一**成员，则该模块在顶层与
 //!    prelude 的成员集合必须相等（"只收伴生、漏收主类型"正是本锁要抓的形状）。
 //!
-//! 整族缺席（如 `spec::tool_plan`/`spec::blueprint`/`scheduler_contract` 等 25 项）**不判**
-//! ——那是"高频子集"的有意取舍（泛用名进 glob 会扩大消费方冲突面），不是漂移。
+//! 整族缺席（`blueprint` 4 / `scheduler_contract` 9 / `tool_plan` 7 / `variant` 2，
+//! 共 **22 项**，由本文件 `parser_sees_the_real_surface` 的 `[facade-scale]` 读数产出）
+//! **不判**——那是"高频子集"的有意取舍（泛用名进 glob 会扩大消费方冲突面），不是漂移。
 //!
 //! # 为什么解析放在测试里而不是门脚本里
 //! G-107 只管两段式**模块级** `pub use <group>::<leaf>;`（53 条，值级不在其辖域）；
@@ -165,6 +166,9 @@ pub mod prelude {
 
 /// 论域自证：解析器必须看得见真实 lib.rs 的两组语句（若锚点/形态改动导致
 /// 解析为空集，前两条断言会因"两侧都空"而恒真——这条把它变成红）。
+///
+/// 同时打印规模：ADR 引用的 top/prelude 计数必须由**本锁自己的解析器**产出
+/// （`cargo test -- --nocapture` 读数），不接受另行手算的快照。
 #[test]
 fn parser_sees_the_real_surface() {
     let (head, prelude_region) = split_regions(&lib_src());
@@ -180,4 +184,45 @@ fn parser_sees_the_real_surface() {
         top.contains_key("behavior_contract"),
         "顶层应含 behavior_contract 值组（实测键集未命中，锚点漂移）"
     );
+    let top_all = flatten(&top);
+    let pre_all = flatten(&pre);
+    let top_only = top_all.iter().filter(|n| !pre_all.contains(*n)).count();
+    let pre_only = pre_all.iter().filter(|n| !top_all.contains(*n)).count();
+    println!(
+        "[facade-scale] stmt_top={} stmt_prelude={} value_top={} value_prelude={} \
+         top_only={} pre_only={} absent_families={} missing_by_family={:?}",
+        top.len(),
+        pre.len(),
+        top_all.len(),
+        pre_all.len(),
+        top_only,
+        pre_only,
+        pre.keys().filter(|k| !top.contains_key(k.as_str())).count(),
+        top_only_by_family(&top, &pre_all),
+    );
+    assert!(
+        !top_all.is_empty() && !pre_all.is_empty() && pre_only == 0,
+        "规模自证失败（value_top={} value_prelude={} pre_only={}）",
+        top_all.len(),
+        pre_all.len(),
+        pre_only
+    );
+}
+
+/// 按 leaf 模块聚合「顶层有、prelude 缺」的项数，供口径注释与 ADR 核对分族规模。
+fn top_only_by_family(
+    top: &BTreeMap<String, Vec<String>>,
+    pre_all: &std::collections::BTreeSet<String>,
+) -> BTreeMap<String, usize> {
+    let mut per: BTreeMap<String, usize> = BTreeMap::new();
+    for (family, names) in top {
+        let missing = names
+            .iter()
+            .filter(|n| !pre_all.contains(n.as_str()))
+            .count();
+        if missing > 0 {
+            per.insert(family.clone(), missing);
+        }
+    }
+    per
 }
