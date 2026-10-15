@@ -11,6 +11,12 @@
 //!
 //! WHY 不 bench 排序本身:`percentile_sorted` 契约要求调用方传入已排序切片(排序是
 //! O(n log n),属调用方策略而非取分位这一步)。这里只测取分位的 O(1) 成本。
+//!
+//! 豁免登记（ADR-215 D-26）:本文件含 `unsafe impl GlobalAlloc`（`CountingAlloc`）。
+//! `#![forbid(unsafe_code)]` 在 lib.rs 只辖 lib 编译单元；bench 是独立 crate，
+//! G-99 纯度门辖区本就是 `src/**`。`CountingAlloc` 是零堆分配硬断言（上条）的
+//! 唯一实现手段，std 无等价替代；唯一允许的 unsafe 形态 = 转发到 `System`
+//! 分配器（不做指针运算/不做自定义内存布局），见下方三个 unsafe fn。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench/example code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
