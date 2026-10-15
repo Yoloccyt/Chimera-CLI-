@@ -679,6 +679,15 @@ pub use calibration::{
 
 /// 预导出模块 — 常用类型的便捷导入
 ///
+/// # 与顶层的关系（口径，ADR-217 D-35）
+/// prelude = **顶层值级导出的高频子集**，两侧关系由 `tests/prelude_surface_test.rs`
+/// 锁成两条不变量：① **无孤儿**（prelude 的每个值名都必须在顶层出现）；② **同族完备**
+/// （某 leaf 模块只要在 prelude 有任一成员，该模块在两侧的成员集合必须相等）。
+/// 整族缺席（`tool_plan`/`blueprint`/`scheduler_contract`/`variant` 共 22 项）是**有意取舍**
+/// 而非漂移——这些模块含 `Quota`/`Priority`/`ToolOp` 等泛用名，进 glob 会扩大 36 个消费
+/// crate 的名字冲突面；需要者走两段式路径 `nexus_contracts::tool_plan::*`。
+/// 下面各分组注释里的"与顶层导出同集"是**分组级**陈述（受不变量②约束），不是全集陈述。
+///
 /// # 示例
 /// ```
 /// use nexus_contracts::prelude::*;
@@ -687,8 +696,11 @@ pub use calibration::{
 /// let mask: SparseMask<ToolId> = SparseMask::empty();
 /// ```
 pub mod prelude {
-    // Milestone B-3c: 强制层校验结果（与顶层导出同集）
-    pub use crate::behavior_contract::{ContractCheckOutcome, ContractContext, ContractExample};
+    // Milestone B-3c: 强制层校验结果（同族四类型齐，缺项由
+    // tests/prelude_surface_test.rs 的「同族完备」不变量锁住）
+    pub use crate::behavior_contract::{
+        BehaviorContract, ContractCheckOutcome, ContractContext, ContractExample,
+    };
     pub use crate::capability_token::{CapabilityToken, CapabilityTokenStatus, SeamId};
     // P4-W16.2.2: R1 召回配额（S7 接缝）
     pub use crate::density::{DensityPolicy, DensityTier};
@@ -718,9 +730,10 @@ pub mod prelude {
     pub use crate::vector::{
         VectorBackend, VectorHit, VectorStore, VectorStoreExt, VectorStoreStats,
     };
-    // T6-2: 形式化属性定义框架
+    // T6-2: 形式化属性定义框架（与顶层 8 项同族齐，缺项由 prelude_surface_test 锁）
     pub use crate::formal_props::{
-        FormalProperty, InvariantSpec, PropertyCategory, VerificationMethod, VerificationResult,
+        EmptyFormalProvider, FormalProperty, FormalResultProvider, InvariantSpec, PropertyCategory,
+        VerificationMethod, VerificationResult, VerifiedWithStrength,
     };
     // Task 3.10: L0 共享类型扩展(EventMetadata / TaskStatus / Checkpoint)
     pub use crate::checkpoint::Checkpoint;
