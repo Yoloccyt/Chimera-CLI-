@@ -13,6 +13,7 @@
 //! bench 覆盖；这里补的是 **L0 单元级**基线，两条对照：
 //! 1. `select_top_k`（实现走 `select_nth_unstable_by`，O(n) 平均 + Top-K 局部排序）；
 //! 2. `full_sort` 对照组（`sort_by` 全排再截断，O(n log n)）。
+//!
 //! 若实现哪天回退成全排，(1) 的读数会贴到 (2)——红线 #8 的机器可见形态。
 //!
 //! # 为什么是 dev-only 而非 registered
@@ -33,7 +34,7 @@ fn scores(len: usize) -> Vec<f32> {
     (0..len)
         .map(|_| {
             seed = seed
-                .wrapping_mul(6364_1362_2384_6793_005)
+                .wrapping_mul(6_364_136_223_846_793_005)
                 .wrapping_add(1_442_695_040_888_963_407);
             // 取高 24 bit 映射到 [0,1)，比整型转 f32 更稳定
             ((seed >> 40) as f32) / (1_u64 << 24) as f32
@@ -66,7 +67,13 @@ fn bench_select_top_k(c: &mut Criterion) {
             // (2) 对照组：全排序后截断（红线 #8 禁止的形态，此处仅作回退哨兵）
             c.bench_function(&format!("full_sort_control n={n} k={k}"), |b| {
                 b.iter_batched(
-                    || src_scores.iter().copied().enumerate().collect::<Vec<(usize, f32)>>(),
+                    || {
+                        src_scores
+                            .iter()
+                            .copied()
+                            .enumerate()
+                            .collect::<Vec<(usize, f32)>>()
+                    },
                     |mut indexed| {
                         indexed.sort_by(|a, b| {
                             b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
@@ -88,11 +95,8 @@ fn bench_tool_id_instantiation(c: &mut Criterion) {
     let k = 100;
     c.bench_function(&format!("select_top_k ToolId n={n} k={k}"), |b| {
         b.iter(|| {
-            let mask = SparseMask::select_top_k(
-                black_box(&src_ids),
-                black_box(&src_scores),
-                black_box(k),
-            );
+            let mask =
+                SparseMask::select_top_k(black_box(&src_ids), black_box(&src_scores), black_box(k));
             black_box(mask.sparsity_ratio);
         })
     });
