@@ -438,12 +438,7 @@ fn any_app_event() -> impl Strategy<Value = AppEvent> {
     prop_oneof![
         (any_nonempty_id(), any_box(), any_box(), any::<u64>()).prop_map(
             |(thread_id, goal_id, run_id, created_at_ms)| AppEvent::ThreadStarted {
-                thread: Thread::new(
-                    ThreadId::new(&thread_id),
-                    &goal_id,
-                    &run_id,
-                    created_at_ms,
-                ),
+                thread: Thread::new(ThreadId::new(&thread_id), &goal_id, &run_id, created_at_ms,),
             }
         ),
         (any_nonempty_id(), any_nonempty_id(), any_box(), any_box()).prop_map(
