@@ -248,6 +248,23 @@ jobs:
         run: |
           python3 scripts/check_immutable_surface_parity.py --selftest
           python3 scripts/check_immutable_surface_parity.py
+      # WHY: G-99 judges the dependency whitelist plus forbidden symbols, so a real
+      # algorithm added to L0 leaves it green -- an algorithm is not a forbidden symbol.
+      # ADR-033's addendum (2026-10-09) and ADR-212 decision 3 both recorded that the
+      # word "controlled" had no machine judgement behind it; ADR-218 closes it here.
+      # Judgement form is completeness pairing, not a size ratchet: the key set is
+      # C (derived fns) U T (D7 policy tables) U R (registered modules the derivation
+      # cannot see), required EXACTLY equal to scripts/l0_logic_ledger.txt. No row for
+      # a derived construct = NEW red (this is the hole); row without its construct =
+      # STALE red; class contradicting the parse = CLASS_MISMATCH red; header CLAIM
+      # disagreeing with reality = red; four size floors make a blind parser rc=2
+      # instead of "clean". Lexer, cfg(test) tail mask and module-key shape are
+      # imported from G-99/G-105 -- two copies of "what is production code" is the
+      # drift class this repository already fights.
+      - name: L0 controlled-logic ledger (G-119)
+        run: |
+          python3 scripts/check_l0_logic_ledger.py --selftest
+          python3 scripts/check_l0_logic_ledger.py
 
 
       # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
