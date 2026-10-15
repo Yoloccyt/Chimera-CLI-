@@ -472,7 +472,7 @@ my-crate/
 
 - `UserIntent` — 多模态用户意图(含 intent_id/raw_text/multimodal_inputs/risk_level；四字段实测全在 `crates/nexus-contracts/src/core_domain/domain.rs:37`，该结构另有 task_id/description/status/dependencies 等字段)
 - `Quest` — 长期任务(实测字段 quest_id/title/tasks/thinking_mode/checkpoint_id/priority；**主键名是 `quest_id` 不是 `id`**，旧述会写错匹配代码)
-- `Checkpoint` — 检查点(含 quest_id/serialized_state:Vec<u8> MessagePack/memory_snapshot_hash/created_at)
+- `Checkpoint` — 检查点(含 quest_id/checkpoint_id/memory_snapshot_hash/serialized_state:Vec<u8> MessagePack/created_at/description(可选,`#[serde(default)]`)/schema_version:u16(ADR-213 F3 尾字段,0=历史形态且不写入))
 - `OmniSparseMasks` — 全维稀疏掩码(routing/context/memory/audit/budget 五维度)
 - `SemanticBlock` — 语义块(实测 15 字段，含 block_id/block_vector/tools/block_coherence/temporal/clv/top_blocks/top_tools 等；**该结构上没有能力 id 字段**，旧述列的三个名字里第三个是错的)
 - `CLV` — 上下文潜在向量(newtype over `Array1<f32>` @ `crates/nexus-core/src/clv.rs:26`，维度由该文件内 `pub const DIMENSION: usize = 512` 钉住；`cosine_similarity_slices` 权威实现在 L0 `crates/nexus-contracts/src/vector_math/util.rs`，经 `clv.rs` 再导出以保持 `nexus_core::cosine_similarity_slices` 的既有调用面)
