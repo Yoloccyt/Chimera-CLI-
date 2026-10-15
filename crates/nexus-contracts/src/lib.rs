@@ -9,8 +9,12 @@
 //! NEXUS-OMEGA L0 契约层 — 纯类型 + 受控纯逻辑，零 workspace 内部依赖
 //!
 //! 对应架构层: **L0 Contracts**（nexus-core 之下，十层架构新增最低层）
-//! 对应 ADR: **ADR-033**（L0 nexus-contracts 契约层建立）
-//! 对应设计源: `NEXUS-OMEGA_v5.0_系统性完整设计文档.md` §C6
+//! 对应 ADR: **ADR-033**（L0 nexus-contracts 契约层建立；其追加节 2026-10-09 把口径由
+//! 「零逻辑」量体订正为「受控纯逻辑」）/ **ADR-212**（边界 = 单 crate + 纯度门 G-99）/
+//! **ADR-218**（「受控」的逻辑量判据 G-119 与例外台账 `scripts/l0_logic_ledger.txt`）
+//! 对应设计源: `docs/architecture/CODE_WIKI.md`（架构权威源）+ `docs/architecture/adr_index.md`。
+//! 旧引用 `NEXUS-OMEGA_v5.0_系统性完整设计文档.md` 经全仓检索确认**不在盘**，与
+//! `AETHER_NEXUS_OMEGA_ULTIMATE.md` 同属悬空权威源，故改指在盘源而非在此复制其内容。
 //!
 //! # 核心职责
 //!

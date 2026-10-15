@@ -63,7 +63,10 @@ harness = false
 # ADR-033: L0 nexus-contracts 契约层
 #
 # 设计约束(C6 治理 L1 上帝 crate):
-# - 纯类型定义 + 零逻辑 + 零 crate 依赖（仅 serde 派生）
+# - 纯类型定义 + 受控纯逻辑 + 零 workspace 内部 crate 依赖（仅 serde/chrono/uuid/thiserror）
+#   「受控」两字的判据史：原口径「零逻辑」自 ADR-033 追加节 2026-10-09 量体订正为
+#   「受控纯逻辑」；符号面由 ADR-212 决策 3 的 G-99 守护，逻辑量面由 ADR-218 的 G-119
+#   （scripts/l0_logic_ledger.txt 完备性对拍）守护——旧版此处写「零逻辑」属未随订正同步
 # - 依赖铁律扩展: L(N) → L(0) 恒允许
 # - nexus-contracts 禁止依赖任何 crate（含 nexus-core / event-bus）
 #
