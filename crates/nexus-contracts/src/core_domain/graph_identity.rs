@@ -23,7 +23,7 @@
 //!   渐进铺开——既有事件无身份字段不破坏序列化（`skip_serializing_if`）
 //! - **不可变承载**: 构造后字段不可变更（身份一旦落档不可篡改，
 //!   与 `SegmentMetadata.parent_traj_id` 铁律9 同源精神）
-//! - **144 事件枚举本体不动**: 本类型仅作为 `EventMetadata` 的扩展字段承载，
+//! - **152 事件枚举本体不动**: 本类型仅作为 `EventMetadata` 的扩展字段承载，
 //!   不新增事件变体、不改 severity() 权威源（v4.0 §17 治理红线）
 
 use serde::{Deserialize, Serialize};

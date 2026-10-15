@@ -420,7 +420,7 @@ pub use seams::rl_hooks;
 /// 图身份契约 — GIP 跨层成本归因三元组（WI-04）
 ///
 /// 承载 GraphIdentity（goal_id/run_id/node_id），经 EventMetadata 可选字段
-/// 渐进铺开；144 事件枚举本体不动（v4.0 §17 治理红线）。
+/// 渐进铺开；152 事件枚举本体不动（v4.0 §17 治理红线）。
 pub use core_domain::graph_identity;
 
 /// MCSM 流形约束信号守恒聚合 — Sinkhorn 双随机投影器（WI-05）
@@ -436,7 +436,7 @@ pub use protocol::app;
 
 /// 事件双轨契约 — DynamicEvent 注册表与 EventMetadataV2（WI-21）
 ///
-/// 轨一（内置 144 枚举）不动；轨二（动态注册）供 MCP/SubAgent/Hook 外部源。
+/// 轨一（内置 152 枚举）不动；轨二（动态注册）供 MCP/SubAgent/Hook 外部源。
 pub use core_domain::event_v2;
 
 /// 公共 Top-K 收敛工具 — 红线 #8(WS-2 C1)
@@ -462,7 +462,8 @@ pub use safety::adjudication;
 /// 写入敏感信息扫描引擎 — 记忆/上下文/会话持久化前的敏感载荷拦截（v2.3 §(b.5)）
 ///
 /// 承载 `scan`（纯函数扫描）/ `ScanPolicy` / `ScanVerdict` / `ScanHit` /
-/// `SensitiveKind` / `SensitiveDisposition` / `looks_high_entropy`。零 crate 依赖
+/// `SensitiveKind` / `SensitiveDisposition`（`looks_high_entropy` 经 ADR-215 D-24
+/// 收窄为模块私有、不在承载面）。零 crate 依赖
 /// （不用 `regex`，靠固定前缀/字面标记 + 熵启发式），供跨 L2–L10 写入口向下依赖（L0）。
 pub use safety::sensitive;
 

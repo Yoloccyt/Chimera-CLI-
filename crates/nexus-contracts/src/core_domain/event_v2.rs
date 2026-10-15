@@ -11,7 +11,7 @@
 //!
 //! # 双轨制设计（T3 裁决）
 //!
-//! - **轨一（不动）**: `event-bus` 内置 144 枚举变体保持编译期穷尽匹配与优化
+//! - **轨一（不动）**: `event-bus` 内置 152 枚举变体保持编译期穷尽匹配与优化
 //! - **轨二（新增）**: [`DynamicEvent`] 注册表供 MCP/SubAgent/Hook 等外部源注册，
 //!   命名空间化（`mcp.github.issue_created`），注册表配命名空间配额
 //!   （≤64 类型/空间）+ 注册审计
@@ -22,7 +22,7 @@
 //!
 //! - **纯类型 + 同步 trait**: L0 零依赖铁律，不引入 async-trait
 //!   （`rl_hooks::RLHook` 同步 trait 先例）
-//! - **144 枚举与 severity() 权威源不动**: 本模块仅承载注册表契约面，
+//! - **152 枚举与 severity() 权威源不动**: 本模块仅承载注册表契约面，
 //!   不新增内置变体（v4.0 §17 治理红线）
 //! - **序列化形态**: `serialize()` 返回 `Bytes`——但 L0 不引入 bytes 依赖，
 //!   使用 `Vec<u8>`（零依赖铁律优先于类型美观）
@@ -39,7 +39,7 @@ use crate::graph_identity::GraphIdentity;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventNamespace {
-    /// 内置（轨一：144 枚举，编译期穷举）
+    /// 内置（轨一：152 枚举，编译期穷举）
     Builtin,
     /// MCP 外部源（命名空间前缀 "mcp."）
     Mcp,
@@ -159,7 +159,7 @@ pub enum EventPattern {
 /// # 与 v1 的关系
 /// `base` 为 L0 [`crate::event_metadata::EventMetadata`]（v1 基座，
 /// event_id/timestamp/source/correlation_id/payload_version），
-/// v2 扩展字段叠加上层——**144 内置枚举的 metadata() 权威源不动**，
+/// v2 扩展字段叠加上层——**152 内置枚举的 metadata() 权威源不动**，
 /// 本类型仅供动态事件（轨二）与内置事件元数据扩展字段使用。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventMetadataV2 {
@@ -279,7 +279,7 @@ impl Default for NamespaceQuotaV2 {
 
 /// 双轨元数据桥接 — 内置枚举元数据提取契约（WI-04 渐进铺开）
 ///
-/// 内置 144 枚举变体经此 trait 暴露 v2 扩展字段（无身份时返回 None），
+/// 内置 152 枚举变体经此 trait 暴露 v2 扩展字段（无身份时返回 None），
 /// 使消费方（账本聚合/成本归因）不感知枚举内部差异。
 pub trait MetadataBridge {
     /// 提取图身份（无身份时 None——成本归因覆盖率 = 100% 目标）

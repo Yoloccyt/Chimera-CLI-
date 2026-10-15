@@ -82,7 +82,7 @@ ADR-214 档 2 未开工：L0 的 227 个 pub 类型全部登记 `class=closed`�
 
 ### 决策 5（D-27）：候选 (a) schema_version 铺开 → **defer**
 
-Checkpoint（LHQP envelope）与 token_evidence 已落；`ExperienceCard`/`HarnessSpec` 未落。铺开须等第二个 wire 演进实需，且 **`HarnessSpec::canonical_merkle_input`（95 行 Merkle 叶子序列化）是硬约束**：给 HarnessSpec 加任何字段都会改变 canonical 输入即改变证据链哈希，须另立迁移方案，不得按"尾部追加 + default"惯性操作。触发条件：出现对 ExperienceCard/HarnessSpec 的实际字段演进需求时，在同一 ADR 批次内按 ADR-213 §9 的实测纪律（同轮镜像结构体字节比对）落地。
+Checkpoint（LHQP envelope）与 token_evidence 已落；`ExperienceCard`/`HarnessSpec` 未落。铺开须等第二个 wire 演进实需，且 **`HarnessSpec::canonical_merkle_input`（95 行 Merkle 叶子序列化）是硬约束**：给 HarnessSpec 加任何字段都会改变 canonical 输入即改变证据链哈希，须另立迁移方案，不得按"尾部追加 + default"惯性操作。触发条件：出现对 ExperienceCard/HarnessSpec 的实际字段演进需求时，在同一 ADR 批次内按 ADR-213 §9 的实测纪律（同轮镜像结构体字节比对）落地。**2026-10-15 二轮审计补登**：`ContentBlock`（mca-gateway `session.rs` 的 SQLite `session_turns` 经 `to_vec_named` 落盘）同属未版本化点，并入本 D-27 触发条件点名清单；`EventMetadata` 以 `payload_version` 自版本化、不入清单。
 
 ### 决策 6（D-28）：候选 (b) VectorStore trait dyn 兼容拆分 → **reject（本轮）**
 
@@ -117,7 +117,7 @@ G-91（`check_contract_consumers.py` + `contract_consumer_baseline.txt` only-shr
 
 ## 6. 未做 / 待裁（诚实登记）
 
-- B0 扫描器文本匹配看不见宏拼接标识符（`paste!`/`concat_idents!` 类）；workspace 依赖现测未引入此类 crate，若未来引入须在派生脚本登记盲区。
+- B0 扫描器文本匹配看不见宏拼接标识符（`paste!`/`concat_idents!` 类）；workspace 依赖现测未引入此类 crate，若未来引入须在派生脚本登记盲区。**2026-10-15 二轮审计复核**：`paste` 仅为 `Cargo.lock` 传递依赖（外部库引入），无任何 workspace crate 直接依赖、`crates/**` 源码零 `paste::` 使用 ⇒ 工作区源码面盲区实测为零；未来若在 workspace 源码引入 `paste!`/`concat_idents!` 直接使用须同批在派生脚本登记盲区。
 - struct 短名单判据"无外部字面量"不含 serde 字符串形态的构造（`serde_json::from_value`）；open 化对该路径无影响（Deserialize 不受 non_exhaustive 限制），但 D-23 的证据口径不含它。
 - G-91 基线中与本批无关的其他 `<2 消费者` 行（如 affinity 组部分类型）未逐个复核——超出本轮 L0 裁决范围。
 - D-18 孤儿源文件 9 处（chimera-tui 5 / parliament 3 / quest-engine 1）属 L0 外，未动。

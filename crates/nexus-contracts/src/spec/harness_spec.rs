@@ -25,7 +25,7 @@
 //!   配合 `gsoe-evolution` 的 `SpecRegistry` 实现谱系追踪（lineage）
 //!
 //! - **不可进化面硬编码（P4-W15.1.1）**: `ImmutableSurface` 枚举穷尽列出所有
-//!   不可进化面（13 条红线 + 6 Critical 事件 + INV-7/8/9 + 沙箱/QEEP + 验证器本身），
+//!   不可进化面（8 条红线 + 17 Critical 事件 + INV-7/8/9 + 沙箱/QEEP + 验证器本身），
 //!   `validate()` 方法拒绝任何试图修改不可进化面的 spec
 //!
 //! - **Merkle 输入规范化（P4-W15.1.1）**: `canonical_merkle_input()` 返回规范化字符串，

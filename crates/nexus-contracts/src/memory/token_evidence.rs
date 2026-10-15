@@ -258,6 +258,10 @@ pub struct SegmentMetadata {
 
 impl SegmentMetadata {
     /// 创建分段元数据
+    ///
+    /// # Panics
+    ///
+    /// `end_turn < start_turn` 时 panic（不变量：分段区间不得为负）。
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         segment_id: &str,

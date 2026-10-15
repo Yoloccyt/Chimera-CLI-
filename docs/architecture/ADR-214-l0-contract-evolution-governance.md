@@ -76,7 +76,7 @@ W13 开工前的实测事实：**ADR-213 已把两条编码铁律写成规范，
 G-113/114 四件同批 `git revert`（门与脚本同进退，反之留死判据触发 G-103 方向 A）；台账删除即回滚；`l0_exception_registry.rs` 不变量 4 单函数删除即回滚（余 4 测不受影响）；文档行为单行反向编辑。**工作树含 146 项他人在途改动 ⇒ 禁用 `git checkout --` / `git restore` / `git stash` / `git add -A`**，回滚一律用落盘前 `git diff -- <file>` 快照或反向编辑。
 
 ## 6. 未做 / 待裁（诚实登记）
-1. ~~**D-22 `#[non_exhaustive]` 三档推进**未开工~~ → **档 1 已落地**（G-115/G-116，见决策 3）；档 2 待逐类型开档，候选集已自测为 21 enum / 64 struct（旧记 24/103 作废，且其偏松方向已定位：首轮漏算根 `tests/`）。
+1. ~~**D-22 `#[non_exhaustive]` 三档推进**未开工~~ → **档 1 已落地**（G-115/G-116，见决策 3）；档 2 待逐类型开档，候选集已自测为 21 enum / 64 struct（旧记 24/103 作废，且其偏松方向已定位：首轮漏算根 `tests/`）。**继任（2026-10-15）**：档 2 已由 **ADR-215 D-23** 执行收口——短名单重派 23 enum / 64 struct，56 类型 open（属性+G-115 台账同批）、171 closed，实档 `ADR-215-l0-closure-extensibility-and-surface-adjudication.md`。
 2. **S7「161 个低消费者豁免」分桶定性未做**（本轮预算内未执行）。已确立的判据前提：G-91 `build_model` 只 walk `crates/*/src`，对 `crates/*/tests/**` 零可见性 ⇒ "仅测试消费"这一桶 G-91/G-101 两支门都算不出，须另建第三轴；不得复用二者基线。
 3. **bench 阈值数值对等无门**：`perf_thresholds.toml:62` 与 `bench_check.yml:265` 各存 `500000`/`500_000`；`check_perf_redlines.py` 的 I1 只比键集、I7 只比 `run_bench` 行集 ⇒ 数值未覆盖。处置：在既有 G-01/G-02 脚本内加 I9，**不新增门**（未实施）。
 4. **覆盖率无 L0 专项条目**：`coverage_per_crate_floor.toml` 无 nexus-contracts 行 ⇒ 落 `[defaults] floor=45`；该文件自陈"不得用估算或编造值填表" ⇒ 只能由 CI 侧 llvm-cov 出数后填，本轮不造数。
