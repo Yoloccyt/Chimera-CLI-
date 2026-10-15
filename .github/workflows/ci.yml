@@ -236,6 +236,19 @@ jobs:
         run: |
           python3 scripts/check_l0_extensibility_class.py --selftest
           python3 scripts/check_l0_extensibility_class.py
+      # WHY: ADR-212 7.1 raised ImmutableSurface Critical coverage to 17 (=16 mpsc +
+      # CheckpointSaved), but all five bus-side locks live inside event-bus: a new
+      # mpsc-Critical variant turns those red while L0 stays silent -- the spec could
+      # silently drop the delivery guarantee for an event that advertises it. This gate
+      # judges set parity in BOTH directions (MISSING = in mpsc but not in L0; EXTRA =
+      # in L0 while neither mpsc nor a registered broadcast-only row).
+      # Parsing lock: comment/string blanking imported from the G-99 lexer; bus side
+      # cross-checked against the CRITICAL_MPSC_VARIANTS count const in the same file.
+      - name: ImmutableSurface <-> mpsc parity (G-117)
+        run: |
+          python3 scripts/check_immutable_surface_parity.py --selftest
+          python3 scripts/check_immutable_surface_parity.py
+
 
       # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
       # 2026-08-29 冗余审计实测:43 个 crate 中仅 28 个从组合根 chimera-cli 沿生产

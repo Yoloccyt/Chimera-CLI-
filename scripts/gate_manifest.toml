@@ -1262,3 +1262,27 @@ expect = 0
 kind = "light"
 test_kind = "single_crate"
 note = "15 条断言走生产同一组抽取函数（tempdir 真树 + `module_key` 复用 G-105 实现）：①生产面键集与期望**逐集相等**（crate 根文件是模块 `lib` 而非 `m`——本门首版该断言写成 `... or len(types)==6`，键全错仍报绿，即本仓反复禁止的恒真守卫，已改为严格集合相等并在源码注明原因）②`#[cfg(test)]` 尾内声明不得入册 ③属性识别精确命中两个声明为 open 的类型且不误报另两个 ④**doc 注释里出现的 `#[non_exhaustive]` 不算属性** ⑤class 与属性全一致⇒rc 0，且 open/closed 分开计数 ⑥植入属性不翻行⇒CLASS_MISMATCH ⑦**反向**翻行不加属性⇒同样 CLASS_MISMATCH（两向都要咬得住）⑧新类型无行⇒NEW ⑨类型消失而行留存⇒STALE ⑩成对撤除⇒转绿 ⑪四类不可判定各判 malformed（open 缺理由 / class 取值非法 / 未知键 / 重复行）⑫`0 < TYPES_FLOOR ≤ 真实抽取数`（夹具仅 6 类型，故该断言必须对真树取数）。任一断言不成立⇒退 1。开发期由本夹具连续现形三处真缺陷：`ne` 元组键 vs 字符串键、NEW 分支 `%` 优先级写错致 3 占位符只给 2 参数（TypeError＝该判据从未跑通）、`evaluate` 与调用方双打印"
+
+# ============================================================
+# G-117/G-118 -- ImmutableSurface <-> event-bus Critical mpsc parity (ADR-216 decision 1)
+# 轴分工：bus 侧五锁（D-8 双清单/计数/lane 名单/perf-redline 散文锁）全在 event-bus
+# 域内；新增 mpsc-Critical 变体只会让 bus 侧红，L0 侧静默漏同步 => 该事件的通道保障
+# 可被 spec 悄悄降级。本门补的正是这条跨 crate 缝。
+# ============================================================
+[[gate]]
+id = "G-117"
+spec_ref = "ADR-216 决策 1（ImmutableSurface 与 bus mpsc 面双向集合对拍）"
+cmd = "{python} scripts/check_immutable_surface_parity.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "L0 ImmutableSurface（harness_spec.rs）与 event-bus bus.rs::is_critical_mpsc_event 的双向集合对拍。为什么需要：ADR-212 §7.1 把 ImmutableSurface Critical 覆盖抬到 17（= 16 mpsc 旁路 + CheckpointSaved），但 bus 侧五把锁全部活在 event-bus 域内——新增一个 mpsc-Critical 变体时 bus 侧判红而 L0 侧静默，spec 对一条通道保障事件的「不可进化」承诺可在无人注意下失效（B-P1-5 修的正是同类洞）。判据两向皆红：MISSING（mpsc 变体不在 ImmutableSurface）/ EXTRA（L0 覆盖既非 mpsc 又无 broadcast-only 登记行——任何此类新增都是刻意动作，须付出带理由的登记行成本，同提交）。解析同源：注释/字符串经 G-99 同一 blank_rust 词法器剔除（注释里出现 NexusEvent::GhostVariant { .. } 不算数、RedlineCriticalEventMpsc 因不以 Critical 开头天然排除）；bus 侧解析出的臂集与同文件 CRITICAL_MPSC_VARIANTS 计数常量互锁（不一致即红）。退码：0 对拍 / 1 MISSING·EXTRA·计数漂移 / 2 不可判定（输入缺失·锚点查无·解析数低于地板 10/10·allowlist 行理由<24 字符）——盲解析不得报「对拍通过」。现取实况（2026-10-15）：mpsc=16、Critical=17=16+CheckpointSaved，双向零缺口。三处实现缺陷（变体正则缺 re.MULTILINE、CRLF 未归一、断言串与消息格式错位）全部由自带 selftest 在接线前咬出。"
+
+[[gate]]
+id = "G-118"
+spec_ref = "G-117 配套（门自身有牙，沿 G-20/G-92/G-99/G-105/G-107/G-109/G-111/G-114/G-116 先例）"
+cmd = "{python} scripts/check_immutable_surface_parity.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "11 条断言走生产同一组抽取/比较函数（fixture 与真树同函数，禁测试专用副本）：①bus 夹具 3 臂 + 计数常量 3 解析 ②matches! 体内注释诱饵 NexusEvent::GhostVariant 不计 ③surface 夹具只取 Critical* 前缀、RedlineCriticalEventMpsc 天然排除 ④对拍成立（surface = mpsc + allowlist）⑤植入 MISSING（mpsc|{Delta}）必须红且点名 Delta ⑥植入 EXTRA（surface+UnknownAdded）必须红 ⑦allowlist 行存在时该名不判 EXTRA ⑧<24 字符理由判 malformed ⑨真 allowlist 自证合规 ⑩地板拒绝微型解析 ⑪第二个注释诱饵不计。任一不成立=>退 1。开发期本夹具连续抓出三处真缺陷（re.MULTILINE 缺失致 surface 恒 0、CRLF 致块尾定位失效、断言串与消息不匹配），先于任何 CI 接线。"

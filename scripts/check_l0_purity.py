@@ -96,6 +96,22 @@ FORBIDDEN = [
     ("env-read", "AMBIENT-INPUT", r"\bstd::env::(?:var|vars|var_os)\b"),
     ("env-write", "AMBIENT-INPUT",
      r"\bstd::env::(?:set_var|remove_var|set_current_dir|set_experimental)\b"),
+    # ADR-216 (2026-10-15, second-round L0 audit) -- sixth impurity class. L0 is
+    # "pure data + controlled pure logic"; lock/atomic/interior-mutability
+    # primitives import shared-mutable-state semantics into a contract crate
+    # whose types are read-only-shared across the whole stack. Measured on the
+    # 64 production files: zero real hits -- this class is REGRESSION PREVENTION,
+    # not stock cleanup (hence no exemption rows today). Patterns are QUALIFIED
+    # on purpose: bare words would false-positive on real identifiers
+    # (`AtomicOperator`, the `thread: Thread` field in protocol/app.rs) -- the
+    # selftest pins both counter-examples.
+    ("std-sync", "SHARED-STATE", r"\bstd::sync\b"),
+    ("mutex", "SHARED-STATE", r"\bMutex\b|\bRwLock\b"),
+    ("interior-mutability", "SHARED-STATE", r"\bRc<|\bRefCell\b|\bCell<|\bUnsafeCell\b"),
+    ("atomic-primitive", "SHARED-STATE",
+     r"\bAtomic(?:Bool|I8|I16|I32|I64|Isize|U8|U16|U32|U64|Usize|Ptr)\b"),
+    ("thread", "SHARED-STATE", r"\bstd::thread\b|\bthread::spawn\b"),
+    ("once-lazy", "SHARED-STATE", r"\bOnceLock\b|\bOnceCell\b|\bLazyLock\b|\blazy_static\b"),
 ]
 
 FORBIDDEN_RE = [(name, cat, re.compile(rx)) for name, cat, rx in FORBIDDEN]
@@ -104,7 +120,7 @@ FORBIDDEN_RE = [(name, cat, re.compile(rx)) for name, cat, rx in FORBIDDEN]
 # error, not a finding: the gate cannot judge -> exit 2 (never borrow a 1 that
 # would read as "checked and red"). Mirrors check_write_sensitive_instrumentation
 # .py's EXEMPT_CATEGORIES discipline (G-92).
-IMPURITY_CATEGORIES = ("AMBIENT-INPUT", "IO-EFFECT")
+IMPURITY_CATEGORIES = ("AMBIENT-INPUT", "IO-EFFECT", "SHARED-STATE")
 
 # Minimum reason length in characters. A one-word reason ("test") is not evidence;
 # the sibling gate enforces the same rule for the same reason.
@@ -447,6 +463,11 @@ CLEAN = (
     'trait Runner {\n'
     '    fn run(&self) -> Result<(), ()>;\n'  # plain code, no forbidden token
     '}\n'
+    # SHARED-STATE counter-examples (ADR-216): identifiers that must NOT trip the
+    # qualified patterns -- AtomicOperator (L0 real type) and a `thread` field.
+    'pub struct AtomicOperator { pub kind: u8 }\n'
+    'pub struct Thread { pub name: String }\n'
+    'pub struct Turn { pub thread: Thread }\n'
 )
 
 # Dirty fixture: each line injects one distinct forbidden construct in CODE.
@@ -466,6 +487,13 @@ DIRTY = [
     # reporting "0 impurity" while a helper's meaning changed with the CI environment.
     ("env-read", "fn q() { let _ = std::env::var(\"CHIMERA_PERF_SCALE\"); }"),
     ("env-write", "fn r() { std::env::set_var(\"A\", \"b\"); }"),
+    # ADR-216 SHARED-STATE (sixth class): one planted line per qualified pattern.
+    ("std-sync", "fn s1() { let _ = std::sync::Arc::new(1u8); }"),
+    ("mutex", "fn s2() { let _ = Mutex::new(1u8); }"),
+    ("interior-mutability", "fn s3(x: Rc<u8>) -> u8 { *x }"),
+    ("atomic-primitive", "fn s4() { let _ = AtomicU32::new(0); }"),
+    ("thread", "fn s5() { let _ = std::thread::spawn(|| {}); }"),
+    ("once-lazy", "fn s6() { let _ = OnceLock::<u8>::new(); }"),
 ]
 
 
