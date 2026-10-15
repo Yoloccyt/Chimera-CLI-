@@ -53,6 +53,12 @@ harness = false
 name = "util_micro"
 harness = false
 
+# ADR-217 D-36:L0 唯一生产热路径函数(SparseMask::select_top_k)的单元基线 +
+# full_sort 回退对照组;dev-only 态登记(bench_inventory_freeze.txt),读数不入 SLO 三表
+[[bench]]
+name = "sparse_select_top_k"
+harness = false
+
 # ============================================================
 # ADR-033: L0 nexus-contracts 契约层
 #

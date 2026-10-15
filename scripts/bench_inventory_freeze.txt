@@ -77,6 +77,7 @@ hcw-window|window_affinity|dev-only|窗口亲和度开发基准
 kvbsr-router|route|dev-only|KVBSR 路由补充开发基准
 mcp-mesh|mesh_benchmark|dev-only|Mesh 消息吞吐开发基准
 mtpe-executor|predict|dev-only|MTPE 预测路径开发基准
+nexus-contracts|sparse_select_top_k|dev-only|L0 热路径掩码选择单元基线(select_top_k vs full_sort 回退哨兵),读数不入三表(无 clean-runner 不标定),ADR-217 D-36
 nexus-core|bridge_bench|dev-only|桥接层开发基准
 nexus-core|clv_bench|dev-only|CLV 客户生命周期价值计算开发基准
 nexus-core|clv_cosine|dev-only|CLV 余弦专项基准
