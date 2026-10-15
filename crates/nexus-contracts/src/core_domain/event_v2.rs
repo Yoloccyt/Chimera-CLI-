@@ -378,4 +378,49 @@ mod tests {
         fn assert_send_sync<T: Send + Sync + 'static>() {}
         assert_send_sync::<Box<dyn DynamicEvent>>();
     }
+
+    /// DynamicEvent trait 的 L0 侧 mock 调度测试（2026-10-15 二轮审计补强：
+    /// 此前仅有 Send+Sync 编译断言，无一个 impl 验证六个方法的调度面）。
+    #[test]
+    fn dynamic_event_trait_mock_dispatch() {
+        struct MockEvent {
+            metadata: EventMetadataV2,
+        }
+        impl DynamicEvent for MockEvent {
+            fn event_type(&self) -> EventTypeId {
+                EventTypeId::new("audit.mock.created")
+            }
+            fn namespace(&self) -> EventNamespace {
+                EventNamespace::External
+            }
+            fn serialize(&self) -> Result<Vec<u8>, String> {
+                rmp_serde::to_vec_named(&self.metadata).map_err(|e| e.to_string())
+            }
+            fn metadata(&self) -> &EventMetadataV2 {
+                &self.metadata
+            }
+            fn importance(&self) -> ImportanceScore {
+                ImportanceScore::new(0.5)
+            }
+            fn extract_symbols(&self) -> Vec<Box<str>> {
+                vec![Box::from("mock_symbol")]
+            }
+        }
+
+        let ev = MockEvent {
+            metadata: EventMetadataV2::new("audit-test"),
+        };
+        assert_eq!(ev.event_type().as_str(), "audit.mock.created");
+        assert_eq!(ev.namespace(), EventNamespace::External);
+        assert_eq!(ev.importance(), ImportanceScore::new(0.5));
+        assert_eq!(ev.extract_symbols().len(), 1);
+        let bytes = ev.serialize().expect("mock 序列化失败");
+        let back: EventMetadataV2 = rmp_serde::from_slice(&bytes).expect("回读失败");
+        assert_eq!(back.base.source, "audit-test");
+
+        // 装箱为 trait object 后调度仍一致（event-bus 动态注册表消费面的真实形态）
+        let boxed: Box<dyn DynamicEvent> = Box::new(ev);
+        assert!(boxed.serialize().is_ok());
+        assert_eq!(boxed.namespace(), EventNamespace::External);
+    }
 }

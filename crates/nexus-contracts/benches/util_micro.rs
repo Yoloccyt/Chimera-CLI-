@@ -103,6 +103,11 @@ fn bench_sigmoid(c: &mut Criterion) {
 
     // 1024 次批量:GEA 门控 / MAPPO 策略头这类逐元素映射的真实使用形态
     let xs: Vec<f32> = (0..1024).map(|i| i as f32 * 0.01 - 5.0).collect();
+    // 2026-10-15 审计补强:map 路径与 scalar/percentile 两路同做零分配硬断言
+    assert_zero_alloc("sigmoid(map 1024)", || {
+        let sum: f32 = xs.iter().map(|&x| sigmoid(black_box(x))).sum();
+        black_box(sum);
+    });
     c.bench_function("sigmoid map 1024", |b| {
         b.iter(|| {
             let sum: f32 = xs.iter().map(|&x| sigmoid(black_box(x))).sum();

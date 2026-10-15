@@ -142,3 +142,109 @@ pub struct FailureRecord {
     /// 受影响组件（crate 名或模块路径，便于归属）
     pub affected_component: String,
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
+mod tests {
+    use super::*;
+
+    fn assert_roundtrip<T>(value: &T, what: &str)
+    where
+        T: Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+    {
+        let json = serde_json::to_string(value).expect("JSON 序列化失败");
+        let back: T = serde_json::from_str(&json).expect("JSON 反序列化失败");
+        assert_eq!(*value, back, "{what}: JSON roundtrip 不等");
+
+        let mp = rmp_serde::to_vec_named(value).expect("MessagePack 序列化失败");
+        let back2: T = rmp_serde::from_slice(&mp).expect("MessagePack 反序列化失败");
+        assert_eq!(*value, back2, "{what}: MessagePack roundtrip 不等");
+    }
+
+    /// 四个 enum 全变体覆盖（2026-10-15 二轮审计补强：本模块此前零测试引用）。
+    #[test]
+    fn adjudication_enums_all_variants_roundtrip() {
+        for e in [
+            EpistemicType::Fact,
+            EpistemicType::Episode,
+            EpistemicType::Observation,
+            EpistemicType::MindModel,
+        ] {
+            assert_roundtrip(&e, "EpistemicType");
+        }
+        for v in [
+            VerifierKind::Compiler,
+            VerifierKind::TestSuite,
+            VerifierKind::GovernanceGate,
+            VerifierKind::FormalCheck,
+            VerifierKind::HeterogeneousReviewer,
+            VerifierKind::HumanCalibration,
+        ] {
+            assert_roundtrip(&v, "VerifierKind");
+        }
+        for v in [
+            CertifyVerdict::Certified,
+            CertifyVerdict::Rejected,
+            CertifyVerdict::Deferred,
+        ] {
+            assert_roundtrip(&v, "CertifyVerdict");
+        }
+        for s in [
+            FailureFixStatus::Open,
+            FailureFixStatus::Mitigated,
+            FailureFixStatus::Resolved,
+            FailureFixStatus::WontFix,
+        ] {
+            assert_roundtrip(&s, "FailureFixStatus");
+        }
+    }
+
+    /// 四个 payload/记录结构（均已 `#[non_exhaustive]`，跨 crate 禁字面量构造，
+    /// 故往返测试落同 crate 单元测试——见 ADR-215 D-23 与 wire_roundtrip 覆盖注）。
+    #[test]
+    fn adjudication_payloads_roundtrip() {
+        let claim = ClaimPayload {
+            claim_id: "claim-1".into(),
+            subject: "foo 返回 i32".into(),
+            claimant: "agent-7".into(),
+            epistemic: EpistemicType::Fact,
+            quest_id: Some("quest-9".into()),
+        };
+        assert_roundtrip(&claim, "ClaimPayload");
+
+        // 可选字段缺失态同样往返（None 路径）
+        let claim_no_quest = ClaimPayload {
+            claim_id: "claim-2".into(),
+            subject: "bar 返回 String".into(),
+            claimant: "agent-8".into(),
+            epistemic: EpistemicType::Observation,
+            quest_id: None,
+        };
+        assert_roundtrip(&claim_no_quest, "ClaimPayload(quest_id=None)");
+
+        let certify = CertifyPayload {
+            claim_ref: "claim-1".into(),
+            subject: "foo 返回 i32".into(),
+            verifier: VerifierKind::TestSuite,
+            verdict: CertifyVerdict::Certified,
+            evidence_refs: vec!["cargo test -p demo".into()],
+        };
+        assert_roundtrip(&certify, "CertifyPayload");
+
+        let declaim = DeclaimPayload {
+            claim_ref: "claim-1".into(),
+            reason: "前提已失效".into(),
+        };
+        assert_roundtrip(&declaim, "DeclaimPayload");
+
+        let failure = FailureRecord {
+            signature: "panics::overflow".into(),
+            applicability: "release 溢出检查关闭".into(),
+            experiment_basis: "e2e/stress/overflow.rs".into(),
+            invalidation_boundary: "debug 构建不适用".into(),
+            fix_status: FailureFixStatus::Mitigated,
+            affected_component: "nexus-contracts".into(),
+        };
+        assert_roundtrip(&failure, "FailureRecord");
+    }
+}

@@ -427,4 +427,46 @@ mod tests {
             }
         }
     }
+
+    /// CommandValidator trait 的 L0 侧 mock 行为测试（2026-10-15 二轮审计补强）。
+    ///
+    /// 生产实现方在 seccore（`SecCoreCommandValidator`），但 trait 方法调度与
+    /// 错误载体（`CommandValidationError` 字段传递）必须在本 crate 可证，
+    /// 否则 L0 侧接口回归只能在下游暴露。
+    #[test]
+    fn command_validator_trait_mock_dispatch() {
+        struct MockValidator {
+            deny_rm: bool,
+        }
+        impl CommandValidator for MockValidator {
+            fn validate(
+                &self,
+                cmd: &Command,
+                _policy: &CommandPolicy,
+            ) -> Result<(), CommandValidationError> {
+                if self.deny_rm && cmd.program == "rm" {
+                    Err(CommandValidationError {
+                        attack_type: AttackType::Abuse,
+                        detail: "mock 拦截 rm".to_string(),
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+        }
+
+        let validator = MockValidator { deny_rm: true };
+        let policy = CommandPolicy::new();
+        let blocked = Command::new("rm");
+        let allowed = Command::new("echo");
+
+        let err = validator.validate(&blocked, &policy).unwrap_err();
+        assert_eq!(err.attack_type, AttackType::Abuse);
+        assert!(err.detail.contains("mock"));
+        assert!(validator.validate(&allowed, &policy).is_ok());
+
+        // 关闭拦截后同一输入放行——证明判定来自 mock 语义而非 trait 分发静默失败
+        let open = MockValidator { deny_rm: false };
+        assert!(open.validate(&blocked, &policy).is_ok());
+    }
 }

@@ -24,6 +24,11 @@
 //! - `app::AppEvent` 其余变体与 `AppOp::ThreadFork`：协议面全量往返由
 //!   `nexus-app-server` 侧 JSON-RPC E2E 承担（协议面主检），本文件覆盖已确认形状的代表集。
 //! - `event_v2::EventPattern::And` 递归深度 = 1（单层）；更深嵌套的编码路径与单层同构。
+//! - `adjudication::*`（8 类型：EpistemicType/VerifierKind/CertifyVerdict/ClaimPayload/
+//!   CertifyPayload/DeclaimPayload/FailureFixStatus/FailureRecord）：**同 crate 单元测试
+//!   覆盖**（`src/safety/adjudication.rs` cfg(test)，JSON+MessagePack 双向往返全变体，
+//!   2026-10-15 二轮审计补强）。本表不重复覆盖：4 个 struct 经 ADR-215 D-23 开放化
+//!   （`#[non_exhaustive]`）后跨 crate 禁字面量构造，集成测试无法再走字面量路径。
 //!
 //! # 协议纪律（ADR-004 / ADR-184 / ADR-194 D4）
 //!
