@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 /// 单个模型的 token 单价（微美元 / 1k tokens）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ModelPrice {
     /// 模型标识（与 `config` 单价表 / `ProviderId` 模型名对齐）
     pub model: String,

@@ -188,6 +188,7 @@ pub enum StatePreservationPolicy {
 /// 服务分层 — 厂商提供的服务档位（加价档必须显式授权，P6 成本先行）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ServiceTier {
     /// 标准档（默认）
     Standard,
@@ -204,6 +205,7 @@ pub enum ServiceTier {
 /// 导入两 prelude 时歧义。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ModalityKind {
     /// 文本
     Text,
@@ -334,6 +336,7 @@ impl PricingSpec {
 /// API Key **不入 spec**：`api_key_env` 仅存环境变量名，密钥由运行时
 /// 从环境读取。TOML 配置文件可安全入库/分享，杜绝密钥泄漏面。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct EndpointSpec {
     /// API 基址（如 `https://open.bigmodel.cn/api/paas/v4`）
     pub base_url: Box<str>,
@@ -589,6 +592,7 @@ pub struct AffinityMessage {
 /// 采样参数离散化桶(`sampling_bucket`)参与 TokenCacheKey,桶间互不命中。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[non_exhaustive]
 pub struct SamplingParams {
     /// 温度(None = 厂商默认;0.0 = 完全确定性)
     pub temperature: Option<f32>,
@@ -642,6 +646,7 @@ pub fn sampling_bucket(sampling: &SamplingParams) -> u8 {
 /// WHY 默认不钉选: "单一首选厂商默认配置"与厂商集中度免疫探针（N7）冲突，
 /// 默认必须是学习路由 + 手动钉选可选（设计文档 §8.3 否决清单）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AffinityOverrides {
     /// 钉选厂商（None = 路由自选）
     pub pinned_provider: Option<ProviderId>,

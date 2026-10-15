@@ -100,6 +100,7 @@ impl ArchiveTier {
 ///
 /// 携带人类可读的 `msg` 字段,调用方可直接记录日志、向上传播或展示。
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InvariantViolation {
     /// 违反描述(含源层级与目标层级名称)
     pub msg: String,

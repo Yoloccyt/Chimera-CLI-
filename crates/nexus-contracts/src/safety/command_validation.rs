@@ -104,6 +104,7 @@ impl Command {
 /// 安全设计决策：拦截模式属于零信任策略面，禁止外部序列化注入
 /// （防篡改绕过）；模式集合仅经代码评审变更。
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct BlockedPattern {
     /// 模式字符串(子串匹配,大小写不敏感)
     pub pattern: String,
@@ -124,6 +125,7 @@ pub struct BlockedPattern {
 /// 与 `BlockedPattern` 同因：安全策略**禁止外部序列化注入**，
 /// 防止配置篡改绕过命令白名单；策略变更必须经代码评审。
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct CommandPolicy {
     /// 允许的程序名白名单(小写存储,大小写不敏感匹配)
     pub allowed_commands: HashSet<String>,

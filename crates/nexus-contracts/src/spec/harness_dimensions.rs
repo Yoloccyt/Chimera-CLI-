@@ -81,6 +81,7 @@ pub enum CompressionStrategy {
 /// WHY 闭集枚举: 任务编排模式集合是封闭的（单调用/计划执行/多 Agent）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum WorkflowType {
     /// 单次调用 — 无分解，直接执行
     SingleCall,
@@ -97,6 +98,7 @@ pub enum WorkflowType {
 /// WHY 闭集枚举: 保留策略决定记忆生命周期，集合封闭。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum RetentionPolicy {
     /// 会话级 — 会话结束即清除
     Session,
@@ -111,6 +113,7 @@ pub enum RetentionPolicy {
 /// WHY 闭集枚举: 驱逐策略决定记忆容量管理，集合封闭。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum EvictionStrategy {
     /// LRU — 最近最少使用
     Lru,
@@ -151,6 +154,7 @@ impl Default for OperatorSelectionStrategy {
 /// 搜索停止条件：尝试次数上限 / 停滞计数 / 分数差距阈值 / 保留最佳。
 /// `score_gap_threshold` 为 f32 字段，仅 `PartialEq`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct StopStrategyConfig {
     /// 最大尝试次数
     pub max_attempts: u32,
@@ -179,6 +183,7 @@ impl Default for StopStrategyConfig {
 /// WHY 闭集枚举: 输出格式决定后处理管线，集合封闭。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum ExtractionFormat {
     /// 纯文本 — 无结构化提取
     PlainText,
@@ -195,6 +200,7 @@ pub enum ExtractionFormat {
 /// WHY 闭集枚举: 输出校验失败时的回退路径，集合封闭。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum FallbackStrategy {
     /// 直接返回原始输出 — 不做回退处理
     Passthrough,
@@ -211,6 +217,7 @@ pub enum FallbackStrategy {
 /// WHY 结构体而非枚举: 校验规则需要携带参数（如最大长度、正则模式），
 /// 结构体提供扩展灵活性。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ValidationRule {
     /// 规则名称（如 "max_length" / "json_schema" / "no_pii"）
     pub rule_name: String,
@@ -229,6 +236,7 @@ pub struct ValidationRule {
 /// 对应 MemoHarness D1 维度：上下文组装决定 Agent 看到什么信息。
 /// 与 OSA 稀疏化（Ω₁-Sparse）和 HCW 分层窗口（Ω₂-Compress）协同。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ContextAssemblyContract {
     /// 最大 token 数（上下文窗口上限）
     pub max_tokens: usize,
@@ -283,6 +291,7 @@ impl ContextAssemblyContract {
 /// 对应 MemoHarness D2 维度：工具交互决定 Agent 如何使用工具。
 /// 与 FaaE 工具路由（Ω₁-Sparse 工具维度）和 GQEP 聚集执行协同。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolInteractionContract {
     /// 每步最大工具调用数
     pub max_tools_per_step: usize,
@@ -330,6 +339,7 @@ impl ToolInteractionContract {
 ///
 /// temperature / top_p 为 f32 字段，故仅 `PartialEq`（不 derive `Eq`/`Hash`）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GenerationControlContract {
     /// 最大输出 token 数
     pub max_output_tokens: usize,
@@ -373,6 +383,7 @@ impl GenerationControlContract {
 /// 对应 MemoHarness D4 维度：任务编排决定 Agent 如何组织执行步骤。
 /// 与 quest-engine DAG 管理和 parliament 审议协同。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TaskOrchestrationContract {
     /// 工作流类型
     pub workflow_type: WorkflowType,
@@ -426,6 +437,7 @@ impl TaskOrchestrationContract {
 /// 由组合根 `with_synthesizer` 注入）；双层经验库与价值回填是②态（见 `mlc-engine`
 /// 对应模块头的「装配态」段）。把这三个旗标接成真实开关属行为变更，需 ADR。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MemoryManagementContract {
     /// 记忆保留策略
     pub retention_policy: RetentionPolicy,
@@ -478,6 +490,7 @@ impl MemoryManagementContract {
 /// 对应 MemoHarness D6 维度：输出处理决定 Agent 如何后处理 LLM 输出。
 /// 与 PVL 生产验证循环和 L4 SecCore 输出校验协同。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct OutputProcessingContract {
     /// 输出提取格式
     pub extraction_format: ExtractionFormat,

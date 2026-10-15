@@ -126,6 +126,7 @@ impl UserInput {
 
 /// 会话（Thread）— 对应 QuestSession（goal_id + run_id）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Thread {
     /// 会话 ID
     pub thread_id: ThreadId,
@@ -153,6 +154,7 @@ impl Thread {
 ///
 /// 状态流转: `started → in_progress → completed / failed`
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Item {
     /// 条目 ID（断点恢复游标）
     pub item_id: ItemId,
@@ -220,6 +222,7 @@ pub enum ItemStatus {
 /// 本类型为**协议面** Token 用量（含缓存读写——WI-03 LPA 前缀稳定性埋点），
 /// 命名 `AppTokenUsage` 避免类型命名空间冲突（E0252）。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AppTokenUsage {
     /// 输入 token 数
     pub input_tokens: u64,
@@ -254,6 +257,7 @@ impl AppTokenUsage {
 
 /// 审批请求 — 客户端需用户裁决的操作
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ApprovalRequest {
     /// 请求 ID（ApprovalRespond 的关联键）
     pub request_id: ReqId,

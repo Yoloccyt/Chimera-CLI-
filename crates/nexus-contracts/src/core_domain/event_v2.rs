@@ -114,6 +114,7 @@ impl ImportanceScore {
 /// 可压缩性评级 — WI-12 CSC 四级压缩链的输入
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[non_exhaustive]
 pub enum Compressibility {
     /// 不可压缩（关键符号/决策锚点）
     Incompressible,
@@ -132,6 +133,7 @@ pub enum Compressibility {
 /// - **阶段二门禁**: `Semantic` 仅当订阅者 > 500 且精确索引 P99 > 1ms 时启用
 ///   （近似路由漏发风险不可接受——漏发率 = 0 硬门禁）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum EventPattern {
     /// 精确类型匹配（如 "mcp.github.issue_created"）
     Exact(EventTypeId),
@@ -258,6 +260,7 @@ pub trait DynamicEvent: Send + Sync + 'static {
 ///
 /// 每命名空间 ≤ 64 类型（v4.0 §6.5 规格）；注册超限拒绝并审计。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NamespaceQuotaV2 {
     /// 每命名空间最大注册类型数
     pub max_types_per_namespace: usize,

@@ -141,6 +141,7 @@ pub const fn security_event_reward(severity: SecuritySeverity) -> f32 {
 
 /// 奖励规格 — 层权重 + 维度组件的可审计契约
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct RewardSpec {
     /// 规格 ID（"rs-" 前缀 + 组件名，如 "rs-s9_route"）
     pub spec_id: String,

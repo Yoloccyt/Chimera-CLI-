@@ -50,9 +50,9 @@ ENUM | type=core_domain/domain::ThinkingMode | class=closed
 ENUM | type=core_domain/event_payload::AgentStatus | class=closed
 ENUM | type=core_domain/event_payload::EventSeverity | class=closed
 ENUM | type=core_domain/event_payload::TaskPriority | class=closed
-ENUM | type=core_domain/event_v2::Compressibility | class=closed
+ENUM | type=core_domain/event_v2::Compressibility | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
 ENUM | type=core_domain/event_v2::EventNamespace | class=closed
-ENUM | type=core_domain/event_v2::EventPattern | class=closed
+ENUM | type=core_domain/event_v2::EventPattern | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
 ENUM | type=core_domain/task::TaskStatus | class=closed
 ENUM | type=core_domain/temporal::TransitionType | class=closed
 ENUM | type=mca/affinity::CacheSupport | class=closed
@@ -60,17 +60,17 @@ ENUM | type=mca/affinity::ContentBlock | class=closed
 ENUM | type=mca/affinity::Currency | class=closed
 ENUM | type=mca/affinity::FinishReason | class=closed
 ENUM | type=mca/affinity::MessageRole | class=closed
-ENUM | type=mca/affinity::ModalityKind | class=closed
+ENUM | type=mca/affinity::ModalityKind | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
 ENUM | type=mca/affinity::NegotiationFidelity | class=closed
 ENUM | type=mca/affinity::OutputFormat | class=closed
 ENUM | type=mca/affinity::ProtocolDialect | class=closed
 ENUM | type=mca/affinity::ProviderId | class=closed
 ENUM | type=mca/affinity::QuirkRule | class=closed
-ENUM | type=mca/affinity::ServiceTier | class=closed
+ENUM | type=mca/affinity::ServiceTier | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
 ENUM | type=mca/affinity::StatePreservationPolicy | class=closed
 ENUM | type=mca/affinity::ThinkingPreference | class=closed
 ENUM | type=mca/affinity::ThinkingSupport | class=closed
-ENUM | type=mca/omni_message::OmniMessage | class=closed
+ENUM | type=mca/omni_message::OmniMessage | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
 ENUM | type=memory/archive_monotonicity::ArchiveTier | class=closed
 ENUM | type=memory/experience_card::AtomicOperator | class=closed
 ENUM | type=memory/experience_card::ExecutionStatus | class=closed
@@ -85,12 +85,12 @@ ENUM | type=protocol/app::ItemStatus | class=closed
 ENUM | type=protocol/app::PermissionMode | class=closed
 ENUM | type=safety/adjudication::CertifyVerdict | class=closed
 ENUM | type=safety/adjudication::EpistemicType | class=closed
-ENUM | type=safety/adjudication::FailureFixStatus | class=closed
+ENUM | type=safety/adjudication::FailureFixStatus | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
 ENUM | type=safety/adjudication::VerifierKind | class=closed
 ENUM | type=safety/budget_tier::BudgetTier | class=closed
-ENUM | type=safety/calibration::EvalSampleKind | class=closed
+ENUM | type=safety/calibration::EvalSampleKind | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
 ENUM | type=safety/calibration::GateVerdict | class=closed
-ENUM | type=safety/calibration::HumanLabel | class=closed
+ENUM | type=safety/calibration::HumanLabel | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
 ENUM | type=safety/calibration::JudgeTier | class=closed
 ENUM | type=safety/command_validation::AttackType | class=closed
 ENUM | type=safety/errors::ErrorLayer | class=closed
@@ -99,7 +99,7 @@ ENUM | type=safety/errors::NexusError | class=closed
 ENUM | type=safety/errors::RecoveryStrategy | class=closed
 ENUM | type=safety/errors::ToolFailure | class=closed
 ENUM | type=safety/sensitive::SensitiveDisposition | class=closed
-ENUM | type=safety/sensitive::SensitiveKind | class=closed
+ENUM | type=safety/sensitive::SensitiveKind | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
 ENUM | type=seams/capability_token::CapabilityTokenStatus | class=closed
 ENUM | type=seams/capability_token::SeamId | class=closed
 ENUM | type=seams/decay_profile::DecayPolicy | class=closed
@@ -129,15 +129,15 @@ ENUM | type=spec/formal_props::PropertyCategory | class=closed
 ENUM | type=spec/formal_props::VerificationMethod | class=closed
 ENUM | type=spec/formal_props::VerificationResult | class=closed
 ENUM | type=spec/harness_dimensions::CompressionStrategy | class=closed
-ENUM | type=spec/harness_dimensions::EvictionStrategy | class=closed
-ENUM | type=spec/harness_dimensions::ExtractionFormat | class=closed
-ENUM | type=spec/harness_dimensions::FallbackStrategy | class=closed
+ENUM | type=spec/harness_dimensions::EvictionStrategy | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
+ENUM | type=spec/harness_dimensions::ExtractionFormat | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
+ENUM | type=spec/harness_dimensions::FallbackStrategy | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
 ENUM | type=spec/harness_dimensions::OperatorSelectionStrategy | class=closed
-ENUM | type=spec/harness_dimensions::RetentionPolicy | class=closed
-ENUM | type=spec/harness_dimensions::WorkflowType | class=closed
+ENUM | type=spec/harness_dimensions::RetentionPolicy | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
+ENUM | type=spec/harness_dimensions::WorkflowType | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
 ENUM | type=spec/harness_spec::HarnessSpecError | class=closed
 ENUM | type=spec/harness_spec::ImmutableSurface | class=closed
-ENUM | type=spec/platform_grounding::GroundingCategory | class=closed
+ENUM | type=spec/platform_grounding::GroundingCategory | class=open | reason=ADR-215 D-23: open vocabulary (strategy/category/status set); zero external mention measured 2026-10-15, wildcard-arm cost only
 ENUM | type=spec/platform_grounding::GroundingCheckOutcome | class=closed
 ENUM | type=spec/scheduler_contract::ClaimOutcome | class=closed
 ENUM | type=spec/scheduler_contract::DenyReason | class=closed
@@ -156,30 +156,30 @@ STRUCT | type=core_domain/event_metadata::EventMetadata | class=closed
 STRUCT | type=core_domain/event_v2::EventMetadataV2 | class=closed
 STRUCT | type=core_domain/event_v2::EventTypeId | class=closed
 STRUCT | type=core_domain/event_v2::ImportanceScore | class=closed
-STRUCT | type=core_domain/event_v2::NamespaceQuotaV2 | class=closed
+STRUCT | type=core_domain/event_v2::NamespaceQuotaV2 | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=core_domain/graph_identity::GraphIdentity | class=closed
 STRUCT | type=core_domain/temporal::TemporalMeta | class=closed
 STRUCT | type=mca/affinity::AffinityMessage | class=closed
-STRUCT | type=mca/affinity::AffinityOverrides | class=closed
+STRUCT | type=mca/affinity::AffinityOverrides | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=mca/affinity::AffinityRequest | class=closed
 STRUCT | type=mca/affinity::AffinityResponse | class=closed
 STRUCT | type=mca/affinity::CapabilitySet | class=closed
 STRUCT | type=mca/affinity::CostEstimate | class=closed
-STRUCT | type=mca/affinity::EndpointSpec | class=closed
+STRUCT | type=mca/affinity::EndpointSpec | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=mca/affinity::ModelAffinitySpec | class=closed
 STRUCT | type=mca/affinity::OutputBudget | class=closed
 STRUCT | type=mca/affinity::PeakPeriod | class=closed
 STRUCT | type=mca/affinity::PricingSpec | class=closed
 STRUCT | type=mca/affinity::ProviderReceipt | class=closed
-STRUCT | type=mca/affinity::SamplingParams | class=closed
+STRUCT | type=mca/affinity::SamplingParams | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=mca/affinity::TokenCacheKey | class=closed
 STRUCT | type=mca/affinity::ToolDecl | class=closed
 STRUCT | type=mca/affinity::UsageReport | class=closed
 STRUCT | type=mca/omni_message::ModelConfig | class=closed
-STRUCT | type=mca/omni_message::TokenUsage | class=closed
-STRUCT | type=mca/price_vector::ModelPrice | class=closed
+STRUCT | type=mca/omni_message::TokenUsage | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=mca/price_vector::ModelPrice | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=mca/price_vector::PriceVector | class=closed
-STRUCT | type=memory/archive_monotonicity::InvariantViolation | class=closed
+STRUCT | type=memory/archive_monotonicity::InvariantViolation | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=memory/experience_card::CardMetadata | class=closed
 STRUCT | type=memory/experience_card::EnvironmentInfo | class=closed
 STRUCT | type=memory/experience_card::ErrorSignature | class=closed
@@ -187,45 +187,45 @@ STRUCT | type=memory/experience_card::ExperienceCard | class=closed
 STRUCT | type=memory/experience_card::NormalizedThreeFactor | class=closed
 STRUCT | type=memory/experience_card::ThreeFactorScore | class=closed
 STRUCT | type=memory/memory_pyramid::AtomicMemoryCard | class=closed
-STRUCT | type=memory/memory_pyramid::PersonaSummary | class=closed
-STRUCT | type=memory/memory_pyramid::SceneBlock | class=closed
-STRUCT | type=memory/quota::NamespaceQuota | class=closed
-STRUCT | type=memory/quota::QuotaLimits | class=closed
+STRUCT | type=memory/memory_pyramid::PersonaSummary | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=memory/memory_pyramid::SceneBlock | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=memory/quota::NamespaceQuota | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=memory/quota::QuotaLimits | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=memory/skill_lifecycle::SkillLifecycleContract | class=closed
 STRUCT | type=memory/token_evidence::SegmentMetadata | class=closed
 STRUCT | type=memory/token_evidence::TokenLedgerEntry | class=closed
-STRUCT | type=memory/token_evidence::ToolCallRecord | class=closed
-STRUCT | type=protocol/app::AppTokenUsage | class=closed
-STRUCT | type=protocol/app::ApprovalRequest | class=closed
-STRUCT | type=protocol/app::Item | class=closed
+STRUCT | type=memory/token_evidence::ToolCallRecord | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=protocol/app::AppTokenUsage | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=protocol/app::ApprovalRequest | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=protocol/app::Item | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=protocol/app::ItemId | class=closed
 STRUCT | type=protocol/app::ReqId | class=closed
-STRUCT | type=protocol/app::Thread | class=closed
+STRUCT | type=protocol/app::Thread | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=protocol/app::ThreadId | class=closed
 STRUCT | type=protocol/app::ThreadStartParams | class=closed
 STRUCT | type=protocol/app::TurnId | class=closed
 STRUCT | type=protocol/app::UserInput | class=closed
-STRUCT | type=safety/adjudication::CertifyPayload | class=closed
-STRUCT | type=safety/adjudication::ClaimPayload | class=closed
-STRUCT | type=safety/adjudication::DeclaimPayload | class=closed
-STRUCT | type=safety/adjudication::FailureRecord | class=closed
-STRUCT | type=safety/calibration::AgreementTrendPoint | class=closed
-STRUCT | type=safety/calibration::BadCaseConversion | class=closed
-STRUCT | type=safety/calibration::CalibrationSample | class=closed
-STRUCT | type=safety/calibration::EvalRecord | class=closed
-STRUCT | type=safety/calibration::GateCoverage | class=closed
-STRUCT | type=safety/calibration::MonthlyEvalReport | class=closed
-STRUCT | type=safety/command_validation::BlockedPattern | class=closed
+STRUCT | type=safety/adjudication::CertifyPayload | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=safety/adjudication::ClaimPayload | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=safety/adjudication::DeclaimPayload | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=safety/adjudication::FailureRecord | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=safety/calibration::AgreementTrendPoint | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=safety/calibration::BadCaseConversion | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=safety/calibration::CalibrationSample | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=safety/calibration::EvalRecord | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=safety/calibration::GateCoverage | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=safety/calibration::MonthlyEvalReport | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=safety/command_validation::BlockedPattern | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=safety/command_validation::Command | class=closed
-STRUCT | type=safety/command_validation::CommandPolicy | class=closed
+STRUCT | type=safety/command_validation::CommandPolicy | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=safety/command_validation::CommandValidationError | class=closed
-STRUCT | type=safety/sensitive::ScanHit | class=closed
+STRUCT | type=safety/sensitive::ScanHit | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=safety/sensitive::ScanPolicy | class=closed
-STRUCT | type=safety/sensitive::ScanVerdict | class=closed
+STRUCT | type=safety/sensitive::ScanVerdict | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=seams/capability_token::CapabilityToken | class=closed
 STRUCT | type=seams/policy::SelectorWeights | class=closed
 STRUCT | type=seams/reward::RewardSignal | class=closed
-STRUCT | type=seams/reward::RewardSpec | class=closed
+STRUCT | type=seams/reward::RewardSpec | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=seams/rl_hooks::RLActionVector | class=closed
 STRUCT | type=seams/rl_hooks::RLStateVector | class=closed
 STRUCT | type=seams/rl_hooks::RLTrajectory | class=closed
@@ -242,22 +242,22 @@ STRUCT | type=spec/formal_props::EmptyFormalProvider | class=closed
 STRUCT | type=spec/formal_props::FormalProperty | class=closed
 STRUCT | type=spec/formal_props::InvariantSpec | class=closed
 STRUCT | type=spec/formal_props::VerifiedWithStrength | class=closed
-STRUCT | type=spec/harness_dimensions::ContextAssemblyContract | class=closed
-STRUCT | type=spec/harness_dimensions::GenerationControlContract | class=closed
+STRUCT | type=spec/harness_dimensions::ContextAssemblyContract | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=spec/harness_dimensions::GenerationControlContract | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=spec/harness_dimensions::HarnessConfigContract | class=closed
-STRUCT | type=spec/harness_dimensions::MemoryManagementContract | class=closed
-STRUCT | type=spec/harness_dimensions::OutputProcessingContract | class=closed
-STRUCT | type=spec/harness_dimensions::StopStrategyConfig | class=closed
-STRUCT | type=spec/harness_dimensions::TaskOrchestrationContract | class=closed
-STRUCT | type=spec/harness_dimensions::ToolInteractionContract | class=closed
-STRUCT | type=spec/harness_dimensions::ValidationRule | class=closed
+STRUCT | type=spec/harness_dimensions::MemoryManagementContract | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=spec/harness_dimensions::OutputProcessingContract | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=spec/harness_dimensions::StopStrategyConfig | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=spec/harness_dimensions::TaskOrchestrationContract | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=spec/harness_dimensions::ToolInteractionContract | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=spec/harness_dimensions::ValidationRule | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=spec/harness_spec::ContractSpec | class=closed
 STRUCT | type=spec/harness_spec::HarnessMeta | class=closed
 STRUCT | type=spec/harness_spec::HarnessSpec | class=closed
 STRUCT | type=spec/harness_spec::HopSpec | class=closed
 STRUCT | type=spec/harness_spec::RetryPolicy | class=closed
-STRUCT | type=spec/platform_grounding::GroundingRequirement | class=closed
-STRUCT | type=spec/platform_grounding::PlatformGroundingSpec | class=closed
+STRUCT | type=spec/platform_grounding::GroundingRequirement | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
+STRUCT | type=spec/platform_grounding::PlatformGroundingSpec | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=spec/scheduler_contract::Lease | class=closed
 STRUCT | type=spec/scheduler_contract::Quota | class=closed
 STRUCT | type=spec/scheduler_contract::TodoClaim | class=closed

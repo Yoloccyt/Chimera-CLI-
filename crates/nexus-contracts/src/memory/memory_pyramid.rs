@@ -196,6 +196,7 @@ impl AtomicMemoryCard {
 /// 聚合同场景的原子卡片 + MSCE 四元组技能要素
 /// （触发器 φ / 执行过程 π / 验证条件 κ / 边界条件 β / 增益 γ）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct SceneBlock {
     /// 场景块 ID
     pub block_id: Box<str>,
@@ -264,6 +265,7 @@ impl SceneBlock {
 /// 每次对话注入的高频记忆（TencentDB 注入策略：系统提示末尾），
 /// 由偏好与规则聚合提炼而成。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PersonaSummary {
     /// 人格 ID
     pub persona_id: Box<str>,

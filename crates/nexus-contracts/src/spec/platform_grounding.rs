@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 /// 接地要求分类
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum GroundingCategory {
     /// 环境变量（如 CARGO_HOME 指向项目工具链）
     Env = 0,
@@ -43,6 +44,7 @@ impl GroundingCategory {
 
 /// 单条接地要求
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GroundingRequirement {
     /// 要求 ID（文档行序号派生，如 "r0"）
     pub requirement_id: String,
@@ -54,6 +56,7 @@ pub struct GroundingRequirement {
 
 /// 平台接地规格 — 平台约束的可审计契约
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct PlatformGroundingSpec {
     /// 规格 ID（"pg-" 前缀）
     pub spec_id: String,

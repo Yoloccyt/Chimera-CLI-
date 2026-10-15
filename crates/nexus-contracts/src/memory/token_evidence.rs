@@ -36,6 +36,7 @@ use crate::graph_identity::GraphIdentity;
 
 /// 工具调用记录 — TokenLedgerEntry 内嵌的工具执行证据
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolCallRecord {
     /// 工具名称（如 "read_file" / "bash"）
     pub tool_name: Box<str>,

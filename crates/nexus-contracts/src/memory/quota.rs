@@ -47,6 +47,7 @@ use serde::{Deserialize, Serialize};
 /// - 深度计算 = 1(根) + 子任务级数
 /// - 5 级时叶子必须 leaf(无 further delegation 能力)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct NamespaceQuota {
     /// 命名空间标识(唯一)
     pub namespace_id: String,
@@ -105,6 +106,7 @@ pub mod defaults {
 /// WHY: 当需要引用全部默认值时(如配置校验、文档生成)，
 /// 使用 `QuotaLimits` 比逐个引用 `defaults::*` 更清晰
 #[derive(Debug, Clone, Copy)]
+#[non_exhaustive]
 pub struct QuotaLimits;
 
 impl QuotaLimits {

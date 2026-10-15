@@ -25,6 +25,7 @@ pub enum GateVerdict {
 
 /// 人工对同一样本的标注（视为真值）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum HumanLabel {
     /// 人审：门的「通过」是对的
     Correct,
@@ -34,6 +35,7 @@ pub enum HumanLabel {
 
 /// 一个对照样本：门判定 vs 人工标注。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CalibrationSample {
     /// 自动化门判定
     pub gate: GateVerdict,
@@ -73,6 +75,7 @@ pub fn agreement_rate_milli(samples: &[CalibrationSample]) -> u32 {
 
 /// 共库样本记录的来源判别：同一存储行承载两类评测样本。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum EvalSampleKind {
     /// 门判定 vs 人审的校准样本（一致率/可认证性证据）
     GateCalibration,
@@ -88,6 +91,7 @@ pub enum EvalSampleKind {
 /// FailureRegistry 存 [`FailureFixStatus`] 变体名（`"Open"`/`"Mitigated"`/
 /// `"Resolved"`/`"WontFix"`，与既有字段取值域严格同源，不另造状态机）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct EvalRecord {
     /// 判别键：校准样本用门/命题标识；失败样本用失败签名
     pub key: String,
@@ -194,6 +198,7 @@ pub fn rm_distillation_eligible(
 
 /// 表一：一致率趋势点 — 某评测周期的人机一致率（千分比）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct AgreementTrendPoint {
     /// 周期标识（如 `2026-10`）
     pub period: String,
@@ -214,6 +219,7 @@ impl AgreementTrendPoint {
 
 /// 表二：Bad Case 转化率 — 检测→修复→回退的漏斗计数。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BadCaseConversion {
     /// 检出的 Bad Case 总数
     pub detected: u32,
@@ -236,6 +242,7 @@ impl BadCaseConversion {
 
 /// 表三：门覆盖率 — 承诺写点中已插桩敏感扫描的比例（§(b.5) 交叉度量）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct GateCoverage {
     /// 承诺写点总数
     pub required: u32,
@@ -256,6 +263,7 @@ impl GateCoverage {
 
 /// 评测月报三表（§(b.6)）。数据形状，不含采样调度 IO。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct MonthlyEvalReport {
     /// 表一：一致率趋势（按周期升序）
     pub agreement_trend: Vec<AgreementTrendPoint>,

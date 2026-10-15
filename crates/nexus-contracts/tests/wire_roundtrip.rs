@@ -200,10 +200,13 @@ fn any_env_info() -> impl Strategy<Value = EnvironmentInfo> {
 }
 
 fn any_token_usage_omni() -> impl Strategy<Value = TokenUsage> {
-    (any::<u64>(), any::<u64>()).prop_map(|(prompt_tokens, completion_tokens)| TokenUsage {
-        prompt_tokens,
-        completion_tokens,
-        total_tokens: prompt_tokens.wrapping_add(completion_tokens),
+    (any::<u64>(), any::<u64>()).prop_map(|(prompt_tokens, completion_tokens)| {
+        // ADR-215 D-23: TokenUsage 已 open（#[non_exhaustive]），集成测试作为独立
+        // 编译单元不得再用 struct 字面量构造；保留原 wrapping_add 语义防 u64 溢出 panic。
+        let mut t = TokenUsage::new(prompt_tokens, 0);
+        t.completion_tokens = completion_tokens;
+        t.total_tokens = prompt_tokens.wrapping_add(completion_tokens);
+        t
     })
 }
 
@@ -258,11 +261,8 @@ fn any_error_signature() -> impl Strategy<Value = ErrorSignature> {
 
 fn any_tool_call_record() -> impl Strategy<Value = ToolCallRecord> {
     (any_box(), any_box(), any_box(), any::<u32>()).prop_map(
-        |(tool_name, arguments, result, latency_ms)| ToolCallRecord {
-            tool_name,
-            arguments,
-            result,
-            latency_ms,
+        |(tool_name, arguments, result, latency_ms)| {
+            ToolCallRecord::new(&tool_name, &arguments, &result, latency_ms)
         },
     )
 }
@@ -338,7 +338,7 @@ proptest! {
         ],
     ) {
         assert_roundtrip(&UserInput { text, extras }, "UserInput");
-        assert_roundtrip(&AppTokenUsage { input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens }, "AppTokenUsage");
+        assert_roundtrip(&AppTokenUsage::new(input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens), "AppTokenUsage");
         assert_roundtrip(&status, "ItemStatus");
         assert_roundtrip(&decision, "ApprovalDecision");
         assert_roundtrip(&mode, "PermissionMode");
@@ -355,25 +355,26 @@ proptest! {
         p_goal in any_box(), p_run in any_box(),
         p_input in proptest::option::of(any_user_input()), p_extras in any_opt_box(),
     ) {
-        let thread = Thread {
-            thread_id: ThreadId::new(&thread_id),
-            goal_id, run_id, created_at_ms,
-        };
+        let thread = Thread::new(ThreadId::new(&thread_id), &goal_id, &run_id, created_at_ms);
         assert_roundtrip(&thread, "Thread");
 
-        let item = Item {
-            item_id: ItemId::new(&item_id),
-            thread_id: ThreadId::new(&thread_id),
-            turn_id: TurnId::new(&turn_id),
-            kind, status: ItemStatus::Completed, payload, extras,
-        };
+        let mut item = Item::new(
+            ItemId::new(&item_id),
+            ThreadId::new(&thread_id),
+            TurnId::new(&turn_id),
+            &kind,
+            ItemStatus::Completed,
+            &payload,
+        );
+        item.extras = extras;
         assert_roundtrip(&item, "Item");
 
-        let req = ApprovalRequest {
-            request_id: ReqId::new(&req_id),
-            description, category,
-            item_id: if has_item { Some(ItemId::new(&item_id)) } else { None },
-        };
+        let req = ApprovalRequest::new(
+            ReqId::new(&req_id),
+            &description,
+            &category,
+            if has_item { Some(ItemId::new(&item_id)) } else { None },
+        );
         assert_roundtrip(&req, "ApprovalRequest");
 
         let params = ThreadStartParams {
@@ -437,25 +438,24 @@ fn any_app_event() -> impl Strategy<Value = AppEvent> {
     prop_oneof![
         (any_nonempty_id(), any_box(), any_box(), any::<u64>()).prop_map(
             |(thread_id, goal_id, run_id, created_at_ms)| AppEvent::ThreadStarted {
-                thread: Thread {
-                    thread_id: ThreadId::new(&thread_id),
-                    goal_id,
-                    run_id,
+                thread: Thread::new(
+                    ThreadId::new(&thread_id),
+                    &goal_id,
+                    &run_id,
                     created_at_ms,
-                },
+                ),
             }
         ),
         (any_nonempty_id(), any_nonempty_id(), any_box(), any_box()).prop_map(
             |(item_id, thread_id, kind, payload)| AppEvent::ItemChanged {
-                item: Item {
-                    item_id: ItemId::new(&item_id),
-                    thread_id: ThreadId::new(&thread_id),
-                    turn_id: TurnId::new("turn-1"),
-                    kind,
-                    status: ItemStatus::InProgress,
-                    payload,
-                    extras: None,
-                },
+                item: Item::new(
+                    ItemId::new(&item_id),
+                    ThreadId::new(&thread_id),
+                    TurnId::new("turn-1"),
+                    &kind,
+                    ItemStatus::InProgress,
+                    &payload,
+                ),
             }
         ),
     ]
@@ -602,7 +602,11 @@ proptest! {
         assert_roundtrip(&ns, "EventNamespace");
         assert_roundtrip(&ImportanceScore::new(score), "ImportanceScore");
         let (max_types_per_namespace, max_total_types) = quota;
-        assert_roundtrip(&NamespaceQuotaV2 { max_types_per_namespace, max_total_types }, "NamespaceQuotaV2");
+        // ADR-215 D-23: open 化后经 Default + 字段赋值构造（外部禁 struct 字面量）
+        let mut ns = NamespaceQuotaV2::default();
+        ns.max_types_per_namespace = max_types_per_namespace;
+        ns.max_total_types = max_total_types;
+        assert_roundtrip(&ns, "NamespaceQuotaV2");
     }
 }
 
@@ -859,16 +863,19 @@ proptest! {
         preferences in any_box_list(), rules in any_box_list(),
         created in any::<u64>(), updated in any::<u64>(),
     ) {
-        let block = SceneBlock {
-            block_id, scene_name, cards, summary, heat_value,
-            trigger_phi, procedure_pi, verification_kappa, boundary_beta, gain_gamma,
-        };
+        let mut block = SceneBlock::new(&block_id, &scene_name, cards, &summary);
+        block.heat_value = heat_value;
+        block.trigger_phi = trigger_phi;
+        block.procedure_pi = procedure_pi;
+        block.verification_kappa = verification_kappa;
+        block.boundary_beta = boundary_beta;
+        block.gain_gamma = gain_gamma;
         assert_roundtrip(&block, "SceneBlock");
 
-        let persona = PersonaSummary {
-            persona_id, user_id, summary: summary_p, preferences, rules,
-            created_at: created, updated_at: updated,
-        };
+        let mut persona = PersonaSummary::new(
+            &persona_id, &user_id, &summary_p, preferences, rules, created,
+        );
+        persona.updated_at = updated;
         assert_roundtrip(&persona, "PersonaSummary");
     }
 }

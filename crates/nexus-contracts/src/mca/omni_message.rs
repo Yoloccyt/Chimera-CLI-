@@ -96,6 +96,7 @@ impl ModelConfig {
 /// 与 MCA 亲和体系的 `UsageReport`（affinity.rs）语义对齐，
 /// 但字段更精简（仅 prompt/completion/total 三项）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct TokenUsage {
     /// 输入 token 数（prompt）
     pub prompt_tokens: u64,
@@ -140,6 +141,7 @@ impl TokenUsage {
 ///
 /// TraceRecord 的 reward 为 f32 字段，故 OmniMessage 仅 `PartialEq`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum OmniMessage {
     /// 模型调用请求 — Agent 向 LLM 发送的推理请求
     ModelRequest {

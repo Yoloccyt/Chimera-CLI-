@@ -67,6 +67,7 @@ pub enum CertifyVerdict {
 
 /// Claim 载荷 — agent 宣布某命题成立（broadcast 级，agent 可写）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ClaimPayload {
     /// 声明全局唯一 ID（供 Certify/Declaim 引用）
     pub claim_id: String,
@@ -82,6 +83,7 @@ pub struct ClaimPayload {
 
 /// Certify 载荷 — 验证器确认某 Claim 成立（Critical 候选，验证器语义独占）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct CertifyPayload {
     /// 被认证/否决的 Claim ID（悬空引用由治理门/测试拦截）
     pub claim_ref: String,
@@ -97,6 +99,7 @@ pub struct CertifyPayload {
 
 /// Declaim 载荷 — agent 撤回此前提出的 Claim（broadcast 级，审计完整性）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct DeclaimPayload {
     /// 被撤回的 Claim ID
     pub claim_ref: String,
@@ -106,6 +109,7 @@ pub struct DeclaimPayload {
 
 /// 失效边界修复状态 — FailureRegistry 条目的生命周期标记
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum FailureFixStatus {
     /// 未处理：仍是一个活跃陷阱
     Open,
@@ -123,6 +127,7 @@ pub enum FailureFixStatus {
 /// 是结构性的）。四字段（适用条件/实验依据/失效边界/修复状态）对齐 Anthropic
 /// 多智能体失效模式研究的可复用失败卡片结构。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct FailureRecord {
     /// 失败签名（用于去重与定向检索，如错误指纹/panic 归一串）
     pub signature: String,

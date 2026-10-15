@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 
 /// 扫描命中的敏感类别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SensitiveKind {
     /// 私钥/证书 PEM 块（`-----BEGIN ... PRIVATE KEY-----`）
     PrivateKeyPem,
@@ -52,6 +53,7 @@ pub enum SensitiveDisposition {
 
 /// 单次命中记录。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScanHit {
     /// 命中的类别
     pub kind: SensitiveKind,
@@ -63,6 +65,7 @@ pub struct ScanHit {
 
 /// 扫描结论：命中清单 + 按策略聚合出的最终处置。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ScanVerdict {
     /// 最终处置（无命中时为 [`SensitiveDisposition::Pass`]）
     pub disposition: SensitiveDisposition,
