@@ -184,6 +184,7 @@ cargo check -p nexus-contracts --all-targets         Finished in 25.41s，0 erro
 | `bench_check.yml:265` 注释订正（xts_top_k 标定出处） | 待另批授权 | 触 workflow；承 ADR-217 D-36/P3-8「无 clean-runner 不标定」，数字不动 |
 | G-17/G-18 本机恒 `rc=2`（无 `pwsh`） | 不修，复述现状 | 承前轮 D-21；CI 侧为 `.sh` 孪生，非阻塞 |
 | `Cargo.toml`（根）与 `gate_manifest.toml` 的 taplo 真实漂移 | **登记不修** | 两文件不在 CI taplo 步清单内 ⇒ 零门禁影响；在 42ab64e 即存在（本轮 `git show` 复测）；扩 CI 范围属另一批次，须先统一全仓 TOML 风格否则首轮大面积红 |
+| **`cargo machete` rc=1（CI 阻塞步，非 L0 范围、非本轮引入）** | **待用户裁决，本轮不修** | 本机 machete **0.9.2 = CI `install-action` 钉定版本**。报 `chimera-cli` 六条 `optional = true` 边（`chtc-bridge`/`csn-substitutor`/`mtpe-executor`/`nexus-hook`/`sesa-router`/`ssra-fusion`）；逐条 `grep -rn <crate> crates/chimera-cli --include=*.rs` **全 crate 0 命中**（不是 feature 门控造成的假阴性）；`[features]` 无 `dep:` 映射这六条；全仓 `grep -rn cargo-machete --include=Cargo.toml` **0 命中** ⇒ `ci.yml:529` 注释所称「误报用 cargo-machete 忽略表解决」的那张表**并不存在**（该注释本身是过期承诺）。`git log -S` 定位边来自 `38c72e6`（架构减法批次 A+B）；`git diff 42ab64e..HEAD -- '*Cargo.toml'` 证明本轮仅改注释行 ⇒ 判决与本轮前逐字相同。`Unused dependencies (cargo-machete)` 是 check job 无 `continue-on-error` 的步骤 ⇒ **本分支推 PR 会红**。三选一须先裁：① 删边（须同批复核 `check_crate_reachability`，这 6 个 crate 的可达性可能正由其他路径承担）② 挂 `dep:` 到对应 feature ③ 加 `[package.metadata.cargo-machete] ignored`。本轮不动：改的是 `chimera-cli` 依赖声明面 + 可达性语义，可能连带棘轮基线 |
 | `RUST_MIN_STACK`/clippy `--jobs 2` 等本仓已知工具链约束 | 不变 | 见 §7.1 日常命令 |
 
 ---
