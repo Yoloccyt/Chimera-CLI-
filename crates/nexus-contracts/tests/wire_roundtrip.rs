@@ -3,7 +3,7 @@
 //! 对应方案: `Chimera架构重构与优化方案_v3.3-L0L3融合终版.md` §2.1 WI-G2
 //! （承 v3.2 WI-G2 / v3.0 L0-3「wire 类型往返 proptest 扩全」）
 //!
-//! # 覆盖范围（9 组 wire 类型，2026-10-07 现取）
+//! # 覆盖范围（组数不在此登记——本表自身即权威清单，见下方各 `proptest!` 分节）
 //!
 //! | 组 | 类型 |
 //! |---|---|
@@ -16,6 +16,7 @@
 //! | skill_lifecycle | SkillLifecycleState/SkillLifecycleContract |
 //! | omni_message | ModelConfig/TokenUsage/OmniMessage（6 变体全覆盖） |
 //! | graph_identity | GraphIdentity |
+//! | sparse | SparseMask\<ToolId\>（empty / full / select_top_k / 入站任意 ratio 四支）+ OmniSparseMasks（五维嵌套路径） |
 //!
 //! # 豁免登记（非 wire 面，故意不覆盖）
 //!
@@ -65,9 +66,12 @@ use nexus_contracts::experience_card::{
     NormalizedThreeFactor, ThreeFactorScore,
 };
 use nexus_contracts::graph_identity::GraphIdentity;
+use nexus_contracts::ids::{FileId, MemoryId, OperationId, TaskId, ToolId};
+use nexus_contracts::masks::SparseMask;
 use nexus_contracts::memory_pyramid::{
     AtomicCardType, AtomicMemoryCard, MemoryPyramidLevel, PersonaSummary, SceneBlock,
 };
+use nexus_contracts::omni_masks::OmniSparseMasks;
 use nexus_contracts::omni_message::{ModelConfig, OmniMessage, TokenUsage};
 use nexus_contracts::skill_lifecycle::{SkillLifecycleContract, SkillLifecycleState};
 use nexus_contracts::token_evidence::{
@@ -1015,6 +1019,91 @@ proptest! {
         assert_roundtrip(&msg, "OmniMessage");
         assert_roundtrip(&cfg, "ModelConfig");
         assert_roundtrip(&usage, "TokenUsage");
+    }
+}
+
+// ============================================================
+// 10. sparse（Ω₁-Sparse 载体：L0 唯一手写 Deserialize 的类型）
+// ============================================================
+
+/// 与 `SparseMask` 的 wire 形状同构（`active_set` 是 `#[serde(skip)]`，故线上只有这两键）。
+/// 刻意用独立结构体而不是 `SparseMask` 自身编码：第四支策略要造 `full()` /
+/// `select_top_k()` **造不出**的合法线上态（ratio 与 ids 长度不成比例），必须能自由填。
+#[derive(Serialize)]
+struct SparseMaskWire {
+    active_ids: Vec<ToolId>,
+    sparsity_ratio: f32,
+}
+
+fn any_tool_ids() -> impl Strategy<Value = Vec<ToolId>> {
+    proptest::collection::vec(any_nonempty_id().prop_map(|s| ToolId::new(&s)), 0..6)
+}
+
+/// 严格降序评分。WHY 不等分：`select_top_k` 内部是 `select_nth_unstable_by`，
+/// 同分时 `active_ids` 的**顺序**是实现细节而非契约（`src/sparse/masks.rs` 既有单测
+/// 同口径），断言顺序会造出伪失败；本文件要锁的是编码，不是并列序。
+fn scores_strictly_descending(n: usize) -> Vec<f32> {
+    (0..n).map(|i| n as f32 - i as f32).collect()
+}
+
+fn any_sparse_mask() -> impl Strategy<Value = SparseMask<ToolId>> {
+    prop_oneof![
+        Just(SparseMask::empty()),
+        any_tool_ids().prop_map(SparseMask::full),
+        (any_tool_ids(), 0..6usize).prop_map(|(ids, k)| {
+            let scores = scores_strictly_descending(ids.len());
+            SparseMask::select_top_k(&ids, &scores, k)
+        }),
+        (any_tool_ids(), any_unit()).prop_map(|(ids, ratio)| {
+            let bytes = serde_json::to_vec(&SparseMaskWire {
+                active_ids: ids.clone(),
+                sparsity_ratio: ratio,
+            })
+            .unwrap();
+            // 走真编解码器（不是 from_value），因为被测面是手写 Deserialize 的入站行为。
+            serde_json::from_slice::<SparseMask<ToolId>>(&bytes).unwrap()
+        }),
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1000))]
+
+    #[test]
+    fn sparse_mask_roundtrip(m in any_sparse_mask()) {
+        assert_roundtrip(&m, "SparseMask<ToolId>");
+        // 手写 Deserialize 的全部理由：反序列化后 active_set 必须与 active_ids 一致。
+        // 若哪天 Helper 路径被换成 derive，`is_active` 会静默恒 false 而往返仍「相等」
+        // （derive 出来的 active_set 为空集，两边都空 ⇒ 恒等式掩盖缺陷），所以这里
+        // 除恒等外必须直接观察重建结果。
+        for id in &m.active_ids {
+            prop_assert!(m.is_active(id), "active_ids 元素不在 active_set 里: {id:?}");
+        }
+        // 去重口径直接观察集合规模（active_set 是 pub，无需反射）：
+        // 集合 = active_ids 的去重基数，这是 `HashSet::from_iter(iter().cloned())` 的定义。
+        // 刻意不用 sort/dedup 归一：ToolId 只 derive 到 Eq+Hash，没有 Ord。
+        let uniq: std::collections::HashSet<&ToolId> = m.active_ids.iter().collect();
+        prop_assert_eq!(m.active_set.len(), uniq.len(), "active_set 未由 active_ids 重建");
+    }
+
+    #[test]
+    fn omni_sparse_masks_roundtrip(
+        routing in any_sparse_mask(),
+        ctx_ids in proptest::collection::vec(any_nonempty_id().prop_map(|s| FileId::new(&s)), 0..4),
+        mem_ids in proptest::collection::vec(any_nonempty_id().prop_map(|s| MemoryId::new(&s)), 0..4),
+        op_ids in proptest::collection::vec(any_nonempty_id().prop_map(|s| OperationId::new(&s)), 0..4),
+        task_ids in proptest::collection::vec(any_nonempty_id().prop_map(|s| TaskId::new(&s)), 0..4),
+    ) {
+        // 五维嵌套路径：每个维度是不同单态化的 SparseMask<T>，手写 Deserialize 是
+        // 泛型 impl，嵌套解码时每个 T 各走一遍——平铺单测覆盖不到这条组合路径。
+        let omni = OmniSparseMasks::new(
+            routing,
+            SparseMask::full(ctx_ids),
+            SparseMask::full(mem_ids),
+            SparseMask::full(op_ids),
+            SparseMask::full(task_ids),
+        );
+        assert_roundtrip(&omni, "OmniSparseMasks(五维嵌套)");
     }
 }
 
