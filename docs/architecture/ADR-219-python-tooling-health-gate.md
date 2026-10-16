@@ -178,7 +178,7 @@ skip=7（heavy 档按设计需显式 `--with-heavy`），合计 122/122**。唯�
 
 | 项 | 证据 | 级别 | 不修的理由 |
 |---|---|---|---|
-| `coverage_gate.py` 历史基线不可读时返回 `([], [note])` | `:266` `except Exception: continue` + `:274 if not vals: return [], [...]` ⇒ 若 `tomllib.loads` 全面失败，棘轮轴**静默不判**且无违规 | **P2** | 需先分清"首提交前无历史"（合法）与"解析致盲"（缺陷）两种空值，改动落在 CI 阻塞路径上，须单独一批设计；本轮只登记 |
+| `coverage_gate.py` 历史基线不可读时返回 `([], [note])` | `:266` `except Exception: continue` + `:274 if not vals: return [], [...]` ⇒ 若 `tomllib.loads` 全面失败，棘轮轴**静默不判**且无违规 | ~~P2~~ **第三轮已修，见 §8** | — |
 | 3 处内联 `except Exception: pass` 的 stdout 编码兜底（`audit_gate_parity` / `check_topk_registry` / `coverage_gate`）绕过了 `gate_rc._utf8_stdio()` | 直读原文确认是刻意兜底，非判据吞异常 | **P3** | 属"双份实现"轴；为风格动三个正在工作的门，回归风险大于收益 |
 | `lru_reachability.py` 把 `lru-0.12.5` 钉在 glob 里 | 版本升级即静默找不到源码 | **P3** | 一次性取证脚本，且 H7 修复后其失败已转 rc=2 可见 |
 
@@ -191,3 +191,44 @@ skip=7（heavy 档按设计需显式 `--with-heavy`），合计 122/122**。唯�
 `classify_fmt_vs_semantic.py`、`lru_facts.py`、`lru_reachability.py` 一并退，
 否则 H6/H7 的 note 与代码会互相矛盾（note 说七条而门判五条，正是本轮在别的门上
 刚修过的那类"散文比代码先腐烂"）。
+
+## 8. 第三轮：关掉 §7 唯一那条 P2，并把「不可判定」接上真通道
+
+`check_min_ratchet` 原把两种空态折叠成同一种结果：**无历史**（合法引导态）与
+**有历史但零条解析成功**（键名/文件契约已变）。后者返回
+`([], ["R1: no readable historical min; ratchet self-activates after first commit"])`
+⇒ 零违规 + 一条听起来完全正常的 INFO，于是 `coverage_baseline.toml` 一旦改键名或搬家，
+min 棘轮轴就**静默失效而门照样报 [OK]**。可达性有现场佐证：该轴当前只在 **1 个**提交值上
+判单调（`R1: min ratchet monotonic over 1 committed values`），样本为 1，格式再变一次即归零。
+
+修法对齐同文件既有范式而非新立口径——`mode_check` 早已对「没有可用记录」打
+`[UNDECIDABLE]` 并退 2（`:338-340`），只有棘轮轴没沿用：
+
+* 新增 `GateUndecidable`；`commits` 非空而 `vals` 为空即抛，消息带双计数
+  （`N commit(s) touch <path> but 0 yielded a numeric min_line_coverage`），因为它要先
+  回答的问题是「是历史为空，还是我读不出来」。
+* 部分解析（`0 < len(vals) < len(commits)`）不再无声：追加 INFO 说明单调性是在这个
+  子样本上判的，而非整段历史。
+* `main()` 的 `--validate-config` 分支捕获后打印 `[UNDECIDABLE]` 退 2。CI 侧
+  `ci.yml:318-321` 是裸 `run:` 块（无 `|| true`）⇒ 非零即阻塞；`run_gate_manifest.py`
+  把 rc=2 归 ENV-FAIL、**既不记红也不记绿**，正是本仓对「判据没跑完」的既定方言
+  （`coverage.yml` 头注显示「阈值算了、结论被丢」同病已在覆盖率真实裁决那侧修过）。
+* 顺带修同函数一条「消息文本说谎」：引导态提示把文件名写死成 `coverage_baseline.toml`，
+  传入别的 `baseline_rel` 时会指认一个与本次判定无关的文件。
+
+**守卫双向验过才算有牙**（只测一个方向＝没测，恒假守卫是本仓反复登记的病灶）：正对照用
+仓内真实文件 `scripts/gate_manifest.toml`（25 个提交、TOML 可解析、但无
+`min_line_coverage` 键）⇒ 必须抛；负对照用无历史路径 ⇒ 必须保持 INFO 不抛。两者固化为
+`--selftest` case 13/14，断言里**不写死提交数**（会腐烂），只锚消息中必然存在的措辞片段。
+
+复验：`--selftest` 由 12 项增至 **14 项全过**、`--validate-config` 仍 rc=0（无行为回归）、
+G-121/G-122 仍 rc=0。
+
+### 全 122 门聚合实跑（本轮在无并发污染下补跑）
+
+上轮聚合跑受主会话在途编辑污染而报 `env-fail=2`——G-119/G-120 rc=2 的成因是
+`required_keys` 签名与调用点未同步，属**未提交中间态**（HEAD 自身自洽，且我当时单独实测
+为 rc=0）。其落地后本轮重跑：**ok=114 / mismatch=1 / env-fail=0 / unknown=0 / skip=7**
+（heavy 档按设计需显式 `--with-heavy`），合计 **122/122**。唯一不符仍是 **G-16**（既有
+已裁决 D-13：仓外 Qoder 计划缓存指 W3 前旧路径，「维持不处理」，且属 `ci_exempt` 本地
+形态）⇒ 不翻案。

@@ -243,6 +243,19 @@ def validate_config(baseline, defaults_floor, exempt, explicit, members):
     return errors
 
 
+class GateUndecidable(Exception):
+    """判据没能真正跑完 —— 必须退 2，既不得记成绿也不得记成红。
+
+    WHY this exists: mode_check already treats "no usable records" as UNDECIDABLE
+    and returns 2, but check_min_ratchet collapsed two very different empty states
+    into one INFO + no findings: (a) legitimately no committed baseline yet, and
+    (b) history exists yet NOTHING parsed. Case (b) means the key contract changed
+    (`min_line_coverage` renamed, file moved, format churned) and would have made
+    the ratchet axis silently inert while the gate printed [OK] -- the same
+    "blind parser reads as clean" class this repo keeps hunting.
+    """
+
+
 def check_min_ratchet(baseline_rel=BASELINE_REL):
     """用 git 历史断言 min_line_coverage 单调非减。无历史 → ([], [INFO])。"""
     try:
@@ -254,8 +267,11 @@ def check_min_ratchet(baseline_rel=BASELINE_REL):
         return [], ["R1: git unavailable; min-ratchet self-activates after commit"]
     commits = log.stdout.split() if log.returncode == 0 else []
     if not commits:
-        return [], ["R1: no committed baseline for coverage_baseline.toml; ratchet self-activates after first commit"]
+        # 措辞必须跟着参数走：原文把文件名写死成 coverage_baseline.toml，于是给
+        # 另一个 baseline_rel 调用时这条 INFO 会指认一个与本次判定无关的文件。
+        return [], [f"R1: no committed baseline for {baseline_rel}; ratchet self-activates after first commit"]
     vals = []
+    notes = []
     for c in reversed(commits):  # 从旧到新
         show = subprocess.run(
             ["git", "-C", ROOT, "show", f"{c}:{baseline_rel}"],
@@ -272,15 +288,27 @@ def check_min_ratchet(baseline_rel=BASELINE_REL):
         if isinstance(v, (int, float)):
             vals.append(v)
     if not vals:
-        return [], ["R1: no readable historical min; ratchet self-activates after first commit"]
+        # `commits` is non-empty here, so this is NOT the bootstrap case: history
+        # exists and every read of it failed. Reporting that as "no committed
+        # baseline; self-activates after first commit" would be a lie that keeps
+        # the gate green, which is exactly how a ratchet dies.
+        raise GateUndecidable(
+            f"R1-UNDECIDABLE: {len(commits)} commit(s) touch {baseline_rel} but 0 "
+            "yielded a numeric min_line_coverage -- the key/file contract changed, so "
+            "any monotonicity claim here is unmeasurable (print the first commit's "
+            "file and fix the reader; do not soften this gate)")
+    if len(vals) < len(commits):
+        notes.append(
+            f"R1: only {len(vals)} of {len(commits)} commits parsed; monotonicity "
+            "was judged on that sample, not on the full history")
     if vals[-1] != load_baseline()["min"]:
         # 工作区当前值应等于最新提交值或更高（未提交上调待校准，放行但提示）
         if vals[-1] > load_baseline()["min"]:
-            return [f"R1-RATCHET-DOWN: min {load_baseline()['min']} < last committed {vals[-1]}"], []
+            return [f"R1-RATCHET-DOWN: min {load_baseline()['min']} < last committed {vals[-1]}"], notes
     for a, b in zip(vals, vals[1:]):
         if b < a:
-            return [f"R1-RATCHET-DOWN: historical min decreased {a} -> {b}"], []
-    return [], [f"R1: min ratchet monotonic over {len(vals)} committed values (last={vals[-1]})"]
+            return [f"R1-RATCHET-DOWN: historical min decreased {a} -> {b}"], notes
+    return [], notes + [f"R1: min ratchet monotonic over {len(vals)} committed values (last={vals[-1]})"]
 
 
 # --------------------------------------------------------------------- modes
@@ -442,6 +470,20 @@ def mode_selftest():
     lr2 = load_records_from_obj({"data": [{"files": [{"filename": "crates/x/src/a.rs"}]}]})
     expect("selftest-12 llvm-cov missing summary tolerated", lr2 == [("crates/x/src/a.rs", 0, 0)])
 
+    # 13/14) R1 的不可判定守卫必须双向有牙：有历史而零解析要抛，无历史不得抛。
+    #        只测一个方向等于没测——恒假守卫是本仓反复登记的病灶。断言里不写死
+    #        提交数（它会变），只锚消息里必然存在的那段措辞。
+    try:
+        check_min_ratchet("scripts/gate_manifest.toml")
+        expect("selftest-13 ratchet is undecidable when history exists but nothing parses",
+               False)
+    except GateUndecidable as und:
+        expect("selftest-13 ratchet is undecidable when history exists but nothing parses",
+               "commit(s) touch" in str(und) and "min_line_coverage" in str(und))
+    e14, n14 = check_min_ratchet("no-such-baseline-anywhere.toml")
+    expect("selftest-14 the legitimate bootstrap case stays INFO, not undecidable",
+           e14 == [] and bool(n14))
+
     print("=== selftest result:", "ALL PASS" if not fails else f"{len(fails)} FAIL", "===")
     return 0 if not fails else 1
 
@@ -456,7 +498,13 @@ def main(argv):
     if "--print-fail-under" in argv:
         return mode_print_fail_under()
     if "--validate-config" in argv:
-        r, infos = check_min_ratchet()
+        try:
+            r, infos = check_min_ratchet()
+        except GateUndecidable as und:
+            # Same dialect mode_check already uses for "no usable records": undecidable
+            # is exit 2, never a borrowed red (1) and never the [OK] this gate prints.
+            print(f"[UNDECIDABLE] {und}")
+            return 2
         _last_infos = infos
         return mode_validate_config()
     if "--check" in argv:
