@@ -61,8 +61,10 @@ pub struct EventMetadata {
     pub payload_version: u32,
     /// 图身份三元组（WI-04 GIP）— 任意 Goal/节点成本归因
     ///
-    /// WHY Option 不 skip_serializing_if: rmp-serde array 位置编码下跳过字段
-    /// 破坏反序列化长度（ADR-004）；缺失字段反序列化自动 None（serde 默认）。
+    /// WHY Option 不 skip_serializing_if: `rmp_serde::to_vec` 的 array 位置编码下跳过
+    /// 字段会破坏反序列化长度；缺失字段反序列化自动 None（serde 默认）。
+    /// 编码**形态**的裁决是 ADR-213 R8.1/R9——ADR-004 只裁「MessagePack 而非 JSON」，
+    /// 不裁形态；两形态的读/写差异实测矩阵见 `crates/nexus-contracts/tests/wire_format_compat.rs`。
     pub graph_identity: Option<GraphIdentity>,
     /// 分布式追踪 ID（WI-29 可观测性）— span 继承载体
     ///
@@ -73,10 +75,14 @@ pub struct EventMetadata {
     /// 是追踪链（一次用户请求引发的全部事件，含多 Quest）。
     ///
     /// # 兼容性（新增字段,向后兼容）
-    /// WHY `Option` 不 `skip_serializing_if`:与 `graph_identity` 同款——
-    /// rmp-serde 位置编码下跳过字段破坏反序列化长度（ADR-004）;本 crate 的
-    /// MessagePack 统一走 `to_vec_named`（命名 map 编码）,旧负载缺失
-    /// `trace_id` 键反序列化自动 `None`,新负载多字段对旧结构被忽略——双向兼容。
+    /// WHY `Option` 不 `skip_serializing_if`:与 `graph_identity` 同款**预防**。
+    /// 现网 MessagePack 编码面实测全为 `to_vec_named`（命名 map，含
+    /// `event-bus/src/bus.rs::serialize_msgpack` 与 `shard.rs`），具名形态下 skip 并
+    /// 不出错；但凡出现位置式 `to_vec` 编码点，跳过字段即破坏反序列化长度——该风险
+    /// 的真实出处见 `crates/nexus-contracts/tests/wire_format_compat.rs`，形态裁决是
+    /// ADR-213 R8.1/R9（**非 ADR-004**，它只裁「MessagePack 而非 JSON」，不裁形态）。
+    /// 具名形态下旧负载缺失 `trace_id` 键反序列化自动 `None`，新负载多字段对旧结构
+    /// 被忽略——双向兼容。
     /// JSON 侧同理（注释见 `legacy_json_without_trace_id_deserializes_to_none` 用例）。
     pub trace_id: Option<String>,
 }

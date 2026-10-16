@@ -167,8 +167,8 @@ pub struct EventMetadataV2 {
     pub base: crate::event_metadata::EventMetadata,
     /// 图身份三元组（WI-04：goal/run/node 成本归因）
     ///
-    /// WHY Option 不 skip_serializing_if: rmp-serde array 位置编码下跳过字段
-    /// 破坏反序列化长度（ADR-004 同源）；缺失字段反序列化自动 None。
+    /// WHY Option 不 skip_serializing_if: array 位置编码下跳过字段会破坏反序列化长度
+    /// （形态裁决见 ADR-213 R8.1/R9，非 ADR-004）；缺失字段反序列化自动 None。
     pub graph_identity: Option<GraphIdentity>,
     /// 残留权重（WI-20：跨轮事件残留注入强度）
     pub residual_weight: f64,

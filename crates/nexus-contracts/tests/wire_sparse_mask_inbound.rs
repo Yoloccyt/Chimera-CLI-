@@ -85,7 +85,8 @@ fn same_payload_decodes_identically_under_both_protocols() {
 
 #[test]
 fn positional_array_still_decodes_for_this_type() {
-    // 本仓的命名 map 约定由 ADR-004/ADR-184 定，而「位置式 array 是否仍读得动」
+    // 本仓的命名 map 约定由 ADR-213 R8.1 定（ADR-004 只裁「MessagePack 而非 JSON」、
+    // ADR-184 只裁 NexusError 无 source 字段，两者都不裁编码形态），而「位置式 array 是否仍读得动」
     // 已由 `wire_format_compat.rs` 对整个 crate 实测过（结论：读得动，F1 双读 shim
     // 因此取消）。本条只做一件事：确认 SparseMask 这份**手写** impl 转发的
     // `Helper`（derive）没有丢掉 visit_seq 路径——它是 2 字段、无可选，故位置式安全。

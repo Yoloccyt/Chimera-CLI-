@@ -300,8 +300,9 @@ impl TreeIndex {
                 for row in rows {
                     // WHY to_vec_named(map 编码)而非 to_vec(array 位置编码):
                     // L0 EventMetadata.correlation_id 带 skip_serializing_if,array
-                    // 编码下字段错位(ADR-004 同坑,event-bus 先例 shard.rs/bus.rs
-                    // 均用 to_vec_named);named 按字段名匹配,skip 不影响反序列化
+                    // 编码下字段错位(形态裁决 ADR-213 R8.1——非 ADR-004,它只裁「MessagePack
+                    // 而非 JSON」,不裁形态;event-bus 先例 shard.rs/bus.rs 均用 to_vec_named);
+                    // named 按字段名匹配,skip 不影响反序列化
                     let payload = rmp_serde::to_vec_named(&row.event).map_err(|e| {
                         StoreError::Serialization {
                             reason: format!("SessionEvent rmp 序列化失败: {e}"),
@@ -815,7 +816,8 @@ impl TreeIndex {
                             reason: format!("rebuild upsert 段 {} 失败: {e}", seg_id),
                         })?;
                     for rec in records {
-                        // WHY to_vec_named:与 insert_events 同源（map 编码,ADR-004）
+                        // WHY to_vec_named:与 insert_events 同源（map 编码;形态裁决
+                        // ADR-213 R8.1,非 ADR-004）
                         let payload = rmp_serde::to_vec_named(&rec.event).map_err(|e| {
                             StoreError::Serialization {
                                 reason: format!("rebuild 事件 rmp 序列化失败: {e}"),

@@ -104,8 +104,9 @@ pub struct TokenLedgerEntry {
     /// [`TokenLedgerEntry::with_graph_identity`] 消费式构建；`None` 条目
     /// 在账本聚合层计入"无身份事件"（WI-04 验收: 成本归因覆盖率目标 100%）。
     ///
-    /// WHY 不 skip_serializing_if: rmp-serde 使用 array 位置编码（ADR-004），
-    /// 跳过字段导致反序列化长度不匹配（invalid length 12, expected 13）；
+    /// WHY 不 skip_serializing_if: `rmp_serde::to_vec` 的 array 位置编码下跳过字段导致
+    /// 反序列化长度不匹配（invalid length 12, expected 13）；形态裁决见 ADR-213 R8.1/R9
+    /// （**非 ADR-004**，它只裁「MessagePack 而非 JSON」，不裁形态）；
     /// Option 缺失字段反序列化自动 None（serde 默认），兼容性由 Option 语义保证。
     pub graph_identity: Option<GraphIdentity>,
     /// 持久化 schema 版本(ADR-213 R7 F3 / R8.2)。
