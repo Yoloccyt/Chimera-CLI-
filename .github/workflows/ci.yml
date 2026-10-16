@@ -187,6 +187,17 @@ jobs:
           python3 scripts/check_contract_consumers.py --selftest
           python3 scripts/check_contract_consumers.py
 
+      # WHY: G-91 的 >=2 消费者规则在豁免台账覆盖面等于缺陷全集时失去约束力——新增一个
+      # 零消费者公共类型只要顺手补一行基线就永久静默(ADR-220 决策 1)。本门用 exact key-set
+      # 的机器派生台账补这一段:台账禁手编、每个字段每次重算逐字 diff,消费者口径 import 自
+      # G-91 本体(两道锁:declared_in 第二遍必须等于 cc 的 defs 集;zero∪one 必须等于 cc 的
+      # gap 集,否则退 2 判不了而非判红)。先 --selftest 证明有牙(含方言锁反事实与已接进
+      # 生产路径的 defs 地板),再跑真实裁决;零 cargo、秒级。
+      - name: Zero-consumer contract ledger (G-123)
+        run: |
+          python3 scripts/check_contract_zero_consumers.py --selftest
+          python3 scripts/check_contract_zero_consumers.py
+
       # WHY: ADR-213 残余债务波把四支「有牙但从没咬」的检查升为阻塞门。
       # G-101(check_dead_contract_apis.py)按 ADR-197 D5「暂不登记」长期以 advisory 存在、
       # ci.yml 此前只在注释里提过它(原 :171)而从未执行;G-103(check_gates_provenance.py)

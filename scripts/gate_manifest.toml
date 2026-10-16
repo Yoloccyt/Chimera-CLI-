@@ -1336,3 +1336,27 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "断言数以 --selftest **自报**，本行不抄数（ADR-218 D-44 与本批 G-120 两次教训：抄进散文的计数必然比代码先腐烂）。全部断言走生产同一组函数（tempdir 真文件 + 真 judge，禁测试专用副本）：①植入不可编译脚本被点名且只它被抓 ②植入死导入被抓 ③植入「用过就不报」负例 ④带 ≥24 字符理由的 side-effect 豁免生效而裸/短理由不生效 ⑤`from __future__ import annotations` 是编译器指令不是死导入——本条来自门自己的首版假阳（8 个真实文件因此被判红），是夹具当初没覆盖的形态 ⑥小语料 judge 必须退 2 而非报绿（致盲不得读作干净）⑦未钉 job 被抓 ⑧钉值≠FLOOR 被抓 ⑨钉对了不报 ⑩无 python 的 job 不需钉 ⑪注释里提及 python3 不制造幻影钉需求 ⑫`python x.py`（无 3）仍算调用 ⑬job_blocks 按 2 空格缩进分 job 而非整文件混判 ⑭H3 分类器与生产共用同一函数（i/crlf·i/mixed 为违规，i/lf·i/-text 不是）⑮两地板 0<floor≤真树读数 ⑯本门对真树必须 rc=0。开发期该门自曝五处实现缺陷并全部先于接线修掉：未排除 __future__ 指令、judge() 在 TOOL-ERROR 分支直接 print 破坏纯 verdict 约定（导致自检看不见自身不可判定消息）、WORKFLOW_FLOOR 声明了却没接进 judge（恒不触发的地板等于没有地板）、H3 分类器存在两份真值（夹具能绿而生产误读）、python 调用检测只认 `python3 ` 因而既漏 `python x.py` 又把 WHY 注释里的提及误判为调用。任一断言不成立=>退 1。；H6/H7 上线时又自曝一处**自指假阳**：本门自己的 ABS_HINTS 裸前缀元组（`/home/`、`/opt/`…）被 H6 判成绝对路径，4 条违规全是门判自己红——故规则改为「裸前缀常量是匹配器、不算钉死默认值」，并要求 POSIX 前缀之后还有实际路径段。另两处先于接线修掉：`[\\/]` 字符类经编辑器往返退化成 `[\\/]`（只匹配 `/`）使绝对路径轴对唯一的真缺陷 `D:\\...` 永久致盲（分隔符因此改用下标判断，且该回归被固化成一条断言）；以及 H6/H7 夹具块引用了尚未赋值的 real_py 导致 NameError，崩溃被 gate_rc 兜成 rc=2 而非借 1 冒充判红（兜底本身按预期工作）。上述列举为代表性形态、**非穷尽**——穷尽式清单正是本仓三次「手抄计数」病灶的形态，权威读数一律以 --selftest 自报为准。"
+
+# ============================================================
+# G-123/G-124 -- L0 zero-consumer contract ledger (ADR-220 decision 1)
+# 轴分工：G-91 判"每个 L0 公共定义 >=2 消费者，否则登记豁免"，但当豁免台账覆盖面
+# 等于缺陷全集时，该规则对**新增**零消费者公共类型不再有任何约束力。本门补的是
+# "新增即隐身"这一段——G-91 的 stale 判据管得到删除与改名，管不到顺手补一行。
+# ============================================================
+[[gate]]
+id = "G-123"
+spec_ref = "ADR-220 决策 1（零消费者 exact-key-set 派生台账；承 G-91 >=2 消费者规则的豁免全集失效）+ ADR-199 7 Q2"
+cmd = "{python} scripts/check_contract_zero_consumers.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "L0 零消费者契约台账。立门的直接证据是 G-91 自己的自报行：`gaps<2` 恰等于 `baseline`，即每一条豁免都已被登记、规则对新增零消费者公共类型零约束力（该形态由 ADR-220 复测台账第 1 行取证）。判据形态是 **exact key-set 的机器派生对拍**，不是计数：`scripts/contract_zero_consumer.txt` 每行 `NAME | consumers=0 | declared_in=<module>`，键集必须逐字等于实况的零消费者集合——实况零消费者而无行⇒[NEW] 红；有行而该类型已拿到消费者⇒[STALE] 红；`declared_in` 与实况不符⇒[LOC] 红（这一列是被验的，不是装饰）；头注 `# CLAIM` 与实况不符⇒[CLAIM] 红；行畸形/未知键/重名/缺 CLAIM/扫描致盲/两门方言分裂⇒退 2 不可判定。**台账禁手编**：每个字段每次由扫描重算并逐字 diff，手改不表达裁决、只会变红，因此它不是第二张手维护表——人唯一编辑的是 G-91 的 `contract_consumer_baseline.txt`，本文件永由 --write 派生。**复用纪律**（消费者口径只有一份）：build_model / consumer_crates / compute_gaps / DEF_RE / read_production_text / load_baseline 全部 import 自 check_contract_consumers；两道硬锁防第二真值源——① `declared_in` 需要文件位置而 cc 的 defs 是丢位置的集合，故第二遍扫盘只用导入的 DEF_RE+read_production_text，并强制 `set(第二遍) == model.defs`，不等退 2；② 方言锁 `zero ∪ one == cc.compute_gaps(...)`，不等退 2 [DIALECT]。三条被否决的反方案及理由（全文见 ADR-220 决策 1）：标量只减棘轮 `zero_max=NN` 被否——改名一进一出净额不变即恒绿，而台账内容已全换，这与 G-115/G-119「从计数迁到 exact-set 才有牙」是同型教训；「新入 zero 须带 >=24 字符理由」被否——现存豁免行全是裸名，该规则首跑即红，会把立门与清存量混成一次改动，改为打印 [REGISTER-DEBT] advisory（不进 rc、不新增门号，是「不能判红也不得继续静默」的半步）；给 rows 设下限被否——rows 是债的度量，正确接线会把它推向 0，设下限等于让本门的绿依赖缺陷继续存在（本仓记录过的极端病理形态），故地板只守扫描面 defs。**首轮不红的核算**：zero+one 恰等于 baseline ⇒ 派生即自洽，无需任何豁免动作。全部读数（defs/zero/one/ge2/gap/baseline/rows 与 sum 是否闭合、zero_by_module 分布、bare 债务数）由脚本自报，本行不抄数。"
+
+[[gate]]
+id = "G-124"
+spec_ref = "G-123 配套（门自身有牙，沿 G-20/G-92/G-99/G-105/G-107/G-109/G-111/G-114/G-116/G-118/G-120/G-122 先例）"
+cmd = "{python} scripts/check_contract_zero_consumers.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "断言数以 --selftest **自报**，本行不抄数（ADR-218 D-44 与 G-120/G-122 两次同课：抄进散文的计数必然比代码先腐烂）。全部断言走生产同一组函数（tempdir 真 crate 树 + 真 scan/judge/read_ledger，禁测试专用副本），代表性形态**非穷尽**：①三桶（zero/one/ge2）在夹具上精确到名单 ②sum 闭合 zero+one+ge2==defs ③同名定义在两文件时被 '+' 并列而非静默折叠 ④删行⇒[NEW]、留行于已非零消费者者⇒[STALE]、手改 declared_in⇒[LOC]、头注过期⇒[CLAIM] ⑤四类畸形行各判 malformed 而非跳过（consumers!=0 / 未知键 / 非 def 名 / 字段无 '='）⑥重名行与缺 CLAIM 均退 2 ⑦跨门哨 [UNREGISTERED]：zero 里有名字不在 G-91 基线 ⇒ 红 ⑧advisory 读数器把带理由的基线行排除出债务计数（证明它测的是「有无理由」而非「有几行」）⑨**方言锁的反事实**：内存替换 cc.compute_gaps 后**重新 scan** 才判得出 [DIALECT]——只 patch 不重扫是无效测试，因为 facts.gaps 在 scan 期内已算完，这条是本夹具首版真实踩到的坑；还原后同一台账必须回到 rc 0（证明守卫不是恒真红）⑩扫描确定性：同一夹具两次 scan 三桶逐项相等 ⑪地板**接进了生产路径**：以 run_real(crates_root=5-def 夹具) 断言 rc 2 且消息含 below floor、并断言拒绝发生在任何台账读写之前（G-121 自曝过「WORKFLOW_FLOOR 声明了却没接进 judge」——恒不触发的地板等于没有地板，故此处不接受「直接调 floor_error 返回非 None」这种弱断言）⑫真树 sum 闭合且方言锁静默、zero 是 G-91 基线的子集 ⑬本门对真树必须 rc=0。夹具口径与生产共用 module_key（自 G-105 导入）与 cc 的 DEF_RE/read_production_text，不复刻解析器。任一断言不成立⇒退 1。"

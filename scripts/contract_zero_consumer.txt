@@ -1,0 +1,100 @@
+# L0 zero-consumer contract ledger -- G-123 / ADR-220
+# (scripts/check_contract_zero_consumers.py)
+#
+# MACHINE-DERIVED. DO NOT HAND-EDIT. Regenerate with
+#     py -3 scripts/check_contract_zero_consumers.py --write
+# every field is recomputed from the scan on every run and diffed, so a
+# hand edit does not express an adjudication -- it just goes red.
+#
+# One line per nexus-contracts pub def with ZERO production consumer crates
+# under G-91's own counting dialect (check_contract_consumers.py imports:
+# build_model / consumer_crates / compute_gaps / DEF_RE / read_production_text).
+# Defs with exactly 1 consumer are NOT listed: they are registered in
+# scripts/contract_consumer_baseline.txt (human-owned) and judged by G-91.
+#
+#   NAME           as enumerated by cc.DEF_RE over the production surface
+#   consumers=0    fixed by construction; any other value is malformed
+#   declared_in    module key(s) relative to nexus-contracts/src, joined by
+#                  '+' when the same name is defined in more than one file
+#
+# Why exact-set and not a scalar ratchet: renaming a type moves one name out
+# and one in, so `zero_max=NN` stays green across a complete change of content.
+# Why there is no minimum: `zero` is the debt -- wiring types up drives it to
+# 0, and a floor there would make this gate's green depend on the defect.
+#
+# CLAIM defs=236 zero=75 one=86 ge2=75 gap=161 baseline=161 rows=75 sum=OK
+AffinityOverrides | consumers=0 | declared_in=mca/affinity
+AgreementTrendPoint | consumers=0 | declared_in=safety/calibration
+BadCaseConversion | consumers=0 | declared_in=safety/calibration
+CalibrationSample | consumers=0 | declared_in=safety/calibration
+CertifyPayload | consumers=0 | declared_in=safety/adjudication
+CertifyVerdict | consumers=0 | declared_in=safety/adjudication
+ClaimPayload | consumers=0 | declared_in=safety/adjudication
+Compressibility | consumers=0 | declared_in=core_domain/event_v2
+CompressionStrategy | consumers=0 | declared_in=spec/harness_dimensions
+ContextAssemblyContract | consumers=0 | declared_in=spec/harness_dimensions
+ContractExample | consumers=0 | declared_in=spec/behavior_contract
+Currency | consumers=0 | declared_in=mca/affinity
+DeclaimPayload | consumers=0 | declared_in=safety/adjudication
+EmptyFormalProvider | consumers=0 | declared_in=spec/formal_props
+ErrorLayer | consumers=0 | declared_in=safety/errors
+EvalRecord | consumers=0 | declared_in=safety/calibration
+EvalSampleKind | consumers=0 | declared_in=safety/calibration
+EventFailure | consumers=0 | declared_in=safety/errors
+EventPattern | consumers=0 | declared_in=core_domain/event_v2
+EvictionStrategy | consumers=0 | declared_in=spec/harness_dimensions
+ExtractionFormat | consumers=0 | declared_in=spec/harness_dimensions
+FailureFixStatus | consumers=0 | declared_in=safety/adjudication
+FailureRecord | consumers=0 | declared_in=safety/adjudication
+FallbackStrategy | consumers=0 | declared_in=spec/harness_dimensions
+FormalProperty | consumers=0 | declared_in=spec/formal_props
+FormalResultProvider | consumers=0 | declared_in=spec/formal_props
+GateCoverage | consumers=0 | declared_in=safety/calibration
+GateVerdict | consumers=0 | declared_in=safety/calibration
+GenerationControlContract | consumers=0 | declared_in=spec/harness_dimensions
+GraphIdentity | consumers=0 | declared_in=core_domain/graph_identity
+GroundingCategory | consumers=0 | declared_in=spec/platform_grounding
+GroundingRequirement | consumers=0 | declared_in=spec/platform_grounding
+HumanLabel | consumers=0 | declared_in=safety/calibration
+InvariantSpec | consumers=0 | declared_in=spec/formal_props
+InvariantViolation | consumers=0 | declared_in=memory/archive_monotonicity
+JudgeTier | consumers=0 | declared_in=safety/calibration
+MemPiAction | consumers=0 | declared_in=seams/rl_types
+MemoryManagementContract | consumers=0 | declared_in=spec/harness_dimensions
+MetadataBridge | consumers=0 | declared_in=core_domain/event_v2
+ModalityKind | consumers=0 | declared_in=mca/affinity
+ModelConfig | consumers=0 | declared_in=mca/omni_message
+ModelPrice | consumers=0 | declared_in=mca/price_vector
+MonthlyEvalReport | consumers=0 | declared_in=safety/calibration
+NamespaceQuota | consumers=0 | declared_in=memory/quota
+NamespaceQuotaV2 | consumers=0 | declared_in=core_domain/event_v2
+NormalizedThreeFactor | consumers=0 | declared_in=memory/experience_card
+OmniMessage | consumers=0 | declared_in=mca/omni_message
+OutputProcessingContract | consumers=0 | declared_in=spec/harness_dimensions
+PeakPeriod | consumers=0 | declared_in=mca/affinity
+PlanEdge | consumers=0 | declared_in=spec/tool_plan
+PlanViolation | consumers=0 | declared_in=spec/blueprint
+ProjectedMatrix | consumers=0 | declared_in=vector_math/mcsm
+QuotaLimits | consumers=0 | declared_in=memory/quota
+RLAction | consumers=0 | declared_in=seams/rl_types
+RLHook | consumers=0 | declared_in=seams/rl_hooks
+RLState | consumers=0 | declared_in=seams/rl_types
+Recoverable | consumers=0 | declared_in=safety/errors
+RecoveryStrategy | consumers=0 | declared_in=safety/errors
+RetentionPolicy | consumers=0 | declared_in=spec/harness_dimensions
+RewardLayer | consumers=0 | declared_in=seams/reward
+SamplingParams | consumers=0 | declared_in=mca/affinity
+ScanHit | consumers=0 | declared_in=safety/sensitive
+ScanVerdict | consumers=0 | declared_in=safety/sensitive
+SegmentCreationReason | consumers=0 | declared_in=memory/token_evidence
+SensitiveKind | consumers=0 | declared_in=safety/sensitive
+ServiceTier | consumers=0 | declared_in=mca/affinity
+StopStrategyConfig | consumers=0 | declared_in=spec/harness_dimensions
+TaskOrchestrationContract | consumers=0 | declared_in=spec/harness_dimensions
+ToolFailure | consumers=0 | declared_in=safety/errors
+ToolInteractionContract | consumers=0 | declared_in=spec/harness_dimensions
+ValidationRule | consumers=0 | declared_in=spec/harness_dimensions
+VerificationMethod | consumers=0 | declared_in=spec/formal_props
+VerifiedWithStrength | consumers=0 | declared_in=spec/formal_props
+VerifierKind | consumers=0 | declared_in=safety/adjudication
+WorkflowType | consumers=0 | declared_in=spec/harness_dimensions
