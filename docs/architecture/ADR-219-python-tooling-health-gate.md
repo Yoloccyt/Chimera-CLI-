@@ -30,7 +30,10 @@
 
 ## 2. 决策
 
-### 决策 1：新增 `scripts/check_py_tooling_health.py`，判据五条（G-121），自证（G-122）
+### 决策 1：新增 `scripts/check_py_tooling_health.py`，初版判据五条（G-121），自证（G-122）
+
+> 第二轮（§7）把判据从 5 条扩到 **7 条**（新增 H6 绝对路径 / H7 环境失败退码），
+> 本节保留初版形态以留痕演进；下表五行即初版。
 
 | 轴 | 判据 | 违规 | 不可判定（rc 2） |
 |---|---|---|---|
@@ -123,3 +126,68 @@ py -3 scripts/audit_gate_parity.py                    # expect=0 且已接 workf
 G-121/G-122 是四件同批（脚本 + manifest 两条 + ci.yml 一步），须同退，否则
 G-103 方向 B（带 `--selftest` 未登记）或 `audit_gate_parity`（expect=0 未接 workflow）
 必红。`.gitattributes`、Python 钉版本、死导入清理三笔互不耦合，可单独退。
+
+## 7. 第二轮（同日深度审查）：新增 H6/H7 两条判据，并记录门自身踩到的三个陷阱
+
+第一轮的门只判"能不能跑"，第二轮才判"写对了没有"。深度探针（AST，逐轴植入正负对照）
+扫完 92 个脚本后，判据从 5 条扩到 7 条，另修 3 处实测缺陷：
+
+| 新增 | 判据 | 使它成形的实测缺陷 |
+|---|---|---|
+| H6 ABSPATH | 模块级赋值 value 里不得出现绝对路径字面量 | `classify_fmt_vs_semantic.py:18` 把 `ROOT` 钉成 `D:\Chimera CLI` ⇒ **被报告引用的那个数字只能在本机复现** |
+| H7 ENVFAIL | `if r.returncode != 0` 不得导向 `sys.exit(1)` | `lru_facts.py:14`、`lru_reachability.py:20` 把环境失败记成判红；`run_gate_manifest.py` 用 `ok = rc == expect` 裁决，借 1 即 gate_rc F33 的假绿通道 |
+
+两处定级细节决定了这两条轴能不能用，记下来免得下轮重犯：
+
+- H6 只扫**模块级赋值的 value**。第一次扫全量常量得到 14 个假阳，全是 `m::alpha`
+  这类夹具键被 `^[A-Za-z]:` 误抓；加上"盘符后必须紧跟分隔符"后降到 1 个真缺陷。
+- 仓内三处合法形态（`os.path.isdir` 守卫、`os.name == 'nt'` 守卫、selftest 夹具）
+  都在函数体内，因此"只看模块级"这一约束天然把它们排除，无需白名单。
+
+### 本轮由门与探针自曝的三个陷阱（都被固化成断言或纪律）
+
+1. **字符类 `[\\/]` 静默退化成 `[\/]`（只匹配 `/`）**，使绝对路径轴对唯一的真缺陷
+   `D:\...` **永久致盲**，并报告"0 命中"。分隔符判断改为下标比较 `s[2] in ("/", "\\")`，
+   并把该回归固化为一条断言。
+2. **门判自己红**：H6 第一版把本门的 `ABS_HINTS = ("/home/", "/opt/", ...)` 裸前缀
+   元组判成 4 条违规。规则修正为"裸前缀常量是匹配器、只有其后还有实际路径段才算钉死默认值"。
+   自指假阳是完备性门的固有职业风险，不修就会诱导后人把整条轴关掉。
+3. **回滚自身失败**：一次补丁用 `io.open(...).write()` 未关句柄，Windows 上令
+   `git checkout HEAD -- <file>` 报 `unable to unlink old ... Invalid argument`，
+   留下一个"内容有效但 TOML 非法"的 manifest。此后所有台账写入必须 `with` 关闭句柄、
+   **写完立刻 tomllib 复验、不过即恢复备份**，且恢复用参数化 subprocess 不用 `os.system`。
+
+另一条与门无关但同样致命的操作教训：**本环境的 heredoc 会把 `\\` 压成 `\`**，
+因此含反斜杠的内容（TOML 转义、正则字符类、Windows 路径）必须走文件写入而非内联
+heredoc——本轮两次 TOML 解析失败都源于此，而非逻辑错误。
+
+### 全门实跑结论（不是"应该都绿"，是跑完读日志）
+
+`py -3 scripts/run_gate_manifest.py` 全 light 档：**ok=114 / mismatch=1 / env-fail=0 /
+skip=7（heavy 档按设计需显式 `--with-heavy`），合计 122/122**。唯一不符是
+**G-16 `audit_spec_coverage.py` rc=1**，经查为**既有且已裁决**项：
+`docs/reports/L0-contracts-residual-debt_2026-10-13.md:178` 记为 D-13——仓外 Qoder 计划
+缓存 `Phase_R_*.md` 仍指 W3 前的 `crates/nexus-contracts/src/util.rs`，裁决"维持不处理
+（仓内代改即污染他库）"，且 G-16 属 `ci_exempt`（本地形态，CI 不跑）。本轮**不翻案**。
+
+值得留档的推论：一个已知为红、又留在 `expect = 0` 里的门，会让聚合实跑**永久红**，
+而永久红的聚合读数会训练人去忽略它——本仓对这类情形的既有处置是改 `expect = 1` 或
+`ci_exempt`，G-16 已取后者，故其红只出现在本地全量实跑中。
+
+### 本轮登记但刻意不修的三项
+
+| 项 | 证据 | 级别 | 不修的理由 |
+|---|---|---|---|
+| `coverage_gate.py` 历史基线不可读时返回 `([], [note])` | `:266` `except Exception: continue` + `:274 if not vals: return [], [...]` ⇒ 若 `tomllib.loads` 全面失败，棘轮轴**静默不判**且无违规 | **P2** | 需先分清"首提交前无历史"（合法）与"解析致盲"（缺陷）两种空值，改动落在 CI 阻塞路径上，须单独一批设计；本轮只登记 |
+| 3 处内联 `except Exception: pass` 的 stdout 编码兜底（`audit_gate_parity` / `check_topk_registry` / `coverage_gate`）绕过了 `gate_rc._utf8_stdio()` | 直读原文确认是刻意兜底，非判据吞异常 | **P3** | 属"双份实现"轴；为风格动三个正在工作的门，回归风险大于收益 |
+| `lru_reachability.py` 把 `lru-0.12.5` 钉在 glob 里 | 版本升级即静默找不到源码 | **P3** | 一次性取证脚本，且 H7 修复后其失败已转 rc=2 可见 |
+
+### 本轮提交与回滚补充
+
+四笔（`git revert` 各自独立）：`99a54aa` 死导入 / `511df34` G-120 计数 /
+`e9d861b` `.gitattributes` / `9657a7d` 钉 Python / `d963289` G-121-G-122 初版；
+第二轮的判据扩展（H6/H7 + 三处修复 + note/spec_ref 同步）与初版同属一个门族，
+回滚须连同 `scripts/check_py_tooling_health.py`、`gate_manifest.toml`、
+`classify_fmt_vs_semantic.py`、`lru_facts.py`、`lru_reachability.py` 一并退，
+否则 H6/H7 的 note 与代码会互相矛盾（note 说七条而门判五条，正是本轮在别的门上
+刚修过的那类"散文比代码先腐烂"）。

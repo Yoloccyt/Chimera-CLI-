@@ -39,6 +39,17 @@ exemptions -- the cleanest possible admission state)
                  pin must equal PYTHON_FLOOR. This is the check whose absence
                  produced the gap this commit closes: adding a python step to a
                  new job silently inherits the runner image's interpreter.
+  H6 ABSPATH     no absolute path in a module-level assignment value. A measured
+                 defect: `classify_fmt_vs_semantic.py` pinned `D:\Chimera CLI`, so
+                 the number a cited report attributes to it was only reproducible
+                 on one box. Guarded host paths inside functions (`os.path.isdir`,
+                 `os.name == 'nt'`) and selftest fixtures are out of scope by
+                 construction -- scanning all constants instead yielded 14 false
+                 positives on fixture keys like `m::alpha`.
+  H7 ENVFAIL     `if r.returncode != 0` must not lead to `sys.exit(1)`. Measured
+                 defect in lru_facts.py / lru_reachability.py: an environment
+                 failure recorded as a red verdict is the false-green channel
+                 gate_rc's F33 note documents.
 
 Stdlib only, on purpose: the pinned CI interpreter has no site-packages, so a
 `import yaml` here would pass locally (dev boxes usually have PyYAML) and fail in
@@ -246,6 +257,101 @@ def pin_parity(workflow_dir):
     return bad, len(files), npython
 
 
+def _parse(path):
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        src = fh.read()
+    try:
+        return ast.parse(src)
+    except SyntaxError:
+        return None
+
+
+ABS_HINTS = ("/home/", "/Users/", "/usr/bin/", "/opt/")
+
+
+def _looks_absolute(s):
+    """Drive letter FOLLOWED BY a separator, or a POSIX root that only exists on a box.
+
+    The separator is checked by indexing, not by a `[\\/]` character class: such a
+    class silently degrades to `[\/]` (which matches only `/`) once the file
+    round-trips through an editor, and that made the first draft of this axis blind
+    to the single real `D:\\...` it was written to catch -- it reported "0 hits" on a
+    tree that had one. The planted positive fixture below IS that bug.
+    """
+    if not isinstance(s, str) or len(s) < 3:
+        return False
+    if s[1] == ":" and s[0].isalpha() and s[2] in ("/", "\\"):
+        return True
+    for h in ABS_HINTS:
+        # A bare prefix constant (`"/opt/"`) is a MATCHER, not a pinned default --
+        # this gate's own allowlist would otherwise trip H6 on itself. Only a path
+        # with something after the prefix (`/home/bob/proj`) is machine-specific.
+        if s.startswith(h) and len(s) > len(h):
+            return True
+    return False
+
+
+def abs_module_paths(py_files):
+    """H6: an absolute path at module level is a machine-specific default.
+
+    Only the VALUE of a module-level assignment is scanned, not the whole tree.
+    The three legitimate host-specific strings in this repo live inside functions
+    behind `os.path.isdir` / `os.name == 'nt'` guards, or are selftest fixtures that
+    deliberately assert a Windows path parses. Widening the scan to every constant
+    produced 14 false positives on fixture keys like `m::alpha` before the separator
+    rule was added -- a gate that cries wolf gets its findings ignored.
+    """
+    bad = []
+    for p in py_files:
+        tree = _parse(p)
+        if tree is None:
+            continue
+        for n in tree.body:
+            if isinstance(n, (ast.Assign, ast.AnnAssign)):
+                for sub in ast.walk(n.value):
+                    if isinstance(sub, ast.Constant) and _looks_absolute(sub.value):
+                        bad.append((os.path.basename(p), "ABSPATH",
+                                    "line %d: %r at module level pins one machine -- "
+                                    "derive from __file__ or an env var, or every number "
+                                    "this script prints is only reproducible here"
+                                    % (sub.lineno, sub.value[:40])))
+    return bad
+
+
+def envfail_exit1(py_files):
+    """H7: a failed external command must exit 2 (undecidable), never 1 (red).
+
+    `run_gate_manifest.py` decides with `ok = rc == expect`, so a script that exits
+    1 on an environment failure is recorded as "ran and judged red" -- the ledger
+    then treats a missing toolchain as a defect to be repaid. gate_rc's F33 note
+    documents this exact false-green channel; H7 catches the hand-written variant.
+    """
+    bad = []
+    for p in py_files:
+        tree = _parse(p)
+        if tree is None:
+            continue
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.If) or not isinstance(n.test, ast.Compare):
+                continue
+            left = n.test.left
+            is_rc = isinstance(left, ast.Attribute) and left.attr == "returncode"
+            if not (is_rc and any(isinstance(c, ast.Constant) and c.value == 0
+                                  for c in n.test.comparators)):
+                continue
+            for sub in ast.walk(n):
+                if (isinstance(sub, ast.Call)
+                        and getattr(sub.func, "attr", None) == "exit"
+                        and getattr(getattr(sub.func, "value", None), "id", None) == "sys"
+                        and sub.args and isinstance(sub.args[0], ast.Constant)
+                        and sub.args[0].value == 1):
+                    bad.append((os.path.basename(p), "ENVFAIL",
+                                "line %d: `returncode != 0` leads to sys.exit(1) -- no "
+                                "verdict was reached, this must be exit 2 (gate_rc F33)"
+                                % sub.lineno))
+    return bad
+
+
 def judge(py_files, workflow_dir, sub_path="scripts"):
     out = []
     fails = 0
@@ -265,8 +371,11 @@ def judge(py_files, workflow_dir, sub_path="scripts"):
         out.append("[TOOL-ERROR] found only %d workflows (floor %d) -- H5 scan is "
                    "blind, refusing to judge" % (nwf, WORKFLOW_FLOOR))
         return 2, out
+    bad5 = abs_module_paths(py_files)
+    bad6 = envfail_exit1(py_files)
     for group, kind in ((bad1, "COMPILE"), (bad2, "DEADIMPORT"),
-                        (bad3, "REPOEOL"), (bad4, "PINPARITY")):
+                        (bad3, "REPOEOL"), (bad4, "PINPARITY"),
+                        (bad5, "ABSPATH"), (bad6, "ENVFAIL")):
         for f, k, msg in group:
             out.append("[GAP][%s] %s: %s" % (k, f, msg))
         fails += len(group)
@@ -350,6 +459,15 @@ jobs:
       - name: Cargo
         run: cargo build
 """
+
+
+ABS_FIX = ('ROOT = "D:\\\\Chimera CLI"\nHOME = "/home/bob/proj"\nprint(ROOT, HOME)\n')
+ABS_OK = ('import os\nROOT = os.path.dirname(os.path.abspath(__file__))\n'
+          'if os.name == "nt":\n    p = r"C:\\Program Files\\x"\nprint(ROOT, p)\n')
+ENVFIX = ('import subprocess, sys\nr = subprocess.run(["cargo", "metadata"])\n'
+          'if r.returncode != 0:\n    sys.exit(1)\nprint("ok")\n')
+ENVOk = ('import subprocess, sys\nr = subprocess.run(["cargo", "metadata"])\n'
+         'if r.returncode != 0:\n    sys.exit(2)\nprint("ok")\n')
 
 
 def _mkdir(root, name, files):
@@ -448,9 +566,33 @@ def selftest():
             _eol_row_is_bad("i/crlf") and _eol_row_is_bad("i/mixed")
             and not _eol_row_is_bad("i/lf") and not _eol_row_is_bad("i/-text"))
 
-        # Floors must be satisfiable on reality but not trivially true.
-        real_py = sorted(os.path.join(HERE, f) for f in os.listdir(HERE)
+        # H6/H7 get their own directory so their fixtures cannot perturb the
+        # compile/dead-import counts asserted above.
+        h67 = _mkdir(tmp, "h67", {"abs.py": ABS_FIX, "absok.py": ABS_OK,
+                                  "env.py": ENVFIX, "envok.py": ENVOk})
+        hf = sorted(os.path.join(h67, f) for f in os.listdir(h67))
+        a_bad = abs_module_paths(hf)
+        e_bad = envfail_exit1(hf)
+        live_py = sorted(os.path.join(HERE, f) for f in os.listdir(HERE)
                          if f.endswith(".py"))
+        add("H6 planted positive: module-level `D:\\...` and `/home/bob/proj` both caught",
+            len(a_bad) == 2 and set(x[0] for x in a_bad) == {"abs.py"})
+        add("H6 planted negative: __file__-derived ROOT and an os.name-guarded "
+            "literal are NOT flagged (the two live patterns in this repo)",
+            not any(x[0] == "absok.py" for x in a_bad))
+        add("H6 backslash-blindness regression: separator checked by indexing, and a "
+            "bare prefix constant (this gate's own allowlist) is not a violation",
+            len(a_bad) == 2 and not abs_module_paths(live_py))
+        add("H7 planted positive: returncode!=0 -> sys.exit(1) is caught",
+            any(x[0] == "env.py" for x in e_bad))
+        add("H7 planted negative: the same guard exiting 2 is clean",
+            not any(x[0] == "envok.py" for x in e_bad))
+        add("H6/H7 are green on the live tree (zero-violation baseline, %d files)"
+            % len(live_py),
+            not abs_module_paths(live_py) and not envfail_exit1(live_py))
+
+        # Floors must be satisfiable on reality but not trivially true.
+        real_py = live_py
         add("PY_FILES_FLOOR is above zero and below the live count (%d)"
             % len(real_py), 0 < PY_FILES_FLOOR <= len(real_py))
         add("WORKFLOW_FLOOR is above zero and below the live count",

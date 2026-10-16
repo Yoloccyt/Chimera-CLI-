@@ -16,8 +16,9 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 roots = glob.glob(".toolchain/cargo/registry/src/*/lru-0.12.5")
 if not roots:
-    print("未找到 lru-0.12.5 源码")
-    sys.exit(1)
+    # 输入缺失 = 不可判定（退 2），不得借 1 冒充「判过且红」（同 lru_facts 的方言理由）。
+    print("[UNDECIDABLE] 未找到 lru-0.12.5 源码（registry 路径或版本已变）")
+    sys.exit(2)
 src_dir = os.path.join(roots[0], "src")
 files = [f for f in sorted(os.listdir(src_dir)) if f.endswith(".rs")]
 print("lru-0.12.5/src:", files)
