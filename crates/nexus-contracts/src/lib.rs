@@ -497,14 +497,24 @@ pub use vector_math::recall_fusion;
 ///
 /// 列出的模块在「纯类型」之外含有**实质性受控纯逻辑**（校验 / 拓扑判环 /
 /// 状态机 / 恢复策略决策表 / 安全策略 validate / 规范化 / 哈希 / 参考实现 /
-/// 熵启发式），逐条对应本文件顶部「测试工具与纯函数（ADR-033 例外）」表与
-/// `ADR-033` 追加节量体数据（无 IO / 无 async / 无网络 / 无随机）。
-/// 小型访问器 / 枚举 `as_str` 等平凡逻辑不登记（如 `vector.rs` 的
-/// ≤7 行微助手 + 8 个 trait 无体声明，其量体结论为「零逻辑仍成立」）；
-/// 决策原语（`affinity::sampling_bucket` / `price_vector::cheapest_model`）
-/// 归 D-待裁决（见 `docs/reports/L0-contracts-refactor-audit_2026-10-12.md`）。
+/// 熵启发式），红线仍只有四项：无 IO / 无 async / 无网络 / 无随机。
+///
+/// 与两份邻近记录的关系（刻意不复制事实，避免第二真值源）：
+/// - 本表是**模块粒度**的登记，唯一权威；项数不在此写死，由
+///   `tests/l0_exception_registry.rs` 的双向锁与 G-119 的 `registered=` 自报复核。
+/// - 本文件顶部「测试工具与纯函数（ADR-033 例外）」表是例外 1-5 的**来源登记**
+///   （provenance：谁、因何、被哪层消费），**不是**全量清单；新增模块不回填该表。
+/// - `scripts/l0_logic_ledger.txt`（G-119）是**函数粒度**的实况台账，键集取
+///   派生逻辑 ∪ 政策表 ∪ 本表，故两处视角互补而非互相抄录。
+///
+/// 小型访问器 / 枚举 `as_str` 等平凡逻辑不登记（如 `vector.rs` 的 ≤7 行微助手 +
+/// 无体 trait 声明，其量体结论为「零逻辑仍成立」）。决策原语
+/// （`affinity::sampling_bucket` / `price_vector::cheapest_model` 等）曾挂
+/// 「D-待裁决」，已由 `ADR-218` 决策 1 逐条裁为受控纯逻辑并于下方补齐。
+///
 /// `tests/l0_exception_registry.rs` 交叉校验本表：① 每个登记名必须是 crate 根可达
-/// 声明模块；② 下列具名实质性逻辑模块恒在册（防自声明例外却未登记）；③ W3 十个组声明均存在（结构锁）。
+/// 声明模块；② 登记表与实质性逻辑集**双向相等**；③ W3 十个组声明均存在（结构锁）；
+/// ④ **已登记模块的头部不得再以项目符号句式自称「纯类型零逻辑」**（名实矛盾）。
 pub const ADR_033_EXCEPTION_MODULES: &[&str] = &[
     "test_scale",
     "archive_monotonicity",
@@ -524,6 +534,20 @@ pub const ADR_033_EXCEPTION_MODULES: &[&str] = &[
     "tool_plan",       // validate + Kahn 拓扑判环（O(V+E) 图算法）
     "errors",          // Recoverable::recovery_strategy 恢复决策表 + to_nexus_error
     "command_validation", // CommandValidator::validate 遍历 20 条拦截模式（ADR-054 决策 3 授权的安全策略）
+    // ADR-218 决策 1/2 补齐（承 ADR-033 追加节自陈缺口 → G-99 符号门 → G-119 逻辑量门）：
+    // 以下 11 个模块由 G-119 从源码派生现形（旧登记表与实况脱节 11 项），逐条裁决记于
+    // ADR-218 决策 1；逐函数读数见 scripts/l0_logic_ledger.txt，勿在此重复台账内容。
+    "affinity", // preferred_dialect 遍历选型 + sampling_bucket 分桶启发式（确定性，无随机源）
+    "price_vector", // cheapest_model min-scan + estimate_cost_micro 微单元成本算术
+    "quota",    // NamespaceQuota::validate 六段区间校验 + 生效上限折减
+    "token_evidence", // TokenLedgerEntry::new 三序列一一对应的证据完整性不变量
+    "density",  // from_rho 为 min_by 最近档搜索（名为查表、实非查表）+ actual_load 容量折减
+    "policy",   // is_valid 权重与策略形状校验
+    "reward",   // LAYER_WEIGHTS 八维奖励权重政策表（Milestone C-1 RewardSpec）
+    "masks",    // SparseMask::select_top_k（select_nth_unstable O(n)，ADR-213 D-7 本域裁决）
+    "formal_props", // collect_results 结果归并 + from_result_with_auto_confidence 置信度分档
+    "harness_dimensions", // default_contract 六维默认契约装配
+    "variant",  // VariantId::new 标识归一化构造
 ];
 
 // ============================================================

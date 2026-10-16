@@ -39,6 +39,19 @@ const SUBSTANTIVE_LOGIC_MODULES: &[&str] = &[
     "tool_plan",
     "errors",
     "command_validation",
+    // ADR-218 决策 1/2：以下 11 项由 G-119 从源码派现（此前登记表与实况脱节 11 项）。
+    // 本表与 lib.rs 的 ADR_033_EXCEPTION_MODULES 必须**同批**修改，否则不变量 2 红。
+    "affinity",
+    "price_vector",
+    "quota",
+    "token_evidence",
+    "density",
+    "policy",
+    "reward",
+    "masks",
+    "formal_props",
+    "harness_dimensions",
+    "variant",
 ];
 
 /// W3 子模块化后的 10 个组模块（结构锁，防回退平铺）。

@@ -5,9 +5,11 @@
 //!
 //! # 设计决策(WHY)
 //!
-//! - **纯类型零逻辑**: 遵循 ADR-033 约束；形式化验证的实际执行逻辑
-//!   分布于各 owner crate 的 formal 模块(7 个验证器,聚合裁决见
-//!   gsoe-evolution `formal_gate::FormalVerifierGate`),本文件仅承载跨层共享类型
+//! - **纯类型 + 受控纯逻辑**（ADR-033 例外，已登记于 `lib.rs` 的
+//!   `ADR_033_EXCEPTION_MODULES`）: 跨层共享类型 + 本文件内的结果归并（`collect_results`）
+//!   与置信度分档（`from_result_with_auto_confidence`）；形式化验证的**实际执行**逻辑
+//!   分布于各 owner crate 的 formal 模块（7 个验证器，聚合裁决在 L5 进化侧），本文件不承载。
+//!   刻意不点名上层实现符号——对方更名即此句漂移（ADR-217 D-38 的文档面纪律）。
 //! - **消费层**: 各 owner crate 的 formal 验证器 / L6 omega-learner
 //!   （进化闭环中查询验证结果）/ L8 parliament（审议时参考属性满足状态）
 //! - **属性类别封闭枚举**: 当前四类属性覆盖 GSOE 谱系、AEGIS 单调性、

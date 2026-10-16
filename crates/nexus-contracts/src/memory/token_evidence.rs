@@ -17,7 +17,10 @@
 //!
 //! # 设计约束（ADR-033）
 //!
-//! - **纯类型零逻辑**: 仅类型定义 + 构造辅助（无 IO 无状态变更）
+//! - **纯类型 + 受控纯逻辑**（ADR-033 例外，已登记于 `lib.rs` 的
+//!   `ADR_033_EXCEPTION_MODULES`）: 类型定义 + `TokenLedgerEntry::new` 的**证据完整性
+//!   不变量**（`output_token_ids` / `output_logprobs` / `loss_mask` 三序列必须一一对应，
+//!   不一致即 panic，消费方训练逻辑依赖此契约）；无 IO / 无 async / 无网络 / 无随机
 //! - **零 crate 依赖**: 仅 `serde` derive
 //! - **f32 字段仅 `PartialEq`**: output_logprobs 为浮点字段，禁止 derive `Eq`/`Hash`
 //! - **`Box<[T]>` 优化**: token ID 序列与快照为写后只读大载荷，用堆切片替代

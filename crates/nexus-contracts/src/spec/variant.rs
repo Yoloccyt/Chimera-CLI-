@@ -6,8 +6,10 @@
 //!
 //! # 设计决策(WHY)
 //!
-//! - **纯类型零逻辑**: 遵循 ADR-033 约束;变体池的存储与审议逻辑在
-//!   L8 parliament(variant_pool.rs),本文件仅承载跨层共享类型
+//! - **纯类型 + 受控纯逻辑**（ADR-033 例外，已登记于 `lib.rs` 的
+//!   `ADR_033_EXCEPTION_MODULES`）: 本文件含 `VariantId::new` 标识归一化构造；
+//!   变体池的存储与审议逻辑在 L8 议会层，本文件不承载
+//!   （刻意不点名上层实现文件/符号——对方更名即此句漂移，承 ADR-217 D-38）
 //! - **消费层**: L8 parliament(变体池与审议)/ L5 gsoe-evolution
 //!   (AEGIS 产出变体登记时构造 VariantId)
 //! - **变体隔离依据**: 小米 HarnessX 实测"全局单 Harness 退化 -24.3%",

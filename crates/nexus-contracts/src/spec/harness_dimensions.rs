@@ -35,7 +35,10 @@
 //!
 //! # 设计约束（ADR-033）
 //!
-//! - **纯类型 + 零逻辑**: 仅类型定义与基础构造函数，不含业务逻辑
+//! - **纯类型 + 受控纯逻辑**（ADR-033 例外，已登记于 `lib.rs` 的
+//!   `ADR_033_EXCEPTION_MODULES`）: 类型定义 + `default_contract` 等六维默认契约装配
+//!   （含逐维字段选择与默认值推导，非纯字面量填充）；不含业务决策，
+//!   无 IO / 无 async / 无网络 / 无随机
 //! - **零 crate 依赖**: 仅 `serde` derive（ADR-033 白名单例外）
 //! - **f32 字段不 derive Eq/Hash**: temperature/top_p/budget_hours/score_gap_threshold
 //!   等浮点字段仅 `PartialEq`（浮点比较红线，见项目记忆 f32 陷阱）
