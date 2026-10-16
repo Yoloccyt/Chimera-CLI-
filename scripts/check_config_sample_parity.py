@@ -35,7 +35,6 @@
 #   python scripts/check_config_sample_parity.py
 # =============================================================================
 import argparse
-import io
 import os
 import re
 import shutil

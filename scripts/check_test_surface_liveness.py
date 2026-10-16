@@ -14,10 +14,8 @@ WHY 需要它：批次 A+B 删 auto-dpo 时用 `#![cfg(any())]` 把 rhi_cg_valid
   登记表覆盖不到它（作用域是 crates/**，且机制不是 #[ignore]）。
 """
 import argparse
-import json
 import os
 import re
-import subprocess
 import sys
 import tomllib
 

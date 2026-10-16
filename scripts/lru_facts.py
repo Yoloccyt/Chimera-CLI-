@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """从 cargo metadata 取 lru 的版本约束与可用升级空间（为 ADR-167 的 A/B 裁决供事实）。"""
-import io
 import json
 import subprocess
 import sys
