@@ -338,7 +338,14 @@ def parse_tree(src_dir):
 
 
 def read_registry(path=LIB_RS):
-    """The 17 names, read LIVE off lib.rs (never copied into the ledger)."""
+    """The registered module names, read LIVE off lib.rs (never copied into the ledger).
+
+    Count-free on purpose: the registry grew 17 -> 28 when ADR-218's P1-REG batch
+    landed, and a selftest that asserted `== 17` went red on a perfectly healthy
+    tree. The invariant is "every name resolves to exactly one module", not a
+    number somebody measured once. Same reasoning keeps this docstring from
+    quoting a count.
+    """
     with open(path, "r", encoding="utf-8", errors="replace") as fh:
         text = fh.read()
     m = REGISTRY_RE.search(text)
@@ -1087,8 +1094,9 @@ def selftest():
         live_fn, live_tbl, _live_all, live_files, live_lines = parse_tree(SRC_DIR)
         names = read_registry()
         reg_mods, notes = resolve_registry(names, SRC_DIR) if names else ({}, ["x"])
-        add("live registry resolves uniquely for all 17 names",
-            names is not None and len(names) == 17 and not notes)
+        add("live registry resolves uniquely (every name -> exactly one module)",
+            names is not None and len(names) > 0
+            and len(reg_mods) == len(names) and not notes)
         add("floors: 0 < DERIVED_FN_FLOOR <= live derived fns (%d)" % len(live_fn),
             0 < DERIVED_FN_FLOOR <= len(live_fn))
         add("floors: FILES_FLOOR <= live src files (%d)" % live_files,
