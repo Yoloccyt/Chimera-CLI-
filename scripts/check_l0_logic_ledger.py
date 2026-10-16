@@ -33,6 +33,13 @@ and the ledger must be EXACTLY that set:
   * STALE  - a row whose key is gone -> red (dropping logic must be deliberate).
   * CLASS_MISMATCH - class says trivial but a hard detector fired, or class says
              controlled-logic with no detector -> red. The ledger may not lie.
+  * MECH   - the row's mechanism echo (mech/near/supp) disagrees with a fresh
+             derivation -> red. This is the field that closes the hole a free-text
+             `basis` left: the shipped ledger asserted "the LOOKUP veto suppresses"
+             for three MOD rows and two of them were about functions with zero
+             match arms, whose real cause is body length under D1/D3. A basis may
+             now not narrate mechanism at all -- it is exit 2 when it does, because
+             a reader cannot tell whether the prose or the field describes the tree.
   * CLAIM  - the header's machine-readable claim line disagrees with the rows or
              with the live parse -> red. A stale header is how
              l0_extensibility_class_freeze.txt:28 ended up asserting "ZERO
@@ -54,13 +61,14 @@ Deliberate non-goals
 
 Modes / exit codes
 ------------------
-  (default)  judge the real repo          0 = agree, 1 = NEW/STALE/CLASS/CLAIM
+  (default)  judge the real repo          0 = agree, 1 = NEW/STALE/CLASS/MECH/CLAIM
   --emit     write a candidate ledger under tmp/ (bootstrap; never overwrites)
   --write    rebuild the ledger in place, floors checked FIRST
   --selftest planted positive AND negative fixtures prove the detectors fire in
              both directions and stay silent on lookup accessors
   undecidable                             2 = missing/bad ledger, bad key, blind
-             parser (floors), unresolvable registry name
+             parser (floors), unresolvable registry name, a basis that narrates
+             mechanism instead of citing it
 
 Output is pure ASCII (project script convention; avoids Windows GBK console traps).
 """
@@ -156,8 +164,27 @@ CLASS_VOCAB = ("controlled-logic", "structural", "trivial", "pending",
                "env-ambient", "clock-read")
 EXEMPT_VOCAB = ("NONE", "AMBIENT-INPUT", "IO-EFFECT", "SHARED-STATE")
 ROW_KINDS = ("FN", "TABLE", "MOD")
-KNOWN_KEYS = ("fn", "table", "module", "detectors", "bl", "br", "ar", "class",
-              "basis", "exempt", "origin")
+# WHY these three fields exist. `detectors` says WHAT fired but not why a row has
+# no detector, so the "why" was written as free text -- and measured 2026-10-16,
+# that prose was wrong: all three shipped MOD rows asserted "the LOOKUP veto
+# suppresses" their logic, while
+#   memory/archive_monotonicity::assert_archive_monotonicity  bl=7  `=>`=0
+#   memory/experience_card::normalize                         bl=7  `=>`=0
+# trip no detector because of body length (D1 needs 12, D3 needs 25) and have no
+# match arms to suppress at all. Only safety/errors::to_nexus_error (bl=36, `=>`=10,
+# call=9) is genuinely LOOKUP-suppressed. mech/near/supp restate the cause from the
+# same `detectors_of` + `is_lookup` the judge runs, so a mechanism claim is now
+# machine diffed instead of believed.
+MECH_VOCAB = ("DETECTED", "LOOKUP-SUPPRESSED", "BELOW-DETECTOR", "NO-BODY", "TABLE")
+# The one-vote-veto wording is machine-owned now; repeating it in `basis` creates a
+# second place to be wrong. A hit is undecidable (exit 2), not red -- a reader
+# cannot tell whether the prose or the field describes the tree, and the row's
+# whole purpose is to be reviewable.
+BASIS_MECH_RX = re.compile(
+    r"trips no detector|no detector|decision[ -]?table|match[ -]to[ -]variant"
+    r"|lookup|veto|suppress|threshold|algorithm", re.IGNORECASE)
+KNOWN_KEYS = ("fn", "table", "module", "detectors", "bl", "br", "ar",
+              "mech", "near", "supp", "class", "basis", "exempt", "origin")
 
 
 def metrics_of(body_lines):
@@ -209,6 +236,64 @@ def detectors_of(m):
     if m["let"] >= D6[0] and m["bl"] >= D6[1]:
         hits.append("D6")
     return hits
+
+
+# Every conjunct of every detector, as (detector, metric, getter, threshold). D1 is
+# compound (body lines AND (branches OR computed mass)), so listing its conjuncts
+# apart is the only way to answer "how close is this to firing" at all.
+SHORTFALL_CANDS = (
+    ("D1", "bl", lambda m: m["bl"], D1[0]),
+    ("D1", "br", lambda m: m["br"], D1[1]),
+    ("D1", "lac", lambda m: m["let"] + m["arith"] + m["cmp"], D1[2]),
+    ("D2", "vocab", lambda m: m["vocab"], 1),
+    ("D2", "bl", lambda m: m["bl"], D2),
+    ("D3", "bl", lambda m: m["bl"], D3),
+    ("D4", "loop", lambda m: m["loop"], 1),
+    ("D5", "bl", lambda m: m["bl"], D5[0]),
+    ("D5", "cmp", lambda m: m["cmp"], D5[1]),
+    ("D6", "let", lambda m: m["let"], D6[0]),
+    ("D6", "bl", lambda m: m["bl"], D6[1]),
+)
+
+
+def closest_shortfall(mod_fns):
+    """`<fn>:<detector>.<metric>=<have>/<need>` for the threshold nearest to firing.
+
+    Called only for a module whose every function trips nothing, which makes D3's
+    body-line conjunct unmet by construction (bl >= D3 would have fired it), so the
+    candidate list cannot be empty. The label is part of the sort key: fn+detector+
+    metric is unique, which keeps the winner deterministic even though os.walk does
+    not order directories.
+    """
+    cands = []
+    for name, _hits, met in mod_fns:
+        for det, metric, get, need in SHORTFALL_CANDS:
+            have = get(met)
+            if have < need:
+                cands.append((have / float(need), have - need,
+                              "%s:%s.%s=%d/%d" % (name, det, metric, have, need)))
+    return max(cands)[2]
+
+
+def mech_of(kind, hits, mod_fns):
+    """(mech, near, supp) derived from the live parse -- never hand-written.
+
+    `class` stays the human adjudication and `basis` the human citation; these three
+    are the machine's own echo, and they are diffed field by field in judge() exactly
+    like detectors/bl/br/ar. Precedence is deliberate: a module that has both a
+    suppressed lookup and short bodies reports LOOKUP-SUPPRESSED, because that is the
+    binding cause of its missing FN row.
+    """
+    if kind == "TABLE":
+        return "TABLE", "-", "-"
+    if hits:
+        return "DETECTED", "-", "-"
+    supp = sum(1 for _n, h, _m in mod_fns if h)
+    if supp:
+        return "LOOKUP-SUPPRESSED", "-", str(supp)
+    if not mod_fns:
+        return "NO-BODY", "-", "0"
+    return "BELOW-DETECTOR", closest_shortfall(mod_fns), "0"
 
 
 # A signature may wrap across lines. 13 was too small and produced FALSE NEGATIVES:
@@ -386,40 +471,60 @@ def claim_of(fn_keys, table_keys, reg_mods, rows):
     arrival and the first real judgement would look like a code defect.
     """
     classes = {}
+    mechs = {}
     for r in rows:
-        c = r.get("fields", r).get("class", "?")
+        f = r.get("fields", r)
+        c = f.get("class", "?")
         classes[c] = classes.get(c, 0) + 1
+        k = f.get("mech", "?")
+        mechs[k] = mechs.get(k, 0) + 1
     dist = "/".join("%s=%d" % (c, classes.get(c, 0)) for c in CLASS_VOCAB)
+    mdist = "/".join("%s=%d" % (m, mechs.get(m, 0)) for m in MECH_VOCAB)
     # Two fns may share a name inside one module (two impl blocks, or an inherent
     # plus a trait impl) -- legal Rust, and the exact case where a set comparison
     # silently launders growth (G-105's multiset lesson). The ledger keeps one row
     # per key, so the COLLAPSE itself is pinned in the CLAIM: a third `new` moves
     # dup_fns and the header no longer describes the tree.
     distinct = len(set((m, n) for m, n, _h, _met in fn_keys))
-    return ("derived_fns=%d dup_fns=%d tables=%d registered=%d rows=%d classes=%s"
+    return ("derived_fns=%d dup_fns=%d tables=%d registered=%d rows=%d classes=%s "
+            "mech=%s"
             % (len(fn_keys), len(fn_keys) - distinct, len(table_keys),
-               len(reg_mods), len(rows), dist))
+               len(reg_mods), len(rows), dist, mdist))
 
 
 CLAIM_RE = re.compile(r"^#\s*CLAIM\s+(.*)$")
 
 
-def required_keys(fn_keys, table_keys, reg_mods):
-    """The exact key set the ledger must equal (see docstring 'What it judges')."""
+def required_keys(fn_keys, table_keys, reg_mods, all_fns):
+    """The exact key set the ledger must equal (see docstring 'What it judges').
+
+    `all_fns` is every production body in the tree, not only the derived ones: a MOD
+    row's mechanism is precisely about the functions that did NOT become keys, so
+    deriving it needs the whole module's shape.
+    """
+    by_mod = {}
+    for mod, name, hits, met in all_fns:
+        by_mod.setdefault(mod, []).append((name, hits, met))
     mods_with_keys = set(m for m, _n, _h, _met in fn_keys)
     mods_with_keys |= set(m for m, _t, _n in table_keys)
     req = {}
     for mod, name, hits, met in fn_keys:
+        mech, near, supp = mech_of("FN", hits, by_mod.get(mod, []))
         req[("FN", "%s::%s" % (mod, name))] = {
             "detectors": "/".join(hits), "bl": str(met["bl"]),
-            "br": str(met["br"]), "ar": str(met["ar"])}
+            "br": str(met["br"]), "ar": str(met["ar"]),
+            "mech": mech, "near": near, "supp": supp}
     for mod, name, n in table_keys:
+        mech, near, supp = mech_of("TABLE", [], [])
         req[("TABLE", "%s::%s" % (mod, name))] = {
-            "detectors": "D7", "bl": "0", "br": "0", "ar": str(n)}
+            "detectors": "D7", "bl": "0", "br": "0", "ar": str(n),
+            "mech": mech, "near": near, "supp": supp}
     for stem, mod in sorted(reg_mods.items()):
         if mod not in mods_with_keys:
+            mech, near, supp = mech_of("MOD", [], by_mod.get(mod, []))
             req[("MOD", mod)] = {"detectors": "NONE", "bl": "0", "br": "0",
-                                 "ar": "0", "origin": "registered"}
+                                 "ar": "0", "mech": mech, "near": near,
+                                 "supp": supp, "origin": "registered"}
     return req
 
 
@@ -484,7 +589,8 @@ def emit_row_line(kind, key, fields):
         head = "table=%s" % key
     else:
         head = "module=%s" % key
-    order = ["detectors", "bl", "br", "ar", "exempt", "class", "basis", "origin"]
+    order = ["detectors", "bl", "br", "ar", "mech", "near", "supp",
+             "exempt", "class", "basis", "origin"]
     chunks = [kind, head]
     for k in order:
         if k in fields:
@@ -492,8 +598,8 @@ def emit_row_line(kind, key, fields):
     return " | ".join(chunks)
 
 
-def judge(fn_keys, table_keys, reg_mods, rows, claim):
-    req = required_keys(fn_keys, table_keys, reg_mods)
+def judge(fn_keys, table_keys, reg_mods, rows, claim, all_fns):
+    req = required_keys(fn_keys, table_keys, reg_mods, all_fns)
     seen = {}
     out, fails = [], 0
     dup = []
@@ -516,17 +622,26 @@ def judge(fn_keys, table_keys, reg_mods, rows, claim):
         fails += 1
     for k in sorted(set(req) & set(seen), key=lambda x: x[1]):
         got, want = seen[k], req[k]
-        for field in ("detectors",):
+        for field in ("detectors", "mech", "near", "supp"):
             if got.get(field, "") != want[field]:
-                out.append("[STALE] %s %r detectors=%r but live parse says %r "
-                           "(threshold drifted, or code changed under the row)"
-                           % (k[0], k[1], got.get(field, ""), want[field]))
+                tag = "[STALE]" if field == "detectors" else "[MECH]"
+                out.append("%s %s %r ledger says %s=%r but live derivation says %s=%r "
+                           "(threshold drifted, code changed under the row, or the "
+                           "mechanism was asserted rather than measured)"
+                           % (tag, k[0], k[1], field, got.get(field, ""),
+                              field, want[field]))
                 fails += 1
         cls = got.get("class", "")
         det = want["detectors"]
         if cls not in CLASS_VOCAB:
             out.append("[TOOL-ERROR] %s %r class=%r outside the closed vocabulary %s"
                        % (k[0], k[1], cls, "/".join(CLASS_VOCAB)))
+            return 2, out, {}
+        if got.get("mech", "") not in MECH_VOCAB:
+            out.append("[TOOL-ERROR] %s %r mech=%r outside the closed vocabulary %s -- "
+                       "mech is machine-derived, so a value from outside it means the "
+                       "row was hand-edited" % (k[0], k[1], got.get("mech", ""),
+                                                "/".join(MECH_VOCAB)))
             return 2, out, {}
         if got.get("exempt", "NONE") not in EXEMPT_VOCAB:
             out.append("[TOOL-ERROR] %s %r exempt=%r outside the closed vocabulary"
@@ -538,12 +653,13 @@ def judge(fn_keys, table_keys, reg_mods, rows, claim):
                        "fires -- either the basis is wrong or the gate is blind"
                        % (k[0], k[1]))
             fails += 1
-        # Legal, and expected on day one: a name in lib.rs' registry whose module
-        # trips NO detector. Measured 2026-10-16 these are archive_monotonicity,
-        # experience_card and errors, whose logic is match->variant decision tables
-        # that the LOOKUP veto suppresses. The MOD row + origin=registered is the
-        # machine-readable form of "the registry asserts logic the derivation cannot
-        # see" -- which is exactly why required() is C U T U R and never C alone.
+        # A MOD row is legal and expected on day one: a name in lib.rs' registry whose
+        # module trips NO detector. The row + origin=registered is the machine-readable
+        # form of "the registry asserts logic the derivation cannot see" -- which is why
+        # required() is C U T U R and never C alone. WHY its cause is not taken at face
+        # value: measured 2026-10-16 it differs per module (archive_monotonicity and
+        # experience_card are BELOW-DETECTOR on body length, errors is genuinely
+        # LOOKUP-SUPPRESSED) while all three rows' prose basis asserted one cause.
         if cls == "trivial" and det != "NONE" \
                 and any(x in det.split("/") for x in ("D1", "D3", "D4", "D7")):
             out.append("[CLASS_MISMATCH] %s %r claims trivial but %s fired (a hard "
@@ -562,6 +678,13 @@ def judge(fn_keys, table_keys, reg_mods, rows, claim):
                        "a citation is a second place to lie"
                        % (k[0], k[1], purity.MIN_EXEMPT_REASON_LEN))
             return 2, out, {}
+        narrated = BASIS_MECH_RX.search(got.get("basis", ""))
+        if narrated:
+            out.append("[TOOL-ERROR] %s %r basis narrates machine-owned mechanism "
+                       "(%r) -- mech/near/supp carry the cause now, so the prose clause "
+                       "is a second place to be wrong: delete it and keep the citation"
+                       % (k[0], k[1], narrated.group(0)))
+            return 2, out, {}
     stats = {"derived_fns": len(fn_keys), "tables": len(table_keys),
              "registered": len(reg_mods), "rows": len(rows)}
     want_claim = claim_of(fn_keys, table_keys, reg_mods, rows)
@@ -579,6 +702,25 @@ def judge(fn_keys, table_keys, reg_mods, rows, claim):
         return 1, out, stats
     out.append("[OK] L0 controlled-logic ledger matches: %s" % want_claim)
     return 0, out, stats
+
+
+def strip_mech_prose(basis):
+    """Drop `;`-separated clauses that narrate mechanism; keep the citation.
+
+    Returns (basis, stripped_count, refused). The refusal case is what makes this
+    safe: when every clause narrates mechanism, deleting them all would turn a loud
+    rc-2 into a silently short basis, so the row is left untouched and --write names
+    it as [BASIS-KEEP] for a human to re-cite. Migration of the shipped ledger is
+    therefore zero-hand-work exactly where it is honest and flagged where it is not.
+    """
+    if not BASIS_MECH_RX.search(basis):
+        return basis, 0, False
+    parts = [p.strip() for p in basis.split(";") if p.strip()]
+    kept = [p for p in parts if not BASIS_MECH_RX.search(p)]
+    joined = "; ".join(kept)
+    if len(joined) < purity.MIN_EXEMPT_REASON_LEN:
+        return basis, 0, True
+    return joined, len(parts) - len(kept), False
 
 
 def run_real(ledger_path=LEDGER):
@@ -610,29 +752,39 @@ def run_real(ledger_path=LEDGER):
             print("[TOOL-ERROR] registry name unresolvable: %s" % n)
         return 2
     if emit_mode or write_mode:
+        # Both write paths need the committed ledger: --emit is the bootstrap that
+        # carries human fields too, and rebuilding it from an absent ledger would
+        # silently hand back a tree of class=pending rows for a ledger that already
+        # exists -- the same laundering --write refuses to do.
+        if not os.path.isfile(ledger_path):
+            print("[TOOL-ERROR] %s not found -- %s needs the current ledger to carry "
+                  "class/basis/exempt forward; refusing to rebuild human adjudication "
+                  "out of nothing" % (ledger_path,
+                                      "--write" if write_mode else "--emit"))
+            return 2
+        prev_rows, _prev_claim, prev_bad = read_ledger(ledger_path)
+        if prev_bad:
+            for m in prev_bad:
+                print("[TOOL-ERROR][malformed] %s" % m)
+            return 2
         human = {}
-        if write_mode:
-            if not os.path.isfile(ledger_path):
-                print("[TOOL-ERROR] --write needs the current ledger to carry class/basis "
-                      "forward; rebuilding from --emit output would launder every human "
-                      "adjudication back into pending: %s" % ledger_path)
-                return 2
-            prev_rows, _prev_claim, prev_bad = read_ledger(ledger_path)
-            if prev_bad:
-                for m in prev_bad:
-                    print("[TOOL-ERROR][malformed] %s" % m)
-                return 2
-            for r in prev_rows:
-                human[(r["kind"], r["key"])] = r["fields"]
-        req = required_keys(fn_keys, table_keys, reg_mods)
+        for r in prev_rows:
+            human[(r["kind"], r["key"])] = r["fields"]
+        req = required_keys(fn_keys, table_keys, reg_mods, all_fns)
         out_rows = []
+        stripped_total, keeps = 0, []
         for key in sorted(req, key=lambda x: (x[1], x[0])):
             kind, ident = key
             fields = dict(req[key])
             prev = human.get(key, {})
             fields["class"] = prev.get("class") or "pending"
-            fields["basis"] = prev.get("basis") or "TODO: cite the ADR or ruling"
             fields["exempt"] = prev.get("exempt") or "NONE"
+            basis, stripped, refused = strip_mech_prose(
+                prev.get("basis") or "TODO: cite the ADR or ruling")
+            fields["basis"] = basis
+            stripped_total += stripped
+            if refused:
+                keeps.append(ident)
             if kind == "MOD":
                 fields["origin"] = "registered"
             out_rows.append({"kind": kind, "key": ident, "fields": fields})
@@ -645,10 +797,19 @@ def run_real(ledger_path=LEDGER):
             fh.write(_header(claim) + "\n")
             for line in lines:
                 fh.write(line + "\n")
+        # Self-reported, never quoted in gate_manifest note text (ADR-218 D-44: a
+        # count copied into prose rots before the code it describes does).
+        print("[BASIS] stripped=%d clause(s) that narrated machine-owned mechanism"
+              % stripped_total)
+        for ident in keeps:
+            print("[BASIS-KEEP] %s -- every clause narrates mechanism, so stripping "
+                  "would drop the basis under %d chars: re-cite by hand"
+                  % (ident, purity.MIN_EXEMPT_REASON_LEN))
         if write_mode:
             fresh = sum(1 for r in out_rows if r["fields"]["class"] == "pending")
             print("[WRITE] %d rows rebuilt at %s (%d left pending = keys with no "
-                  "predecessor)" % (len(lines), target, fresh))
+                  "predecessor, %d basis(es) needing a hand citation)"
+                  % (len(lines), target, fresh, len(keeps)))
         else:
             print("[EMIT] %d candidate rows at %s -- fill class/basis by hand, copy to "
                   "scripts/, then re-run (this file never overwrites the ledger)"
@@ -663,7 +824,7 @@ def run_real(ledger_path=LEDGER):
             print("[TOOL-ERROR][malformed] %s" % m)
         print("[TOOL-ERROR] malformed ledger rows -> undecidable, exit 2")
         return 2
-    rc, out, stats = judge(fn_keys, table_keys, reg_mods, rows, claim)
+    rc, out, stats = judge(fn_keys, table_keys, reg_mods, rows, claim, all_fns)
     for line in out:
         print(line)
     print("[SCOPE] files=%d src_lines=%d fns_seen=%d derived_fns=%d tables=%d "
@@ -711,9 +872,21 @@ def _header(claim):
         "#         contradict it having a row at all).",
         "# exempt: %s (reuses G-99's IMPURITY_CATEGORIES; NONE for most rows)"
         % "/".join(EXEMPT_VOCAB),
+        "# mech/near/supp: MACHINE ECHO -- why this row has the detectors it has.",
+        "#         mech: %s" % "/".join(MECH_VOCAB),
+        "#         near: for BELOW-DETECTOR, the closest threshold anywhere in the",
+        "#               module as `<fn>:<D>.<metric>=<have>/<need>`; `-` elsewhere.",
+        "#         supp: for LOOKUP-SUPPRESSED, how many of the module's functions trip",
+        "#               a detector and are then vetoed as plain lookups.",
+        "#         Diffed field by field against a fresh derivation every run, exactly",
+        "#         like detectors/bl/br/ar -- so hand-editing one goes [MECH] red.",
         "# basis:  >= %d chars, and it must cite. A row without a citation is just"
         % purity.MIN_EXEMPT_REASON_LEN,
-        "#         another place for the ledger to become a lie.",
+        "#         another place for the ledger to become a lie. It may NOT narrate",
+        "#         mechanism (no detector / decision table / lookup / veto / suppress /",
+        "#         threshold / algorithm ...): mech carries that now, and the shipped",
+        "#         ledger proved such prose can be wrong. A hit is exit 2, not red --",
+        "#         a reader cannot tell which of the two describes the tree.",
         "#",
         "# DO NOT add a `registered=` key. scripts/check_l0_purity.py and lib.rs own",
         "# those facts; duplicating them here creates a second truth source, which is",
@@ -725,7 +898,10 @@ def _header(claim):
         "# still fires is CLASS_MISMATCH red.",
         "#",
         "# Rebuild machine fields without losing adjudication: --write carries",
-        "# class/basis/exempt forward by key and refreshes detectors/bl/br/ar.",
+        "# class/basis/exempt forward by key, refreshes detectors/bl/br/ar, derives",
+        "# mech/near/supp, and strips mechanism narration from basis -- naming on disk",
+        "# any row whose basis cannot survive the strip, so migration is either honest",
+        "# and automatic, or flagged and human.",
         "# CLAIM " + claim])
 
 
@@ -896,6 +1072,7 @@ def _fixture_tree(root, newline):
     files = {
         "planted/heavy.rs": POS_HEAVY,
         "planted/table.rs": POS_TABLE,
+        "planted/lookup_long.rs": POS_LOOKUP_LONG,
         "neg/lookups.rs": NEG_LOOKUPS,
         "neg/branchy.rs": POS_BRANCHY,
         "neg/tests_tail.rs": NEG_TESTS_TAIL,
@@ -909,6 +1086,23 @@ def _fixture_tree(root, newline):
         with open(path, "w", encoding="utf-8", newline=newline) as fh:
             fh.write(text)
     return src
+
+
+# The LOOKUP-suppressed shape, generated rather than hand-typed: 30 arms keep the
+# body over D3's 25-line floor by construction, so the fixture cannot silently drop
+# below it if someone edits an arm. This is the one shape whose detectors are NON-empty
+# and which is_lookup still vetoes -- i.e. the only way to plant a MOD row whose mech is
+# LOOKUP-SUPPRESSED instead of BELOW-DETECTOR.
+POS_LOOKUP_LONG = (
+    "pub enum Code { %s }\n\n" % ", ".join("V%d" % i for i in range(30))
+    + "impl Code {\n"
+      "    pub fn name(&self) -> &'static str {\n"
+      "        match self {\n"
+    + "".join('            Code::V%d => "v%02d",\n' % (i, i) for i in range(30))
+    + "        }\n"
+      "    }\n"
+      "}\n"
+)
 
 
 # False-negative guard for the signature-scan budget: a wide constructor whose
@@ -990,37 +1184,47 @@ def selftest():
         add("VOCAB actually fires on select_nth_unstable/sort (D2 detector not dead)",
             any("D2" in h for _m, _n, h, _met in fn_keys))
 
-        # Judge direction, on a hand-made key set derived from the fixture.
+        # Judge direction, on a hand-made key set derived from the fixture. FIX_REG
+        # deliberately registers the two modules that produce NO FN key, so the MOD
+        # branch is exercised twice with two different mechanisms (one suppressed by
+        # the lookup veto, one simply below every detector).
+        FIX_REG = {"lookup_stub": "planted/lookup_long", "neg_stub": "neg/lookups"}
+        ID_FIELD = {"FN": "fn", "TABLE": "table", "MOD": "module"}
         rows_ok = []
-        req = required_keys(fn_keys, table_keys, {"heavy_stub": "planted/heavy"})
+        req = required_keys(fn_keys, table_keys, FIX_REG, all_fns)
+
+        def row_for(kind, key, **over):
+            """A row that matches the live parse, with exactly one injected defect."""
+            fields = dict(req[(kind, key)])
+            fields["class"] = "controlled-logic"
+            fields["exempt"] = "NONE"
+            fields["basis"] = "fixture basis for selftest only"
+            fields[ID_FIELD[kind]] = key
+            fields.update(over)
+            return {"kind": kind, "key": key, "fields": fields}
+
         for (_kind, key), f in req.items():
             fields = dict(f)
             fields["class"] = "controlled-logic"
             fields["exempt"] = "NONE"
             fields["basis"] = "fixture basis for selftest only"
-            if _kind == "FN":
-                fields["fn"] = key
-            elif _kind == "TABLE":
-                fields["table"] = key
-            else:
-                fields["module"] = key
+            fields[ID_FIELD[_kind]] = key
             rows_ok.append({"kind": _kind, "key": key, "fields": fields})
-        claim = claim_of(fn_keys, table_keys, {"heavy_stub": "planted/heavy"}, rows_ok)
-        rc, _out, _ = judge(fn_keys, table_keys, {"heavy_stub": "planted/heavy"},
-                            rows_ok, claim)
+        claim = claim_of(fn_keys, table_keys, FIX_REG, rows_ok)
+        rc, _out, _ = judge(fn_keys, table_keys, FIX_REG, rows_ok, claim, all_fns)
         add("fixture rows matching the live parse -> rc 0", rc == 0)
         # NEW: drop one row -> red.
-        rc, out, _ = judge(fn_keys, table_keys, {"heavy_stub": "planted/heavy"},
-                           rows_ok[:-1], claim)
+        rc, out, _ = judge(fn_keys, table_keys, FIX_REG, rows_ok[:-1], claim, all_fns)
         add("missing row is caught as NEW (this is the gap the gate exists to close)",
             rc == 1 and any("[NEW]" in l for l in out))
         # STALE: extra row -> red.
         bogus = {"kind": "FN", "key": "planted/heavy::gone_now",
                  "fields": {"fn": "planted/heavy::gone_now", "detectors": "D1",
+                            "mech": "DETECTED", "near": "-", "supp": "-",
                             "class": "controlled-logic", "exempt": "NONE",
                             "basis": "stale row fixture basis"}}
-        rc, out, _ = judge(fn_keys, table_keys, {"heavy_stub": "planted/heavy"},
-                           rows_ok + [bogus], claim)
+        rc, out, _ = judge(fn_keys, table_keys, FIX_REG, rows_ok + [bogus], claim,
+                           all_fns)
         add("row whose construct vanished is caught as STALE",
             rc == 1 and any("[STALE]" in l for l in out))
         # CLASS_MISMATCH: trivial label on a hard detector.
@@ -1031,28 +1235,97 @@ def selftest():
         for r in mutated:
             if r["key"].endswith("rank_desc"):
                 r["fields"]["class"] = "trivial"
-        rc, out, _ = judge(fn_keys, table_keys, {"heavy_stub": "planted/heavy"},
-                           mutated, claim)
+        rc, out, _ = judge(fn_keys, table_keys, FIX_REG, mutated, claim, all_fns)
         add("class=trivial while D1/D3 fired is CLASS_MISMATCH (ledger cannot lie)",
             rc == 1 and any("[CLASS_MISMATCH]" in l for l in out))
         # CLAIM drift.
-        rc, out, _ = judge(fn_keys, table_keys, {"heavy_stub": "planted/heavy"},
-                           rows_ok, "derived_fns=999 tables=0 registered=1 rows=999")
+        rc, out, _ = judge(fn_keys, table_keys, FIX_REG, rows_ok,
+                           "derived_fns=999 tables=0 registered=1 rows=999", all_fns)
         add("header CLAIM disagreeing with live parse is red",
             rc == 1 and any("[CLAIM]" in l for l in out))
-        # Undecidable states must exit 2, never 1.
-        bad = [{"kind": "FN", "key": "planted/heavy::rank_desc",
-                "fields": {"fn": "planted/heavy::rank_desc", "detectors": "D1",
-                           "class": "controlled-logic", "exempt": "NONE",
-                           "basis": "x"}}]
-        rc, _o, _ = judge(fn_keys, table_keys, {}, bad, claim)
-        add("basis shorter than MIN_EXEMPT_REASON_LEN -> rc 2", rc == 2)
-        bad2 = [{"kind": "FN", "key": "planted/heavy::rank_desc",
-                 "fields": {"fn": "planted/heavy::rank_desc", "detectors": "D1",
-                            "class": "maybe", "exempt": "NONE",
-                            "basis": "fixture basis for selftest only"}}]
-        rc, _o, _ = judge(fn_keys, table_keys, {}, bad2, claim)
-        add("class outside the closed vocabulary -> rc 2", rc == 2)
+        # Undecidable states must exit 2, never 1 -- and each assertion names the
+        # message it expects, or a defect caught for the wrong reason reads as a pass.
+        rd = ("FN", "planted/heavy::rank_desc")
+        rc, out, _ = judge(fn_keys, table_keys, FIX_REG, [row_for(*rd, basis="x")],
+                           claim, all_fns)
+        add("basis shorter than MIN_EXEMPT_REASON_LEN -> rc 2, named as such",
+            rc == 2 and any("basis shorter than" in l for l in out))
+        rc, out, _ = judge(fn_keys, table_keys, FIX_REG,
+                           [row_for(*rd, **{"class": "maybe"})], claim, all_fns)
+        add("class outside the closed vocabulary -> rc 2, named as such",
+            rc == 2 and any("class=" in l and "outside the closed vocabulary" in l
+                            for l in out))
+        rc, out, _ = judge(fn_keys, table_keys, FIX_REG,
+                           [row_for(*rd, mech="GUESSED")], claim, all_fns)
+        add("mech outside the closed vocabulary -> rc 2 (it is derived, not typed)",
+            rc == 2 and any("mech=" in l and "hand-edited" in l for l in out))
+        rc, out, _ = judge(
+            fn_keys, table_keys, FIX_REG,
+            [row_for(*rd, basis="its logic is match-to-variant decision tables "
+                                "the LOOKUP veto suppresses per the old ledger")],
+            claim, all_fns)
+        add("a basis that narrates mechanism -> rc 2 (wording copied from the shipped "
+            "ledger, so the ban is proven against the sentence it exists for)",
+            rc == 2 and any("narrates machine-owned mechanism" in l for l in out))
+        rc, out, _ = judge(fn_keys, table_keys, FIX_REG,
+                           [row_for(*rd, mech="LOOKUP-SUPPRESSED")], claim, all_fns)
+        add("mech asserted against a live BELOW/DETECTED reality is [MECH] red, not 2",
+            rc == 1 and any(l.startswith("[MECH]") for l in out))
+        mrow = ("MOD", "neg/lookups")
+        rc, out, _ = judge(fn_keys, table_keys, FIX_REG,
+                           [row_for(*mrow, near="made-up:D9.bl=99/100")], claim,
+                           all_fns)
+        add("a hand-written `near` is [MECH] red (the gap is measured, not claimed)",
+            rc == 1 and any(l.startswith("[MECH]") and "near" in l for l in out))
+
+        # Mechanism derivation itself: each MECH_VOCAB value needs its own fixture,
+        # otherwise a constant return value would satisfy every assertion above.
+        lk = [x for x in all_fns if x[0] == "planted/lookup_long"]
+        add("planted lookup table trips a detector yet is_lookup vetoes it",
+            len(lk) == 1 and bool(lk[0][2]) and is_lookup(lk[0][3]))
+        add("the vetoed function produces no FN key (that is what suppression means)",
+            "planted/lookup_long::name" not in fk)
+        add("LOOKUP-SUPPRESSED: mech names the veto and counts it",
+            req[("MOD", "planted/lookup_long")]["mech"] == "LOOKUP-SUPPRESSED"
+            and req[("MOD", "planted/lookup_long")]["supp"] == "1")
+        below = req[("MOD", "neg/lookups")]
+        add("BELOW-DETECTOR: mech reports the closest threshold, no veto counted",
+            below["mech"] == "BELOW-DETECTOR" and below["supp"] == "0"
+            and below["near"].count(":") == 1 and below["near"].count("/") == 1)
+        add("BELOW-DETECTOR near names a function of that module",
+            below["near"].split(":")[0] in ("rho", "as_str", "is_hot"))
+        add("DETECTED / TABLE are the row-kind echoes, never a human choice",
+            req[rd]["mech"] == "DETECTED"
+            and req[("TABLE", "planted/table::POLICY")]["mech"] == "TABLE")
+        add("NO-BODY: a registered module with no production body says so",
+            mech_of("MOD", [], [])[0] == "NO-BODY")
+        add("mech_of precedence: a veto outranks short bodies in the same module",
+            mech_of("MOD", [], [("tiny", [], {"bl": 1, "br": 0, "loop": 0, "mt": 0,
+                                              "ar": 0, "let": 0, "ret": 0, "cmp": 0,
+                                              "arith": 0, "call": 0, "vocab": 0}),
+                                ("tab", ["D3"], {"bl": 30, "br": 0, "loop": 0,
+                                                 "mt": 1, "ar": 30, "let": 0,
+                                                 "ret": 0, "cmp": 0, "arith": 0,
+                                                 "call": 0, "vocab": 0})])[0]
+            == "LOOKUP-SUPPRESSED")
+        add("CLAIM carries the mech distribution, not only the row counts",
+            "LOOKUP-SUPPRESSED=1" in claim and "BELOW-DETECTOR=1" in claim
+            and "TABLE=1" in claim)
+        # Migration: automatic where it is honest, refused where it would erase the
+        # citation. Both directions must be pinned or --write is a blind rewrite.
+        kept_basis, stripped, refused = strip_mech_prose(
+            "registered in lib.rs but trips no detector: its logic is match-to-variant "
+            "decision tables the LOOKUP veto suppresses; ADR-218 records the blind axis")
+        add("--write migration drops the narrating clause and keeps the citation",
+            kept_basis == "ADR-218 records the blind axis" and stripped == 1
+            and not refused)
+        same_basis, stripped2, refused2 = strip_mech_prose(
+            "trips no detector because the LOOKUP veto suppresses it")
+        add("migration refuses to empty a basis that is nothing but mechanism",
+            refused2 and stripped2 == 0 and same_basis.startswith("trips no detector"))
+        add("a pure citation basis is untouched (the ban must not eat provenance)",
+            strip_mech_prose("ADR-218 D-1 closes the pending-adjudication marker")
+            == ("ADR-218 D-1 closes the pending-adjudication marker", 0, False))
 
         # CRLF must not change a single verdict (Windows worktree mixes 11/53).
         tmp2 = tempfile.mkdtemp(prefix="l0logic-crlf-")
@@ -1091,7 +1364,7 @@ def selftest():
             len(malformed) == 1 and len(rows) == 1 and claim2 is not None)
 
         # The floors must actually be able to fire, and be below the live tree.
-        live_fn, live_tbl, _live_all, live_files, live_lines = parse_tree(SRC_DIR)
+        live_fn, live_tbl, live_all, live_files, live_lines = parse_tree(SRC_DIR)
         names = read_registry()
         reg_mods, notes = resolve_registry(names, SRC_DIR) if names else ({}, ["x"])
         add("live registry resolves uniquely (every name -> exactly one module)",
@@ -1110,6 +1383,37 @@ def selftest():
         # not only against the planted table.
         add("live tree yields at least one D7 policy table (axis not blind on reality)",
             len(live_tbl) >= 1)
+        # Mechanism fields judged against REALITY, not only against fixtures. These are
+        # structural: they never assert which mechanism a given module has (that would
+        # freeze today's measurement into a spec, the exact defect class ADR-218 D-44
+        # records), only that whatever the derivation says is self-consistent and
+        # traceable to a function that exists.
+        live_req = required_keys(live_fn, live_tbl, reg_mods, live_all)
+        live_mods = dict((k, v) for k, v in live_req.items() if k[0] == "MOD")
+        names_by_mod = {}
+        for _mod, _nm, _h, _m in live_all:
+            names_by_mod.setdefault(_mod, set()).add(_nm)
+        add("live MOD rows exist and every one carries a mechanism in the closed set",
+            len(live_mods) >= 1
+            and all(v["mech"] in MECH_VOCAB for v in live_mods.values()))
+        add("cross-field: BELOW-DETECTOR names a real gap and counts no veto",
+            all(v["near"] != "-" and v["supp"] == "0"
+                for v in live_mods.values() if v["mech"] == "BELOW-DETECTOR"))
+        add("cross-field: a BELOW-DETECTOR gap names a function of THAT module",
+            all(v["near"].split(":")[0] in names_by_mod.get(v_key[1], set())
+                for v_key, v in live_mods.items()
+                if v["mech"] == "BELOW-DETECTOR"))
+        add("cross-field: LOOKUP-SUPPRESSED counts at least one vetoed function",
+            all(int(v["supp"]) >= 1
+                for v in live_mods.values() if v["mech"] == "LOOKUP-SUPPRESSED"))
+        add("cross-field: a NO-BODY module really has no production body",
+            all(not names_by_mod.get(k[1])
+                for k, v in live_mods.items() if v["mech"] == "NO-BODY"))
+        _dist = {}
+        for _v in live_mods.values():
+            _dist[_v["mech"]] = _dist.get(_v["mech"], 0) + 1
+        print("[SELFTEST] live MOD-row mech distribution: %s"
+              % "/".join("%s=%d" % (k, _dist[k]) for k in sorted(_dist)))
         # Multiplicity pin: two fns sharing a name in one module collapse to a single
         # ledger key, so the only thing standing between that collapse and a silent
         # pass is dup_fns living in the CLAIM header.
@@ -1126,7 +1430,8 @@ def selftest():
         # exists to make impossible -- and why the count is checked against the
         # same floor the runtime guard uses.
         empty_claim = claim_of(live_fn, live_tbl, reg_mods, [])
-        empty_rc, empty_out, _es = judge(live_fn, live_tbl, reg_mods, [], empty_claim)
+        empty_rc, empty_out, _es = judge(live_fn, live_tbl, reg_mods, [], empty_claim,
+                                         live_all)
         new_rows = sum(1 for l in empty_out if "[NEW]" in l)
         add("live tree vs empty ledger is red with NEW rows (extractors are not blind)",
             empty_rc == 1 and new_rows > 0)
