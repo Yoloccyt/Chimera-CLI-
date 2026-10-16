@@ -82,6 +82,11 @@ ADR-033 追加节（2026-10-09）与 ADR-212 决策 3 双双记录了同一事�
 - **裁决**：**否决重命名**。破坏性（触 36 个声明面消费者）、需同批翻 `l0_pubfn_freeze.txt` 254 行基线，而收益仅是消除一个已在测试注释处被规避的 E0034 歧义。
 - **采纳的替代**：additive 构造器（形如 `empty()`，inherent 优先解析即消歧）列为**待批 P2 批次**（改 `vector.rs` 属生产面，本轮不做）；本轮仅落本 ADR 结论。
 - **反方案**：「加一道门禁止 `Type::default()` 形式的歧义调用点」——否决：该形态在 L0 只有一处，为其建门是门数膨胀而零覆盖增益，且 L0 侧无调用点可判。
+- **★ 追加（2026-10-16 同日第五轮，本决策由「待批」改为「零改动关闭」）**：推进该待批项前实测三件事，结论是**无事可做**：
+  ① `vector.rs:135` 的 `pub trait VectorStore {` **无 `Default` 超 trait**，`:178 fn default() -> Self;` 只是本 trait 的方法；
+  ② `:354` 已有一条 NOTE 明写「不实现 `std::default::Default` trait，避免与 `VectorStore::default()` 产生 E0034 歧义」——即规避**已存在且有注释锚定**；
+  ③ 全仓 8 个 `impl VectorStore for` 实现方（hcw-window ×2 + bench、repo-wiki ×2、L0 文档示例 ×1、cfg(test) mock ×2）无一同时实现 `Default`；且用最小夹具实测（`rustc --edition 2021`）：给同时拥有 trait 方法 `default()` 的类型再 `impl Default`，rustc 直接 **E0034 编译错并点名两个候选** ⇒ 该风险**不可能静默回归**，编译器本身就是守卫。
+  ⇒ 因此 `empty()` 属净增公共 API（还要付 G-105 基线 +1 行的表面成本）换零收益；**本决策关闭，不改代码、不建门**。教训：被裁决为「待批的小改进」的条目，落地前必须重测其**前提是否仍成立**——前提常已被别处的注释或编译器吃掉。
 
 ### 决策 43（D-43）：P3-7 `id_newtype!` 跨 crate 镜像契约 —— 裁「不建宏体对拍门，对拍落点改 L1 侧」
 
@@ -181,9 +186,10 @@ cargo check -p nexus-contracts --all-targets         Finished in 25.41s，0 erro
 
 | 项 | 状态 | 前置条件 |
 |---|---|---|
-| **P1-REG**：11 名补进 `lib.rs` const + `tests/l0_exception_registry.rs` 镜像集同批 | 待用户批准（D-41） | 批准即做；须同复核相关模块头注释是否仍自称「零逻辑」 |
-| **P2**：`VectorStore::empty()` additive 构造器（替代 P3-6 改名） | 待批（D-42） | 属 `crates/` 生产面；单函数 additive + G-105 基线 +1 行 |
-| **P2**：`id_newtype!` 序列化等价对拍落 L1 侧测试 | 待批（D-43） | `nexus-core` dev-dep 已含 L0，无需新增依赖边 |
+| ~~**P1-REG**~~ | **已执行 2026-10-16（`6fd3742`）** | 11 名补进 `lib.rs` const + `tests/l0_exception_registry.rs` 镜像集同批；4 个模块头按不变量 4 的确切谓词（`//! - **纯类型` + `零逻辑**`）现测现改（宽口径 grep 曾把 11 个全报为违例，窄谓词下只有 4 个）；登记后 `[REGISTRY-GAP] 11 → 0` |
+| ~~**P2**：`id_newtype!` 序列化等价对拍落 L1 侧测试~~ | **已执行 2026-10-16（`8f46de5`）** | 新增 `crates/nexus-core/tests/id_newtype_parity.rs`（行为对拍六面 + 两条 `should_panic` 有牙夹具）；`nexus-core` 生产依赖已含 L0，零新增依赖边；280 passed / 0 failed |
+| **P2**：`VectorStore::empty()` additive 构造器 | **已撤销（实测推翻，见 D-42 追加节）** | 实测 `vector.rs:178` 的 `default()` 是 `VectorStore` 的 trait 方法、`:354` 已注明刻意**不**实现 `std::default::Default`，且 rustc 对二者共存给 **E0034 编译错并点名两个候选**（本轮 `rustc --edition 2021` 最小夹具实测）⇒ 该风险不可能静默回归，补构造器只净增公共 API 与 G-105 基线一行，零收益 |
+| **本 ADR 自伤一条**：G-120 的 `len(names) == 17` 手抄计数 | **已红过一次，修复在并发批次工作树内（未入库）** | P1-REG 把登记表从 17 改到 28 后，我在 `check_l0_logic_ledger.py:1090` 写死的 `== 17` 断言当场失效 ⇒ **HEAD `8f46de5` 上 G-120 为红**（`ci.yml` 阻塞步），而我只重跑 judge 未重跑 `--selftest`。⇒ 两条教训并入本仓既有的「计数不得手抄」纪律：① 计数断言要写成**不变式**（"每名恰好解析到一个模块"）而非等值；② **改完被检物必须重跑该门的 `--selftest`**，本会话第四轮报告 §五已把这条列为验收项，我自己没执行 |
 | G-119 的**已知盲区**（诚实边界） | 不判缺陷，登记于此 | 「逻辑形 match→变体决策表」被 LOOKUP 否决 ⇒ 该类只靠 `lib.rs` 登记可见（现 3 例 `REG=NO`）；纯 struct 字面量构造器、`temporal::is_valid_at` 类短谓词不入集；`core_domain/event_metadata` 的时钟/env 读依赖 G-99 的裁决而非本门 |
 | `bench_check.yml:265` 注释订正（xts_top_k 标定出处） | 待另批授权 | 触 workflow；承 ADR-217 D-36/P3-8「无 clean-runner 不标定」，数字不动 |
 | G-17/G-18 本机恒 `rc=2`（无 `pwsh`） | 不修，复述现状 | 承前轮 D-21；CI 侧为 `.sh` 孪生，非阻塞 |
