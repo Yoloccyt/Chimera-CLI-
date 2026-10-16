@@ -1310,3 +1310,29 @@ expect = 0
 kind = "light"
 test_kind = "single_crate"
 note = "断言数以 `--selftest` **自报**，本行不抄数（G-116 note 已因「写 15 条而代码实为 17」吃过同一课；本门首版写「29 条」，主会话修 G-119 签名预算/幻影体后实为 34——抄进散文的计数必然比代码先腐烂，故改指针）。全部断言走生产同一组抽取/判定函数（tempdir 真树 + 复用 G-99/G-105 同源件，禁测试专用副本）：①植入 40 行 sort/loop fn 必须派生 ②match 臂内含算术+let 的函数必须派生（证明 LOOKUP 否决不吃『表体内含计算』）③D7 政策表轴对 const [(K,u8);9] 有牙 ④植入负例：三个单 match 返常量访问器 + as_str + 四个无体 trait 声明，派生 fn 数严格为 0（不写 or len==0 式恒真断言）⑤cfg(test) 尾内逻辑不得入集 ⑥doc 注释里的伪代码 fn 不得当真码 ⑦VOCAB 命中即 D2 非死轴 ⑧夹具行与实况一致⇒rc 0 ⑨删一行⇒NEW ⑩删构造留行⇒STALE ⑪class=trivial 而 D1/D3 仍命中⇒CLASS_MISMATCH ⑫CLAIM 与实况不符⇒红 ⑬basis<24 字符⇒2 ⑭class 越词表⇒2 ⑮⑯同一夹具分别以 LF 与 CRLF 落盘，派生结果逐项相等（L0 src 现混合 11 CRLF/53 LF，行尾是本仓静默 0 命中的头号成因）⑰台账出现 registered= 键即 malformed⇒2（第二真值源守卫）⑱未知行 kind 不跳过而判 malformed ⑲每个登记名在 L0 树内唯一解析（判据是 len(resolved)==len(names) 且无歧义注记，不写死名数——P1-REG 使登记表 17→28 时，原先写死「17」的断言在一棵完全健康的树上假红） ⑳-㉓四地板各自 0<floor≤真树读数（夹具规模小，故地板断言必须对真树取数）㉔真树 D7≥1（re.MULTILINE 一旦丢失，夹具仍绿而实况致盲——此断言专防该轴向）㉕㉖dup_fns 在 CLAIM 内被钉住：注入重名⇒dup_fns=1，无重名⇒dup_fns=0（同模块两 impl 块重名会折叠成一键，折叠量若不落 CLAIM 即成新隐身位）㉗真树对空台账判红且有 NEW（Extractor 非致盲）㉘NEW 行数≥DERIVED_FN_FLOOR。开发期本夹具先于任何 CI 接线咬出四处真缺陷：TABLE_RE 缺 re.MULTILINE 使 D7 恒 0 命中、SRC_LINES 误取非空行口径（15007 vs wc -l 25700）触发地板而暴露口径错配、同模块重名 fn 被键集折叠、POS_BRANCHY 首版仅 6 行不含 let 因而无任何检测器命中（断言本身是错的，不是门错）。任一断言不成立⇒退 1。"
+
+# ============================================================
+# G-121/G-122 -- Python governance-tooling health (ADR-219 decision 1)
+# 轴分工：120 道门全在判 Rust，而实现这些门的 92 个 scripts/*.py 自己无人判
+# （全仓 grep ruff|flake8|mypy|pylint|black|pyright 在 workflows 与 scripts/*.toml
+# 零命中，Rust 侧却有 fmt+clippy+typos+taplo 四把）。该不对称已造成三类实测缺陷：
+# 8 处死导入无人拦、3 个 .sh 本地 CRLF 致 `bash scripts/check_doc_drift.sh` 炸而 CI 绿、
+# 跑门的解释器随 runner 镜像浮动而 run_gate_manifest.py 依赖 tomllib(3.11+)。
+# ============================================================
+[[gate]]
+id = "G-121"
+spec_ref = "ADR-219 决策 1（五条判据 H1-H5）+ 决策 2（side-effect 豁免须带 ≥24 字符理由）+ 决策 5（四 job 同值钉 3.11）"
+cmd = "{python} scripts/check_py_tooling_health.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "Python 治理工具面健康门。基线现值即 0 违规，因此本门**无需任何豁免台账**就能以阻塞态上线——这是最干净的准入形态：不是「先放行一批已知违规再慢慢收」，而是把已知缺陷先清完再落门。判据五条：H1 每个 scripts/*.py 必须 compile()；H2 模块级 import 的名字必须被引用（豁免只认 `# side-effect-import: <理由>=24 字符`，裸标记不认，长度阈值直接复用 check_l0_purity.MIN_EXEMPT_REASON_LEN 不另立口径）；H3 `git ls-files --eol scripts/` 不得出现 i/crlf / i/mixed——刻意判 blob/CI 视图而非工作树视图，因为只有这一侧决定判定一致性，工作树由 .gitattributes 前瞻收敛，而 `git add --renormalize`（会重写盘上 89 个 CRLF 副本）是留给人的签字动作；H4 解释器低于 PYTHON_FLOOR=(3,11) 直接退 2 而不是「旧解释器上跑绿」；H5 任何调用 python 的 **job** 必须钉版本且所有钉值==FLOOR，取 job 粒度是因为文件级检查会让「在未钉 job 里加 python 步骤」静默通过，而那正是本缺口的成因。地板 PY_FILES_FLOOR=80 / WORKFLOW_FLOOR=8（实测 92 / 11），低于地板判「扫描致盲」退 2。stdlib-only 是硬约束而非风格：CI 钉定的 3.11 无 site-packages，而开发机常有（本机 yaml 可导入即实证），用 import yaml 写的门会本地绿 CI 崩——正是本门要消灭的类别。现取实况 py_files=92 imports=452 eol_rows=178 workflows=11 python_jobs=4，零违规。非缺陷登记：26 个未接 CI/manifest 的脚本全部至少被 1 份 docs/reports/*.md 引用（nc_* 植入对照 / lru_* / t2_* / recover_*），是「报告数字可复现」的证据链，真孤儿=0，禁止下一轮顺手删；93 处文本写未指定 newline= 判 P3 不动（blob 全 LF 且 Python 文本模式对 CRLF 透明，为低风险项改 28 个在工作的门脚本回归风险大于收益）。"
+
+[[gate]]
+id = "G-122"
+spec_ref = "G-121 配套（门自身有牙，沿 G-20/G-92/G-99/G-105/G-107/G-109/G-111/G-114/G-116/G-118/G-120 先例）"
+cmd = "{python} scripts/check_py_tooling_health.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "断言数以 --selftest **自报**，本行不抄数（ADR-218 D-44 与本批 G-120 两次教训：抄进散文的计数必然比代码先腐烂）。全部断言走生产同一组函数（tempdir 真文件 + 真 judge，禁测试专用副本）：①植入不可编译脚本被点名且只它被抓 ②植入死导入被抓 ③植入「用过就不报」负例 ④带 ≥24 字符理由的 side-effect 豁免生效而裸/短理由不生效 ⑤`from __future__ import annotations` 是编译器指令不是死导入——本条来自门自己的首版假阳（8 个真实文件因此被判红），是夹具当初没覆盖的形态 ⑥小语料 judge 必须退 2 而非报绿（致盲不得读作干净）⑦未钉 job 被抓 ⑧钉值≠FLOOR 被抓 ⑨钉对了不报 ⑩无 python 的 job 不需钉 ⑪注释里提及 python3 不制造幻影钉需求 ⑫`python x.py`（无 3）仍算调用 ⑬job_blocks 按 2 空格缩进分 job 而非整文件混判 ⑭H3 分类器与生产共用同一函数（i/crlf·i/mixed 为违规，i/lf·i/-text 不是）⑮两地板 0<floor≤真树读数 ⑯本门对真树必须 rc=0。开发期该门自曝五处实现缺陷并全部先于接线修掉：未排除 __future__ 指令、judge() 在 TOOL-ERROR 分支直接 print 破坏纯 verdict 约定（导致自检看不见自身不可判定消息）、WORKFLOW_FLOOR 声明了却没接进 judge（恒不触发的地板等于没有地板）、H3 分类器存在两份真值（夹具能绿而生产误读）、python 调用检测只认 `python3 ` 因而既漏 `python x.py` 又把 WHY 注释里的提及误判为调用。任一断言不成立=>退 1。"

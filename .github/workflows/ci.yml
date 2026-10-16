@@ -276,6 +276,18 @@ jobs:
         run: |
           python3 scripts/check_l0_logic_ledger.py --selftest
           python3 scripts/check_l0_logic_ledger.py
+      # WHY: the 120 gates above judge Rust; nothing judged the 92 scripts/*.py that
+      # *implement* those gates (`grep -riE ruff|flake8|mypy|pylint|black|pyright` over
+      # .github/workflows and scripts/*.toml = 0 hits, while Rust has fmt+clippy+typos+
+      # taplo). That asymmetry already cost defects: 8 dead module-level imports nobody
+      # caught, 3 governance .sh materializing as CRLF so `bash scripts/check_doc_drift.sh`
+      # died locally while the same gate passed in CI, and the interpreter floated with
+      # the runner image while run_gate_manifest.py needs tomllib (3.11+). ADR-219.
+      # Baseline is zero-violation, so the gate ships blocking with NO exemption ledger.
+      - name: Python tooling health (G-121)
+        run: |
+          python3 scripts/check_py_tooling_health.py --selftest
+          python3 scripts/check_py_tooling_health.py
 
 
       # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
