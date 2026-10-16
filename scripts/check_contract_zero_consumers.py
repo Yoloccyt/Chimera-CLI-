@@ -84,7 +84,6 @@ from check_l0_pubfn_ratchet import module_key  # noqa: E402  (shares the key sha
 DEFS_FLOOR = 50
 
 NAME_RE = re.compile(r"^[A-Z][A-Za-z0-9_]*$")
-MODULE_RE = re.compile(r"^[a-z0-9_/]+$")
 CLAIM_RE = re.compile(r"^#\s*CLAIM\s+(.*)$")
 ROW_FIELDS = ("consumers", "declared_in")
 LOC_JOIN = "+"
@@ -542,13 +541,16 @@ def selftest():
             blocked_rc == 2 and "below floor" in _buf.getvalue())
         add("the refusal comes before any ledger read or write",
             "DERIVED" not in _buf.getvalue())
-        add("0 < DEFS_FLOOR", 0 < DEFS_FLOOR)
 
     live_facts, live_err = scan(ROOT / "crates")
     add("live scan succeeds", live_facts is not None)
     if live_facts is not None:
-        add("floors: DEFS_FLOOR <= live defs (%d)" % live_facts["defs_n"],
-            DEFS_FLOOR <= live_facts["defs_n"])
+        # Both directions in ONE assertion whose label matches what it checks
+        # (G-119's precedent). A bare `0 < DEFS_FLOOR` would be an assertion no
+        # input can flip, and a label claiming more than the condition proves is
+        # the failure class this repository has recorded twice in its own tests.
+        add("floors: 0 < DEFS_FLOOR <= live defs (%d)" % live_facts["defs_n"],
+            0 < DEFS_FLOOR <= live_facts["defs_n"])
         add("live sum closes and the dialect lock holds on reality",
             len(live_facts["zero"]) + len(live_facts["one"]) + len(live_facts["ge2"])
             == live_facts["defs_n"]
