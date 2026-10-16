@@ -211,35 +211,73 @@ def detectors_of(m):
     return hits
 
 
+# A signature may wrap across lines. 13 was too small and produced FALSE NEGATIVES:
+# `memory/token_evidence.rs:129` is a genuine 26-argument constructor whose opening
+# brace sits ~28 lines below `pub fn new(`, so a short budget silently dropped real
+# logic (the worst direction a completeness gate can fail in). Declarations are still
+# cheap to reject because a `;` at depth 0 terminates the scan on its own line.
+SIG_SCAN_BUDGET = 64
+# Body span budget: the largest live L0 body measures 91 lines (harness_spec::validate);
+# truncation returns the partial body, which under-flags rather than over-flags.
+BODY_SCAN_BUDGET = 300
+
+
+def body_open_index(lines, mask, start):
+    """Index of the '{' that opens this fn's body, or None if it is a declaration.
+
+    A trait method signature (`fn f(&self) -> T;`) has NO body. Latching onto the
+    next unrelated '{' (an `impl` block, a struct, or the *next* method) fabricates
+    a body out of foreign code: measured on 2026-10-16, L0 carries 28 such
+    declarations, and `spec/formal_props.rs:196` produced a phantom 48-line
+    `collect_results` sitting next to the genuine 46-line one -- which in turn made
+    the dup_fns field report "two impl blocks" when the truth was a parse artifact.
+
+    Terminator rule: a ';' at bracket depth 0. Depth matters because array types
+    put a ';' inside brackets BEFORE the body brace -- `pub const fn all() ->
+    [SeamId; 9] {` is a definition, and a naive "first ';' wins" test would drop it.
+    """
+    depth = 0
+    for i in range(start, min(start + SIG_SCAN_BUDGET, len(lines))):
+        if mask[i]:
+            continue
+        for ch in lines[i]:
+            if ch in "([":
+                depth += 1
+            elif ch in ")]":
+                depth -= 1
+            elif ch == "{":
+                if depth <= 0:
+                    return i
+            elif ch == ";" and depth <= 0:
+                return None
+    return None
+
+
 def fn_bodies(lines, mask, start):
     """Body lines of the fn whose signature begins at `start`, or None.
 
-    The signature may span lines; the body begins at the first unmasked '{'.
-    Brace balancing runs over the blanked code so strings/comments cannot open a
-    brace. A body we cannot close is returned empty, which biases toward NOT
-    flagging -- the floors and the selftest are what make that safe.
+    The signature may span lines; the body begins at the first depth-0 '{' that is
+    not preceded by a depth-0 ';' (see body_open_index). Brace balancing runs over
+    the blanked code so strings/comments cannot open a brace. A body we cannot close
+    is returned empty, which biases toward NOT flagging -- the floors and the
+    selftest are what make that safe.
     """
+    opened = body_open_index(lines, mask, start)
+    if opened is None:
+        return None
     depth = 0
-    seen_open = False
     body = []
-    for i in range(start, min(start + 120, len(lines))):
+    for i in range(opened, min(opened + BODY_SCAN_BUDGET, len(lines))):
         if mask[i]:
             continue
         line = lines[i]
-        if not seen_open:
-            if "{" not in line:
-                # A signature may wrap, but never over 12 lines in this crate;
-                # beyond that we bail rather than swallow the whole file.
-                if i - start > 12:
-                    return None
-                continue
+        if i == opened:
             line = line[line.index("{"):]
-            seen_open = True
         depth += line.count("{") - line.count("}")
         body.append(line)
         if depth <= 0:
             return body
-    return body if seen_open else None
+    return body
 
 
 def parse_file(path, src_dir):
@@ -261,7 +299,12 @@ def parse_file(path, src_dir):
         if name == "main":
             continue
         body = fn_bodies(lines, mask, i)
-        met = metrics_of(body or [])
+        if body is None:
+            # A bodiless declaration (trait method sig, fn-pointer type). Not counted
+            # as seen code: `fns_seen` must mean "bodies", or a 48-line phantom can
+            # sit beside a 6-line real one and make dup_fns report legal Rust.
+            continue
+        met = metrics_of(body)
         hits = detectors_of(met)
         fns.append((mod, name, hits, met))
         if hits and not is_lookup(met):
@@ -805,6 +848,39 @@ pub fn real_and_short(x: u32) -> u32 {
 }
 """
 
+# Regression guard for the phantom-body bug: a bodiless trait declaration followed
+# closely by an impl of the SAME method name used to latch onto the impl block's
+# brace and invent a body out of foreign code (measured: spec/formal_props.rs:196
+# produced bl=48 next to the genuine bl=46). The array-type case in the same file is
+# the opposite guard -- `[SeamId; 9]` puts a ';' BEFORE the body brace, so a naive
+# "first ';' means declaration" test would silently drop a real definition.
+NEG_DECL_THEN_IMPL = """
+pub trait Probe {
+    /// doc for a bodiless declaration
+    fn measured(&self) -> u32;
+}
+
+pub struct Holder;
+
+impl Probe for Holder {
+    fn measured(&self) -> u32 {
+        let mut acc = 0;
+        for i in 0..9 {
+            acc += i;
+        }
+        acc
+    }
+}
+
+pub enum SeamId { A, B, C, D, E, F, G, H, I }
+
+impl SeamId {
+    pub const fn all() -> [SeamId; 9] {
+        [SeamId::A, SeamId::B]
+    }
+}
+"""
+
 
 def _fixture_tree(root, newline):
     src = os.path.join(root, "src")
@@ -817,6 +893,8 @@ def _fixture_tree(root, newline):
         "neg/branchy.rs": POS_BRANCHY,
         "neg/tests_tail.rs": NEG_TESTS_TAIL,
         "neg/doc_only.rs": NEG_DOC,
+        "neg/decl_then_impl.rs": NEG_DECL_THEN_IMPL,
+        "neg/longsig.rs": POS_LONGSIG,
         "lib.rs": "pub mod planted;\npub mod neg;\n",
     }
     for rel, text in files.items():
@@ -824,6 +902,26 @@ def _fixture_tree(root, newline):
         with open(path, "w", encoding="utf-8", newline=newline) as fh:
             fh.write(text)
     return src
+
+
+# False-negative guard for the signature-scan budget: a wide constructor whose
+# opening brace sits far below `pub fn new(` must still be measured. The live tree
+# has exactly this shape at memory/token_evidence.rs:129 (26 arguments).
+POS_LONGSIG = (
+    "pub struct Wide { pub a: u32, pub total: u32 }\n\n"
+    "impl Wide {\n"
+    "    #[allow(clippy::too_many_arguments)]\n"
+    "    pub fn build(\n"
+    + "".join("        p%d: u32,\n" % i for i in range(24))
+    + "    ) -> Self {\n"
+      "        let mut acc = 0;\n"
+      "        for i in 0..p3 {\n"
+      "            acc += i;\n"
+      "        }\n"
+      "        Wide { a: acc, total: acc }\n"
+      "    }\n"
+      "}\n"
+)
 
 
 def selftest():
@@ -862,6 +960,24 @@ def selftest():
         add("planted negative: fn inside a doc comment is not real code",
             "neg/doc_only::ghost_from_docs" not in fk
             and "neg/doc_only::real_and_short" not in fk)
+        # Phantom-body guard (the defect that made dup_fns lie about formal_props).
+        decl_seen = [x for x in all_fns if x[1] == "measured"]
+        add("bodiless trait declaration yields exactly ONE entry, not decl+impl",
+            len(decl_seen) == 1)
+        add("the surviving `measured` is the genuine impl body (D4 fires, bl<=8)",
+            len(decl_seen) == 1 and any("D4" in h for _m, _n, h, _met in decl_seen)
+            and decl_seen[0][3]["bl"] <= 8)
+        add("the genuine declaration-body pair still ENTERS the derived set "
+            "(guard must not throw away real logic while killing phantoms)",
+            "neg/decl_then_impl::measured" in fk)
+        alls = [x for x in all_fns if x[1] == "all"]
+        add("array-type signature `-> [T; 9] {` is NOT mistaken for a declaration",
+            len(alls) == 1 and alls[0][3]["bl"] >= 1)
+        # Budget guard: a 24-parameter wrapped signature must still be measured.
+        wide = [x for x in all_fns if x[1] == "build"]
+        add("24-line wrapped signature is measured, not dropped as a declaration",
+            len(wide) == 1 and wide[0][3]["bl"] >= 5
+            and any("D4" in h for _m, _n, h, _met in wide))
         add("fixture scope sanity: fns seen covers positive+negative bodies",
             len(all_fns) >= 6)
         add("VOCAB actually fires on select_nth_unstable/sort (D2 detector not dead)",

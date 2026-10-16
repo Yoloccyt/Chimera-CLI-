@@ -120,7 +120,7 @@ ADR-033 追加节（2026-10-09）与 ADR-212 决策 3 双双记录了同一事�
 | 8 | 「第 1 笔可只提交门脚本、暂不接线」（本轮计划原文） | 跑 `check_gates_provenance.py` | **被门推翻**：带 `--selftest` 未登记 ⇒ G-103 方向 B 判红。「四件同批」在本仓是机器强制而非惯例，故计划批次 1/2 合并为一笔 |
 | 9 | 主会话自纠：新门首版 `TABLE_RE` 缺 `re.MULTILINE` | `--selftest` 的 D7 植入正对照 + 真树 `len(live_tbl)>=1` 断言 | **首版恒零命中**（夹具仍会绿而实况致盲）⇒ 修 + 新增「真树 D7≥1」专项断言 |
 | 10 | 主会话自纠：`SRC_LINES_FLOOR` 取非空行口径 | 地板自身触发 rc=2 | 15,007（非空行）vs 25,700（`wc -l`）⇒ 改为与可交叉核对口径一致的总行数，并把该次触发写入 D-39 的「开发期咬出四缺陷」 |
-| 11 | 「同模块重名 fn 折叠成一键无害」 | `--write` 前后 `derived_fns` 52 vs 行数 57 不自洽 | **立为判据**：`spec/formal_props::collect_results` 确有 2 个构造折叠 ⇒ CLAIM 增 `dup_fns` 字段并两条断言锁死（G-105 的 multiset 教训在键集形态上的等价防线） |
+| 11 | 「同模块重名 fn 折叠成一键无害」 | `--write` 前后 `derived_fns` 52 vs 行数 57 不自洽 | **立为判据**：CLAIM 增 `dup_fns` 字段并两条断言锁死（G-105 的 multiset 教训在键集形态上的等价防线）。**★ 本行的归因已被同日第五轮实测推翻**：`spec/formal_props::collect_results` 的两条同键读数中 `bl=48` 那条是**幻影**——`:196` 是无体 trait 声明，旧 `fn_bodies` 吸附到随后 `impl {` 的块括号，用别人的代码造了一具身体；真实折叠数 **0**（`derived_fns` 52→51、`dup_fns` 1→0）。字段与断言**保留**（同键折叠本身仍是合法 Rust 形态，只是本例不是），归因改记为解析缺陷。同轮另查出旧扫描的两处相邻错误：① 全 L0 共 **23 处**无体声明可被吸附，而原夹具只覆盖「后续 12 行内无 `{`」这一种 ⇒ 恒真通过；② 13 行签名预算把 `memory/token_evidence.rs:129` 的 **26 参数真构造函数**误判为无体 ⇒ **假阴性**（真逻辑静默逃门，比假阳性更坏）；③ 同预算使 `harness_spec::validate` 体被**少算 12 行**（bl 91→103，`br` 25→27）。三处各配新夹具断言（无体声明+同名单键、`-> [T; 9] {` 数组型不误杀、24 行折行签名必须计到），selftest 29→**34** 条 |
 | 12 | 「taplo 本地 rc=1 是我引入的回归」 | `git ls-files --eol` + `git show 42ab64e:` 旧版复测 | **判非本轮引入**：CI 在检的 4 个文件是 `i/lf w/crlf`（`core.autocrlf=true`、无 `.gitattributes`），Linux runner 上为 LF ⇒ 本地红是 checkout 假象；`Cargo.toml`/`gate_manifest.toml` 的真实漂移在 42ab64e 即已存在，且二者**不在 CI taplo 步的文件清单内** |
 
 ---
@@ -148,9 +148,13 @@ py -3 scripts/check_l0_logic_ledger.py              rc=0  derived_fns=52 dup_fns
                                                             registered=17 rows=57
                                                             classes=controlled-logic=55/structural=1/env-ambient=1
                                                             REGISTRY-GAP=11  REG=NO=3
+# ↑ 上三行为第四轮现取读数，保留不回写（"某时点怎么判断"的可追溯性）。同日第五轮修掉
+#   fn_bodies 的无体声明吸附与 13 行签名预算后，同一命令的现值为：
+#   selftest 29 → 34 条；derived_fns 52 → 51、dup_fns 1 → 0、fns_seen 436 → 414、
+#   src_lines 25700 → 25704（本 ADR D-45 的注释订正所致）、rows 57 不变（键集未动）、
+#   REGISTRY-GAP 仍 11（token_evidence 因假阴性消除而回到集合内，证据由错变对）。
 py -3 scripts/check_l0_extensibility_class.py --selftest  rc=0 (24 assertions)
-py -3 scripts/check_l0_extensibility_class.py             rc=0 types=227 listed=227 open=56 closed=171
-py -3 scripts/check_l0_purity.py                     rc=0  64 src files scanned
+py -3 scripts/check_l0_extensibility_class.py             rc=0 types=227 listed=227 open=56 closed=171py -3 scripts/check_l0_purity.py                     rc=0  64 src files scanned
 py -3 scripts/check_l0_pubfn_ratchet.py              rc=0  live=254 listed=254
 py -3 scripts/check_l0_root_surface.py               rc=0  live=53 listed=53
 py -3 scripts/check_immutable_surface_parity.py      rc=0  mpsc=16 Critical=17
