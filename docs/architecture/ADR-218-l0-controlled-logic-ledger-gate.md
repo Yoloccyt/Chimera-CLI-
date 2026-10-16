@@ -24,6 +24,8 @@ ADR-033 追加节（2026-10-09）与 ADR-212 决策 3 双双记录了同一事�
 
 首轮派生即证伪该形态：`memory/archive_monotonicity`、`memory/experience_card`、`safety/errors` 三个**已登记**模块的函数体形如 `match → 变体决策表`，被 LOOKUP 一票否决抑制，即 **C ⊉ R**。若以 C 为判据，门交付即红且无合法解（要么删登记、要么违 lib.rs:499-500 的平凡访问器裁决）。故键集取 **C ∪ T ∪ R**：派生 fn 集 ∪ D7 政策表集 ∪ 「登记名在 C∪T 中无对应构造」的 MOD 行。
 
+> **【第六轮订正 2026-10-16，见 §9】** 本节**结论与键集不变**（`C ⊉ R` 成立，`C ∪ T ∪ R` 仍是对的形态），被推翻的只有**机制归因**：三例中只有 `safety/errors`（`to_nexus_error`，bl=36 / `=>`=10 / call=9）确为 LOOKUP 否决抑制；`archive_monotonicity::assert_archive_monotonicity` 与 `experience_card::normalize` 的 `=>` 计数为 **0**，根本没有可被否决的 match 臂，真实原因是体长 7 未达 D1(≥12)/D3(≥25)。该归因自第六轮起由 `mech/near/supp` 三个机器字段承担，散文不再是判据来源。
+
 ### 1.3 反方案与否决理由
 
 | 反方案 | 否决理由 |
@@ -191,7 +193,7 @@ cargo check -p nexus-contracts --all-targets         Finished in 25.41s，0 erro
 | ~~**P2**：`id_newtype!` 序列化等价对拍落 L1 侧测试~~ | **已执行 2026-10-16（`8f46de5`）** | 新增 `crates/nexus-core/tests/id_newtype_parity.rs`（行为对拍六面 + 两条 `should_panic` 有牙夹具）；`nexus-core` 生产依赖已含 L0，零新增依赖边；280 passed / 0 failed |
 | **P2**：`VectorStore::empty()` additive 构造器 | **已撤销（实测推翻，见 D-42 追加节）** | 实测 `vector.rs:178` 的 `default()` 是 `VectorStore` 的 trait 方法、`:354` 已注明刻意**不**实现 `std::default::Default`，且 rustc 对二者共存给 **E0034 编译错并点名两个候选**（本轮 `rustc --edition 2021` 最小夹具实测）⇒ 该风险不可能静默回归，补构造器只净增公共 API 与 G-105 基线一行，零收益 |
 | **本 ADR 自伤一条**：G-120 的 `len(names) == 17` 手抄计数 | **已修复并入库（并发批次 `511df34`，本会话复测 34/34 rc=0）** | P1-REG 把登记表从 17 改到 28 后，我在 `check_l0_logic_ledger.py:1090`（`selftest()` 内的 "live registry resolves uniquely" 断言；修复后行号已移至 `:1097`，按函数名定位而不按号定位）写死的 `== 17` 断言当场失效 ⇒ **HEAD `8f46de5` 上 G-120 为红**（`ci.yml` 阻塞步），而我只重跑 judge 未重跑 `--selftest`。⇒ 两条教训并入本仓既有的「计数不得手抄」纪律：① 计数断言要写成**不变式**（"每名恰好解析到一个模块"）而非等值；② **改完被检物必须重跑该门的 `--selftest`**，本会话第四轮报告 §五已把这条列为验收项，我自己没执行。修复由并发批次落库（该 hunk 非本会话所写，本 ADR 只记缺陷与归因，不代认领修法）；同批另落 `e9d861b` 新增 `.gitattributes`，正是本会话 §3 行 12 里 taplo 本地假红的根因（`core.autocrlf=true` 且原先无该文件） |
-| G-119 的**已知盲区**（诚实边界） | 不判缺陷，登记于此 | 「逻辑形 match→变体决策表」被 LOOKUP 否决 ⇒ 该类只靠 `lib.rs` 登记可见（现 3 例 `REG=NO`）；纯 struct 字面量构造器、`temporal::is_valid_at` 类短谓词不入集；`core_domain/event_metadata` 的时钟/env 读依赖 G-99 的裁决而非本门 |
+| G-119 的**已知盲区**（诚实边界） | 不判缺陷，登记于此 | 「逻辑形 match→变体决策表」被 LOOKUP 否决 ⇒ 该类只靠 `lib.rs` 登记可见（现 3 例 `REG=NO`）；纯 struct 字面量构造器、`temporal::is_valid_at` 类短谓词不入集；`core_domain/event_metadata` 的时钟/env 读依赖 G-99 的裁决而非本门。**【第六轮订正，见 §9】** 盲区的**存在**不变（登记面仍必须靠 `lib.rs` 可见），但该行把三例归为同一机制是错的：现由 `mech` 逐行给出 `BELOW-DETECTOR=2 / LOOKUP-SUPPRESSED=1`，且 D8「决策表检测器」能否补上已由 ADR-220 决策 3 实测否决并附重议触发条件 |
 | `bench_check.yml:265` 注释订正（xts_top_k 标定出处） | 待另批授权 | 触 workflow；承 ADR-217 D-36/P3-8「无 clean-runner 不标定」，数字不动 |
 | G-17/G-18 本机恒 `rc=2`（无 `pwsh`） | 不修，复述现状 | 承前轮 D-21；CI 侧为 `.sh` 孪生，非阻塞 |
 | `Cargo.toml`（根）与 `gate_manifest.toml` 的 taplo 真实漂移 | **登记不修** | 两文件不在 CI taplo 步清单内 ⇒ 零门禁影响；在 42ab64e 即存在（本轮 `git show` 复测）；扩 CI 范围属另一批次，须先统一全仓 TOML 风格否则首轮大面积红 |
@@ -207,3 +209,19 @@ cargo check -p nexus-contracts --all-targets         Finished in 25.41s，0 erro
 | `9618417` | `feat(gates)`：`check_l0_logic_ledger.py` + `l0_logic_ledger.txt` + manifest G-119/G-120 + ci.yml 一步 | 4 files, +1163；四件同批（原计划拆两笔被 G-103 判非法，见 §3 项 8） |
 | `bc4437c` | `fix(gates)`：G-115 CLAIM 轴 + extensibility 台账头注改写 + G-116 note 去手抄计数 | 3 files, +130/−29 |
 | 第 3 笔 | `docs(l0)`：本 ADR + `adr_index.md` + 第四轮报告 + CHANGELOG + `lib.rs`/`Cargo.toml` 注释订正 | 见本批 |
+
+---
+
+## 9. 追加节 2026-10-16（第六轮）：本 ADR 的机制归因被机器字段接管
+
+**为什么单列一节而不覆写原文**：§1 的键集取舍（`C ∪ T ∪ R`）与 §7 的盲区登记**至今正确**，被实测推翻的只是「三例同属 LOOKUP 否决抑制」这一句归因。把原文改掉会抹掉当初的设计依据，而那份依据仍是今天读这扇门的人需要的东西。本仓对此类情况的既有纪律是**标注过期 + 指向新裁决**（见 §6 回滚节在第五轮的同一处理方式）。
+
+| 本 ADR 原述 | 实况（第六轮现取） | 处置 |
+|---|---|---|
+| §1：三个已登记模块「函数体形如 match → 变体决策表，被 LOOKUP 一票否决抑制」 | `archive_monotonicity::assert_archive_monotonicity` 与 `experience_card::normalize` 的 `=>` 计数为 **0**、bl=**7**（D1 需 12、D3 需 25）；只有 `safety/errors::to_nexus_error`（bl=36 / `=>`=10 / call=9）是否决抑制 | 归因改由 `mech` 字段给出：`BELOW-DETECTOR=2 / LOOKUP-SUPPRESSED=1`；`near` 分别为 `level:D5.bl=8/9`、`default_token_estimate:D5.bl=8/9` |
+| §7：盲区的存在 | 不变 | 仍登记；新增的是 D8 检测器**否决**及其重议触发条件（ADR-220 决策 3） |
+| 隐含前提：`basis` 自由文本可承载机制主张 | `basis` 只受 `len>=24` 约束，从不校验内容 ⇒ 一句足够长的假话必然是绿的 | ADR-220 决策 2：机制搬进 `mech/near/supp`，`BASIS_MECH_RX` 令散文叙述机制即退 2 |
+
+**自我归因（重要，别把它写成"发现的他人缺陷"）**：这三处错词是本 ADR 的作者在第四轮自己写进 `scripts/l0_logic_ledger.txt` 的，且当时**没有任何门会拒绝它**——这不是粗心，是判据缺失。第四轮报告 §G-119 已知盲区那一行同样沿用了该错误归因，已就地标注。
+
+**新增门与本轮改动**：G-123/G-124（零消费者 exact-key-set 派生台账，`scripts/check_contract_zero_consumers.py`）、G-119 内改造（无新门号）、`crates/nexus-contracts/tests/wire_roundtrip.rs` 与新增 `wire_sparse_mask_inbound.rs`。全档见 **ADR-220**；执行记录见 `docs/reports/L0-round6-governance-trio_2026-10-16.md`。
