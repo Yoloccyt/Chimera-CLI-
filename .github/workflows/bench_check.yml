@@ -63,6 +63,12 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@1.97.1
 
+      # WHY 钉解释器：本 job 的阈值断言步骤跑 scripts/*.py，与 ci.yml check job 同口径
+      # 钉 3.11（tomllib 下限 + 本地已验证），理由全文见 ci.yml。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2 # zizmor: ignore[cache-poisoning]
         with:

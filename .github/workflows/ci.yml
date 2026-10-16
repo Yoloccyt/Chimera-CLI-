@@ -64,6 +64,17 @@ jobs:
         uses: mozilla/sccache-action@v0.0.11
 
       # WHY: 先跑零编译依赖的文档一致性巡检，若架构文档 crate 数与 Cargo.toml 漂移则快速失败(F4)。
+      # WHY 钉解释器（2026-10-16）：下面 32 个步骤跑 scripts/*.py 门。91 个脚本经 ast
+      # 扫描确认只依赖 stdlib + 同目录兄弟模块（gate_rc / check_l0_purity 等），零 PyPI
+      # 包，所以换解释器不会断依赖；但 9 个脚本 `import tomllib`（3.11+ 才有），其中含
+      # run_gate_manifest.py——门清单执行器本身。此前一直吃 ubuntu 预装 python3 的隐式
+      # 版本，随镜像升级而浮动；Rust 侧已因 `-D warnings` 随 stable 浮动吃过突发红并
+      # 钉死 1.97.1（见上一步的 WHY），Python 侧是同一个病的未治版本。
+      # 钉 3.11 = 本地已验证的解释器（本机 py -3 即 3.11.9，L0 全门 rc=0），CI==开发端。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Doc consistency (crate count vs Cargo.toml)
         run: bash scripts/check_doc_consistency.sh
 
