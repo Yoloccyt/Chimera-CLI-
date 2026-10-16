@@ -147,7 +147,8 @@ mech_of(kind, hits, mod_fns):
 
 ## 8. 影响面与兼容性
 
-- **生产码零改动**（`crates/**/src` 未动一行）；改动面 = `scripts/`（2 改 2 增）+ `crates/nexus-contracts/tests/`（1 改 1 增）+ 本 ADR + `.github/workflows/ci.yml` 一步。
+- **生产码零改动**（`crates/**/src` 未动一行）；改动面 = `scripts/`（3 改 2 增：`check_l0_logic_ledger.py` / `l0_logic_ledger.txt` / `gate_manifest.toml` 改，`check_contract_zero_consumers.py` / `contract_zero_consumer.txt` 增）+ `crates/nexus-contracts/tests/`（1 改 1 增）+ `docs/architecture/`（本 ADR 新增、ADR-218 追加订正节）+ `.github/workflows/ci.yml` 一步。
+- **终验快照与本地未覆盖项**：`run_gate_manifest.py`（light 集）实测 `ok=116 / mismatch=1 / skip=7 / 合计 124/124`，唯一红项即下条登记的既有红 G-16，与本 ADR 无关；由执行器自身产出该结果同时证明新门在清单形态下 `{python}` 可解析且 `[G-123] [G-124] OK rc=0`。**`cargo check --workspace --all-targets` 未执行**——D 盘实测 `271G 已用 / 4.5G 可用（99%）`，本仓有 `No space left on device` 与全量编译面 OOM 前科，强跑只会得到分不清「回归」与「爆盘」的 rc；本地已覆盖的是 `cargo clippy -p nexus-contracts --all-targets -- -D warnings`（含本轮新增测试文件的全 target 类型检查）与 `cargo test -p nexus-contracts` 939/0。其余 crate 的编译面是靠「未触碰任何 `crates/**/src` + 公共 API 面逐值不变」**论证**排除的，不是实测 ⇒ 全量编译检查交由 CI `check` job，此项在交付报告中列为未验证项而非已验证。
 - 无事件契约变更 ⇒ 不动 `NexusEvent`/`doc_count_freeze.txt`/mpsc 双清单。
 - 无依赖变更 ⇒ 不动 `Cargo.toml`/`Cargo.lock`（新门 stdlib-only，与 ADR-219 的钉定解释器无 site-packages 约束一致）。
 - 兼容性：**非破坏性**。`contract_zero_consumer.txt` 是新文件；G-123 的 `expect=0` 首跑即绿。
