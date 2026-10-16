@@ -179,6 +179,7 @@ cargo check -p nexus-contracts --all-targets         Finished in 25.41s，0 erro
 - 第 4 笔（ADR/报告/注释订正）退它自身，与门无耦合。
 - **禁止** `git checkout --` / `reset --hard`：会话开始工作树干净，任何残留均须逐个核对归属后再退。
 - 回滚后的自证：重跑 `py -3 scripts/audit_gate_parity.py` 与 `check_gates_provenance.py` 应回到 rc=0 且门数回 118。
+- **★ 本节的"可独立退"在当时为真、同日第五轮已过期**（不改写原文，只标注）：`git apply -R --check` 复测显示 `9618417`/`7a2dc91`/`f32f2ad` 三笔此后与并发批次及本会话后续提交改了同一文件的相邻区域，反向应用**冲突**；已排除行尾假象（`git ls-files --eol` 全部 `i/lf w/lf`，且新落 `.gitattributes` 对 `scripts/` 钉 `eol=lf`）。现势回滚判据与整组逆序见 `docs/reports/L0-round5-production-registration_2026-10-16.md` §五。
 
 ---
 
@@ -189,7 +190,7 @@ cargo check -p nexus-contracts --all-targets         Finished in 25.41s，0 erro
 | ~~**P1-REG**~~ | **已执行 2026-10-16（`6fd3742`）** | 11 名补进 `lib.rs` const + `tests/l0_exception_registry.rs` 镜像集同批；4 个模块头按不变量 4 的确切谓词（`//! - **纯类型` + `零逻辑**`）现测现改（宽口径 grep 曾把 11 个全报为违例，窄谓词下只有 4 个）；登记后 `[REGISTRY-GAP] 11 → 0` |
 | ~~**P2**：`id_newtype!` 序列化等价对拍落 L1 侧测试~~ | **已执行 2026-10-16（`8f46de5`）** | 新增 `crates/nexus-core/tests/id_newtype_parity.rs`（行为对拍六面 + 两条 `should_panic` 有牙夹具）；`nexus-core` 生产依赖已含 L0，零新增依赖边；280 passed / 0 failed |
 | **P2**：`VectorStore::empty()` additive 构造器 | **已撤销（实测推翻，见 D-42 追加节）** | 实测 `vector.rs:178` 的 `default()` 是 `VectorStore` 的 trait 方法、`:354` 已注明刻意**不**实现 `std::default::Default`，且 rustc 对二者共存给 **E0034 编译错并点名两个候选**（本轮 `rustc --edition 2021` 最小夹具实测）⇒ 该风险不可能静默回归，补构造器只净增公共 API 与 G-105 基线一行，零收益 |
-| **本 ADR 自伤一条**：G-120 的 `len(names) == 17` 手抄计数 | **已红过一次，修复在并发批次工作树内（未入库）** | P1-REG 把登记表从 17 改到 28 后，我在 `check_l0_logic_ledger.py:1090` 写死的 `== 17` 断言当场失效 ⇒ **HEAD `8f46de5` 上 G-120 为红**（`ci.yml` 阻塞步），而我只重跑 judge 未重跑 `--selftest`。⇒ 两条教训并入本仓既有的「计数不得手抄」纪律：① 计数断言要写成**不变式**（"每名恰好解析到一个模块"）而非等值；② **改完被检物必须重跑该门的 `--selftest`**，本会话第四轮报告 §五已把这条列为验收项，我自己没执行 |
+| **本 ADR 自伤一条**：G-120 的 `len(names) == 17` 手抄计数 | **已修复并入库（并发批次 `511df34`，本会话复测 34/34 rc=0）** | P1-REG 把登记表从 17 改到 28 后，我在 `check_l0_logic_ledger.py:1090`（`selftest()` 内的 "live registry resolves uniquely" 断言；修复后行号已移至 `:1097`，按函数名定位而不按号定位）写死的 `== 17` 断言当场失效 ⇒ **HEAD `8f46de5` 上 G-120 为红**（`ci.yml` 阻塞步），而我只重跑 judge 未重跑 `--selftest`。⇒ 两条教训并入本仓既有的「计数不得手抄」纪律：① 计数断言要写成**不变式**（"每名恰好解析到一个模块"）而非等值；② **改完被检物必须重跑该门的 `--selftest`**，本会话第四轮报告 §五已把这条列为验收项，我自己没执行。修复由并发批次落库（该 hunk 非本会话所写，本 ADR 只记缺陷与归因，不代认领修法）；同批另落 `e9d861b` 新增 `.gitattributes`，正是本会话 §3 行 12 里 taplo 本地假红的根因（`core.autocrlf=true` 且原先无该文件） |
 | G-119 的**已知盲区**（诚实边界） | 不判缺陷，登记于此 | 「逻辑形 match→变体决策表」被 LOOKUP 否决 ⇒ 该类只靠 `lib.rs` 登记可见（现 3 例 `REG=NO`）；纯 struct 字面量构造器、`temporal::is_valid_at` 类短谓词不入集；`core_domain/event_metadata` 的时钟/env 读依赖 G-99 的裁决而非本门 |
 | `bench_check.yml:265` 注释订正（xts_top_k 标定出处） | 待另批授权 | 触 workflow；承 ADR-217 D-36/P3-8「无 clean-runner 不标定」，数字不动 |
 | G-17/G-18 本机恒 `rc=2`（无 `pwsh`） | 不修，复述现状 | 承前轮 D-21；CI 侧为 `.sh` 孪生，非阻塞 |
