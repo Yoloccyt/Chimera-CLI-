@@ -180,7 +180,7 @@ L1   Core ─────── nexus-core · event-bus
 | **核心职责** | 纯类型 + **受控纯逻辑** + 零外部业务依赖契约层（口径出处：`ADR-033` 追加节 2026-10-09——旧口径“零逻辑”已被量体证伪于 `harness_spec`（`validate` 143 行）与 `capability_token`（EWMA 灰度状态机），而 `vector.rs` 上仍成立；逐模块登记于 `nexus-contracts/src/lib.rs` 顶部例外表 1-5）;承载跨层共享的语义不变量类型(`OmniSparseMasks` / `HarnessSpec` / `TemporalMeta` / `NamespaceQuota` / `SelectorPolicy`,MCA M0 新增 `affinity` 模块:`ProviderId` / `CapabilitySet` / `ModelAffinitySpec`,ADR-065),P9 新增 `budget_tier` / `command_validation` / `domain` / `event_payload` 模块(`BudgetTier` / `Command` / `CommandPolicy` / `AttackType` / `ThinkingMode` / `MultimodalInput` / `UserIntent` / `Quest` / `Task` / `EventSeverity` / `TaskPriority` / `AgentStatus`,ADR-054 决策 3/6,P9-T3/T4/T7 上提/下沉),依赖铁律扩展为 `L(N) → L(0)` 恒允许；**ADR-215（2026-10-15）：56 个 pub 类型经 G-115 台账 `#[non_exhaustive]` 开档（open=56 / closed=171，D-23），零消费符号 12 项逐个裁决（D-24），档 2 收口** |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-contracts/src/lib.rs) |
 | **关键类型** | `OmniSparseMasks` · `HarnessSpec` · `TemporalMeta` · `NamespaceQuota` · `SelectorPolicy` · `BudgetTier` · `Command` · `CommandPolicy` · `AttackType` · `ThinkingMode` · `MultimodalInput` · `UserIntent` · `Quest` · `Task` · `EventSeverity` · `TaskPriority` · `AgentStatus` |
-| **关键函数** | 类型派生(`Serialize`/`Deserialize`/`Clone`/`Debug`/`PartialEq`);`util` 模块七个共享工具函数（**五个**为无副作用纯函数，另两个是测量旋钮）:`xts_top_k_by`(Top-K,O(n) `select_nth_unstable_by`)、`xts_top_k`(序元素 Top-K,同 O(n) 内核)、`sigmoid`、`percentile_sorted<T: Copy>`(已排序切片分位,O(1))、`cosine_similarity_slices`(逐位一致余弦相似度,供检索/分层评分复用)、`perf_scale` 与 `perf_scale_ms`(测量尺度因子,读 `CHIMERA_PERF_SCALE`,仅供基准放宽阈值)。**订正记录(2026-10-08 / v3.5 W6-2)**:本行原写“三个”仅列 `xts_top_k_by`/`sigmoid`/`percentile_sorted`,与 `crates/nexus-contracts/src/vector_math/util.rs` 现测 7 个 `pub fn` 不符(余 4 个为后续批次新增且未同步本文)。其中**五个**(`xts_top_k`/`xts_top_k_by`/`sigmoid`/`percentile_sorted`/`cosine_similarity_slices`)属 ADR-033"纯类型+零逻辑"约束的**受控例外**(与 `test_scale::scaled_timeout!` 同源),保持零分配/零 I/O/零全局状态;而 `perf_scale`/`perf_scale_ms` **不是纯函数**(每次调用读进程环境变量),其定位是测试/CI 侧阈值缩放,本体注释自陈"仅适用于测试/CI 路径;生产代码不得依赖本函数做业务决策",失败安全为非法值回退 1.0(不因旋钮写错而静默放松红线) |
+| **关键函数** | 类型派生(`Serialize`/`Deserialize`/`Clone`/`Debug`/`PartialEq`);`util` 模块七个共享工具函数（**五个**为无副作用纯函数，另两个是测量旋钮）:`xts_top_k_by`(Top-K,O(n) `select_nth_unstable_by`)、`xts_top_k`(序元素 Top-K,同 O(n) 内核)、`sigmoid`、`percentile_sorted<T: Copy>`(已排序切片分位,O(1))、`cosine_similarity_slices`(逐位一致余弦相似度,供检索/分层评分复用)、`perf_scale` 与 `perf_scale_ms`(测量尺度因子,读 `CHIMERA_PERF_SCALE`,仅供基准放宽阈值)。**订正记录(2026-10-08 / v3.5 W6-2)**:本行原写“三个”仅列 `xts_top_k_by`/`sigmoid`/`percentile_sorted`,与 `crates/nexus-contracts/src/vector_math/util.rs` 现测 7 个 `pub fn` 不符(余 4 个为后续批次新增且未同步本文)。其中**五个**(`xts_top_k`/`xts_top_k_by`/`sigmoid`/`percentile_sorted`/`cosine_similarity_slices`)属 ADR-033"纯类型+受控纯逻辑"约束的**受控例外**(旧口径"零逻辑"已于 ADR-033 2026-10-09 追加节量体订正;与 `test_scale::scaled_timeout!` 同源),保持零分配/零 I/O/零全局状态;而 `perf_scale`/`perf_scale_ms` **不是纯函数**(每次调用读进程环境变量),其定位是测试/CI 侧阈值缩放,本体注释自陈"仅适用于测试/CI 路径;生产代码不得依赖本函数做业务决策",失败安全为非法值回退 1.0(不因旋钮写错而静默放松红线) |
 | **性能证据** | `benches/util_micro.rs`(criterion,含 `CountingAlloc` 零堆分配硬断言):`sigmoid scalar` 33.2 ns / `sigmoid map 1024` 33.73 µs / `percentile_sorted p95` 6.5 ns(n=100 与 n=10000 等价 → 实证 O(1));CI 门槛见 `bench_check.yml` |
 | **主要依赖** | **仅** **`serde`** **workspace**,**无其他 workspace crate 依赖**(零依赖契约层) |
 | **设计模式** | Pure Data · 零运行时 · 编译期契约 |
@@ -1079,6 +1079,7 @@ NexusEvent 变体并注册 mpsc 旁路(禁止为对齐文档而伪造发布)。�
 ```
 L(N) → L(N)   ✓ 同层互引允许
 L(N) → L(N-1) ✓ 向下依赖允许
+L(N) → L(0)    ✓ L0 Contracts 恒允许(ADR-033)
 L(N) → L(N+1) ✗ 向上依赖禁止
 L(N) ──event-bus── L(M)  ✓ 跨层通信只能走Event Bus
 L(N) ──mcp-mesh─── L(M)  ✓ 跨进程通信只能走MCP Mesh
@@ -1319,7 +1320,7 @@ cargo test --test owasp_top10
 | 工具 | 路径 | 说明 |
 | ------------------ | ---------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | 三档 nextest profile | `.config/nextest.toml` | `ci-fast`(PR 快轨) / `default`(=full) / `stress`(nightly 压测,test-threads=2) |
-| 等待缩放宏 | `nexus-contracts::test_scale::scaled_timeout!` | `CHIMERA_TEST_TIMEOUT_SCALE` 环境变量驱动,clamp \[0.01,1.0],缺省 1.0 与原行为等价;ADR-033 "纯类型+零逻辑"约束唯一例外 |
+| 等待缩放宏 | `nexus-contracts::test_scale::scaled_timeout!` | `CHIMERA_TEST_TIMEOUT_SCALE` 环境变量驱动,clamp \[0.01,1.0],缺省 1.0 与原行为等价;ADR-033 "纯类型+受控纯逻辑"口径下的受控例外之一(登记表 `lib.rs::ADR_033_EXCEPTION_MODULES`;旧口径"零逻辑"已于 2026-10-09 追加节订正) |
 | 测试编译加速 | `.cargo/config.toml [profile.test]` | `opt-level=0` + `codegen-units=16` + `debug=0` + `[profile.test.build-override]`,冷全量编译 \~-75% |
 | 基准采集脚本 | `scripts/bench_test_runtime.{sh,ps1}` | ci-fast/default/stress 三档分派 + JSON 报告解析 |
 | 临时文件清理 | `scripts/clean_test_temp.ps1` | 清理 tmp/ 下 .tmp\* 残留(实测 47 目录) |
