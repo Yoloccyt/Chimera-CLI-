@@ -63,13 +63,17 @@ alwaysApply: true
 
 ## 记忆系统
 
-- 路径:`c:\Users\30324\.trae-cn\memory\projects\-d-Chimera-CLI\`
-- 会话记忆按日期存放:`<date>/session_memory_<session_id>.jsonl`
-- 主题索引:`<date>/topics.md`
-- 项目级持久规则: `project_memory.md`
+> **唯一活跃存储（2026-10-19 订正，M8）**：本项目的持久记忆只写在下面两个 qoder 目录，**索引 `MEMORY.md` 是唯一召回面**——未列入索引的文件不会被召回（仍留盘备查，勿无据加回）。计数一律现取，不在本文件登记。
+
+- 项目域(只对本仓为真):`C:\Users\30324\.qoder-cn\projects\d--Chimera-CLI\memory\`，索引导航 `MEMORY.md`
+- 用户域(跨项目为真):`C:\Users\30324\.qoder-cn\memory\`，索引导航 `MEMORY.md`
+- 落点判据:「对所有项目都为真」写用户域，「只对本仓为真」写项目域;`feedback` 类默认用户域，**但本仓专属的技术判据留在项目域**(迁到用户域会把本仓规则泄漏进其它项目)
+- 新增记忆必须同步在 `MEMORY.md` 落一行指针，否则等于没写
+- **历史归档(已冻结，只读，禁止再写入)**:`c:\Users\30324\.trae-cn\memory\projects\` 下的 trae 存储两套——`-d-Chimera-CLI\project_memory.md`(mtime 2026-07-25，会话日期目录止于 20260731)与 `-d-Chimera-CLI--p2-35a24f2af7eb9ad9ddea\project_memory.md`(mtime 2026-10-11)。二者早于活跃存储，**只在 qoder 记忆缺失时按历史线索查阅**，引用前仍须现取代码复核；其内部布局为 `<date>/session_memory_<session_id>.jsonl`(逐会话) + `<date>/topics.md`(主题索引)
+- 另注:`.qoder-cn\projects\` 下存在因路径规范化差异产生的旁支目录(如 `d--Chimera------\memory\`)，其中的条目本会话不会被加载;发现重复内容按上条判据归并到项目域，**不要当作活跃存储继续写**
 - 在引用记忆前必须验证(grep/读文件),记忆**会陈旧**
 - 项目状态变化大时(数量/规则/路径),先更新记忆再继续
-- **引用机制**(§10.4):本规则只摘录 Hard Constraints 摘要与核心新红线,60+ 条 Week 1-8 实战 Lessons 保留在 `project_memory.md`,通过引用指针访问,避免规则膨胀
+- **引用机制**(§10.4):本规则只摘录 Hard Constraints 摘要与核心新红线,完整实战 Lessons 在**项目域记忆**（Week 1-8 历史 60+ 条见上述冻结归档）,通过引用指针访问,避免规则膨胀
 
 ---
 
@@ -451,7 +455,7 @@ my-crate/
 
 ### 4.4 async 反模式清单(Week 1-8 实战教训)
 
-> 以下反模式来自 `project_memory.md` Lessons Learned,违反即触发 CI 失败或运行时死锁。
+> 以下反模式来自项目域记忆的 Lessons Learned（引用机制 §10.4;违反即触发 CI 失败或运行时死锁）。
 
 1. **禁止持锁跨 `.await`** — DashMap/Mutex 写锁必须在 `.await` 前释放(faae-router `crates/faae-router/tests/lock_holding.rs` 检测)。正确模式:锁内取快照→释放锁→await 快照
 2. **rusqlite 调用必须 `spawn_blocking`** — rusqlite 非 async,直接在 async 上下文调用阻塞 runtime(repo-wiki/scc-cache 89 处已包装;2026-09-22 现取,命令与量纲见 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md` §25)
@@ -517,7 +521,7 @@ event-bus 的 `NexusEvent` 变体清单以 `crates/event-bus/src/types.rs` 为�
 
 ### 6.2 Week 1-8 实战新红线
 
-> 以下红线来自 `project_memory.md` Hard Constraints + Lessons Learned,违反即阻塞发布。
+> 以下红线来自项目域记忆的 Hard Constraints + Lessons Learned（引用机制 §10.4;违反即阻塞发布）。
 
 | 红线 | 教训来源 | 说明 |
 |------|---------|------|
@@ -530,7 +534,7 @@ event-bus 的 `NexusEvent` 变体清单以 `crates/event-bus/src/types.rs` 为�
 | **sqlite-vec 禁用(违反 forbid unsafe)** | ADR-005 降级 | sqlite-vec 0.1.9 binding 需 unsafe,改内存 KNN(10-1000 entry scale) |
 | **Top-K 用 select_nth_unstable** | Engineering Convention | O(n) 替代 O(n log n) sort_by |
 
-> 完整 60+ 条 Week 1-8 Lessons 见 `project_memory.md`(引用机制 §10.4)。
+> 完整实战 Lessons 见**项目域记忆**（Week 1-8 的 60+ 条存于 §10.4 所指冻结归档;引用机制 §10.4）。
 
 ---
 
@@ -779,21 +783,28 @@ git push origin v<x.y.z>-omega
 
 ### 10.4 project_memory 引用机制
 
-本规则只摘录 **Hard Constraints 摘要**(§6.2 8 条核心新红线)与 **async 反模式清单**(§4.4 8 条)。**完整 Lessons 集合**保留在:
+本规则只摘录 **Hard Constraints 摘要**(§6.2 8 条核心新红线)与 **async 反模式清单**(§4.4 8 条)。**完整 Lessons 集合**的活跃存储是**项目域记忆**（其索引 `MEMORY.md` 是唯一召回面；未列入索引的文件不召回，勿无据加回）：
 
 ```
-c:\Users\30324\.trae-cn\memory\projects\-d-Chimera-CLI\project_memory.md
+C:\Users\30324\.qoder-cn\projects\d--Chimera-CLI\memory\
 ```
 
-**Lessons 范围演进**:
+**历史归档（已冻结，只读，禁止再写入）** —— 本条此前只指向下列路径，而它们已分别停在 2026-07-25 / 2026-10-11，与活跃存储分叉：
+
+```
+c:\Users\30324\.trae-cn\memory\projects\-d-Chimera-CLI\project_memory.md                                   (mtime 2026-07-25)
+c:\Users\30324\.trae-cn\memory\projects\-d-Chimera-CLI--p2-35a24f2af7eb9ad9ddea\project_memory.md          (mtime 2026-10-11)
+```
+
+**Lessons 范围演进**（历史脉络，非现势计数）:
 - Week 1-8(2026-06):第一阶段 8 周推进 + RC 实战,60+ 条核心 Lessons
 - v1.x(2026-06~07):GA 后演进补充(8 条 async 反模式 / Top-K select_nth_unstable / sqlite-vec 禁用等)
 - v2.x(2026-07~至今):第三阶段补充(4 象限不变量 / Part II 闭环 / Commit Message UTF-8 / `MasError` 变体演进等)
 
 **引用规则**:
-- 遇到 async 死锁 / broadcast 丢事件 / SQLite 阻塞 / fuzz 失败 / 多 Agent 协同不变量等问题,先查 `project_memory.md` 是否有历史教训
+- 遇到 async 死锁 / broadcast 丢事件 / SQLite 阻塞 / fuzz 失败 / 多 Agent 协同不变量等问题,**先查项目域记忆**（按 `MEMORY.md` 索引）是否有历史教训;仅当其中缺失时才回查上述冻结归档
 - 引用记忆前必须验证(grep/读文件),记忆**会陈旧**(v1.x 的代码行号在 v2.x 后已失效)
-- 新教训产生时,先更新 `project_memory.md`,再评估是否提炼进本规则 §6.2 / §4.4
+- 新教训产生时,**写入项目域记忆并在 `MEMORY.md` 补一行索引指针**（不得再写入已冻结归档——那正是本条此前造成分叉的原因）,再评估是否提炼进本规则 §6.2 / §4.4
 
 ### 10.5 已知基建短板(待修复)
 

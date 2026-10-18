@@ -2,7 +2,7 @@
 
 > **核心位置**:本文件是 Trae/Qoder 多 agent 工具**自动加载**的 `.trae/rules/nuxus规则.md` 路径的**权威规则载体**。原 `AGENTS.md`(项目根目录)为详细全文载体;本文件聚焦"项目代发"所需的**速查 + 决策基线 + 硬约束**,便于智能体快速消费。
 >
-> **历史溯源**:早期为重定向占位(2026-08-11 之前的 nuxus规则.md 由 AGENTS.md 完全托管);自 2026-08-11 v2.26.0-omega 同步后,本文件升级为**速查 + 基线 + 硬约束**三重定位,与 `AGENTS.md`(全量规则)+ `project_memory.md`(持久记忆)形成"快速 / 详细 / 历史"三层规则体系。
+> **历史溯源**:早期为重定向占位(2026-08-11 之前的 nuxus规则.md 由 AGENTS.md 完全托管);自 2026-08-11 v2.26.0-omega 同步后,本文件升级为**速查 + 基线 + 硬约束**三重定位,与 `AGENTS.md`(全量规则)+ `项目域记忆`(持久记忆，2026-10-19 起其索引 `MEMORY.md` 为唯一召回面；口径见 `AGENTS.md` §10.4)形成"快速 / 详细 / 历史"三层规则体系。
 >
 > **最后更新**:2026-10-11(文档系统纠漂批次:NexusEvent 152、Critical mpsc 16/总 20、ADR 磁盘主编号已至 211(不登记上限,一律现取)、G 门 G-01~G-98;继承 2026-10-07 Wave 0:ADR-193 两批次 41→39(router-traits 整 crate 退役、lsct-tiering 整并入 cmt-tiering)+ TUI 面板 30(焦点环 29)+ slash 54 条;基线口径:crate 数以 `Cargo.toml` `workspace.members` 为准(39) + ADR 索引见 `docs/architecture/adr_index.md` + 可达性棘轮由 `scripts/check_crate_reachability.sh` 现测(2026-10-02:30 生产可达 / 0 冻结孤岛 / 9 GATED,`mca-gateway` 经 ADR-177 重分类);上一已发 tag = v2.28.2-omega(2026-09-08),现行 `Cargo.toml` = 2.29.0-omega(2026-09-27 本地发布,tag v2.29.0-omega 未 push);协作流程类规则(分支/提交/PR/发布)的唯一权威源为根目录 [CONTRIBUTING.md](../../../CONTRIBUTING.md);**RL 开发闸门决策持续有效**:Rust-First,Python 侧仅规划)
 > **生成方式**:trae-remote-official:staff-engineer-mode + superpowers-main + praxis + brooks-lint + product-lifecycle-workbench 多 agent 工具分布式深度分析
@@ -136,7 +136,7 @@ L1   Core ─────── nexus-core · event-bus
 
 ---
 
-## 4. async 反模式清单(完整 8 条 + Week 1-8 教训,见 AGENTS.md §4.4 / project_memory.md)
+## 4. async 反模式清单(完整 8 条 + Week 1-8 教训,见 AGENTS.md §4.4 / 项目域记忆)
 
 1. **禁止持锁跨 `.await`** — DashMap/Mutex 写锁必须在 `.await` 前释放
 2. **rusqlite 必须 `spawn_blocking`** — 89 处已包装(repo-wiki / scc-cache;2026-09-22 现取,旧值 79 已漂,见 DOC-AUDIT-FACTS §25)
@@ -207,7 +207,8 @@ L1   Core ─────── nexus-core · event-bus
 | 协作流程(分支/提交/PR/发布) | `CONTRIBUTING.md`(项目根) | 流程类规则唯一权威源(2026-10-11 立) |
 | 详细规则 | `AGENTS.md`(项目根) | 全量规则(10 章 + 附录) |
 | 项目特定命令 | `.claude/CLAUDE.md` | 环境/CI/Docker/发布 checklist |
-| 持久记忆 | `c:\Users\30324\.trae-cn\memory\projects\-d-Chimera-CLI--p2-35a24f2af7eb9ad9ddea\project_memory.md` | Hard Constraints + Lessons Learned |
+| 持久记忆(活跃，唯一召回面=其索引 `MEMORY.md`) | `C:\Users\30324\.qoder-cn\projects\d--Chimera-CLI\memory\` | 项目域 Lessons + 判据;口径见 `AGENTS.md` §10.4 |
+| 持久记忆(历史归档，已冻结只读，禁止再写入) | `c:\Users\30324\.trae-cn\memory\projects\`(`-d-Chimera-CLI` mtime 2026-07-25 / `-d-Chimera-CLI--p2-35a24f2af7eb9ad9ddea` mtime 2026-10-11) | 仅当活跃存储缺失时按历史线索查阅 |
 | 架构权威源 | `docs/architecture/CODE_WIKI.md` | crate 完整索引(§3.11 冻结孤岛清单)+ `NexusEvent` 全量清单(权威源 `crates/event-bus/src/types.rs`)+ ADR 全量索引(§11 与 `docs/architecture/adr_index.md`)+ 8 专家深度分析 |
 | 版本演进权威源 | `CHANGELOG.md` | v1.0.0→[2.29.0-omega] 在途完整历史 |
 | 当前基线行数报告 | `docs/reports/project_line_count_report_v2.28.0-omega.md` | 623,344 LOC / 1,870 文件(2026-08-15 实测;competition 3 份已归档至 tmp) |
@@ -250,14 +251,14 @@ L1   Core ─────── nexus-core · event-bus
 │ AGENTS.md(项目根) ─── 全量规则(10 章 + 附录)                  │
 │ ↓ 实战教训见 ↓                                                │
 ├──────────────────────────────────────────────────────────────┤
-│ project_memory.md ─── Hard Constraints + Lessons Learned 持久 │
+│ 项目域记忆 memory/ + MEMORY.md 索引 ── Hard Constraints+Lessons │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 **引用规则**:
 - 速查决策先查本文件(§0 决策表 + §1 基线 + §2 依赖铁律)
 - 详细章节查 `AGENTS.md` §X.Y
-- 实战教训查 `project_memory.md` Lessons
+- 实战教训查**项目域记忆**(其索引 `MEMORY.md` 为唯一召回面;口径与写入规则见 `AGENTS.md` §10.4)
 - **引用前必须验证**(grep/读文件),记忆**会陈旧**(v1.x 的代码行号在 v2.x 后已失效)
 
 ---
