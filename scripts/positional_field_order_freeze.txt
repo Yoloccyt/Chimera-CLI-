@@ -28,13 +28,14 @@
 # is legal ONLY as a tail append with #[serde(default)], and the row must be re-emitted in
 # that same commit -- the ledger stays the authoritative order, not a hint.
 #
-# CURRENT MEASURED STATE (2026-10-14, --emit over 799 src files): exactly 2 production
-# positional write points exist. One is crates/quest-engine/src/wal.rs::append_entry, which
-# is excluded because that file is an orphan in src_module_reachability_freeze.txt (G-109)
-# and participates in no build; the day it is wired up its site lands here with no row and
-# turns NEW. So ADR-213 R8.2's "Class B" set has ZERO live members today, and this gate is
-# admission control, not a cleanup -- it exists so that the first new positional type is a
-# reviewed decision instead of a silent data-corruption bug shipped behind a green CI.
+# CURRENT MEASURED STATE (2026-10-17): exactly 1 production positional write point remains,
+# and it is the sanctioned popup waiver below (serde_json::Value -- no declaration order to
+# freeze). The former second site -- quest-engine/src/wal.rs::append_entry -- was wired up
+# in D-18 on 2026-10-17 and converted to to_vec_named in the same batch per ADR-213 R8.1
+# Class A (durable WAL envelope); existing array-form records still decode via from_slice,
+# so the conversion is read-compatible. This gate remains admission control, not cleanup --
+# it exists so that the first NEW positional type is a reviewed decision instead of a silent
+# data-corruption bug shipped behind a green CI.
 # WRITE-NONE: this ledger intentionally carries no WRITE row yet (see CURRENT MEASURED
 # STATE above). An empty sanctioned set is a measured fact, not a placeholder that may be
 # filled silently by whoever notices it first.

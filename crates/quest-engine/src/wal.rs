@@ -125,8 +125,10 @@ impl CheckpointWal {
 
     /// 内部:追加一条 WAL 记录(append 与 commit 共用)
     fn append_entry(&self, entry: &WalEntry) -> Result<(), QuestError> {
-        // 序列化为 MessagePack(ADR-004)
-        let bytes = rmp_serde::to_vec(entry)
+        // WHY to_vec_named:WAL 是长生命周期持久 envelope(ADR-213 R8.1 Class A),
+        // 具名 map 对字段追加/重排免疫,且旧读端容忍新 key;磁盘上既有的
+        // array 形态记录仍可被 from_slice 读回(derived Deserialize 双形态)。
+        let bytes = rmp_serde::to_vec_named(entry)
             .map_err(|e| QuestError::WalError(format!("msgpack encode wal entry: {e}")))?;
 
         // 以追加模式打开,写长度前缀 + 字节
@@ -453,7 +455,7 @@ mod tests {
             timestamp: Utc::now(),
             committed: false,
         };
-        let bytes = rmp_serde::to_vec(&entry).unwrap();
+        let bytes = rmp_serde::to_vec_named(&entry).unwrap();
         let de: WalEntry = rmp_serde::from_slice(&bytes).unwrap();
         assert_eq!(de.entry_id, entry.entry_id);
         assert_eq!(de.quest_id, entry.quest_id);
