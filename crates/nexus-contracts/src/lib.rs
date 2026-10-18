@@ -364,8 +364,8 @@ pub use seams::reward;
 /// 判定函数（降级 + 同层保持合法，回升拒绝）。INV-8 判定此前仅存在于
 /// L9 `chimera-mas`，本模块将其下沉至 L0，使 mlc-engine（L2）/ cmt-tiering（L3）
 /// 的归档入口可独立执行单调性断言（依赖铁律 §2.2：L(N) → L(0) 恒允许）。
-/// ADR-033"纯类型 + 零逻辑"的第二个明确例外（首个为 `test_scale`），
-/// 详见模块级文档。
+/// ADR-033"纯类型 + 受控纯逻辑"口径下的受控例外之一（旧口径"零逻辑"已由 ADR-033
+/// 2026-10-09 追加节量体订正；完整登记表见本文件 `ADR_033_EXCEPTION_MODULES`）。
 pub use memory::archive_monotonicity;
 
 /// 六维控制面契约 — MemoHarness D1-D6 融合（设计文档 §5.3.1）
@@ -447,7 +447,8 @@ pub use core_domain::event_v2;
 ///
 /// 承载 `xts_top_k` / `xts_top_k_by`,以 O(n) `select_nth_unstable_by` +
 /// O(k log k) 局部排序取代"全排后截断"的 `sort_by` 全排序。
-/// ADR-033"纯类型 + 零逻辑"下的纯函数工具先例(与 test_scale / archive_monotonicity / mcsm 同级)。
+/// ADR-033"纯类型 + 受控纯逻辑"下的纯函数工具先例（旧口径"零逻辑"已于 2026-10-09
+/// 订正；与 test_scale / archive_monotonicity / mcsm 同级）。
 pub use vector_math::util;
 
 /// 统一错误层级契约 — NexusError 与 Recoverable（A0/WI-01 §6.6）
