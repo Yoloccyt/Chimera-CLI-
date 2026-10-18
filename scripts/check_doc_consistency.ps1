@@ -190,16 +190,37 @@ $report += '[D1] ADR physical file main numbers = ' + $adrMainCount + ' (with ' 
 #   - expected: declared >= physical (some ADRs may be reserved/historical with no file)
 #   - GAP only if declared < physical (index undercount vs actual files)
 if (Test-Path 'docs/architecture/adr_index.md') {
-    $declaredTotal = $null
+    # D-31: the declared total is DERIVED from the index rows (single-number rows
+    # + interval rows expanded, de-duplicated) rather than read as a hand-copied
+    # integer from prose -- that literal could not be falsified by any consumer
+    # (measured 2026-10-17: literal 184 vs derived 193, every gate stayed green).
+    # Same rule as scripts/adr_index_metrics.py, re-implemented natively here
+    # because this twin runs without a python interop layer. The floors (60 single
+    # rows / 100 distinct) mirror the helper's, so a collapsed parse reports
+    # undecidable instead of emitting a plausible small number.
+    $declared = New-Object 'System.Collections.Generic.HashSet[int]'
+    $singleRows = 0
+    $intervalRows = 0
     $adrIndexLines = Get-Content 'docs/architecture/adr_index.md' -Encoding UTF8
     foreach ($line in $adrIndexLines) {
-        if ($line -match '(\d+)\s*\u4E2A\s*ADR') {
-            $declaredTotal = [int]$Matches[1]
-            break
+        if ($line -match '^\|\s*ADR-(\d{3})\s*\|') {
+            $singleRows++
+            [void]$declared.Add([int]$Matches[1])
+        } elseif ($line -match '^\|\s*ADR-(\d{3})\s*~\s*(\d{3})\s*\|') {
+            $lo = [int]$Matches[1]
+            $hi = [int]$Matches[2]
+            if ($hi -ge $lo) {
+                $intervalRows++
+                for ($n = $lo; $n -le $hi; $n++) { [void]$declared.Add($n) }
+            }
         }
     }
+    $declaredTotal = $null
+    if ($singleRows -ge 60 -and $declared.Count -ge 100) {
+        $declaredTotal = $declared.Count
+    }
     if ($null -eq $declaredTotal) {
-        $report += '[WARN-D2] adr_index.md has no machine-readable ADR total declaration'
+        $report += '[WARN-D2] adr_index.md declared set undecidable (floors unmet: single=' + $singleRows + ' distinct=' + $declared.Count + ' intervals=' + $intervalRows + ')'
     } elseif ($declaredTotal -lt $adrMainCount) {
         # real gap: index undercounts physical files
         $report += '[GAP-D2] adr_index.md declares ' + $declaredTotal + ' ADRs, disk has ' + $adrMainCount + ' main numbers (index undercount)'

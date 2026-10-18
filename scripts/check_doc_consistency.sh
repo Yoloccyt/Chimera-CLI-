@@ -206,20 +206,14 @@ if [ ! -f "docs/architecture/adr_index.md" ]; then
     # 2026-08-07 适配: 同 B/C —— gitignore *.md 策略下缺失文档降级为 warn。
     report+=("[D2-warn] missing document: docs/architecture/adr_index.md (gitignore *.md 策略,仅本地维护,跳过)")
 else
-    # Use the resolved python launcher for robust CJK+ASCII regex matching
-    declared_total=$("${py[@]}" -c "
-import re, sys
-with open('docs/architecture/adr_index.md', encoding='utf-8') as fh:
-    for line in fh:
-        m = re.search(r'(\d+)\s*个\s*ADR', line)
-        if m:
-            print(m.group(1))
-            sys.exit(0)
-sys.exit(1)
-" 2>/dev/null || echo "")
+    # D-31: declared 值由索引行**派生**(单编号行 + 区间行展开去重),读
+    # scripts/adr_index_metrics.py 这一个源。旧口径是从正文里抓一个手抄整数,
+    # 而任何消费方都证不了伪(2026-10-17 实测:手抄 184 vs 派生 193,全链路仍绿);
+    # helper 自带规模闸门,解析塌陷时退非 0 而非挤出一个可信的小数字。
+    declared_total=$("${py[@]}" scripts/adr_index_metrics.py --declared-total 2>/dev/null || echo "")
 
     if [ -z "$declared_total" ]; then
-        report+=("[WARN-D2] adr_index.md has no machine-readable ADR total declaration")
+        report+=("[WARN-D2] adr_index.md declared set undecidable (helper exit!=0 or floors unmet)")
     elif [ "$declared_total" -lt "$adr_main_count" ]; then
         report+=("[GAP-D2] adr_index.md declares ${declared_total} ADRs, disk has ${adr_main_count} main numbers (index undercount)")
         status=1
