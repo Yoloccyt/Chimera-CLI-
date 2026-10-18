@@ -654,6 +654,13 @@ const DYNAMICALLY_CONSTRUCTED_KEYS: &[&str] = &[
     "slash.unwired.fork",
     "slash.unwired.undo",
     "slash.unwired.redo",
+    // components::prefix_hint::prefix_hint_entries 返回 &'static str 键,
+    // 渲染时才经 tr() 解析,源码中无 t!()/tr() 字面量调用点。
+    "prefix.hint.g_top",
+    "prefix.hint.g_jump",
+    "prefix.hint.w_hl",
+    "prefix.hint.w_jk",
+    "prefix.hint.w_cycle",
 ];
 
 #[test]

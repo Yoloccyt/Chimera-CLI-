@@ -33,7 +33,9 @@
 
 pub mod metrics_history;
 pub mod newline_gate;
+pub mod pace_gate;
 pub mod resource_history;
+pub mod sanitize;
 
 /// `/compact` 上下文策展器(Concord W9,ADR-081;FC-2 接线,2026-09-06)
 ///

@@ -194,6 +194,13 @@ fn lookup_table_1(key: &str) -> Option<&'static str> {
         "chat.composer_hint" => "Press i to type, or / for commands",
         "status.view_chat" => "Switched to chat mode (\\ for dashboard)",
         "status.view_dashboard" => "Switched to dashboard mode (\\ for chat)",
+        // Prefix-key transient hint (components::prefix_hint; entries mirror
+        // input::router route_gprefix/route_wprefix and resolve via tr() at render)
+        "prefix.hint.g_top" => "g — jump to top",
+        "prefix.hint.g_jump" => "1-9/0 — jump to panel",
+        "prefix.hint.w_hl" => "h/l — focus pane left/right",
+        "prefix.hint.w_jk" => "j/k — focus pane up/down",
+        "prefix.hint.w_cycle" => "w — cycle focus pane",
         _ => return None,
     };
     Some(v)

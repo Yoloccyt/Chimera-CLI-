@@ -40,6 +40,7 @@ pub(crate) mod fps_counter;
 /// 本地动作派发表从 event_loop.rs 收编至此,与 InputRouter(按键归属)分层分工
 pub(crate) mod key_dispatch;
 pub(crate) mod mouse;
+pub mod notify;
 pub(crate) mod pane_manager;
 pub(crate) mod render;
 pub(crate) mod state;

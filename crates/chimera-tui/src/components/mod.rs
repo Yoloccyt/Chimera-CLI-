@@ -10,6 +10,7 @@
 //! (`LegacyPanelAdapter` 包装旧 `panels::Panel`);逐面板从旧 trait 迁移到
 //! `ComponentPanel`,M5 移除旧 trait 与适配层。
 
+pub mod prefix_hint;
 pub mod traits;
 
 pub use traits::{ComponentPanel, LayoutNode, ViewContext};

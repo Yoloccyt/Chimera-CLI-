@@ -6,11 +6,6 @@
 # either wired up (add the missing `mod`) or deleted, and the row removed in that commit.
 # A NEW orphan turns red; a row that stops being an orphan without being deleted (i.e. the
 # file vanished another way) turns red as STALE.
-crates/chimera-tui/src/actions/user_commands.rs
-crates/chimera-tui/src/app/notify.rs
-crates/chimera-tui/src/components/prefix_hint.rs
-crates/chimera-tui/src/data/pace_gate.rs
-crates/chimera-tui/src/data/sanitize.rs
 crates/parliament/src/delegation.rs
 crates/parliament/src/event_pipeline.rs
 crates/parliament/src/scheduler.rs

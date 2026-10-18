@@ -349,6 +349,12 @@ pub const SEED_KEYS: &[&str] = &[
     "status.tick_restart_hint",
     "status.panel_not_registered",
     "status.data_source_unavailable",
+    // 前缀键瞬显(动态消费:prefix_hint_entries 返回键,渲染时才 tr())
+    "prefix.hint.g_top",
+    "prefix.hint.g_jump",
+    "prefix.hint.w_hl",
+    "prefix.hint.w_jk",
+    "prefix.hint.w_cycle",
     // 通用
     "common.none",
 ];
@@ -536,6 +542,13 @@ fn lookup_table_1(key: &str) -> Option<&'static str> {
         "chat.composer_hint" => "按 i 开始输入,或按 / 打开命令",
         "status.view_chat" => "已切换到会话模式(\\ 切回仪表盘)",
         "status.view_dashboard" => "已切换到仪表盘模式(\\ 切回会话)",
+        // 前缀键瞬显(components::prefix_hint;条目与 input::router 的
+        // route_gprefix/route_wprefix 同源,呈现时才经 tr() 解析)
+        "prefix.hint.g_top" => "g — 跳到顶部",
+        "prefix.hint.g_jump" => "1-9/0 — 跳转到对应面板",
+        "prefix.hint.w_hl" => "h/l — 左/右切换焦点窗格",
+        "prefix.hint.w_jk" => "j/k — 上/下切换焦点窗格",
+        "prefix.hint.w_cycle" => "w — 循环切换焦点窗格",
         _ => return None,
     };
     Some(v)
