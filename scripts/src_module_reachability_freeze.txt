@@ -6,4 +6,3 @@
 # either wired up (add the missing `mod`) or deleted, and the row removed in that commit.
 # A NEW orphan turns red; a row that stops being an orphan without being deleted (i.e. the
 # file vanished another way) turns red as STALE.
-crates/parliament/src/scheduler.rs

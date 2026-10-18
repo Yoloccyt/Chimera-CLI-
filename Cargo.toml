@@ -177,6 +177,9 @@ thiserror = "1.0"
 # 中作为传递依赖存在(rayon/async-channel 等),无新增编译器负担;
 # 纯 safe Rust 实现(unsafe 在依赖内部不传播),符合 forbid(unsafe_code) 哲学。
 crossbeam-queue = "0.3"
+# D-18:parliament/scheduler 的工作窃取全局注入器。crossbeam-deque 早已作为
+# rayon-core 的传递依赖存在于 Cargo.lock,此处仅提升为直接依赖(无新增包)。
+crossbeam-deque = "0.8"
 # ADR-004:消息序列化协议为 MessagePack
 rmp-serde = "1.3"
 # tempfile:测试用临时文件/目录,跨平台安全

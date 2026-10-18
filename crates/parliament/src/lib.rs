@@ -98,6 +98,7 @@ pub mod learner_holder;
 pub mod provider_affinity;
 pub mod reasoning;
 pub mod roles;
+pub mod scheduler;
 /// 策略封顶守卫 — ratio 反馈驱动的审议深度降级封顶(推理悖论红线风控)
 ///
 /// 消费 `CoordinationRatioReported` 事件,滞后带状态机维护审议策略上界

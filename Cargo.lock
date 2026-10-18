@@ -3917,6 +3917,7 @@ version = "2.29.0-omega"
 dependencies = [
  "async-trait",
  "criterion",
+ "crossbeam-deque",
  "decb-governor",
  "event-bus",
  "futures",
