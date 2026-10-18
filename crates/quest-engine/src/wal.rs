@@ -32,7 +32,7 @@
 //! - **MessagePack**(ADR-004):WAL 条目用 rmp-serde 序列化,与检查点格式一致
 
 use std::fs::{File, OpenOptions};
-use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
+use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -80,9 +80,8 @@ impl CheckpointWal {
     pub fn new(checkpoint_dir: impl AsRef<Path>) -> Result<Self, QuestError> {
         let dir = checkpoint_dir.as_ref();
         // 确保目录存在(与 CheckpointManager.save_blocking 一致)
-        std::fs::create_dir_all(dir).map_err(|e| {
-            QuestError::WalError(format!("mkdir {}: {e}", dir.display()))
-        })?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| QuestError::WalError(format!("mkdir {}: {e}", dir.display())))?;
         let wal_path = dir.join("checkpoint.wal");
         Ok(Self { wal_path })
     }
@@ -99,12 +98,7 @@ impl CheckpointWal {
     ///
     /// # 返回
     /// 成功返回空,失败返回 `WalError`。
-    pub fn append(
-        &self,
-        entry_id: &str,
-        quest_id: &str,
-        payload: &[u8],
-    ) -> Result<(), QuestError> {
+    pub fn append(&self, entry_id: &str, quest_id: &str, payload: &[u8]) -> Result<(), QuestError> {
         let entry = WalEntry {
             entry_id: entry_id.to_string(),
             quest_id: quest_id.to_string(),
@@ -140,7 +134,9 @@ impl CheckpointWal {
             .create(true)
             .append(true)
             .open(&self.wal_path)
-            .map_err(|e| QuestError::WalError(format!("open wal {}: {e}", self.wal_path.display())))?;
+            .map_err(|e| {
+                QuestError::WalError(format!("open wal {}: {e}", self.wal_path.display()))
+            })?;
 
         // 写长度前缀(u32 LE)+ 消息体
         let len = bytes.len() as u32;
@@ -229,7 +225,9 @@ impl CheckpointWal {
 
         // 截断损坏尾部(若有):valid_bytes 之后的数据无效
         if valid_bytes > 0 {
-            let file_len = self.wal_path.metadata()
+            let file_len = self
+                .wal_path
+                .metadata()
                 .map_err(|e| QuestError::WalError(format!("wal metadata: {e}")))?
                 .len();
             if file_len > valid_bytes {
@@ -249,10 +247,12 @@ impl CheckpointWal {
         }
 
         // 过滤:返回未提交且有 append 记录但无 commit 的条目
-        let committed_ids: std::collections::HashSet<&str> = entries
+        // WHY 持有 String 而非 &str:下一行 `entries.into_iter()` 会移动 entries,
+        // 借用型集合会让闭包捕获到悬空借用(E0505)。
+        let committed_ids: std::collections::HashSet<String> = entries
             .iter()
             .filter(|e| e.committed)
-            .map(|e| e.entry_id.as_str())
+            .map(|e| e.entry_id.clone())
             .collect();
 
         let uncommitted: Vec<WalEntry> = entries
@@ -395,10 +395,7 @@ mod tests {
         wal.append("cp-1", "q-1", &make_payload("1")).unwrap();
 
         // 手动追加损坏数据(模拟崩溃中断的部分写入)
-        let mut file = OpenOptions::new()
-            .append(true)
-            .open(wal.path())
-            .unwrap();
+        let mut file = OpenOptions::new().append(true).open(wal.path()).unwrap();
         // 写入一个长度前缀但不写完整消息体(模拟崩溃)
         file.write_all(&1000u32.to_le_bytes()).unwrap();
         file.sync_all().unwrap();

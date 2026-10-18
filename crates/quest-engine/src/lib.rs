@@ -68,6 +68,7 @@ pub mod state_listener;
 pub mod trajectory_exporter;
 pub mod ttg;
 pub mod types;
+pub mod wal;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use arbitration::ArbitrationLayer;

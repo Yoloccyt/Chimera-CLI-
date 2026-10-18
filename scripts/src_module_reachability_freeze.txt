@@ -9,4 +9,3 @@
 crates/parliament/src/delegation.rs
 crates/parliament/src/event_pipeline.rs
 crates/parliament/src/scheduler.rs
-crates/quest-engine/src/wal.rs
