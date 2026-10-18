@@ -143,9 +143,15 @@ impl EventPipeline {
             ack_tx: Some(ack_tx),
         };
 
-        // 锁定 Mutex 获取发送端引用(poison-tolerant,同上)
-        let tx_guard = self.tx.lock().unwrap_or_else(|e| e.into_inner());
-        match tx_guard.as_ref() {
+        // 锁内只克隆发送端,守卫随代码块结束立即释放;await 前不再持锁(§4.4 红线 #1)。
+        // WHY 不用 `drop(tx_guard)` 逐臂释放:match  scrutinee 对 guard 有借用,
+        // clippy::await_holding_lock 无法证明所有臂都已释放(clippy 实报此处)。
+        let maybe_tx = {
+            let guard = self.tx.lock().unwrap_or_else(|e| e.into_inner());
+            guard.as_ref().cloned()
+        };
+
+        match maybe_tx {
             Some(tx) => {
                 // 尝试非阻塞发送
                 match tx.try_send(pipeline_event) {
@@ -154,7 +160,6 @@ impl EventPipeline {
                         // WHY await ack:保证调用方在事件实际发布后才继续，
                         // 避免流水线带来"事件未发布但调用方认为已发布"的时序问题。
                         // 消费端通过 ack_tx.send(result) 回传 bus.publish 结果。
-                        drop(tx_guard); // 提前释放锁，避免持锁跨 await(§4.4 红线 #1)
                         match ack_rx.await {
                             Ok(result) => result,
                             // 消费端已关闭(任务退出)，事件已投递但无法获知结果
@@ -165,12 +170,10 @@ impl EventPipeline {
                         // 背压降级:channel 满 → 直接发布
                         // WHY 降级而非等待:VoteCast 等非 Critical 事件可接受
                         // 直接发布延迟，不应因 channel 满而阻塞辩论流程。
-                        drop(tx_guard);
                         self.bus.publish(pe.event).await
                     }
                     Err(mpsc::error::TrySendError::Closed(pe)) => {
                         // 通道已关闭(消费任务异常退出)→ 直接发布
-                        drop(tx_guard);
                         warn!("EventPipeline 通道已关闭，降级到直接发布");
                         self.bus.publish(pe.event).await
                     }
@@ -178,7 +181,6 @@ impl EventPipeline {
             }
             None => {
                 // 尚未启动(spawn 未调用)，直接发布
-                drop(tx_guard);
                 self.bus.publish(pipeline_event.event).await
             }
         }

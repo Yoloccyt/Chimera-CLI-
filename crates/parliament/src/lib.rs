@@ -72,7 +72,9 @@ pub mod config;
 /// 确保 Skeptic 与 Producer 使用不同厂商通道，修复同源相关失败(病理 D3)。
 pub mod cross_vendor;
 pub mod debate;
+pub mod delegation;
 pub mod error;
+pub mod event_pipeline;
 /// FormalVerifier L4 骨架 — Parliament 形式化验证模块
 ///
 /// 共识安全性的形式化验证：Security 一票否决不可覆盖 + 2/3 多数阈值正确性。
