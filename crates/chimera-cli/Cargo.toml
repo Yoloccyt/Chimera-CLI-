@@ -190,3 +190,17 @@ harness = false
 # E-5 lint ratchet opt-in (docs/reports/arch-quality-deep-review-2026-09-25.md)
 [lints]
 workspace = true
+
+# T-2（ADR-221 §11，2026-10-19）：cargo-machete 假阳处置表。
+# WHY 这 6 条零 .rs 引用却必须保留：它们是 **feature-gated 装配面**（上方 `r2_island_repayment`
+# 的 `dep:` 边，ADR-161 待接线），零代码引用属设计预期；**删边**会让它们由 GATED 退回冻结
+# 孤岛（触 ADR-160 可达性棘轮，且反 ADR-161 偿还方向）——故不删。
+# WHY 必须有本表：machete 只计代码引用，**不把仅出现在 [features] 的 `dep:` 计为使用**
+# （2026-10-19 实测：给这 6 条补上 dep: 映射后 rc 仍为 1），故按该工具官方口给出 ignored。
+# WHICH 性质：这是一处**判据放宽**——本表只声明「这 6 条不需要代码引用」，不改变任何依赖边、
+# 不影响装配面可达性语义（GATED 状态仍由 optional 边与 ADR-160 棘轮判定）。
+[package.metadata.cargo-machete]
+ignored = [
+    "chtc-bridge", "csn-substitutor", "mtpe-executor",
+    "nexus-hook", "sesa-router", "ssra-fusion"
+]
