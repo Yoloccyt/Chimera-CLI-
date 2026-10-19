@@ -213,4 +213,9 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    # Crash guard (F33/F37): this file is run as a program by check_doc_consistency.sh, so an
+    # uncaught exception would exit 1 -- the same code as "judged red", turning "never decided"
+    # into a verdict downstream. The guard lives in the gate_rc single point (see its WHY).
+    # Import inside __main__ so importers (xdoc_precise.py) do not depend on gate_rc.
+    import gate_rc
+    sys.exit(gate_rc.run(lambda: main(sys.argv[1:])))

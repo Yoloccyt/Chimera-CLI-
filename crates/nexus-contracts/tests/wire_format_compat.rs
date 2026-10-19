@@ -36,7 +36,10 @@
 
 use nexus_contracts::{Checkpoint, SegmentCreationReason, SegmentMetadata, TokenLedgerEntry};
 
-/// A checkpoint as quest-engine writes it today: `rmp_serde::to_vec` (array).
+/// A representative checkpoint used to probe BOTH encodings below (`to_vec` array and
+/// `to_vec_named` map). The production writer (`quest-engine/src/checkpoint.rs`) has emitted
+/// the NAMED form since ADR-213 R8; the array form is kept here as the *legacy* writer shape
+/// that every compatibility pair in this file is measured against.
 fn sample_checkpoint() -> Checkpoint {
     Checkpoint::new(
         "quest-1",
