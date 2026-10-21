@@ -52,7 +52,7 @@ use crate::strategy::MemoryStrategy;
 /// 但定义在 L0 避免 OSA 直接依赖 omega-learner (L6)。
 ///
 /// WHY 独立枚举而非复用 omega-learner 的 TaskPhase:
-/// - L0 契约层禁止依赖任何 workspace crate（ADR-033）
+/// - L0-A 契约层禁止依赖 L0-B 与层号 >= 2 的 crate，仅可依赖 L0-A sibling（ADR-033 + ADR-222 D2）
 /// - omega-learner 的 `TaskPhase` 携带 one-hot 编码等 LinUCB 特定逻辑，
 ///   OSA 不需要这些细节，只需阶段语义
 /// - 两端通过 `From` 转换保持映射一致性（适配器负责转换）

@@ -160,7 +160,7 @@ alwaysApply: true
 > 权威源:`CODE_WIKI.md §2.1`。注意 `AETHER_NEXUS_OMEGA_ULTIMATE.md §3.1` 描述的 L0-L10(11 层)为早期设计,已废弃,以本表 10 层为准(加 L0 Contracts 实际为 11 层语义但 10 层架构不变,ADR-033 决议)。
 
 ```
-L0   Contracts ─ nexus-contracts                       (纯类型 + 受控纯逻辑,零外部业务依赖;ADR-033 与其 2026-10-09 追加节——旧口径“零逻辑”仅 `vector.rs` 仍成立)
+L0   Contracts ─ nexus-contracts · nexus-contracts-core · nexus-contracts-sparse · nexus-contracts-safety · nexus-contracts-seams · nexus-contracts-mca · nexus-contracts-memory (纯类型 + 受控纯逻辑,零外部业务依赖;ADR-033 与其 2026-10-09 追加节——旧口径“零逻辑”仅 `vector.rs` 仍成立; ADR-222:L0 = L0-A(0A 纯契约,7 crate)+L0-B(0B 核心基础面),机器层号不重排) 
 L10  Interface ── chimera-cli · chimera-tui · chtc-bridge · mcp-mesh · csn-substitutor · mca-gateway · nexus-app-server
 L9   Quest ───── quest-engine · gea-activator · efficiency-monitor · chimera-mas · mas-sched · nexus-hook
 L8   Parliament ─ parliament · decb-governor
@@ -170,7 +170,7 @@ L5   Knowledge ── repo-wiki · gsoe-evolution
 L4   Security ─── seccore · qeep-protocol · decay-engine
 L3   Storage ──── scc-cache · cmt-tiering · session-store
 L2   Memory ───── nmc-encoder · hcw-window · mlc-engine
-L1   Core ─────── nexus-core · event-bus
+L1   Core ─────── nexus-core · event-bus · nexus-telemetry [ADR-222：L0-B 核心基础面]
 ```
 
 > **v2.0.0-omega 变更**:L9 新增 `chimera-mas`(多 Agent 协同子系统,ADR-026),第 35 个 crate,与 10 个现有 crate 复用(80% 能力复用,Part II append-only 闭环见 ADR-028)。
@@ -450,7 +450,7 @@ my-crate/
 | `*Router` | `KVBlockSemanticRouter` | 路由模式,输入→匹配→输出 |
 | `*Protocol` | `QeepProtocol`(`crates/qeep-protocol/src/protocol.rs:70`) | 协议模式,定义通信契约 |
 | `*Governor` | `DecbGovernor`(`crates/decb-governor/src/governor.rs:76`) | 治理模式,速率/预算控制(旧例 ACBGovernor 随 acb-governor 按 ADR-182 退役) |
-| `*Mask<T>` | `SparseMask<T>` | 掩码模式,稀疏化选择(定义 `crates/nexus-contracts/src/sparse/masks.rs:53`;五维聚合类型是 `OmniSparseMasks`) |
+| `*Mask<T>` | `SparseMask<T>` | 掩码模式,稀疏化选择(定义 `crates/nexus-contracts-sparse/src/sparse/masks.rs:53`;五维聚合类型是 `OmniSparseMasks`) |
 | `*Block` | `SemanticBlock` | 块模式,结构化数据单元 |
 
 ### 4.4 async 反模式清单(Week 1-8 实战教训)
@@ -472,16 +472,16 @@ my-crate/
 
 ### 5.1 关键类型参照
 
-> 权威源(2026-09-22 现测)：核心领域类型**归属 L0 `nexus-contracts`** —— `UserIntent` `crates/nexus-contracts/src/core_domain/domain.rs:37`、`MultimodalInput` `crates/nexus-contracts/src/core_domain/domain.rs:53`、`Quest` `crates/nexus-contracts/src/core_domain/domain.rs:103`、`Checkpoint` `crates/nexus-contracts/src/core_domain/checkpoint.rs:36`、`OmniSparseMasks` `crates/nexus-contracts/src/sparse/omni_masks.rs:46`、`cosine_similarity_slices` 的权威实现 `crates/nexus-contracts/src/vector_math/util.rs`。L1 的 `crates/nexus-core/src/types.rs` 自述即「**纯 re-export 汇聚点**」(`:1-10`)，`crates/nexus-core/src/clv.rs:26` 是 `CLV` newtype 宿主，`crates/nexus-core/src/state.rs:88` 才是 `NexusState` 归属——**把 re-export 汇聚点当权威源会让改字段的人找错文件**，本节旧版正是这么写的，已纠。`SemanticBlock` 归属 L5 层内 `crates/kvbsr-router/src/types.rs:83`(非 L1 共享)。
+> 权威源(2026-09-22 现测)：核心领域类型**归属 L0 `nexus-contracts`** —— `UserIntent` `crates/nexus-contracts-core/src/core_domain/domain.rs:37`、`MultimodalInput` `crates/nexus-contracts-core/src/core_domain/domain.rs:53`、`Quest` `crates/nexus-contracts-core/src/core_domain/domain.rs:103`、`Checkpoint` `crates/nexus-contracts-core/src/core_domain/checkpoint.rs:36`、`OmniSparseMasks` `crates/nexus-contracts-sparse/src/sparse/omni_masks.rs:46`、`cosine_similarity_slices` 的权威实现 `crates/nexus-contracts/src/vector_math/util.rs`。L1 的 `crates/nexus-core/src/types.rs` 自述即「**纯 re-export 汇聚点**」(`:1-10`)，`crates/nexus-core/src/clv.rs:26` 是 `CLV` newtype 宿主，`crates/nexus-core/src/state.rs:88` 才是 `NexusState` 归属——**把 re-export 汇聚点当权威源会让改字段的人找错文件**，本节旧版正是这么写的，已纠。`SemanticBlock` 归属 L5 层内 `crates/kvbsr-router/src/types.rs:83`(非 L1 共享)。
 
-- `UserIntent` — 多模态用户意图(含 intent_id/raw_text/multimodal_inputs/risk_level；四字段实测全在 `crates/nexus-contracts/src/core_domain/domain.rs:37`，该结构另有 task_id/description/status/dependencies 等字段)
+- `UserIntent` — 多模态用户意图(含 intent_id/raw_text/multimodal_inputs/risk_level；四字段实测全在 `crates/nexus-contracts-core/src/core_domain/domain.rs:37`，该结构另有 task_id/description/status/dependencies 等字段)
 - `Quest` — 长期任务(实测字段 quest_id/title/tasks/thinking_mode/checkpoint_id/priority；**主键名是 `quest_id` 不是 `id`**，旧述会写错匹配代码)
 - `Checkpoint` — 检查点(含 quest_id/checkpoint_id/memory_snapshot_hash/serialized_state:Vec<u8> MessagePack/created_at/description(可选,`#[serde(default)]`)/schema_version:u16(ADR-213 F3 尾字段,0=历史形态且不写入))
 - `OmniSparseMasks` — 全维稀疏掩码(routing/context/memory/audit/budget 五维度)
 - `SemanticBlock` — 语义块(实测 15 字段，含 block_id/block_vector/tools/block_coherence/temporal/clv/top_blocks/top_tools 等；**该结构上没有能力 id 字段**，旧述列的三个名字里第三个是错的)
 - `CLV` — 上下文潜在向量(newtype over `Array1<f32>` @ `crates/nexus-core/src/clv.rs:26`，维度由该文件内 `pub const DIMENSION: usize = 512` 钉住；`cosine_similarity_slices` 权威实现在 L0 `crates/nexus-contracts/src/vector_math/util.rs`，经 `clv.rs` 再导出以保持 `nexus_core::cosine_similarity_slices` 的既有调用面)
 - `NexusState` — 全局运行时状态(独立 state.rs 模块)
-- `MultimodalInput` — **领域面当前只有 `Text(String)` 一个变体**(`crates/nexus-contracts/src/core_domain/domain.rs:53-59`)；Image/Video/Audio 三变体在 `crates/nexus-contracts/src/core_domain/domain.rs:57-59` 被注释 ⇒ **领域面多模态 = 待实现**。感知器侧另有 `crates/nmc-encoder/src/fusion.rs:244-246` 分派的 `PerceptionInput::{Image,Video,Audio}` 已实现——**两套枚举不要混谈**：领域面未支持不等于感知器未支持，反之亦然
+- `MultimodalInput` — **领域面当前只有 `Text(String)` 一个变体**(`crates/nexus-contracts-core/src/core_domain/domain.rs:53-59`)；Image/Video/Audio 三变体在 `crates/nexus-contracts-core/src/core_domain/domain.rs:57-59` 被注释 ⇒ **领域面多模态 = 待实现**。感知器侧另有 `crates/nmc-encoder/src/fusion.rs:244-246` 分派的 `PerceptionInput::{Image,Video,Audio}` 已实现——**两套枚举不要混谈**：领域面未支持不等于感知器未支持，反之亦然
 
 ### 5.2 数据流参考
 

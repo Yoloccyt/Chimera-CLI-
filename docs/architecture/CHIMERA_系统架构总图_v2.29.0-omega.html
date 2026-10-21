@@ -168,7 +168,7 @@ th{background:#dbe5ec;font-weight:600}
       <span class="crate hub">event-bus NexusEvent(152)</span></div></div>
 
     <div class="band"><div class="lab" style="background:var(--l0)">L0<small>Contracts 契约 · 1</small></div><div class="body">
-      <span class="crate root0">nexus-contracts — 纯类型 + 受控纯逻辑 · 零 workspace 内部依赖（ADR-033 + 追加节）</span></div></div>
+      <span class="crate root0">nexus-contracts — 纯类型 + 受控纯逻辑 · 零 workspace 内部依赖（ADR-033 + 追加节；<b>本图为 v2.29.0 时点快照，该口径已由 ADR-222 D2/D4 订正为「外部仅 serde/chrono/uuid/thiserror + 内部仅 6 个 L0-A sibling」，现势见 CODE_WIKI §3.0</b>）</span></div></div>
 
     <div class="dirnote"><b>读法</b>：图自上而下即"允许依赖方向"（上层可依赖下层，反之禁止）。虚线琥珀框 = 需 <code>--features mca</code> 装配期注入的 GATED 成员；灰点线 = 已物理删除、不可再按名索引的 crate（唯一登记表 CODE_WIKI §3.12）。枢纽加粗框 = 被所有成员消费的上帝 crate（<code>nexus-core</code>/<code>event-bus</code>）与契约根 <code>nexus-contracts</code>。</div>
   </div>

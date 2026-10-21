@@ -6,7 +6,8 @@
 > **权威源**: 本文件是架构决策、模块职责、核心类型的唯一权威参考
 > **生成方式**: 8 位资深专家虚拟团队分布式源码深度分析 + 实证验证(Cargo.toml 比对 + `cargo check --workspace` 全 members 全绿)
 > **专家签名**: E01 首席架构师 · E02 安全架构师 · E03 记忆系统专家 · E04 路由算法专家 · E05 生产系统专家 · E06 认知科学专家 · E07 任务调度专家 · E08 前端交互专家
-> **三方一致性** (2026-10-02 复核): `Cargo.toml` workspace.package.version = `2.29.0-omega`(代码实况,**39 members**;原 43 - auto-dpo/model-router + router-traits,再经 ADR-193 两批次整并 `router-traits` 退役与 `lsct-tiering` 并入 `cmt-tiering`) ⇔ `CHANGELOG.md` 最新条目 = `[2.29.0-omega] 2026-09-27 发布` ⇔ 本文档 = **39 crates(30 生产可达 + 9 GATED + 0 冻结孤岛;2026-10-02 棘轮实测 `reachable=30 frozen=0 new_gaps=0`;历史:M13 decb/scc 重路由 11→9,M12 三岛链 14→11,P0-P3 批次剩余孤岛经 r2_island_repayment feature 全部偿还)· 152 NexusEvent 变体(types.rs单表;L4 深度优化 P1-1:FormalVerificationFailed 升入 Critical 后分布 20/11/120,三层锁同步;event\_types.rs 镜像已退役)· 测试规模不登记动态 passed(时点链 11587 = 2026-09-02 全量重测,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;→ 11794 = 2026-09-17 M13 提交态全量回归实测终值,回写提交 `d3840ba`;架构减法/三层锁变更后待重测,两值均不得当现势;静态两尺 11232 strict / 11276 loose = 2026-09-22 现取,旧"差值 = doctest + 宏展开"解释已被否证,见 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md §24`)**
+> **三方一致性** (2026-10-02 复核；**crate 数部分已被 ADR-222（2026-10-20）取代：现取 46 members，本行旧值不得当现势引用；行 9 末尾有现行指针**): `Cargo.toml` workspace.package.version = `2.29.0-omega`(代码实况,**39 members**;原 43 - auto-dpo/model-router + router-traits,再经 ADR-193 两批次整并 `router-traits` 退役与 `lsct-tiering` 并入 `cmt-tiering`) ⇔ `CHANGELOG.md` 最新条目 = `[2.29.0-omega] 2026-09-27 发布` ⇔ 本文档 = **39 crates(30 生产可达 + 9 GATED + 0 冻结孤岛;2026-10-02 棘轮实测 `reachable=30 frozen=0 new_gaps=0`;历史:M13 decb/scc 重路由 11→9,M12 三岛链 14→11,P0-P3 批次剩余孤岛经 r2_island_repayment feature 全部偿还)· 152 NexusEvent 变体(types.rs单表;L4 深度优化 P1-1:FormalVerificationFailed 升入 Critical 后分布 20/11/120,三层锁同步;event\_types.rs 镜像已退役)· 测试规模不登记动态 passed(时点链 11587 = 2026-09-02 全量重测,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;→ 11794 = 2026-09-17 M13 提交态全量回归实测终值,回写提交 `d3840ba`;架构减法/三层锁变更后待重测,两值均不得当现势;静态两尺 11232 strict / 11276 loose = 2026-09-22 现取,旧"差值 = doctest + 宏展开"解释已被否证,见 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md §24`)**
+> **三方一致性・crate 数现行值（2026-10-20 现取）**：`workspace.members` = **46**（上一行 39 为 2026-10-02 时点快照）——ADR-222 拆 `nexus-contracts` 为 1+6 + 新建 `nexus-telemetry`；事件面 **152 变体 / 三层锁 20-11-120 未变**，本波零 `NexusEvent` 改动（G-117/118 对拍 rc=0）。可达性口径仍以 `scripts/check_crate_reachability.sh` 实时输出为准（拆 crate 后未重测，见报告 §7 R8-3）。
 > **基线变更触发**: 任何 workspace.member / NexusEvent 变体 / `#[test]` 函数增删必须同步更新本文档的"§1.1 身份标识"与"§3 Crate 索引",并触发 `scripts/check_doc_consistency.ps1` 巡检
 
 ***
@@ -15,7 +16,7 @@
 
 1. [项目概览](#1-项目概览)
 2. [十层架构详解](#2-十层架构详解)
-3. [39 Crate 完整索引](#3-39-crate-完整索引)
+3. [46 Crate 完整索引](#3-46-crate-完整索引)
 4. [核心领域类型](#4-核心领域类型)
 5. [事件系统](#5-事件系统)
 6. [依赖关系铁律](#6-依赖关系铁律)
@@ -37,7 +38,7 @@
 | 项目名 | Chimera CLI |
 | 代号 | NEXUS-OMEGA (Omni-Model Engineering Generative Architecture) |
 | 根目录 | `D:\Chimera CLI` |
-| 技术栈 | Rust 2021 edition · Tokio async · Workspace × **39 crates** (38 基线 + v2.28 新增 L10 `nexus-app-server` / L3 `session-store` / L9 `mas-sched`·`nexus-hook` / L7 `nexus-subagent`;v2.29 架构减法:删 auto-dpo/model-router + 新增 L6 `router-traits`;ADR-193 两批次:退役 `router-traits`、整并 `lsct-tiering` 入 `cmt-tiering`,41→39) |
+| 技术栈 | Rust 2021 edition · Tokio async · Workspace × **46 crates**（2026-10-20 现取 = `Cargo.toml` `workspace.members`；旧值 39 为 ADR-222 拆分前时点） (38 基线 + v2.28 新增 L10 `nexus-app-server` / L3 `session-store` / L9 `mas-sched`·`nexus-hook` / L7 `nexus-subagent`;v2.29 架构减法:删 auto-dpo/model-router + 新增 L6 `router-traits`;ADR-193 两批次:退役 `router-traits`、整并 `lsct-tiering` 入 `cmt-tiering`,41→39) |
 | 核心哲学 | OMEGA 十一定律: Ω₁-Sparse · Ω₂-Compress · Ω₃-Evolve · Ω₄-Event · Ω₅-Credit · Ω₆-Reuse · Ω₇-Locate · Ω₈-Assess · Ω₉-Preserve · Ω₁₀-Card · Ω₁₁-Synthesize |
 | 设计来源 | Claude Code 尸检 + Hermes 基因 + Qoder 骨骼 + 五大模型灵魂 |
 | **当前版本** | `v2.29.0-omega` (**2026-09-27 发布**,收口四维深审运行期质量批次 + 架构减法 A/B/P0 治理 + mlc L2 分层检索（ADR-192）;上一发布 = v2.28.2-omega(2026-09-08 发布 / tag a1b4616 2026-09-14 落在 release 支线，main 未含该 merge;⚠ 双支线历史待治理，见 `docs/reports/arch-quality-deep-review-2026-09-25.md` §5.51);再早 v2.28.0-omega → 94499b4(2026-09-06);v2.28.2 收口 09-05 治理批次 + TUI 四维评估三轮修复,高严重度问题 5→0;Phase 1-5 Ch12 波次 W1-W26 全部收尾 + 5 新 crate 落地 + ADR-095~160 治理 + 多轮冗余收敛(R1~R4→R9/R11);迭代链 v2.8.0 polish-v2.7 → v2.9.0~v2.13.0 L8/L10/MCA → v2.14.0\~v2.19.0 P3 Sprint → v2.20.0 PROBE → v2.21.0 CLI LLM → v2.22.0 MCA token → v2.24.0 Phase 9 → v2.25.0 Milestone B → v2.26.0 Concord TUI → v2.27.0 Phase 10 → v2.27.1 GPG 补发 → v2.28.0 Phase 1-5 治理 + 可达性棘轮 → v2.28.2 TUI 修复收口) |
@@ -98,8 +99,10 @@
 
 ### 2.1 分层映射 (L1→L10)
 
+> **ADR-222 (2026-10-20 追加)**：crate 数现为 **46 crates**（+ L0-B `nexus-telemetry`，+ L0-A 6 个 sibling 契约 crate：core / sparse / safety / seams / mca / memory）；L0 = L0-A（0A 纯契约，7 crate）+ L0-B（0B 核心基础面，3 crate），机器层号 0/1 不重排。下文历史段落的 39 为 2026-10-11 前时点值，保留留痕。
+
 ```
-L0   Contracts ── nexus-contracts                            [ADR-033 纯类型零依赖契约层]
+L0   Contracts ── nexus-contracts · nexus-contracts-core · nexus-contracts-sparse · nexus-contracts-safety · nexus-contracts-seams · nexus-contracts-mca · nexus-contracts-memory [ADR-033 纯类型零依赖契约层；ADR-222：L0 = L0-A(0A) + L0-B(0B)，机器层号 0/1 不重排；D2: core_domain 已拆为 sibling]
 L10  Interface ── chimera-cli · chimera-tui · chtc-bridge · mcp-mesh · csn-substitutor · mca-gateway · nexus-app-server [ADR-065 MCA 网关 + WI-01 宿主协议门面]
 L9   Quest ───── quest-engine · gea-activator · efficiency-monitor · chimera-mas · mas-sched · nexus-hook [ADR-145 调度控制面 + ADR-146 生命周期 Hook]
 L8   Parliament ─ parliament · decb-governor
@@ -109,7 +112,7 @@ L5   Knowledge ── repo-wiki · gsoe-evolution
 L4   Security ─── seccore · qeep-protocol · decay-engine
 L3   Storage ──── scc-cache · cmt-tiering · session-store [ADR-141 append-only 会话事件流]
 L2   Memory ───── nmc-encoder · hcw-window · mlc-engine
-L1   Core ─────── nexus-core · event-bus
+L1   Core ─────── nexus-core · event-bus · nexus-telemetry [ADR-222：L0-B 核心基础面]
 ```
 
 > **本层图与依赖门之间的历史分歧（2026-09-22 逐层对拍登记；2026-09-24 已按 ADR-189 收口为 L10，以下保留登记时的原状描述）**：`csn-substitutor` 在本文档 §2.1 与 §3.11、目录树、E08 专家映射
@@ -160,17 +163,21 @@ L1   Core ─────── nexus-core · event-bus
 
 ***
 
-## 3. 39 Crate 完整索引
+## 3. 46 Crate 完整索引
+
+> 标题计数为 **2026-10-20 现取**（= `Cargo.toml` `workspace.members`），ADR-222 前为 39；下表逐时点演进见本节变更注。**现值永远以 `workspace.members` 为准，不以本标题为准。**
 
 > **三方一致性原则**: 本节每个 crate 的"层归属"必须与 §2.1 分层映射图严格一致;
 > "主要依赖"必须与各 crate 的 `Cargo.toml` 实证一致;任何增删触发 `scripts/check_doc_consistency.ps1` 巡检。
 > **v2.4.0-omega 变更**: 35 → 37 crate,新增 L0 `nexus-contracts` (ADR-033) + L6 `omega-learner` (ADR-031)。
 > **MCA M0 变更**: 37 → 38 crate,新增 L10 `mca-gateway` (ADR-065)。
 > **v2.28.0-omega 变更**: 38 → 43 crate,新增 L10 `nexus-app-server`(WI-01)、L3 `session-store`(ADR-141)、L9 `mas-sched`(ADR-145)、L9 `nexus-hook`(ADR-146)、L7 `nexus-subagent`(ADR-148)。
+> **ADR-193 架构减法**: 43 → 41 → 39（批次 A 物理删除 `auto-dpo`/`model-router`；其后整 crate 退役 `router-traits`、`lsct-tiering` 整并入 `cmt-tiering`）。被删实体唯一登记表见 §3.12。
+> **ADR-222 边界重裁变更（2026-10-20）**: 39 → **46 crate**，新增 **1 个 L0-B crate** `nexus-telemetry`（计算面遥测纯判定 + `SaturationSource` 契约 + 上报编排，从 `nexus-core/compute/telemetry.rs` 抽出）与 **6 个 L0-A sibling 契约 crate** `nexus-contracts-{core,sparse,safety,seams,mca,memory}`（umbrella 作 facade 重导出，两条旧路径逐字不变）。**层号 0/1 不重排**：L0-A/L0-B 是层名亚层，机器判据仍由 `layer_of()` + 新 `sublayer_of()` 双源给出（G-125/G-126）；本节 §3.0 列 L0-A 七 crate，§3.1 列 L0-B 三 crate（其中 `nexus-telemetry` 机器层号为 1）。
 > **可达性现状（2026-09-21 棘轮现测）**: **41** crate = **32 生产可达 + 9 GATED + 0 冻结孤岛**（`scripts/check_crate_reachability.sh` 输出 `[R] members: 41, reachable: 32, unreachable: 0` 与 `[OK] reachable=32 frozen=0 new_gaps=0`）。GATED（仅 `--features` 编译、不入默认二进制）名单 = `chtc-bridge` · `csn-substitutor` · `mas-sched` · `mca-gateway` · `mtpe-executor` · `nexus-hook` · `omega-learner` · `sesa-router` · `ssra-fusion`；其中 `mas-sched`/`nexus-hook` 是经 `crates/chimera-cli/Cargo.toml:21 r2_island_repayment` 转为可达（freeze 清单 2026-09-20 `[ROTATE]` 留痕），故"冻结孤岛"这一类**已清零**，剩余 9 个是**有意 feature 门控**而非欠债。
 > **可达性历史标注(ADR-160 + ADR-177 + M10/M12/M13 批次)**: **M13 时点(2026-09-17)** 42 crate = 32 生产可达 + 9 冻结孤岛 + 1 GATED(mca-gateway;M13 批次 2026-09-17:decb-governor 经 efficiency-monitor 生产边转正(L9→L8 向下非内环,RuntimeAuditor 第 6 维 budget_discipline 消费 get_stats)+ scc-cache 经 chimera-cli 组合根转正(ADR-161 路径①,doctor 第 9 探针消费 stats()),冻结 11→9、可达 30→32,棘轮实测 reachable=32/frozen=9/new_gaps=0,消费者决策论证与 D1/D2 决策见 §3.11 M13 批次注记;M12 批次 2026-09-16:gea-activator/gqep-executor/qeep-protocol 三岛链经 wave 3c 接线全量转正——mas→gea 生产边(L9→L9)+ chimera-cli→gqep 生产边(L10→L7)+ qeep 传递转正(ADR-048 收编),冻结 14→11、可达 27→30,ADR-185;M10 批次 2026-09-16:acb-governor 退役删除 + lsct-tiering 转正,冻结 16→14;decb/scc-cache M10 经 parliament/hcw-window 转正被依赖铁律驳回后于 M13 按重路由候选偿还);孤岛完整清单(含阻塞依赖/解除条件)集中见本节末尾 **§3.11 冻结孤岛清单**,权威源为 `scripts/crate_reachability_freeze.txt`(由 `scripts/check_crate_reachability.sh` 生成,dev-dep 不计入装配面)。
 
-### 3.0 L0 Contracts (1 crate,ADR-033)
+### 3.0 L0-A 纯契约 (7 crates，ADR-033 + ADR-222 D2)
 
 #### [nexus-contracts](file:///d:/Chimera%20CLI/crates/nexus-contracts)
 
@@ -182,9 +189,23 @@ L1   Core ─────── nexus-core · event-bus
 | **关键类型** | `OmniSparseMasks` · `HarnessSpec` · `TemporalMeta` · `NamespaceQuota` · `SelectorPolicy` · `BudgetTier` · `Command` · `CommandPolicy` · `AttackType` · `ThinkingMode` · `MultimodalInput` · `UserIntent` · `Quest` · `Task` · `EventSeverity` · `TaskPriority` · `AgentStatus` |
 | **关键函数** | 类型派生(`Serialize`/`Deserialize`/`Clone`/`Debug`/`PartialEq`);`util` 模块七个共享工具函数（**五个**为无副作用纯函数，另两个是测量旋钮）:`xts_top_k_by`(Top-K,O(n) `select_nth_unstable_by`)、`xts_top_k`(序元素 Top-K,同 O(n) 内核)、`sigmoid`、`percentile_sorted<T: Copy>`(已排序切片分位,O(1))、`cosine_similarity_slices`(逐位一致余弦相似度,供检索/分层评分复用)、`perf_scale` 与 `perf_scale_ms`(测量尺度因子,读 `CHIMERA_PERF_SCALE`,仅供基准放宽阈值)。**订正记录(2026-10-08 / v3.5 W6-2)**:本行原写“三个”仅列 `xts_top_k_by`/`sigmoid`/`percentile_sorted`,与 `crates/nexus-contracts/src/vector_math/util.rs` 现测 7 个 `pub fn` 不符(余 4 个为后续批次新增且未同步本文)。其中**五个**(`xts_top_k`/`xts_top_k_by`/`sigmoid`/`percentile_sorted`/`cosine_similarity_slices`)属 ADR-033"纯类型+受控纯逻辑"约束的**受控例外**(旧口径"零逻辑"已于 ADR-033 2026-10-09 追加节量体订正;与 `test_scale::scaled_timeout!` 同源),保持零分配/零 I/O/零全局状态;而 `perf_scale`/`perf_scale_ms` **不是纯函数**(每次调用读进程环境变量),其定位是测试/CI 侧阈值缩放,本体注释自陈"仅适用于测试/CI 路径;生产代码不得依赖本函数做业务决策",失败安全为非法值回退 1.0(不因旋钮写错而静默放松红线) |
 | **性能证据** | `benches/util_micro.rs`(criterion,含 `CountingAlloc` 零堆分配硬断言):`sigmoid scalar` 33.2 ns / `sigmoid map 1024` 33.73 µs / `percentile_sorted p95` 6.5 ns(n=100 与 n=10000 等价 → 实证 O(1));CI 门槛见 `bench_check.yml` |
-| **主要依赖** | **仅** **`serde`** **workspace**,**无其他 workspace crate 依赖**(零依赖契约层) |
-| **设计模式** | Pure Data · 零运行时 · 编译期契约 |
-| **ADR 来源** | ADR-033 (L0 nexus-contracts) |
+| **主要依赖** | **workspace 外部仅 `serde`**（无其他业务 crate）；**ADR-222 D2/D4 后本 umbrella 额外依赖 6 个 L0-A sibling**（`nexus-contracts-{core,sparse,safety,seams,mca,memory}`）作 facade 重导出，且**方向单向**（sibling 不得反向依赖 umbrella，否则即 crate 环）；旧口径「零 workspace 内部依赖」已随拆分订正（权威源 `crates/nexus-contracts/Cargo.toml`） |
+| **设计模式** | Pure Data · 零运行时 · 编译期契约 · **facade 重导出（ADR-222 D4）** |
+| **ADR 来源** | ADR-033 (L0 nexus-contracts) · ADR-212 (单 crate 边界 + G-99) · ADR-218 (受控逻辑量门 G-119) · **ADR-222** (1+6 拆分与 L0-A/L0-B 双层，部分 supersede ADR-212 D1/D2) |
+
+#### L0-A sibling 索引（ADR-222 D2；每个 sibling **保留原组目录**，所以消费方旧路径不变）
+
+| crate | 组目录（即原 `nexus-contracts/src/<组>/`） | `src/*.rs` | 承载 | sibling 依赖 |
+|---|---|---|---|---|
+| [nexus-contracts-core](file:///d:/Chimera%20CLI/crates/nexus-contracts-core) | `core_domain/` | 10 | `UserIntent`/`Quest`/`Task`/`TaskStatus`/`Checkpoint`/`TemporalMeta`/`MultimodalInput`/`ThinkingMode`（`domain.rs`）+ `EventMetadata`/`EventMetadataV2`/`DynamicEvent`/`GraphIdentity` + `EventSeverity`/`TaskPriority`/`AgentStatus`（`event_payload.rs`） | 无（只 serde/chrono/uuid） |
+| [nexus-contracts-sparse](file:///d:/Chimera%20CLI/crates/nexus-contracts-sparse) | `sparse/` | 5 | `OmniSparseMasks` / `SparseMask<T>` / 五个 Id 新类型 + `id_newtype!` 镜像宏 | 无 |
+| [nexus-contracts-safety](file:///d:/Chimera%20CLI/crates/nexus-contracts-safety) | `safety/` | 8 | `BudgetTier`；`Command`/`CommandPolicy`/`AttackType`/`CommandValidator`；裁决类型 `EpistemicType`/`CertifyVerdict`/`FailureRecord`；敏感扫描 `SensitiveKind`/`ScanPolicy`；校准类型 `CalibrationSample`/`EvalRecord`；`errors.rs` 里的 `NexusError`/`ErrorLayer`/`Recoverable`（thiserror） | 无 |
+| [nexus-contracts-seams](file:///d:/Chimera%20CLI/crates/nexus-contracts-seams) | `seams/` | 14 | S1-S9 接缝策略契约（`SelectorPolicy`/`DensityPolicy`/`MemoryStrategy`/`Prefetch*`/`ParliamentPolicy`/`DecayProfile`/`CapabilityToken`/RL 钩子与 `reward` 政策表） | 无 |
+| [nexus-contracts-mca](file:///d:/Chimera%20CLI/crates/nexus-contracts-mca) | `mca/` | 5 | `ProviderId`/`CapabilitySet`/`ModelAffinitySpec`/`OmniMessage`/`PriceVector`（ADR-065 族） | 无 |
+| [nexus-contracts-memory](file:///d:/Chimera%20CLI/crates/nexus-contracts-memory) | `memory/` | 8 | Ω₁₀ 经验卡片 / `NamespaceQuota` / `TokenLedgerEntry` / 归档单调性 / 技能生命周期 | core + mca + seams |
+
+> 分区依据是实测组间依赖 DAG（**量纲订正 2026-10-20**：拆分新增的**跨 crate 边 = 11 条**，与 `scripts/dep_edge_freeze.txt` 本波登记的 11 行同集；crate 级 L0 内部边现取 **14 条**（G-125 自报，含 L0-B 的 `nexus-core->event-bus` 等）；模块级展开边另见 `docs/reports/L0-boundary-readjudication_2026-10-19.md` §5.2——该报告原标「实测 15 条边」无可复现口径，已在 §5.2 标题就地订正）；上述七个 crate 的生产依赖白名单恒为 `{serde, chrono, uuid, thiserror}` + 已拆出的 sibling（G-99），方向铁律由 G-125 守护（L0-A 不得指向 L0-B）。
+> **本索引不洗白一件事**：六个 sibling 的装配面多为“仅被 umbrella 消费”（CONSUMERS=1~2，见 `docs/architecture/views/layer_contracts.txt`），这是拆分的已知代价而不是收益，登记于 ADR-222 §3 与报告待裁 R8-3。
 
 ### 3.1 L1 Core (3 crates)
 
@@ -210,6 +231,20 @@ L1   Core ─────── nexus-core · event-bus
 | **关键方法** | `EventBus::publish()` · `EventBus::subscribe()` · `EventBus::publish_critical()` |
 | **主要依赖** | tokio · serde · chrono · uuid · tracing · nexus-contracts |
 | **设计模式** | 发布 - 订阅 · 双通道保障 (Normal→broadcast, Critical→mpsc) |
+
+#### [nexus-telemetry](file:///d:/Chimera%20CLI/crates/nexus-telemetry)
+
+| 项 | 说明 |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **架构层** | L1 Core（**机器层号 1**）—— ADR-222 D1 层名为 **L0-B 核心基础面**（层名与层号分离，0/1 不重排） |
+| **核心职责** | 计算面饱和观测的**纯判定 + 契约 + 上报编排**：`SaturationMode` 三态处置策略（Observe/Degrade/Strict）、bp 阈值解析与 fail-safe 回退、`report_needed` 去抖判定、`SaturationSource` 依赖倒置契约、`reporter_tick`/`spawn_saturation_reporter` 周期驱动。从 `nexus-core/src/compute/telemetry.rs` 抽出（ADR-197 Phase A 的可观测闭环，ADR-222 D3 只改落点不改语义） |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-telemetry/src/lib.rs) · [mode.rs](file:///d:/Chimera%20CLI/crates/nexus-telemetry/src/mode.rs) · [threshold.rs](file:///d:/Chimera%20CLI/crates/nexus-telemetry/src/threshold.rs) · [source.rs](file:///d:/Chimera%20CLI/crates/nexus-telemetry/src/source.rs) · [report.rs](file:///d:/Chimera%20CLI/crates/nexus-telemetry/src/report.rs) · [tests/contract.rs](file:///d:/Chimera%20CLI/crates/nexus-telemetry/tests/contract.rs) |
+| **关键类型** | `SaturationMode` · `SaturationSource`（trait，对象安全，由 L0-B 的 `nexus-core` 实现） · `CalibrationEvidence`（纯 DTO，枚举字段字符串化以免 crate 环） · `TickReport` |
+| **关键函数** | `saturation_ratio_bp`（u64 大数百分比经 f64 中间值，项目红线）、`parse_saturation_mode`、`parse_threshold_bp`、`threshold_bp`/`saturation_mode`（env 一次性读取）、`report_needed`、`clamped_period`（周期下界 1s）、`reporter_tick`、`spawn_saturation_reporter(bus, period_secs, Arc<dyn SaturationSource>)` |
+| **主要依赖** | event-bus · tokio · tracing（**三件，不依赖 `nexus-core`**——反向即 crate 环，由 G-125 `[PURITY-LEAK]` 拦；也不依赖 `nexus-contracts`，抽取代码不引用任何 L0 类型，按字面加声明会撞 G-31「声明未用即红」） |
+| **设计模式** | 依赖倒置（端口在 L0-B、适配与有状态实体在 `nexus-core`） · facade 薄包装（旧签名 `spawn_saturation_reporter(bus, secs)` 保留 ⇒ 3 处装配点零改动） |
+| **测试面** | 13 测：6 单元（纯函数表驱动）+ 7 集成契约测（外部视角：`clamped_period(0)→1s`、`reporter_tick` 三阶段各调一次且顺序为 sample→flush→evidence、`TickReport` 透传、周期任务真驱动 tick） |
+| **ADR 来源** | ADR-197（双口径饱和事件）· ADR-198（B1 校准写表）· **ADR-222 D3**（上提为 L0-B 并抽契约） |
 
 ***
 
@@ -399,8 +434,8 @@ L1   Core ─────── nexus-core · event-bus
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **架构层** | L6 Router |
 | **核心职责** | 全维稀疏架构协调器(OSA)，五维度稀疏掩码(路由/上下文/记忆/审计/预算)计算 |
-| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/osa-coordinator/src/lib.rs) · [coordinator.rs](file:///d:/Chimera%20CLI/crates/osa-coordinator/src/coordinator.rs) · [masks.rs](file:///d:/Chimera%20CLI/crates/osa-coordinator/src/masks.rs)(17 行 re-export 垫片;类型定义在 `crates/nexus-contracts/src/sparse/masks.rs:53`) |
-| **关键类型** | `OmniSparseCoordinator` · `OmniSparseMasks`(`crates/nexus-contracts/src/sparse/omni_masks.rs:46`) · `SparseMask<T>`(`crates/nexus-contracts/src/sparse/masks.rs:53`) · 五维字段 `routing`/`context`/`memory`/`audit`/`budget`(`crates/nexus-contracts/src/sparse/omni_masks.rs:48-56`) |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/osa-coordinator/src/lib.rs) · [coordinator.rs](file:///d:/Chimera%20CLI/crates/osa-coordinator/src/coordinator.rs) · [masks.rs](file:///d:/Chimera%20CLI/crates/osa-coordinator/src/masks.rs)(17 行 re-export 垫片;类型定义在 `crates/nexus-contracts-sparse/src/sparse/masks.rs:53`) |
+| **关键类型** | `OmniSparseCoordinator` · `OmniSparseMasks`(`crates/nexus-contracts-sparse/src/sparse/omni_masks.rs:46`) · `SparseMask<T>`(`crates/nexus-contracts-sparse/src/sparse/masks.rs:53`) · 五维字段 `routing`/`context`/`memory`/`audit`/`budget`(`crates/nexus-contracts-sparse/src/sparse/omni_masks.rs:48-56`) |
 | **关键方法** | `OmniSparseCoordinator::compute_all_masks()` → `OmniSparseMasks`(`crates/osa-coordinator/src/coordinator.rs:322`,async) · `compute_all_masks_batch()`(`crates/osa-coordinator/src/coordinator.rs:458`) |
 | **主要依赖** | nexus-contracts · nexus-core · event-bus · serde · serde\_json · thiserror · sha2 · hex · tracing |
 
@@ -743,7 +778,7 @@ L1   Core ─────── nexus-core · event-bus
 
 ### 3.11 生产可达性与冻结孤岛清单(ADR-160,2026-08-29 棘轮)
 
-> **口径**:从 `chimera-cli` 生产依赖图反向可达(**dev-dependencies 与 feature-gated/optional 边不计入**)。39 crate = **30 生产可达 + 9 GATED(feature 门控)+ 0 冻结孤岛**(2026-10-02 棘轮实测 `reachable=30 frozen=0 new_gaps=0`;成员数演进:43 - 架构减法批次删除 auto-dpo/model-router + 新增 router-traits,再经 ADR-193 两批次退役 router-traits、整并 lsct-tiering 入 cmt-tiering,41→39)。登记为孤岛 = 承认其为"可见技术债",不阻塞合并;新出现的未登记不可达 crate 会让 `scripts/check_crate_reachability.sh` 非零退出。三条偿还路径:① 接入组合根 `chimera-cli/Cargo.toml`;② 在消费方声明 `optional=true` + cargo feature(先例 ADR-065 决策 6 + `--features mca` CI job);③ 保持不接线但在 ADR 记录理由(shadow-first/迁移)。权威清单以 `scripts/crate_reachability_freeze.txt` 为准。
+> **口径**:从 `chimera-cli` 生产依赖图反向可达(**dev-dependencies 与 feature-gated/optional 边不计入**)。39 crate = **30 生产可达 + 9 GATED(feature 门控)+ 0 冻结孤岛**（**2026-10-20 注：成员数现为 46，但本行可达性读数未重测——拆 crate 后装配面是否变化属新轴，登记为待裁 R8-3；以 `scripts/check_crate_reachability.sh` 实时输出为准**；2026-10-02 棘轮实测 `reachable=30 frozen=0 new_gaps=0`;成员数演进:43 - 架构减法批次删除 auto-dpo/model-router + 新增 router-traits,再经 ADR-193 两批次退役 router-traits、整并 lsct-tiering 入 cmt-tiering,41→39)。登记为孤岛 = 承认其为"可见技术债",不阻塞合并;新出现的未登记不可达 crate 会让 `scripts/check_crate_reachability.sh` 非零退出。三条偿还路径:① 接入组合根 `chimera-cli/Cargo.toml`;② 在消费方声明 `optional=true` + cargo feature(先例 ADR-065 决策 6 + `--features mca` CI job);③ 保持不接线但在 ADR 记录理由(shadow-first/迁移)。权威清单以 `scripts/crate_reachability_freeze.txt` 为准。
 >
 > **M10 偿还批次(2026-09-16,island-batch-promotion-a):冻结孤岛 16 → 14**。有效两岛:`acb-governor` 退役删除(ADR-182,零生产消费者,~2200 LOC);`lsct-tiering` 经 cmt-tiering 生产边转正(`src/lsct_policy.rs` 策略装配闭环,L3→L3 同层;lsct 自持 Tier 类型解除 cmt↔lsct 依赖环,ADR-179 真实生产调用路径)。
 >
@@ -790,7 +825,7 @@ L1   Core ─────── nexus-core · event-bus
 | 已删 crate | 删除提交 | 依据 | 原能力的现存载体（已核实） |
 |---|---|---|---|
 | `acb-governor`（L8 ACB 能力预算治理器） | `697b6c2`（2026-09-16） | ADR-182（生产孤岛退役执行，十步删除清单） | 预算/成本治理落在 `decb-governor`（其 `src/config.rs:12`/`:69` 仍按 CACR 美分单位对齐成本参数） |
-| `model-router`（L1 CACR 成本感知模型路由） | `38c72e6`（2026-09-20，架构减法批次 A+B） | 同上批次 | 渠道亲和/成本面落在 `mca-gateway`（`src/adapters.rs`、`src/capability.rs`、`src/cost_guard.rs`）；类型契约落在 `nexus-contracts/src/mca/affinity.rs`（`ProviderId:68` / `CacheSupport:162` 等） |
+| `model-router`（L1 CACR 成本感知模型路由） | `38c72e6`（2026-09-20，架构减法批次 A+B） | 同上批次 | 渠道亲和/成本面落在 `mca-gateway`（`src/adapters.rs`、`src/capability.rs`、`src/cost_guard.rs`）；类型契约落在 `nexus-contracts-mca/src/mca/affinity.rs`（`ProviderId:68` / `CacheSupport:162` 等） |
 | `auto-dpo`（L5 DPO 偏好数据生成与优化） | `38c72e6`（同上） | 同上批次 | **无 1:1 继承者**。仅事件契约留存：`DpoPairGenerated`（`event-bus/src/types.rs:447`、定级 `registry.rs:149`），其构造点在 `crates/*/src` **零命中**（仅 `event-bus/tests/filtered_subscriber_test.rs:577` 与 TUI 覆盖测试构造）⇒ 该事件属"已定义未接线"，勿当作可用链路 |
 | `router-traits`（L6 路由纯 trait 抽象层） | `1ead632`（2026-09-28，ADR-193 批次一，41→40） | 过早抽象（YAGNI）：长期只有唯一实现、无第二 provider 落地，独立 crate 无收益却增依赖面与可达性维护成本 | **无载体——trait 面随 crate 整体删除**。其 `RouterConfig`/`RouterId`/`SparseMaskProvider`/`SparseMaskError` 在 `crates/**/*.rs` 实测 **0 命中**（唯一 `RouterConfig` 子串命中是无关的 `nexus-core::ModelRouterConfig`）；唯一实现块 `impl SparseMaskProvider for OmniSparseCoordinator` 随提交自 `crates/osa-coordinator/src/lib.rs` 一并移除（−38 行）。掩码能力面仍由 L0 `nexus-contracts` 的 `SparseMask<T>`（`src/sparse/masks.rs:53`）与 `OmniSparseMasks` 承载，**未受影响** |
 | `lsct-tiering`（L3 分层调度） | `bd3b10a`（2026-09-28，ADR-193 批次二，40→39） | **整 crate 并入 `cmt-tiering`**（能力未删，属载体搬迁） | `crates/cmt-tiering/src/lsct/`——`mod.rs:42-49` 声明 `config`/`error`/`tiering`/`types` 四子模块并重导出 `LsctConfig`/`LsctError`（实测在盘） |
@@ -1442,7 +1477,9 @@ chimera tui
 >
 > * **NexusEvent 变体数不在此登记**（2026-09-21 校正：原记"= 145 权威口径"为 2026-08-30 时点值，已被后续批次超越）：唯一取法为枚举 `crates/event-bus/src/types.rs`，分类由其 `metadata()` 负责（`event_types.rs` 镜像已按 ADR-160 决策 5 退役删除，分类真值源收敛为 types.rs 一处），并由 `scripts/check_doc_drift.sh` 自报校验
 >
-> * **`#![forbid(unsafe_code)]`** **41/41 crate 全合规**(2026-09-21 实测：每个 `crates/*/src/lib.rs` 均声明；lib.rs 层声明，依赖 crate 内部 unsafe 如 rusqlite/prometheus-client 不传播)
+> * **`#![forbid(unsafe_code)]`** **46/46 crate 全合规**（2026-10-20 现取口径：`crates/*/src/lib.rs` 共 46 个，逐个 grep 均含该属性；旧值 41/41 为 ADR-222 拆分前时点，新增 8 个 crate 的 lib.rs 同样带 crate 级声明；lib.rs 层声明，依赖 crate 内部 unsafe 如 rusqlite/prometheus-client 不传播）
+>
+> * **ADR-2xx 批次指针（编号上限与登记数一律以 `docs/architecture/adr_index.md` 现取，本文件不锁上限）**：L0 专项已连续收口七轮——ADR-212~220 六轮（门族 G-99/G-105/G-107/G-113/G-115/G-117~120/G-123~124）+ ADR-221（第七轮全量审计与验证基线）+ **ADR-222**（第八轮：L0 边界重裁 → L0-A/L0-B 层名亚层 + `nexus-contracts` 拆 1+6 + `nexus-telemetry` 上提，新增 G-125/G-126，**部分 supersede ADR-212 D1/D2 与 ADR-049 D1**）。上方两处「主编号至 **ADR-198**」属 **2026-10-02 时点快照，已过期**，不得当登记数依据；下表逐条行也只覆盖早期 ADR，近批的决策-主题映射只查 `adr_index.md`。
 
 | ADR | 主题 | 决策 | 落地状态 | 代码实证 |
 | ----------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1455,10 +1492,10 @@ chimera tui
 | ADR-027 | CHIMERA-MAS 四象限 + 优先级调度 | 孙代理四象限(INV-3/4) + WSJF + E01-E08 专家团队 | ✅ 落地 | `chimera-mas/src/quadrant.rs` + `scheduler.rs`;v2.1.0-omega Stage B |
 | ADR-028 | CHIMERA-MAS Part II 闭环能力 | 7 项闭环(上下文预算/分块/归档/知识/稳定/PDCA/INV) | ✅ 落地 | `chimera-mas/src/{context,chunker,archive,knowledge,stability,pdca,invariants}.rs`;v2.2.0-omega;INV-7/INV-8 不变量 |
 | **ADR-029** | **AETHER TUI v3.1 交互式重构** | **自研渲染引擎(纯 safe Rust,L3 双缓冲 diff/L4 Flexbox/L5 组件)+ Action 统一协议(8 变体 append-only)+ Registry 单一事实源 + InputRouter 5 态路由(Normal/Insert/Command/GPrefix/WPrefix)+ i18n 默认中文 +** **`v3-engine`** **feature 双轨迁移** | ✅ **M0 落地** | `chimera-tui/src/{actions,engine,components,i18n,input}/` 5 模块 + `event-bus` TUI 段现 **11 变体**(types.rs:1567-1740;ADR-029 原始 8 变体 + W10 增 TuiHello/TuiHelloAck + FC-2 增 TuiChatHistoryReplaced;旧记「8 变体(types.rs:1549-1655)」行号已漂移) + `chimera-cli` action\_orchestrator 订阅;commit `bf9aa75`(2026-07-21);M2 起 v3-engine feature 启用渲染 |
-| **ADR-030** | **unsafe 红线不特批** | **安全等价物重写(arc-swap / crossbeam / bumpalo 替代 unsafe 库)** | ✅ 落地 | workspace 引入 `arc-swap`(event-bus Cargo.toml;版本以 `Cargo.toml` `[workspace.dependencies]` 为准,旧记行号 L251-255 已漂移);`#![forbid(unsafe_code)]` **41/41 crate 全覆盖**(2026-09-21 实测,旧记 43/43 为架构减法前时点) |
+| **ADR-030** | **unsafe 红线不特批** | **安全等价物重写(arc-swap / crossbeam / bumpalo 替代 unsafe 库)** | ✅ 落地 | workspace 引入 `arc-swap`(event-bus Cargo.toml;版本以 `Cargo.toml` `[workspace.dependencies]` 为准,旧记行号 L251-255 已漂移);`#![forbid(unsafe_code)]` **46/46 crate 全覆盖**(2026-10-20 现取；旧记 41/41 为 2026-09-21 实测、43/43 为架构减法前时点，均为历史快照) |
 | **ADR-031** | **Harness-as-Spec + omega-learner 边界** | **C2 嫁接点命名映射表 + §5.2 九项裁决对账附录 + omega-learner 异步下发 SelectorPolicy::Learned** | ✅ 落地 | `omega-learner/src/{bandit,policy,shadow}.rs`;LinUCB + Shadow Mode + 本地 fallback |
 | **ADR-032** | **双通道评估器(RHI-CG)** | **通道 A 提议 + 通道 B 否决(双通道互不覆盖)** | ✅ 落地 | `auto-dpo/src/rhi_channel_a.rs` + `gsoe-evolution/src/ci_gate.rs`;P5.1/P5.2 完整闭环 |
-| **ADR-033** | **L0 nexus-contracts** | **纯类型 + 受控纯逻辑（无 IO/async/网络/随机）+ 零外部业务依赖契约层,依赖铁律扩展** **`L(N) → L(0)`** **恒允许**（“零逻辑”总括词已于 2026-10-09 量体订正，见本 ADR 追加节） | ✅ 落地 | `crates/nexus-contracts/src/lib.rs` 仅依赖 `serde` workspace;承载 `OmniSparseMasks` / `HarnessSpec` / `TemporalMeta` / `NamespaceQuota` / `SelectorPolicy` / `BudgetTier`(ADR-054 决策 3,P9-T3 上提) / `command_validation` 契约(`Command`/`CommandPolicy`/`AttackType` + `CommandValidator` trait,ADR-054 决策 3,P9-T4) + `domain` 契约(`ThinkingMode`/`MultimodalInput`/`UserIntent`/`Quest`/`Task`,ADR-054 决策 6,P9-T7) + `event_payload` 契约(`EventSeverity`/`TaskPriority`/`AgentStatus`,P9-T7) |
+| **ADR-033** | **L0 nexus-contracts** | **纯类型 + 受控纯逻辑（无 IO/async/网络/随机）+ 零外部业务依赖契约层,依赖铁律扩展** **`L(N) → L(0)`** **恒允许**（“零逻辑”总括词已于 2026-10-09 量体订正，见本 ADR 追加节） | ✅ 落地 | `crates/nexus-contracts/src/lib.rs` 外部仅依赖 `serde` workspace（**ADR-222 D2/D4 后另依赖 6 个 L0-A sibling 作 facade 重导出，方向单向；旧口径「零 workspace 内部依赖」已订正，以 `crates/nexus-contracts/Cargo.toml` 实读为准**）;承载 `OmniSparseMasks` / `HarnessSpec` / `TemporalMeta` / `NamespaceQuota` / `SelectorPolicy` / `BudgetTier`(ADR-054 决策 3,P9-T3 上提) / `command_validation` 契约(`Command`/`CommandPolicy`/`AttackType` + `CommandValidator` trait,ADR-054 决策 3,P9-T4) + `domain` 契约(`ThinkingMode`/`MultimodalInput`/`UserIntent`/`Quest`/`Task`,ADR-054 决策 6,P9-T7) + `event_payload` 契约(`EventSeverity`/`TaskPriority`/`AgentStatus`,P9-T7) |
 | **ADR-034** | **灰度=能力场 + 编译期 feature** | **否决运行时 Feature Flag,采用 CapabilityToken 四态 + 编译期** **`v3-engine`** **/** **`wasm-sandbox`** **feature 双轨** | ✅ 落地 | `chimera-tui/Cargo.toml:10-12` `v3-engine` feature 默认 off;`seccore/Cargo.toml` `wasm-sandbox` feature gate |
 | **ADR-035** | **威胁模型下修 + wasmtime 沙箱重启路径** | **wasmtime 下沉到 seccore 直接声明 +** **`wasm-sandbox`** **feature gate 隔离 + 重启路径** | ✅ 落地 | `seccore/Cargo.toml` wasmtime 独立声明;`sandbox.rs:474` 注释降级说明 + 重启路径代码 |
 | **ADR-037** | **能力场灰度工程化方案** | **CapabilityToken 四态 + EWMA α=0.1 + AsaIntervention 安全闭环** | ✅ 落地 | `parliament/src/capability_token.rs` + ~~`acb-governor/src/ewma.rs`~~(已随 ADR-182 退役);P4-W14.5 实施 |
@@ -1732,10 +1769,10 @@ my-crate/
 
 | 不变量 | 编码位置 | 触发条件 | 动作 |
 | -------------------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | ------------------------------------------- |
-| **INV-7 上下文预算界** | `chimera-mas/src/invariants.rs` `InvariantChecker::check_inv7_context_budget()`（`invariants.rs:275`；两条约束 = 单 Agent 驻留 ≤ `effective_capacity`、全局 `m_total ≤ m_budget × 0.9`） | `m_total > m_budget × MEMORY_BUDGET_UTILIZATION`（常量 `MEMORY_BUDGET_MB = 130` @ `invariants.rs:87`、`MEMORY_BUDGET_UTILIZATION = 0.9` @ `invariants.rs:95` ⇒ 阈值 117 MB；`nexus-contracts/src/memory/quota.rs:85`+`:88` 另有同值镜像） | 早退返回 `MasError::TokenBudgetExceeded`（**检测型，不执行淘汰**；Hot 256 条 LRU 与 Warm/Cold 降级由归档调度独立负责，见 `archive/mod.rs:28`） |
+| **INV-7 上下文预算界** | `chimera-mas/src/invariants.rs` `InvariantChecker::check_inv7_context_budget()`（`invariants.rs:275`；两条约束 = 单 Agent 驻留 ≤ `effective_capacity`、全局 `m_total ≤ m_budget × 0.9`） | `m_total > m_budget × MEMORY_BUDGET_UTILIZATION`（常量 `MEMORY_BUDGET_MB = 130` @ `invariants.rs:87`、`MEMORY_BUDGET_UTILIZATION = 0.9` @ `invariants.rs:95` ⇒ 阈值 117 MB；`nexus-contracts-memory/src/memory/quota.rs:85`+`:88` 另有同值镜像） | 早退返回 `MasError::TokenBudgetExceeded`（**检测型，不执行淘汰**；Hot 256 条 LRU 与 Warm/Cold 降级由归档调度独立负责，见 `archive/mod.rs:28`） |
 | **INV-8 归档单调性** | `chimera-mas/src/invariants.rs` `InvariantChecker::check_inv8_archive_monotonicity()` | 检测到 Cold→Warm 升级请求 | `InvariantChecker::check_inv8_archive_monotonicity()` 以 `?` 早退返回 `MasError::ArchiveMonotonicityViolated`（调用点 `archive/scheduler.rs:123` 的 `trigger`；该模块自述见 `archive/scheduler.rs:15`） |
-| **MAX\_AGENT\_DEPTH = 5** | `chimera-mas/src/orchestrator.rs:49` 的 `pub const MAX_AGENT_DEPTH: usize = 5`（`nexus-contracts/src/memory/quota.rs:91` 镜像同值；`delegation.rs` 内该常量出现 0 次） | 深度 = 1(根) + 子任务级数;5 级时叶子必须 leaf | 委托拒绝,返回 `MasError::MaxDepthExceeded`（`MasError` enum 实测 40 个变体，变体名以 `crates/chimera-mas/src/error.rs` 为准） |
-| **`#![forbid(unsafe_code)]`** | **41/41 crate** 的 `src/lib.rs` 顶部属性区（实测**无一处位于第 1 行**——前导是 `//!` 模块文档注释；`grep -l` 口径 41/41 命中） | 任何 unsafe 块 | `rustc` 编译失败 |
+| **MAX\_AGENT\_DEPTH = 5** | `chimera-mas/src/orchestrator.rs:49` 的 `pub const MAX_AGENT_DEPTH: usize = 5`（`nexus-contracts-memory/src/memory/quota.rs:91` 镜像同值；`delegation.rs` 内该常量出现 0 次） | 深度 = 1(根) + 子任务级数;5 级时叶子必须 leaf | 委托拒绝,返回 `MasError::MaxDepthExceeded`（`MasError` enum 实测 40 个变体，变体名以 `crates/chimera-mas/src/error.rs` 为准） |
+| **`#![forbid(unsafe_code)]`** | **46/46 crate** 的 `src/lib.rs` 顶部属性区（2026-10-20 现取；旧值 41/41 为拆分前时点。实测**无一处位于第 1 行**——前导是 `//!` 模块文档注释；`grep -l` 口径 46/46 命中） | 任何 unsafe 块 | `rustc` 编译失败 |
 | **Critical 事件 mpsc** | `event-bus/src/bus.rs` `publish_critical()` | `SkepticVeto`/`RedTeamAudit`/`AsaIntervention`/`BudgetExceeded`/`AgentTaskFailed` | mpsc fan-out,保证送达 |
 | **BudgetExceeded severity = Critical** | `event-bus/src/registry.rs`(`NexusEvent::severity()`,`define_event_registry!` 注册表展开生成) | 任何 BudgetExceeded 事件 | `severity()` 必须返回 `EventSeverity::Critical` |
 
@@ -1756,7 +1793,7 @@ my-crate/
 
 ★ **Insight 1 — L1 上帝 crate 现象**:`nexus-core` 被 **38 crate** 中 33 个依赖;`event-bus` 被 **38 crate** 中 30+ 个依赖。两者构成 L1 上帝节点,任何核心 API 变更需 major 版本升级。改进方向:内环/外环重组(参考 `三环循环_十层接口_元架构重组深度分析.md` Phase 0;**Phase 0 评估已于 2026-08-04 完成,P9-T1**);v5.0 P2 引入 `nexus-contracts` 零依赖契约层作为 L0 解耦基底(ADR-033)。
 
-★ **Insight 2 — L6 Router 耦合面(现状)**:`osa-coordinator` 曾被记为 L6 router 的星型中心;**该星型已消解** —— `kvbsr-router`/`faae-router`/`sesa-router`/`omega-learner` 的 manifest 现只依赖 L0 `nexus-contracts`(各 `Cargo.toml` 的 `nexus-contracts = { workspace = true }` 行),对 `osa-coordinator` **无依赖边**(仅注释提及)。共享类型定义点:`OmniSparseMasks` = `crates/nexus-contracts/src/sparse/omni_masks.rs:46`,`SparseMask<T>` = `crates/nexus-contracts/src/sparse/masks.rs:53`(ADR-033 基底 + P2-W5.2/P9-T3 上提)。
+★ **Insight 2 — L6 Router 耦合面(现状)**:`osa-coordinator` 曾被记为 L6 router 的星型中心;**该星型已消解** —— `kvbsr-router`/`faae-router`/`sesa-router`/`omega-learner` 的 manifest 现只依赖 L0 `nexus-contracts`(各 `Cargo.toml` 的 `nexus-contracts = { workspace = true }` 行),对 `osa-coordinator` **无依赖边**(仅注释提及)。共享类型定义点:`OmniSparseMasks` = `crates/nexus-contracts-sparse/src/sparse/omni_masks.rs:46`,`SparseMask<T>` = `crates/nexus-contracts-sparse/src/sparse/masks.rs:53`(ADR-033 基底 + P2-W5.2/P9-T3 上提)。
 
 ★ **Insight 3 — chimera-mas 协同广度**:`chimera-mas` 作为 L9 hub 协同 16 个跨层 crate(L1/L2/L3/L4/L6/L7/L8/L9 全部),是迄今依赖最广的单一 crate(24 个内部依赖 + 3 个外部),但严格遵守依赖铁律(只依赖 L(N-1) 及以下)。
 

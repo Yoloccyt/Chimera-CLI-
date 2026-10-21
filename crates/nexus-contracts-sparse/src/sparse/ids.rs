@@ -9,7 +9,8 @@
 //!   定义在 `osa-coordinator/src/types.rs`，通过 `nexus_core::id_newtype!` 宏生成。
 //!   上提至 L0 后消除 L6 Router × 3 对 OSA 的星型依赖（Insight 2 消解）
 //!
-//! - **手动实现(不依赖 nexus-core)**: L0 禁止依赖任何 workspace crate（含 nexus-core），
+//! - **手动实现(不依赖 nexus-core)**: L0-A 禁止依赖 L0-B（含 `nexus-core`）与层号 >= 2 的
+//!   crate，仅可依赖 L0-A sibling（ADR-033 + ADR-222 D2；机器判据 G-99 / G-125），
 //!   因此无法使用 `nexus_core::id_newtype!` 宏。改用 crate 私有宏 `id_newtype!`
 //!   生成完全相同的 trait 实现（Debug/Clone/PartialEq/Eq/Hash/Serialize/Deserialize +
 //!   Deref/AsRef/Borrow/From/Display），保证行为一致与序列化向后兼容
