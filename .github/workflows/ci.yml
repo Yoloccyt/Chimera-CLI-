@@ -145,6 +145,16 @@ jobs:
           python3 scripts/check_ps1_bom_gate.py --selftest
           python3 scripts/check_ps1_bom_gate.py
 
+      # WHY(ADR-222 R8-9): 2026-10-20 的重复键使整份 check_dependency_rules.ps1
+      # 无法被 PowerShell 加载，而所有门仍绿——因为 CI 只跑 .sh，G-45/46 与 G-125
+      # 都用 Python 读表（dict 折叠重复键），没有任何执行体真正解析过 .ps1。
+      # 本步用 Parser::ParseFile 真解析，只判「能否解析」；内容一致与亚层方向
+      # 分别仍由 G-45/46 与 G-125 负责（轴分工，不互抄基线）。
+      - name: PowerShell syntax gate (G-127)
+        run: |
+          python3 scripts/check_ps1_syntax.py --selftest
+          python3 scripts/check_ps1_syntax.py
+
       # WHY: 加速器/推理栈排除门(ADR-195 V1/D5)——把"零 GPU 依赖"从一次性人工核对升为
       # 机器判据。当前排除靠 feature 非激活而非结构隔离:nmc-encoder 直接依赖
       # mel_spec="0.4",其可选 feature 面(wgpu/cuda/ort-tensor,default=[])可在零 ADR、
@@ -626,7 +636,7 @@ jobs:
         #   注:必须显式传入(2026-08-12 修复——此前命令缺失该参数,注释与命令漂移,
         #   导致 check job 重复编译运行 E2E target,拖慢快轨);
         # - nextest:不运行 doc-tests(~335s,占 cargo test 运行段 55%),
-        #   doc-tests 由 release.yml 全量验证与发布清单步骤覆盖;
+        #   doc-tests 由下方 doctest job（PR 必跑,ADR-222 R8-10）与 release.yml 全量验证覆盖;
         # - --no-fail-fast:单测试失败不阻塞其余测试运行,汇总全部失败;
         # - CHIMERA_BACKPRESSURE_SECS=5:背压测试 60s spec 时长降为 5s 快速回归
         #   (参数化设计见 backpressure_test.rs,Release 验收仍 60s);
@@ -717,6 +727,44 @@ jobs:
         env:
           CHIMERA_TEST_TIMEOUT_SCALE: '0.1'
         run: cargo nextest run -p chimera-e2e-tests -E 'binary(/formal_verifier/)' --no-fail-fast
+
+  # ============================================================
+  # doctest 独立 job（ADR-222 R8-10）
+  # WHY: PR 快轨三 job 全用 cargo nextest，而 nextest 不跑 doc-tests（见 check job
+  # 的 nextest 注释）；release.yml 的 linux-test 只在 tag/dispatch 跑 ⇒ 合入路径上
+  # 一度没有任何执行体验证 doctest。本 job 把它补回 PR；独立成 job 而非塞进 check
+  # （check timeout 15min，doctest 实测约 335s，混跑会压缩快轨余量）。
+  # 工具链与缓存与 check/e2e 同口径钉 1.97.1；不设 continue-on-error。
+  # ============================================================
+  doctest:
+    name: test (doctests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_CACHE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # WHY 钉定工具链：同 check/e2e，doctest 编译单元的元数据行为必须与其余 job
+      # 同版本，避免版本噪声被误读成代码缺陷。
+      - uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '.'
+          key: doctests
+
+      - name: Setup sccache
+        uses: mozilla/sccache-action@v0.0.11
+
+      # WHY --no-fail-fast：一次跑出全部失败 target，避免「修一个才看见下一个」。
+      # WHY 排除根 package：e2e 由 e2e job 承担（同 nextest 口径），doctest 面无该 target。
+      - name: Run doctests
+        run: cargo test --workspace --exclude chimera-e2e-tests --doc --no-fail-fast
 
   # ============================================================
   # MCA 双轨旁路 job(ADR-065 决策 6,PANTHEON 计划 M0 PR-4)
