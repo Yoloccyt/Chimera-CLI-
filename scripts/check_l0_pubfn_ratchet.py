@@ -50,7 +50,13 @@ from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-CRATE_DIR = os.path.join(ROOT, "crates", "nexus-contracts")
+# L0-A crate roster (ADR-222 D2); primary crate first. Siblings keep their
+# original group directories, so the module keys stay byte-identical.
+sys.path.insert(0, HERE)
+import l0_roster  # noqa: E402  (single source for the L0-A roster; G-125 cross-checks it)
+L0A_CRATES = l0_roster.L0A_DIR_NAMES
+SRC_DIRS = [os.path.join(ROOT, "crates", name, "src") for name in L0A_CRATES]
+CRATE_DIR = os.path.join(ROOT, "crates", L0A_CRATES[0])
 BASELINE = os.path.join(HERE, "l0_pubfn_freeze.txt")
 
 # Below this many extracted definitions the parser is presumed blind, not clean.
@@ -101,6 +107,14 @@ def extract_defs(src_dir):
                 m = PUB_FN_RE.match(line)
                 if m:
                     defs.append((mod, m.group(1)))
+    return defs
+
+
+def extract_all(src_dirs):
+    """Aggregate the production surface over every L0-A crate."""
+    defs = []
+    for src_dir in src_dirs:
+        defs.extend(extract_defs(src_dir))
     return defs
 
 
@@ -167,11 +181,11 @@ def evaluate(defs, baseline_rows):
 
 
 def run_real():
-    src_dir = os.path.join(CRATE_DIR, "src")
-    if not os.path.isdir(src_dir):
-        print("[TOOL-ERROR] L0 source not found: %s" % src_dir)
+    missing = [d for d in SRC_DIRS if not os.path.isdir(d)]
+    if missing:
+        print("[TOOL-ERROR] L0 source not found: %s" % ", ".join(missing))
         return 2
-    defs = extract_defs(src_dir)
+    defs = extract_all(SRC_DIRS)
     if "--emit" in sys.argv:
         # Bootstrap path: the ledger does not exist yet on the very first run, so
         # emitting must happen BEFORE the "baseline missing" verdict -- otherwise
@@ -273,7 +287,7 @@ def selftest():
         add("malformed baseline key -> rc 2 (undecidable)", rc == 2)
         # The floor: a parser that went blind would otherwise report a clean tree.
         add("DEFS_FLOOR is below the live surface and above zero",
-            0 < DEFS_FLOOR <= len(extract_defs(os.path.join(CRATE_DIR, "src"))))
+            0 < DEFS_FLOOR <= len(extract_all(SRC_DIRS)))
         # Baseline reading: comments and inline reasons are not rows.
         led = os.path.join(tmp, "led.txt")
         with open(led, "w", encoding="utf-8") as fh:

@@ -60,9 +60,10 @@ pub struct Checkpoint {
 
 /// 版本号为 0(未标注)时省略该字段,保证 wire 字节与加字段前完全一致。
 ///
-/// 标 `pub(crate)`:ADR-213 可见性约定——契约层内部辅助项默认不进入公开 API,
-/// 供本 crate 各持久化 envelope 模块共用(其余模块经 `crate::core_domain::checkpoint::` 引用)。
-pub(crate) fn is_schema_version_unset(v: &u16) -> bool {
+/// 标 `pub`:ADR-222 D2 把 `memory/` 拆为独立 sibling crate 后，本项被
+/// `memory/token_evidence.rs` **跨 crate** 引用；ADR-213 的「内部辅助项默认不公开」
+/// 约定在此让位于「跨 crate 可复用」，G-105 台账同批 +1 行（254→255）。
+pub fn is_schema_version_unset(v: &u16) -> bool {
     *v == 0
 }
 

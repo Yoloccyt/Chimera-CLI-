@@ -76,9 +76,9 @@ $report = @()
 # conflict adjudication report section 2.5.
 $layerMap = @{
     # L0 Contracts (ADR-033): zero-logic contract layer
-    'nexus-contracts' = 0
+    'nexus-contracts' = 0; 'nexus-contracts-core' = 0; 'nexus-contracts-sparse' = 0; 'nexus-contracts-safety' = 0; 'nexus-contracts-seams' = 0; 'nexus-contracts-mca' = 0; 'nexus-contracts-memory' = 0
     # L1 Core
-    'nexus-core' = 1; 'event-bus' = 1
+    'nexus-core' = 1; 'event-bus' = 1; 'nexus-telemetry' = 1
     # L2 Memory
     'nmc-encoder' = 2; 'hcw-window' = 2; 'mlc-engine' = 2
     # L3 Storage
@@ -116,6 +116,19 @@ $layerMap = @{
     'nexus-app-server' = 10
 }
 
+# L0 sub-layer map (ADR-222 D1): L0 is TWO sub-layers over the SAME machine
+# layer numbers -- 0 = L0-A pure contracts, 1 = L0-B core foundation. The
+# numeric map above is deliberately NOT renumbered: 116+ historical ADRs cite
+# "L4 seccore" etc., and renumbering would falsify that evidence chain.
+# Consumer: scripts/check_l0_sublayer.py (G-125/G-126) parses this table and
+# its .sh twin; KEEP BOTH IN SYNC.
+$subLayerMap = @{
+    # L0-A pure contracts (machine layer 0)
+    'nexus-contracts' = '0A'; 'nexus-contracts-core' = '0A'; 'nexus-contracts-sparse' = '0A'; 'nexus-contracts-safety' = '0A'; 'nexus-contracts-seams' = '0A'; 'nexus-contracts-mca' = '0A'; 'nexus-contracts-memory' = '0A'
+    # L0-B core foundation (machine layer 1)
+    'nexus-core' = '0B'; 'event-bus' = '0B'; 'nexus-telemetry' = '0B'
+}
+
 # Expected total crate count (workspace members). Static completeness bound.
 # ADR-182 (2026-09-16, M10): acb-governor 退役,43 -> 42
 # 架构减法批次 (2026-09-20): +router-traits -> 43
@@ -125,7 +138,10 @@ $layerMap = @{
 #   GAP-B），且解法不该是让生产层图钉住已删 crate —— 改为让 mock 借用同为 L1 的
 #   现存 event-bus。auto-dpo 从未出现在任何 mock 中。
 # 口径：此值必须等于 Cargo.toml workspace.members 实测数，勿硬编码追数。
-$expectedCrates = 39
+# ADR-222 (2026-10-20): +nexus-telemetry -> 40 (L0-B core foundation, single-direction
+# ADR-222 D2 (2026-10-20): +nexus-contracts-core (L0-A sibling) -> 41
+# nexus-core -> nexus-telemetry; reverse would form a crate cycle via TaskKind/KindCounters)
+$expectedCrates = 46
 
 # Inner-ring whitelist ($innerRing) and L0/L1 base ($innerBase) tables were
 # removed together with Check A by ADR-187 (2026-09-24); they were referenced

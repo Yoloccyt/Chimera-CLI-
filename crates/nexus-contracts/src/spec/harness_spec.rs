@@ -318,7 +318,8 @@ impl std::fmt::Display for ImmutableSurface {
 // WHY 手动实现 std::error::Error 而非 thiserror:
 // - L0 依赖白名单 = {serde, chrono, uuid, thiserror}（ADR-033）；本枚 HarnessSpecError
 //   刻意手动实现而非用 thiserror derive，以保留精确的错误文案（errors.rs 则用 thiserror）；
-//   二者与「零 workspace 内部依赖」不矛盾（thiserror 仅外部基础库白名单成员）。
+//   二者与 L0-A 的依赖口径不矛盾（thiserror 属外部基础库白名单成员；ADR-222 D2 另允许 6 个
+//   L0-A sibling，旧口径「零 workspace 内部依赖」已随之订正）。
 // - 错误类型本身是数据（无逻辑），符合 L0 约束
 
 /// HarnessSpec 校验错误 — validate() 拒绝非法 spec 时返回（P4-W15.1.1）

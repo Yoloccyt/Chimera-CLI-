@@ -5,8 +5,9 @@
 //! # 为什么需要本测
 //!
 //! 两侧各有一份同名宏：`crates/nexus-core/src/newtype.rs:61` 与
-//! `crates/nexus-contracts/src/sparse/ids.rs:38`。L0 禁止依赖任何 workspace crate
-//! （ADR-033 / G-99），因此**无法**复用 L1 的宏，只能另写一份并在文档里声称
+//! `crates/nexus-contracts-sparse/src/sparse/ids.rs`（ADR-222 W3.2 前在
+//! `crates/nexus-contracts/src/sparse/ids.rs`）。L0-A 禁止依赖 L0-B（含 `nexus-core`）
+//! 与层号 >= 2 的 crate（ADR-033 / G-99 / G-125），因此**无法**复用 L1 的宏，只能另写一份并在文档里声称
 //! 「生成的实现完全一致，保证序列化兼容性」。在本测之前，那句承诺**零机器判据**——
 //! 改一侧而另一侧不动，没有任何东西会红。
 //!

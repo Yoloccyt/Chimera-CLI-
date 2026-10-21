@@ -70,6 +70,10 @@ import sys
 # --- configuration -----------------------------------------------------------
 
 ALLOW_DEPS = {"serde", "chrono", "uuid", "thiserror"}
+# L0-A siblings (ADR-222 D2) are the only workspace deps a contract crate may
+# declare: same machine layer 0, and the umbrella -> sibling direction is the
+# facade. A sibling must never depend back on the umbrella (that is a cycle).
+SIBLING_PREFIX = "nexus-contracts-"
 
 # (rule-name, category, regex) applied to the comment/string-blanked source.
 # CATEGORIES are the impurity classes ADR-033 names; a file may be exempted only
@@ -159,9 +163,20 @@ MODULE_DECL_RE = re.compile(r"^\s*(pub(\([^)]*\))?\s+)?mod\s+\w")
 SKIP_IN_LOOKAHEAD = ("#", "//", "/*", "*")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CRATE_DIR = os.path.join(ROOT, "crates", "nexus-contracts")
+# L0-A crate roster (ADR-222 D2). G-99's jurisdiction was renamed from "L0" to
+# "L0-A"; the judgement itself is unchanged. Primary crate stays first for the
+# fixture/back-compat aliases below. Every sibling keeps its original group
+# directory, so crate-relative module paths (and the exemption keys) stay stable.
+# L0-A roster comes from scripts/l0_roster.py (single source; G-125 cross-checks
+# it against the .sh/.ps1 sub-layer tables, so a stale roster is undecidable).
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import l0_roster  # noqa: E402
+L0A_CRATES = l0_roster.L0A_DIR_NAMES
+CRATE_DIRS = [os.path.join(ROOT, "crates", name) for name in L0A_CRATES]
+CRATE_DIR = CRATE_DIRS[0]  # kept for fixtures / back-compat
 CARGO_TOML = os.path.join(CRATE_DIR, "Cargo.toml")
 SRC_DIR = os.path.join(CRATE_DIR, "src")
+SRC_DIRS = [os.path.join(d, "src") for d in CRATE_DIRS]
 
 
 # --- Rust comment/string blanking lexer --------------------------------------
@@ -259,34 +274,48 @@ def _blank_keep_nl(s):
 def scan_dependencies():
     """Return list of violation strings for [dependencies] allowlist breach."""
     violations = []
-    if not os.path.isfile(CARGO_TOML):
-        return ["Cargo.toml not found at " + CARGO_TOML]
-    section = ""
-    with open(CARGO_TOML, "r", encoding="utf-8") as fh:
-        for raw in fh:
-            line = raw.strip()
-            if line.startswith("[") and line.endswith("]"):
-                section = line[1:-1].strip()
-                continue
-            if section == "dependencies":
-                m = re.match(r"^([A-Za-z0-9_.\-]+)\s*=", line)
-                if not m:
+    for crate_dir in CRATE_DIRS:
+        cargo_toml = os.path.join(crate_dir, "Cargo.toml")
+        if not os.path.isfile(cargo_toml):
+            violations.append("Cargo.toml not found at " + cargo_toml)
+            continue
+        section = ""
+        with open(cargo_toml, "r", encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if line.startswith("[") and line.endswith("]"):
+                    section = line[1:-1].strip()
                     continue
-                dep = m.group(1)
-                if dep not in ALLOW_DEPS:
-                    violations.append(
-                        "Cargo.toml [dependencies]: disallowed dep '%s' "
-                        "(allowlist: %s)" % (dep, ", ".join(sorted(ALLOW_DEPS)))
-                    )
+                if section == "dependencies":
+                    m = re.match(r"^([A-Za-z0-9_.\-]+)\s*=", line)
+                    if not m:
+                        continue
+                    dep = m.group(1)
+                    if dep == "nexus-contracts":
+                        violations.append(
+                            "Cargo.toml [dependencies] (%s): a sibling must not depend "
+                            "on the umbrella 'nexus-contracts' (facade direction is "
+                            "umbrella -> siblings; reverse would be a crate cycle)"
+                            % os.path.basename(crate_dir)
+                        )
+                        continue
+                    if dep not in ALLOW_DEPS and not dep.startswith(SIBLING_PREFIX):
+                        violations.append(
+                            "Cargo.toml [dependencies] (%s): disallowed dep '%s' "
+                            "(allowlist: %s; workspace deps limited to %s*)"
+                            % (os.path.basename(crate_dir), dep,
+                               ", ".join(sorted(ALLOW_DEPS)), SIBLING_PREFIX)
+                        )
     return violations
 
 
 def iter_src_files():
     files = []
-    for dirpath, _dirnames, filenames in os.walk(SRC_DIR):
-        for fn in filenames:
-            if fn.endswith(".rs"):
-                files.append(os.path.join(dirpath, fn))
+    for src_dir in SRC_DIRS:
+        for dirpath, _dirnames, filenames in os.walk(src_dir):
+            for fn in filenames:
+                if fn.endswith(".rs"):
+                    files.append(os.path.join(dirpath, fn))
     return sorted(files)
 
 
@@ -394,19 +423,29 @@ def scan_text(rel, src, exempt_set):
 
 
 def scan_symbols():
-    """Return (hits, exempted, stale) over the real crate source."""
+    """Return (hits, exempted, stale) over every L0-A crate's source."""
     hits = []
     exempted = []
     seen_pairs = set()
-    for path in iter_src_files():
-        with open(path, "r", encoding="utf-8") as fh:
-            src = fh.read()
-        rel = os.path.relpath(path, CRATE_DIR).replace(os.sep, "/")
-        file_hits, file_exempt = scan_text(rel, src, EXEMPT_SET)
-        hits.extend(file_hits)
-        exempted.extend(file_exempt)
-        for _r, _l, _n, cat, _s in file_exempt:
-            seen_pairs.add((rel, cat))
+    for crate, src_dir in zip(L0A_CRATES, SRC_DIRS):
+        for dirpath, _dirnames, filenames in os.walk(src_dir):
+            for fn in sorted(filenames):
+                if not fn.endswith(".rs"):
+                    continue
+                path = os.path.join(dirpath, fn)
+                with open(path, "r", encoding="utf-8") as fh:
+                    src = fh.read()
+                rel = os.path.relpath(path, os.path.dirname(src_dir)).replace(
+                    os.sep, "/")
+                # Exemption keys stay verbatim for the primary crate; siblings are
+                # crate-qualified so two crates can never share a waiver.
+                if crate != L0A_CRATES[0]:
+                    rel = crate + "/" + rel
+                file_hits, file_exempt = scan_text(rel, src, EXEMPT_SET)
+                hits.extend(file_hits)
+                exempted.extend(file_exempt)
+                for _r, _l, _n, cat, _s in file_exempt:
+                    seen_pairs.add((rel, cat))
     return hits, exempted, stale_entries(EXEMPT_SET, seen_pairs)
 
 

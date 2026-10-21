@@ -24,7 +24,11 @@
 
 nexus_event_variants = 152
 event_topic_variants = 10
-workspace_crates = 39
+workspace_crates = 46
+# ADR-222 (2026-10-20): +nexus-telemetry (L0-B core foundation), 39 -> 40.
+# ADR-222 D2 (2026-10-20): +6 L0-A sibling contract crates (core/sparse/safety/
+# seams/mca/memory), 40 -> 46. The 1+6 split is a deliberate reversal of the
+# ADR-193 subtraction trend, ruled by the owner; see ADR-222 D2/D5.
 
 # --- drift registry: doc declarations currently disagreeing with the lock ---
 # format: drift = <file> | <metric> | <declared>
@@ -41,3 +45,8 @@ workspace_crates = 39
 # check_doc_drift.sh moved to the facts baseline doc that still declares them.
 # A registered drift whose file no longer matches would FAIL the gate as STALE,
 # so the lines go away with the fix.
+
+# ADR-222 (2026-10-20): the historical facts snapshot still declares 39 crates.
+# It is a dated audit record under .gitignore'd docs/reports/ and is kept as-is
+# (只加注不改写 discipline), so the mismatch is registered as visible debt.
+drift = docs/reports/DOC-AUDIT-FACTS_2026-09-20.md | workspace_crates | 39

@@ -56,6 +56,12 @@ DEFS_FLOOR = 20
 # `pub use group::leaf;` -- must end right after the second path segment, so that
 # the value-level re-exports (`pub use crate::leaf::{A, B};`) are NOT in this class.
 ROOT_REEXPORT_RE = re.compile(r"^\s*pub\s+use\s+([a-z_][a-z0-9_]*)::([a-z_][a-z0-9_]*)\s*;")
+# ADR-222 D2: after the 1+6 split, the umbrella binds a whole GROUP with
+# `pub use nexus_contracts_core::core_domain;`. That publishes no new leaf name --
+# the ratchet's subject is "names reachable as nexus_contracts::<leaf>", so a
+# facade group binding is out of this class by definition (and must never be
+# smuggled in as a leaf row, which would make the ledger meaningless).
+FACADE_BINDING_PREFIX = "nexus_contracts_"
 sys.path.insert(0, HERE)
 import check_l0_purity as purity  # noqa: E402  (shares the comment/string lexer)
 
@@ -66,7 +72,7 @@ def extract_rows(text):
     rows = []
     for line in code.splitlines():
         m = ROOT_REEXPORT_RE.match(line)
-        if m:
+        if m and not m.group(1).startswith(FACADE_BINDING_PREFIX):
             rows.append((m.group(1), m.group(2)))
     return rows
 
@@ -153,6 +159,7 @@ CLEAN_LIB = (
     "pub use sparse::masks;\n"
     "pub use sparse::omni_masks;\n"
     "pub use core_domain::domain;\n"
+    "pub use nexus_contracts_core::core_domain;\n"  # ADR-222 facade group binding
     "pub use crate::masks::{SparseMask, OmniSparseMasks};\n"  # value level, not this class
     "pub const X: &str = \"pub use fake::thing;\";\n"          # string literal
 )
@@ -173,6 +180,9 @@ def selftest():
     live = extract_rows(CLEAN_LIB)
     add("doc comment / string literal / value-level re-export not counted",
         sorted(live) == sorted(CLEAN_ROWS))
+    add("ADR-222 facade group binding publishes no leaf (stays out of the ratchet)",
+        ("nexus_contracts_core", "core_domain") not in live
+        and ("core_domain", "domain") in live)
     add("matching ledger -> rc 0", evaluate(live, CLEAN_ROWS)[0] == 0)
     rc, out = evaluate(live + [("safety", "brand_new")], CLEAN_ROWS)
     add("planted NEW root re-export is caught", rc == 1 and "[GAP] NEW" in out[0])

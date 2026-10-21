@@ -121,12 +121,25 @@ def scan(crates_root):
     model = cc.build_model(Path(crates_root))
     if model is None:
         return None, "contracts crate not found under %s" % crates_root
-    src = Path(crates_root) / cc.CONTRACTS_DIR_NAME / "src"
+    src_root = Path(crates_root)
+    if not (src_root / cc.L0A_DIR_NAMES[0] / "src").is_dir():
+        return None, ("contracts crate %s not found under %s"
+                      % (cc.L0A_DIR_NAMES[0], crates_root))
     locs = {}
-    for path in sorted(src.rglob("*.rs")):
-        text = cc.read_production_text(path, flatten=False)
-        for m in cc.DEF_RE.finditer(text):
-            locs.setdefault(m.group(1), []).append(module_key(str(path), str(src)))
+    # ADR-222 D2: the second pass must walk the same L0-A crate set that
+    # cc.build_model() enumerates defs from, or the `set(locs) == defs` lock
+    # below would fire on every split batch (a moved group would read as a def
+    # that vanished). Module keys stay crate-relative, so `declared_in` is
+    # byte-stable across the split. Missing siblings are tolerated for fixtures;
+    # G-99 owns the real-tree disk-existence guard.
+    for crate_name in cc.L0A_DIR_NAMES:
+        src = src_root / crate_name / "src"
+        if not src.is_dir():
+            continue
+        for path in sorted(src.rglob("*.rs")):
+            text = cc.read_production_text(path, flatten=False)
+            for m in cc.DEF_RE.finditer(text):
+                locs.setdefault(m.group(1), []).append(module_key(str(path), str(src)))
     for keys in locs.values():
         keys.sort()
     if set(locs) != set(model["defs"]):

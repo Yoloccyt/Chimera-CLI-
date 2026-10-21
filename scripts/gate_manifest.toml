@@ -1360,3 +1360,28 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "断言数以 --selftest **自报**，本行不抄数（ADR-218 D-44 与 G-120/G-122 两次同课：抄进散文的计数必然比代码先腐烂）。全部断言走生产同一组函数（tempdir 真 crate 树 + 真 scan/judge/read_ledger，禁测试专用副本），代表性形态**非穷尽**：①三桶（zero/one/ge2）在夹具上精确到名单 ②sum 闭合 zero+one+ge2==defs ③同名定义在两文件时被 '+' 并列而非静默折叠 ④删行⇒[NEW]、留行于已非零消费者者⇒[STALE]、手改 declared_in⇒[LOC]、头注过期⇒[CLAIM] ⑤四类畸形行各判 malformed 而非跳过（consumers!=0 / 未知键 / 非 def 名 / 字段无 '='）⑥重名行与缺 CLAIM 均退 2 ⑦跨门哨 [UNREGISTERED]：zero 里有名字不在 G-91 基线 ⇒ 红 ⑧advisory 读数器把带理由的基线行排除出债务计数（证明它测的是「有无理由」而非「有几行」）⑨**方言锁的反事实**：内存替换 cc.compute_gaps 后**重新 scan** 才判得出 [DIALECT]——只 patch 不重扫是无效测试，因为 facts.gaps 在 scan 期内已算完，这条是本夹具首版真实踩到的坑；**同版另一处是真缺陷但性质不同——夹具的输入与它的期望不一致**：某类型实测只有 1 个消费者而断言预期它进 ge2 桶，三条断言连带假失败，症状像「门不对」而实为夹具设计漏了第二个消费者。修法有两个方向（补输入 / 改期望），**必须先回读扫描结果再决定选哪个**：本次判为「输入该补」（因为 ge2 桶本身就是被测形态，缺一个成员的夹具等于没测那条轴），若反过来改期望就会把「桶划分对不对」这件事悄悄取消。方向判错的代价与门本身失灵同量级，故登记于此。还原后同一台账必须回到 rc 0（证明守卫不是恒真红）⑩扫描确定性：同一夹具两次 scan 三桶逐项相等 ⑪地板**接进了生产路径**：以 run_real(crates_root=5-def 夹具) 断言 rc 2 且消息含 below floor、并断言拒绝发生在任何台账读写之前（G-121 自曝过「WORKFLOW_FLOOR 声明了却没接进 judge」——恒不触发的地板等于没有地板，故此处不接受「直接调 floor_error 返回非 None」这种弱断言）⑫真树 sum 闭合且方言锁静默、zero 是 G-91 基线的子集 ⑬本门对真树必须 rc=0。夹具口径与生产共用 module_key（自 G-105 导入）与 cc 的 DEF_RE/read_production_text，不复刻解析器。任一断言不成立⇒退 1。"
+
+# G-125/G-126 -- L0 sub-layer direction (ADR-222 D1/D3)
+# 轴分工：G-45/G-46 判层表多源一致；本门只判方向——L0-A 不得依赖 L0-B，
+# L0-B 不得依赖 L2+。层号不重排（116+ 份 ADR 的历史层引用不得失真），
+# 亚层由 .sh/.ps1 双源 sublayer_of/$subLayerMap 表达。
+# ============================================================
+[[gate]]
+id = "G-125"
+spec_ref = "ADR-222 D1/D3（L0-A/L0-B 双层与方向铁律 L0-R1/L0-R2）"
+cmd = "{python} scripts/check_l0_sublayer.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "L0 亚层方向门。为什么需要：ADR-222 把 L0 拆为 0A 纯契约 / 0B 核心基础面，但机器层号 0/1 刻意不重排（116+ 份 ADR 以 L4 seccore 等层号引用历史证据，重排会让整条证据链失真）。层号不动就意味着「谁属于 L0-A」无法从数字直接读出，故必须有一道门专门判方向：①L0-A 声明依赖 L0-B ⇒ [PURITY-LEAK] 红（纯契约不得看见运行时）；②L0-B 声明依赖 layer>=2 ⇒ [UPWARD] 红；③不可判定退 2（源文件缺失/锚点查无/.sh 与 .ps1 亚层表不一致/亚层表未恰好覆盖 layer-0-1 全 crate/依赖解析低于地板/tomllib 缺失）——盲解析不得报 clean。解析纪律：层号只从 .sh 的 layer_of() 读（CI 实调侧），不在本脚本里复写常量；亚层成员从 .sh sublayer_of() 与 .ps1 $subLayerMap 双源读并互相对拍，二者不等即退 2（两源一真，不选边）。依赖面只取 [dependencies]/[build-dependencies]/target.*.dependencies，dev-deps 不计（ADR-033 允许测试面例外，且 L0 dev 环已清零）。轴分工：层表多源一致由 G-45/G-46 负责，本门不抄其基线；G-99 判 L0-A 纯度符号面，本门判 crate 级方向，两者分母不同。成员集与边数一律取 `[OK] L0 sub-layer direction holds: ...` 自报行（G-126 note 同条纪律：抄进散文的计数必比代码先腐烂）——本 note 早期曾抄过「0A=1 / 0B=2 / 内部边=3」的 2026-10-19 时点值，W3 拆分后已失效并就地删除，现势为 0A=7 / 0B=3。**轴外声明**：L0-B 的外部依赖白名单与新增流程**不在本门辖区**（见 ADR-222 §9 附录：白名单 `{event-bus, tokio, tracing}`，新增须另立 ADR）；本门只判 crate 级方向，不得把“白名单未冻结”误读为本门漏判。"
+
+[[gate]]
+id = "G-126"
+spec_ref = "G-125 配套（门自身有牙，沿 G-20/G-92/G-99/G-105/G-107/G-109/G-111/G-114/G-116/G-118/G-120/G-122/G-124 先例）"
+cmd = "{python} scripts/check_l0_sublayer.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "断言数以 --selftest **自报**，本行不抄数（ADR-218 D-44 与 G-120/G-122/G-124 同课：抄进散文的计数必然比代码先腐烂）。全部断言走生产同一组函数（真源解析 + tempdir 真 Cargo.toml + 同一 evaluate，禁测试专用副本），代表性形态非穷尽：①真源 layer_of() 读出 nexus-contracts=0、nexus-core=event-bus=1 ②真源 sublayer_of() 读出 0A/0B ③真 .sh 与 .ps1 亚层表逐字相等 ④clean 夹具通过 ⑤植入 L0-A->L0-B 必须红且消息点名两侧 ⑥植入 L0-B->layer5 必须红且消息带层号 ⑦空依赖集判不可判定而非 clean（致盲不得读作干净）⑧成员数低于地板判不可判定 ⑨.sh/.ps1 漂移判不可判定 ⑩亚层表漏覆盖 layer-0-1 crate 判不可判定 ⑪未知亚层值判不可判定 ⑫build_facts 从真 Cargo.toml 解析出依赖（证明不是常量复写）⑬夹具树走生产 evaluator 通过 ⑭同一夹具把 a 改成依赖 b 后必须转红 ⑮真树 rc=0。开发期本夹具咬出一处**夹具自身的输入与期望不一致**：up 夹具只有 1 个 L0 crate，先被成员地板拦成 rc=2 而非期望的 rc=1——按 ADR-220 的教训判为「输入该补」（补一个 L0-A 成员）而非改期望，否则等于把地板轴悄悄取消。任一断言不成立⇒退 1。"
+
+# ============================================================

@@ -3462,6 +3462,12 @@ version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
+ "nexus-contracts-core",
+ "nexus-contracts-mca",
+ "nexus-contracts-memory",
+ "nexus-contracts-safety",
+ "nexus-contracts-seams",
+ "nexus-contracts-sparse",
  "proptest",
  "rmp-serde",
  "serde",
@@ -3469,6 +3475,78 @@ dependencies = [
  "serde_yaml",
  "thiserror 1.0.69",
  "uuid",
+]
+
+[[package]]
+name = "nexus-contracts-core"
+version = "2.29.0-omega"
+dependencies = [
+ "chrono",
+ "proptest",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "nexus-contracts-mca"
+version = "2.29.0-omega"
+dependencies = [
+ "nexus-contracts",
+ "proptest",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nexus-contracts-memory"
+version = "2.29.0-omega"
+dependencies = [
+ "chrono",
+ "nexus-contracts",
+ "nexus-contracts-core",
+ "nexus-contracts-mca",
+ "nexus-contracts-seams",
+ "proptest",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nexus-contracts-safety"
+version = "2.29.0-omega"
+dependencies = [
+ "nexus-contracts",
+ "proptest",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "nexus-contracts-seams"
+version = "2.29.0-omega"
+dependencies = [
+ "nexus-contracts",
+ "proptest",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+]
+
+[[package]]
+name = "nexus-contracts-sparse"
+version = "2.29.0-omega"
+dependencies = [
+ "nexus-contracts",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3483,6 +3561,7 @@ dependencies = [
  "hex",
  "ndarray",
  "nexus-contracts",
+ "nexus-telemetry",
  "proptest",
  "rand 0.8.6",
  "rayon",
@@ -3521,6 +3600,16 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "nexus-telemetry"
+version = "2.29.0-omega"
+dependencies = [
+ "event-bus",
+ "proptest",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

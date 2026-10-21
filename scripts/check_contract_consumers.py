@@ -63,6 +63,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "scripts" / "contract_consumer_baseline.txt"
 CONTRACTS_DIR_NAME = "nexus-contracts"
+# L0-A crate roster (ADR-222 D2). Both sides of the judgement are crate-set
+# aware on purpose:
+#   * the DEF side must walk every pure-contract crate -- after `core_domain`
+#     moved out, a single-crate def scan lost 23 defs and turned their baseline
+#     rows into bogus [STALE] (measured defs 236 -> 213);
+#   * the CONSUMER side must EXCLUDE every L0-A crate, because the umbrella's
+#     facade re-export is not consumption. Counting siblings as consumers would
+#     let each contract crate vote for the others and silently relax the
+#     >=2-consumer rule.
+sys.path.insert(0, str(ROOT / "scripts"))
+import l0_roster  # noqa: E402  (single source for the L0-A roster; G-125 cross-checks it)
+L0A_DIR_NAMES = l0_roster.L0A_DIR_NAMES
 
 DEF_RE = re.compile(r"^\s*pub\s+(?:struct|enum|trait|type)\s+([A-Z][A-Za-z0-9_]*)", re.M)
 CFG_TEST_RE = re.compile(r"^\s*#\[cfg\(test\)\]")
@@ -136,15 +148,21 @@ def build_model(crates_root):
     blobs       -- {crate_name: flattened production text} (for hop queries)
     """
     model = {"defs": set(), "idents": {}, "tokens": {}, "exports": {}, "blobs": {}}
-    contracts_src = crates_root / CONTRACTS_DIR_NAME / "src"
-    if not contracts_src.is_dir():
+    if not (crates_root / L0A_DIR_NAMES[0] / "src").is_dir():
         return None
-    for p in contracts_src.rglob("*.rs"):
-        text = read_production_text(p, flatten=False)
-        for m in DEF_RE.finditer(text):
-            model["defs"].add(m.group(1))
+    for crate_name in L0A_DIR_NAMES:
+        contracts_src = crates_root / crate_name / "src"
+        # Fixture trees carry only the primary crate; the disk-existence guard for
+        # the real roster lives in G-99 (scan_dependencies fails on a missing
+        # Cargo.toml), which is judged only against the real tree.
+        if not contracts_src.is_dir():
+            continue
+        for p in contracts_src.rglob("*.rs"):
+            text = read_production_text(p, flatten=False)
+            for m in DEF_RE.finditer(text):
+                model["defs"].add(m.group(1))
     for cd in sorted(crates_root.iterdir()):
-        if not cd.is_dir() or cd.name == CONTRACTS_DIR_NAME:
+        if not cd.is_dir() or cd.name in L0A_DIR_NAMES:
             continue
         src = cd / "src"
         if not src.is_dir():

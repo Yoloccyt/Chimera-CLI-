@@ -1,0 +1,21 @@
+[package]
+name = "nexus-telemetry"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "NEXUS-OMEGA L0-B 核心基础面 — 计算面遥测契约与上报编排（ADR-222 D3）"
+
+[dependencies]
+# L0-B 同层依赖：事件总线是上报通道（同层互引允许，§2.2）。
+event-bus = { workspace = true }
+# 上报器周期循环；L0-B 允许运行时依赖（与 L0-A 纯契约的 G-99 白名单不同）。
+tokio = { workspace = true }
+# 校准证据输出：每 kind 一行，静默无输出等于无守护（ADR-197 Phase A 教训）。
+tracing = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

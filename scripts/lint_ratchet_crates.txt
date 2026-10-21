@@ -26,6 +26,13 @@ mlc-engine  # opted in, measured clean at registration time
 mtpe-executor  # opted in, measured clean at registration time
 nexus-app-server  # opted in, measured clean at registration time
 nexus-contracts  # opted in, measured clean at registration time
+nexus-contracts-core  # ADR-222 D2 split; inherits the umbrella's opt-in (same production code, moved not written)
+nexus-contracts-mca  # ADR-222 D2 split; inherits the umbrella's opt-in (same production code, moved not written)
+nexus-contracts-memory  # ADR-222 D2 split; inherits the umbrella's opt-in (same production code, moved not written)
+nexus-contracts-safety  # ADR-222 D2 split; inherits the umbrella's opt-in (same production code, moved not written)
+nexus-contracts-seams  # ADR-222 D2 split; inherits the umbrella's opt-in (same production code, moved not written)
+nexus-contracts-sparse  # ADR-222 D2 split; inherits the umbrella's opt-in (same production code, moved not written)
+nexus-telemetry  # ADR-222 D3 extraction; inherits nexus-core's opt-in (moved code, no new unwrap/expect site)
 nexus-core  # opted in, measured clean at registration time
 nexus-hook  # opted in, measured clean at registration time
 nexus-subagent  # opted in, measured clean at registration time

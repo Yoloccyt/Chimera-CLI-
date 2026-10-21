@@ -1,0 +1,22 @@
+[package]
+name = "nexus-contracts-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "NEXUS-OMEGA L0-A 领域契约 — core_domain（ADR-222 D2）"
+
+[dependencies]
+# L0-A 依赖白名单（ADR-033 / G-99）：仅 serde/chrono/uuid/thiserror。
+serde = { workspace = true, features = ["derive"] }
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+# 随 `core_domain/` 迁入的单元测试使用（拆分前由 umbrella 的 dev-deps 提供）。
+proptest = { workspace = true }
+serde_json = { workspace = true }
+rmp-serde = { workspace = true }
+
+[lints]
+workspace = true

@@ -75,7 +75,13 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-CRATE_DIR = os.path.join(ROOT, "crates", "nexus-contracts")
+# L0-A crate roster (ADR-222 D2); primary crate first. Siblings keep their
+# original group directories, so the type keys stay byte-identical.
+sys.path.insert(0, HERE)
+import l0_roster  # noqa: E402  (single source for the L0-A roster; G-125 cross-checks it)
+L0A_CRATES = l0_roster.L0A_DIR_NAMES
+SRC_DIRS = [os.path.join(ROOT, "crates", name, "src") for name in L0A_CRATES]
+CRATE_DIR = os.path.join(ROOT, "crates", L0A_CRATES[0])
 LEDGER = os.path.join(HERE, "l0_extensibility_class_freeze.txt")
 
 # Refuse to judge if fewer public types than this are extracted: a blind parser reports
@@ -151,6 +157,14 @@ def extract_types(src_dir):
             kind, name = m.group(1), m.group(2)
             ne = "non_exhaustive" in attr_block(lines, i)
             rows.append((kind, mod, name, ne))
+    return rows
+
+
+def extract_all(src_dirs):
+    """Aggregate the public-type surface over every L0-A crate."""
+    rows = []
+    for src_dir in src_dirs:
+        rows.extend(extract_types(src_dir))
     return rows
 
 
@@ -347,11 +361,11 @@ def emit_and_judge(types):
 
 
 def run_real():
-    src_dir = os.path.join(CRATE_DIR, "src")
-    if not os.path.isdir(src_dir):
-        print_line("[TOOL-ERROR] L0 source not found: %s" % src_dir)
+    missing = [d for d in SRC_DIRS if not os.path.isdir(d)]
+    if missing:
+        print_line("[TOOL-ERROR] L0 source not found: %s" % ", ".join(missing))
         return 2
-    types = extract_types(src_dir)
+    types = extract_all(SRC_DIRS)
     # The floor guard runs BEFORE emit on purpose: a blind parser must not be able to
     # write a "clean" baseline, which would launder its own blindness into the ledger.
     if len(types) < TYPES_FLOOR:
@@ -542,7 +556,7 @@ def selftest():
                              "ENUM | type=a::B | class=closed"])[1]))
 
         # 7. Parser-blindness floor must sit under the real surface.
-        real = extract_types(os.path.join(CRATE_DIR, "src"))
+        real = extract_all(SRC_DIRS)
         add("TYPES_FLOOR above zero and below the real surface (%d types)" % len(real),
             0 < TYPES_FLOOR <= len(real))
         # And the shipped ledger must itself satisfy the axis we just added --

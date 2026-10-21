@@ -27,7 +27,13 @@ mca = []
 members = [
     # L0 Contracts (ADR-033): 纯类型零依赖契约层，必须最先编译
     "crates/nexus-contracts",
-    "crates/nexus-core", "crates/event-bus", "crates/quest-engine",
+    "crates/nexus-contracts-core",
+    "crates/nexus-contracts-sparse",
+    "crates/nexus-contracts-safety",
+    "crates/nexus-contracts-seams",
+    "crates/nexus-contracts-mca",
+    "crates/nexus-contracts-memory",
+    "crates/nexus-core", "crates/event-bus", "crates/nexus-telemetry", "crates/quest-engine",
     "crates/repo-wiki", "crates/parliament",
     "crates/pvl-layer", "crates/osa-coordinator", "crates/kvbsr-router",
     "crates/faae-router", "crates/gea-activator", "crates/gqep-executor",
@@ -200,12 +206,22 @@ toml = "0.8"
 # 版本号由 workspace.package 集中管理。
 # 按 L0→L1→...→L10 顺序排列,确保编译顺序符合依赖铁律。
 # L0 Contracts (ADR-033):纯类型零依赖契约层,所有上层 crate 可依赖 L0
+# ADR-222:L0 = L0-A(0A 纯契约) + L0-B(0B 核心基础面),机器层号 0/1 不重排
 nexus-contracts = { path = "crates/nexus-contracts" }
+# L0-A sibling: core_domain 领域契约（ADR-222 D2；umbrella 以 facade 保持旧路径）
+nexus-contracts-core = { path = "crates/nexus-contracts-core" }
+nexus-contracts-sparse = { path = "crates/nexus-contracts-sparse" }
+nexus-contracts-safety = { path = "crates/nexus-contracts-safety" }
+nexus-contracts-seams = { path = "crates/nexus-contracts-seams" }
+nexus-contracts-mca = { path = "crates/nexus-contracts-mca" }
+nexus-contracts-memory = { path = "crates/nexus-contracts-memory" }
 # L7 SubAgent 运行时（Phase 3 ADR-148;P4-T3 L10 组合根接线引用）
 nexus-subagent = { path = "crates/nexus-subagent" }
-# L1 Core:核心运行时，事件总线
+# L1 Core (ADR-222 称 L0-B 核心基础面):核心运行时，事件总线
 nexus-core = { path = "crates/nexus-core" }
 event-bus = { path = "crates/event-bus" }
+# ADR-222 L0-B 核心基础面：计算面遥测契约与上报编排（nexus-core 单向依赖）
+nexus-telemetry = { path = "crates/nexus-telemetry" }
 mcp-mesh = { path = "crates/mcp-mesh" }  # L10 Interface(跨进程 MCP 网格);物理位置沿史留在 L1 段,层号以本行为准
 # L2 Memory:多模态编码，分层窗口，四级记忆
 nmc-encoder = { path = "crates/nmc-encoder" }

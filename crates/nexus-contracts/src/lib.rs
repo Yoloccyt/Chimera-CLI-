@@ -1,17 +1,19 @@
 //! CRATE-CONTRACT BEGIN
 //! LAYER:    L0
-//! ROLE:     NEXUS-OMEGA L0 契约层 — 纯类型 + 受控纯逻辑，零 workspace 内部依赖
+//! ROLE:     NEXUS-OMEGA L0-A 契约层 facade — 纯类型 + 受控纯逻辑，对 workspace 的依赖仅限 6 个 L0-A sibling
 //! BACKEND:  memory
 //! PRODUCERS: 0 -
 //! CONSUMERS: 34 chimera-cli,chimera-mas,chimera-tui,cmt-tiering,csn-substitutor…
-//! MATURITY: NOT-IMPL-CN
+//! MATURITY: TRUE
 //! CRATE-CONTRACT END
-//! NEXUS-OMEGA L0 契约层 — 纯类型 + 受控纯逻辑，零 workspace 内部依赖
+//! NEXUS-OMEGA L0-A 契约层 facade — 纯类型 + 受控纯逻辑，对 workspace 的依赖仅限 6 个 L0-A sibling
 //!
-//! 对应架构层: **L0 Contracts**（nexus-core 之下，十层架构新增最低层）
+//! 对应架构层: **L0 Contracts / L0-A 纯契约亚层**（机器层号 0；nexus-core 之下，十层架构新增最低层）
 //! 对应 ADR: **ADR-033**（L0 nexus-contracts 契约层建立；其追加节 2026-10-09 把口径由
 //! 「零逻辑」量体订正为「受控纯逻辑」）/ **ADR-212**（边界 = 单 crate + 纯度门 G-99）/
-//! **ADR-218**（「受控」的逻辑量判据 G-119 与例外台账 `scripts/l0_logic_ledger.txt`）
+//! **ADR-218**（「受控」的逻辑量判据 G-119 与例外台账 `scripts/l0_logic_ledger.txt`）/
+//! **ADR-222**（部分 supersede ADR-212 D1/D2：本 crate 拆为 1+6，L0 分为 L0-A/L0-B 两个层名亚层，
+//! 机器层号 0/1 不重排；本 crate 作 facade 重导出 6 个 sibling，旧路径逐字不变）
 //! 对应设计源: `docs/architecture/CODE_WIKI.md`（架构权威源）+ `docs/architecture/adr_index.md`。
 //! 旧引用 `NEXUS-OMEGA_v5.0_系统性完整设计文档.md` 经全仓检索确认**不在盘**，与
 //! `AETHER_NEXUS_OMEGA_ULTIMATE.md` 同属悬空权威源，故改指在盘源而非在此复制其内容。
@@ -26,12 +28,32 @@
 //! - **纯类型 + 受控纯逻辑**: 类型定义 + 契约自身语义的纯计算（校验/规范化/哈希/
 //!   参考实现/状态机/熵启发式），无 IO / 无 async / 无网络 / 无随机；含逻辑模块
 //!   逐条登记于 `ADR_033_EXCEPTION_MODULES`（口径见 ADR-033 追加节，**不得再整体引用「零逻辑」**）
-//! - **零 workspace 内部依赖**: 禁止依赖任何 workspace crate（含 `nexus-core` / `event-bus`）
+//! - **workspace 内部依赖受控**（ADR-222 D2/D4 订正，原口径为「零 workspace 内部依赖」）:
+//!   本 umbrella 仅允许依赖 6 个 L0-A sibling（`nexus-contracts-{core,sparse,safety,seams,mca,memory}`），
+//!   且**方向单向**：sibling 不得反向依赖本 crate（否则即 crate 环，G-99 已按此判红）；
+//!   两者都**禁止**依赖 `nexus-core` / `event-bus` 或任何层号 ≥ 2 的 crate（G-125 [PURITY-LEAK]/[UPWARD]）
 //! - **外部依赖白名单**: `serde`(derive) + `chrono` + `uuid` + `thiserror`（均无运行时业务
 //!   逻辑的基础类型/派生库，ADR-033 例外；G-99 `check_l0_purity.py` 机器锁）
 //! - **依赖铁律扩展**: `L(N) → L(0)` 恒允许（任何层均可依赖 L0）
 //!
-//! # 承载类型（按功能分组，64 源文件 = 53 叶子模块 + 10 组 mod.rs + lib.rs；v3.5 W3 子模块化）
+//! # 承载类型（按功能分组；ADR-222 拆分后的 7-crate 实测结构，下述文件数为 2026-10-20 现取）
+//!
+//! L0-A 共 **70 个 `src/*.rs`**（G-99 扫描面同值）= 本 umbrella **20** + 6 个 sibling **50**：
+//!
+//! | crate | 保留组目录 | `src/*.rs` | 说明 |
+//! |---|---|---|---|
+//! | `nexus-contracts`（本 crate，facade） | `spec/` `vector_math/` `protocol/` `testutil/` | 20 | 4 组未拆 + facade 重导出 |
+//! | `nexus-contracts-core` | `core_domain/` | 10 | W3.1 首批，含 `is_schema_version_unset` 升 `pub` |
+//! | `nexus-contracts-sparse` | `sparse/` | 5 | W3.2 |
+//! | `nexus-contracts-safety` | `safety/` | 8 | W3.4 |
+//! | `nexus-contracts-seams` | `seams/` | 14 | W3.5（MATURITY=NOT-IMPL-CN 台账行随代码迁至本 crate） |
+//! | `nexus-contracts-mca` | `mca/` | 5 | W3.3 |
+//! | `nexus-contracts-memory` | `memory/` | 8 | W3.6（依赖 core + mca + seams） |
+//!
+//! 每个 sibling **保留原组目录名**（如 `nexus-contracts-core/src/core_domain/`），因此
+//! 消费方两条旧路径 `nexus_contracts::<leaf>::Type` 与 `nexus_contracts::<group>::<leaf>::Type`
+//! 逐字不变；旧口径「64 源文件 = 53 叶子模块 + 10 组 mod.rs + lib.rs」为拆分前单 crate 时点值，
+//! 现由上表取代（53 条根 re-export 计数未变，由 G-107 台账锁定）。（v3.5 W3 子模块化）
 //!
 //! ## 稀疏掩码体系
 //! | 类型 | 来源 | 消费层 |
@@ -82,7 +104,7 @@
 //! ## MCA 亲和与向量存储
 //! | 类型 | 来源 | 消费层 |
 //! |------|------|--------|
-//! | `ProviderId` / `ProtocolDialect` / `CapabilitySet` / `ModelAffinitySpec` | 新建（ADR-065 MCA 体系） | L10 mca-gateway / L1 model-router |
+//! | `ProviderId` / `ProtocolDialect` / `CapabilitySet` / `ModelAffinitySpec` | 新建（ADR-065 MCA 体系） | L10 mca-gateway / L6 omega-learner |
 //! | `AffinityRequest` / `AffinityResponse` / `ContentBlock` | 新建（ADR-065 MCA 体系） | L10 mca-gateway / L9 quest-engine |
 //! | `VectorStore` / `VectorHit` / `VectorBackend` | 新建（P2-W7.3 向量抽象） | L5 repo-wiki / L2 mlc-engine |
 //!
@@ -112,7 +134,7 @@
 //! | `TokenLedgerEntry` / `SegmentMetadata` / `SegmentCreationReason` | 新建（v3.4.0 §5.3 Dressage） | L1 event-bus token-ledger / L7 segment-validation |
 //! | `MemoryPyramidLevel` / `AtomicMemoryCard` / `SceneBlock` / `PersonaSummary` | 新建（v3.4.0 §5.4 MSCE + TencentDB） | L2 mlc-engine / L3 cmt-tiering |
 //! | `SkillLifecycleState` / `SkillLifecycleContract` | 新建（v3.4.0 §5.5 MSCE） | L5 skill-graph / L6 skills-loader |
-//! | `RLHook` / `SerializedPolicy` / `RLTrajectory` / `RLStateVector` / `RLActionVector` | 新建（v3.4.0 §5.7 RL 预留） | L1 rl-client / L2 memory-pyramid |
+//! | `RLHook` / `SerializedPolicy` / `RLTrajectory` / `RLStateVector` / `RLActionVector` | 新建（v3.4.0 §5.7 RL 预留） | L1 nexus-core(rl_client) / L10 chimera-cli(rl_client) |
 //! | `OperatorSelectionStrategy` / `StopStrategyConfig` + 六维 OpenMLE 扩展字段 | 扩展（v3.4.0 §5.6） | L6 Router / L9 Quest |
 //!
 //! ## 测试工具与纯函数（ADR-033 例外）
@@ -163,13 +185,25 @@
 // 转为对该 re-export 的文档说明（内容不变，仅声明点从 `pub mod` 改为 `pub use`）。
 // ============================================================
 
-pub mod core_domain;
-pub mod mca;
-pub mod memory;
+// L0-A sibling（ADR-222 D2）：core_domain 领域契约。以 re-export 保持 `crate::core_domain::<leaf>`
+// 与 `nexus_contracts::core_domain::<leaf>::Type` 两条路径逐字不变（34 消费 crate 零改动）。
+pub use nexus_contracts_core::core_domain;
+// L0-A sibling（ADR-222 D2）：core re-export 保持 `crate::mca::<leaf>`
+// 与两条外部路径逐字不变（34 个消费 crate 零改动）。
+pub use nexus_contracts_mca::mca;
+// L0-A sibling（ADR-222 D2）：core re-export 保持 `crate::memory::<leaf>`
+// 与两条外部路径逐字不变（34 个消费 crate 零改动）。
+pub use nexus_contracts_memory::memory;
 pub mod protocol;
-pub mod safety;
-pub mod seams;
-pub mod sparse;
+// L0-A sibling（ADR-222 D2）：core re-export 保持 `crate::safety::<leaf>`
+// 与两条外部路径逐字不变（34 个消费 crate 零改动）。
+pub use nexus_contracts_safety::safety;
+// L0-A sibling（ADR-222 D2）：core re-export 保持 `crate::seams::<leaf>`
+// 与两条外部路径逐字不变（34 个消费 crate 零改动）。
+pub use nexus_contracts_seams::seams;
+// L0-A sibling（ADR-222 D2）：core re-export 保持 `crate::sparse::<leaf>`
+// 与两条外部路径逐字不变（34 个消费 crate 零改动）。
+pub use nexus_contracts_sparse::sparse;
 pub mod spec;
 pub mod testutil;
 pub mod vector_math;
@@ -302,7 +336,7 @@ pub use safety::budget_tier;
 ///
 /// 承载 ProviderId / ProtocolDialect / CapabilitySet / ModelAffinitySpec /
 /// AffinityRequest / AffinityResponse 等"能力协商取代名字嗅探"（原则 P1）
-/// 契约类型,供 L10 mca-gateway / L1 model-router / L6 omega-learner 共享。
+/// 契约类型,供 L10 mca-gateway / L6 omega-learner 共享。
 pub use mca::affinity;
 
 /// 命令验证契约 — 攻击类型/命令/策略/trait 上提(ADR-054 决策 3,P9-T4)
@@ -507,6 +541,10 @@ pub use vector_math::recall_fusion;
 ///   （provenance：谁、因何、被哪层消费），**不是**全量清单；新增模块不回填该表。
 /// - `scripts/l0_logic_ledger.txt`（G-119）是**函数粒度**的实况台账，键集取
 ///   派生逻辑 ∪ 政策表 ∪ 本表，故两处视角互补而非互相抄录。
+/// - **ADR-222 拆分后的归属**：本表仍是 L0-A 唯一的**模块粒度**登记权威，但登记名对应的源文件
+///   已物理落在 6 个 sibling（如 `masks` → `nexus-contracts-sparse/src/sparse/masks.rs`）；
+///   故表内继续用**裸模块名**而不改成 crate 限定名——台账键不变是 D4 兼容承诺的一部分，
+///   可达性由 `tests/l0_exception_registry.rs` 跨 7 个 src 根解析（空集不得读作通过）。
 ///
 /// 小型访问器 / 枚举 `as_str` 等平凡逻辑不登记（如 `vector.rs` 的 ≤7 行微助手 +
 /// 无体 trait 声明，其量体结论为「零逻辑仍成立」）。决策原语

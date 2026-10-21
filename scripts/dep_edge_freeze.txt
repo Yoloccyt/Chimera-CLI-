@@ -188,4 +188,17 @@ chimera-cli|nexus-hook        # L10->L9 down; composition-root optional GATED ed
 chimera-cli|sesa-router       # L10->L6 down; composition-root optional GATED edge (island repayment, ADR-177)
 chimera-cli|ssra-fusion       # L10->L7 down; composition-root optional GATED edge (island repayment, ADR-177)
 mcp-mesh|nexus-contracts      # L10->L0 down; consumes nexus-contracts event/affinity contract types (ADR-033)
+# --- registered 2026-10-20: ADR-222 L0 dual sub-layer (L0-A 1+6 split + L0-B telemetry extraction) ---
+nexus-contracts|nexus-contracts-core  # L0-A -> L0-A, same machine layer 0; umbrella facade target after ADR-222 D2 moved `core_domain` out. Direction is umbrella -> sibling ONLY; the reverse would be a crate cycle and is rejected outright by check_l0_purity's allowlist branch (sibling must not depend on `nexus-contracts`).
+nexus-core|nexus-telemetry            # L0-B -> L0-B, same machine layer 1; ADR-222 D3 dependency inversion -- telemetry owns SaturationSource + the reporting loop, nexus-core implements the trait. Reverse edge would close a cycle through KindCounters/TaskKind.
+nexus-telemetry|event-bus             # L0-B -> L0-B, same machine layer 1; the reporter publishes ComputePoolSaturated over the existing bus channel (zero new NexusEvent variants).
+# --- registered 2026-10-20: ADR-222 D2 sibling edges created by the 1+6 split ---
+nexus-contracts|nexus-contracts-sparse  # L0-A -> L0-A, same layer 0; umbrella facade re-export edge (ADR-222 D4). Direction is umbrella -> sibling only; G-99 rejects the reverse (cycle).
+nexus-contracts|nexus-contracts-safety   # L0-A -> L0-A, same layer 0; umbrella facade re-export edge (ADR-222 D4).
+nexus-contracts|nexus-contracts-seams    # L0-A -> L0-A, same layer 0; umbrella facade re-export edge (ADR-222 D4).
+nexus-contracts|nexus-contracts-mca      # L0-A -> L0-A, same layer 0; umbrella facade re-export edge (ADR-222 D4).
+nexus-contracts|nexus-contracts-memory   # L0-A -> L0-A, same layer 0; umbrella facade re-export edge (ADR-222 D4).
+nexus-contracts-memory|nexus-contracts-core  # L0-A -> L0-A; measured edge from the module dependency DAG: memory/token_evidence -> core_domain/{checkpoint,graph_identity}, memory/memory_pyramid needs nothing from core. ADR-222 D2 lists memory -> core/mca/seams.
+nexus-contracts-memory|nexus-contracts-mca   # L0-A -> L0-A; memory/experience_card -> mca/omni_message (TokenUsage), ADR-222 D2 DAG.
+nexus-contracts-memory|nexus-contracts-seams # L0-A -> L0-A; memory/memory_pyramid -> seams/rl_hooks (RLActionVector/RLStateVector), ADR-222 D2 DAG.
 

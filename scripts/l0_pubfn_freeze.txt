@@ -259,3 +259,5 @@ vector_math/vector::is_empty
 vector_math/vector::is_near_capacity
 vector_math/vector::new
 vector_math/vector::new
+# ADR-222 D2: pub(crate) -> pub for the cross-crate serde predicate
+core_domain/checkpoint::is_schema_version_unset

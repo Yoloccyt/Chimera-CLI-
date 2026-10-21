@@ -81,8 +81,14 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-CRATE_DIR = os.path.join(ROOT, "crates", "nexus-contracts")
-SRC_DIR = os.path.join(CRATE_DIR, "src")
+# L0-A crate roster (ADR-222 D2); primary crate first. Siblings keep their
+# original group directories, so the module keys stay byte-identical.
+sys.path.insert(0, HERE)
+import l0_roster  # noqa: E402  (single source for the L0-A roster; G-125 cross-checks it)
+L0A_CRATES = l0_roster.L0A_DIR_NAMES
+SRC_DIRS = [os.path.join(ROOT, "crates", name, "src") for name in L0A_CRATES]
+CRATE_DIR = os.path.join(ROOT, "crates", L0A_CRATES[0])
+SRC_DIR = SRC_DIRS[0]  # kept for fixtures / back-compat
 LIB_RS = os.path.join(SRC_DIR, "lib.rs")
 LEDGER = os.path.join(HERE, "l0_logic_ledger.txt")
 CANDIDATE = os.path.join(ROOT, "tmp", "l0_logic_ledger_candidate.txt")
@@ -422,6 +428,19 @@ def parse_tree(src_dir):
     return fn_keys, table_keys, all_fns, files, src_lines
 
 
+def parse_tree_all(src_dirs):
+    """Aggregate parse_tree over every L0-A crate (keys stay crate-relative)."""
+    fn_keys, table_keys, all_fns, files, src_lines = [], [], [], 0, 0
+    for src_dir in src_dirs:
+        f, t, a, n, lines = parse_tree(src_dir)
+        fn_keys.extend(f)
+        table_keys.extend(t)
+        all_fns.extend(a)
+        files += n
+        src_lines += lines
+    return fn_keys, table_keys, all_fns, files, src_lines
+
+
 def read_registry(path=LIB_RS):
     """The registered module names, read LIVE off lib.rs (never copied into the ledger).
 
@@ -439,26 +458,31 @@ def read_registry(path=LIB_RS):
     return sorted(set(REG_ITEM_RE.findall(m.group(1))))
 
 
-def resolve_registry(names, src_dir):
+def resolve_registry(names, src_dirs):
     """Map registry stems to module keys, printing every path actually opened.
 
     Bare-name resolution is a known false-red class in this repository (two
     different src/wal.rs exist repo-wide), so a stem with 0 or >1 hits is
     undecidable rather than guessed, and each hit is printed with its full path.
+    Accepts one src dir (fixtures) or a list (production L0-A roster).
     """
+    if isinstance(src_dirs, str):
+        src_dirs = [src_dirs]
     out = {}
     notes = []
     for stem in names:
         hits = []
-        for dirpath, _dirnames, filenames in os.walk(src_dir):
-            for fn in sorted(filenames):
-                if fn == stem + ".rs":
-                    hits.append(os.path.join(dirpath, fn))
+        for src_dir in src_dirs:
+            for dirpath, _dirnames, filenames in os.walk(src_dir):
+                for fn in sorted(filenames):
+                    if fn == stem + ".rs":
+                        hits.append((os.path.join(dirpath, fn), src_dir))
         if len(hits) != 1:
             notes.append("stem %r resolved to %d file(s): %s"
-                         % (stem, len(hits), "; ".join(hits) if hits else "-"))
+                         % (stem, len(hits),
+                            "; ".join(h[0] for h in hits) if hits else "-"))
             continue
-        out[stem] = module_key(hits[0], src_dir)
+        out[stem] = module_key(hits[0][0], hits[0][1])
     return out, notes
 
 
@@ -724,16 +748,17 @@ def strip_mech_prose(basis):
 
 
 def run_real(ledger_path=LEDGER):
-    if not os.path.isdir(SRC_DIR):
-        print("[TOOL-ERROR] L0 source not found: %s" % SRC_DIR)
+    missing = [d for d in SRC_DIRS if not os.path.isdir(d)]
+    if missing:
+        print("[TOOL-ERROR] L0 source not found: %s" % ", ".join(missing))
         return 2
-    fn_keys, table_keys, all_fns, files, src_lines = parse_tree(SRC_DIR)
+    fn_keys, table_keys, all_fns, files, src_lines = parse_tree_all(SRC_DIRS)
     names = read_registry()
     if names is None:
         print("[TOOL-ERROR] ADR_033_EXCEPTION_MODULES not found in %s -- the registry "
               "shape changed and this gate no longer knows what to read" % LIB_RS)
         return 2
-    reg_mods, notes = resolve_registry(names, SRC_DIR)
+    reg_mods, notes = resolve_registry(names, SRC_DIRS)
     emit_mode = "--emit" in sys.argv
     write_mode = "--write" in sys.argv
     # Floors BEFORE any write: a collapsed parse must never be able to launder a
@@ -1364,9 +1389,9 @@ def selftest():
             len(malformed) == 1 and len(rows) == 1 and claim2 is not None)
 
         # The floors must actually be able to fire, and be below the live tree.
-        live_fn, live_tbl, live_all, live_files, live_lines = parse_tree(SRC_DIR)
+        live_fn, live_tbl, live_all, live_files, live_lines = parse_tree_all(SRC_DIRS)
         names = read_registry()
-        reg_mods, notes = resolve_registry(names, SRC_DIR) if names else ({}, ["x"])
+        reg_mods, notes = resolve_registry(names, SRC_DIRS) if names else ({}, ["x"])
         add("live registry resolves uniquely (every name -> exactly one module)",
             names is not None and len(names) > 0
             and len(reg_mods) == len(names) and not notes)

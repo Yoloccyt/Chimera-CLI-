@@ -68,6 +68,17 @@ const GROUP_MODULES: &[&str] = &[
     "testutil",
 ];
 
+/// ADR-222 D2 已拆为 sibling crate 的组：组名 -> sibling lib 名。
+/// 结构锁对它们接受 `pub use <sibling>::<group>;` 形态（facade 保持旧路径）。
+const SPLIT_GROUPS: &[(&str, &str)] = &[
+    ("core_domain", "nexus_contracts_core"),
+    ("sparse", "nexus_contracts_sparse"),
+    ("safety", "nexus_contracts_safety"),
+    ("seams", "nexus_contracts_seams"),
+    ("mca", "nexus_contracts_mca"),
+    ("memory", "nexus_contracts_memory"),
+];
+
 /// 不变量 1：每个登记名都以 `pub use <group>::<leaf>;` 形式声明于 crate 根，
 /// 即 `lib.rs` 必含子串 `::<name>;`。facade/prelude 对模块的引用一律带 `::{`
 /// 或 `::Item`（PascalCase），故 `::<name>;`（snake_case + 紧跟分号）唯一命中
@@ -100,15 +111,24 @@ fn registry_equals_substantive_logic_set() {
     );
 }
 
-/// 不变量 3：W3 子模块化的 10 个组模块均以 `pub mod <group>;` 声明于 lib.rs，
-/// 锁住「53 平铺模块 → 内聚子树」结构，防止静默回退。
+/// 不变量 3：10 个组模块必须在 crate 根可见——未拆分的组用 `pub mod <group>;`，
+/// 已按 ADR-222 D2 拆为 sibling 的组用 `pub use <sibling>::<group>;`（facade）。
+/// 两种情况都锁住「53 平铺模块 → 内聚子树」结构，防止静默回退。
 #[test]
 fn nested_group_structure_is_present() {
     for &group in GROUP_MODULES {
         let decl = format!("pub mod {group};");
+        let ok = match SPLIT_GROUPS.iter().find(|(g, _)| *g == group) {
+            Some((_, krate)) => {
+                let facade = format!("pub use {krate}::{group};");
+                LIB.contains(&decl) || LIB.contains(&facade)
+            }
+            None => LIB.contains(&decl),
+        };
         assert!(
-            LIB.contains(&decl),
-            "W3 子模块化组 `{group}` 未在 lib.rs 声明（`{decl}`）——结构被回退或漂移"
+            ok,
+            "组 `{group}` 未在 lib.rs 以 `pub mod`（自有）或 `pub use <sibling>::{group};`\
+             （ADR-222 D2 拆分）声明——结构被回退或漂移"
         );
     }
 }
@@ -146,40 +166,79 @@ fn registry_is_deduped_and_snake_case() {
 /// `default_priority`/`Default::default`，其余全在 `#[cfg(test)]` 之后，确不在表内）。
 #[test]
 fn registered_exception_never_claims_zero_logic() {
-    let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    // ADR-222 D2 后登记例外分布在 7 个 L0-A crate 里；只扫本 crate 会让覆盖面
+    // 静默缩水（实测：只扫 umbrella 时 28 项只能解析到 12 项）。因此按 crate 名前缀
+    // `nexus-contracts` 枚举全量 L0-A 源码根，不另维一份会漂移的硬编码清单。
+    let roots = l0a_src_roots();
     let mut checked = 0usize;
-    for file in rust_files(&src_root) {
-        let stem = file
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or_default()
-            .to_string();
-        if !ADR_033_EXCEPTION_MODULES.contains(&stem.as_str()) {
-            continue;
-        }
-        checked += 1;
-        let text = std::fs::read_to_string(&file)
-            .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", file.display()));
-        for (idx, line) in text.lines().enumerate() {
-            let t = line.trim_start();
-            let is_self_claim = t.starts_with("//! - **纯类型") && t.contains("零逻辑**");
-            assert!(
-                !is_self_claim,
-                "模块 `{stem}` 已登记于 ADR_033_EXCEPTION_MODULES（即承认含受控实质逻辑），\
-                 其模块头 {}:{} 却仍自称「纯类型零逻辑」——名实矛盾，读者会据该行误判本模块\
-                 是否需要读逻辑。改为陈述实际形状（「纯类型 + 受控纯逻辑（登记例外）」）或删除该断言行。\n  {t}",
-                file.display(),
-                idx + 1,
-            );
+    for src_root in &roots {
+        for file in rust_files(src_root) {
+            let stem = file
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default()
+                .to_string();
+            if !ADR_033_EXCEPTION_MODULES.contains(&stem.as_str()) {
+                continue;
+            }
+            checked += 1;
+            let text = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", file.display()));
+            for (idx, line) in text.lines().enumerate() {
+                let t = line.trim_start();
+                let is_self_claim = t.starts_with("//! - **纯类型") && t.contains("零逻辑**");
+                assert!(
+                    !is_self_claim,
+                    "模块 `{stem}` 已登记于 ADR_033_EXCEPTION_MODULES（即承认含受控实质逻辑），\
+                     其模块头 {}:{} 却仍自称「纯类型零逻辑」——名实矛盾，读者会据该行误判本模块\
+                     是否需要读逻辑。改为陈述实际形状（「纯类型 + 受控纯逻辑（登记例外）」）或删除该断言行。\n  {t}",
+                    file.display(),
+                    idx + 1,
+                );
+            }
         }
     }
     assert_eq!(
         checked,
         ADR_033_EXCEPTION_MODULES.len(),
-        "本测只解析到 {checked} 个登记例外的源文件，而登记表有 {} 项——有登记名解析不到文件，\
-         本测覆盖面已静默缩水（不变量 1 应同时红）",
-        ADR_033_EXCEPTION_MODULES.len()
+        "全量 L0-A crate（{} 个）只解析到 {checked} 个登记例外的源文件，而登记表有 {} 项——\
+         有登记名解析不到文件（或被重命名/移除），登记表与实况漂移",
+        roots.len(),
+        ADR_033_EXCEPTION_MODULES.len(),
     );
+}
+
+/// 枚举全部 L0-A crate 的 `src/` 目录（目录名以 `nexus-contracts` 开头）。
+///
+/// WHY 按前缀枚举而不是硬编码清单：再维一份 crate 名单就是 G-115/G-119 反复治理的
+/// 「第二份手维护表」；ADR-222 D2 的命名约定（`nexus-contracts` / `nexus-contracts-<domain>`）
+/// 足以让本函数自维护，新增 sibling 时无需改本测试。
+fn l0a_src_roots() -> Vec<std::path::PathBuf> {
+    let crates_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("crates/ 父目录")
+        .to_path_buf();
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(&crates_dir).expect("读取 crates/ 失败") {
+        let path = entry.expect("crates/ 目录项").path();
+        let name = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default()
+            .to_string();
+        if name.starts_with("nexus-contracts") {
+            let src = path.join("src");
+            if src.is_dir() {
+                out.push(src);
+            }
+        }
+    }
+    out.sort();
+    assert!(
+        !out.is_empty(),
+        "未解析到任何 L0-A crate 源码根——本测覆盖面为零，不得读作通过"
+    );
+    out
 }
 
 /// 递归收集 `*.rs`。dev 上下文运行期 IO：G-99 只扫 `src/**` 生产面、不扫 `tests/`，

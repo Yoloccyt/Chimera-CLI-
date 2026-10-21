@@ -81,8 +81,8 @@ esac
 # conflict adjudication report section 2.5.
 layer_of() {
     case "$1" in
-        nexus-contracts) echo 0 ;;
-        nexus-core|event-bus) echo 1 ;;
+        nexus-contracts|nexus-contracts-core|nexus-contracts-sparse|nexus-contracts-safety|nexus-contracts-seams|nexus-contracts-mca|nexus-contracts-memory) echo 0 ;;
+        nexus-core|event-bus|nexus-telemetry) echo 1 ;;
         nmc-encoder|hcw-window|mlc-engine) echo 2 ;;
         # P2-T2 (2026-08-24): session-store session persistence (L3, 40th crate)
         scc-cache|cmt-tiering|session-store) echo 3 ;;
@@ -109,10 +109,24 @@ layer_of() {
     esac
 }
 
+# L0 sub-layer map (ADR-222 D1): L0 is TWO sub-layers over the SAME machine
+# layer numbers -- 0 = L0-A pure contracts, 1 = L0-B core foundation. The
+# numeric map above is deliberately NOT renumbered: 116+ historical ADRs cite
+# "L4 seccore" etc., and renumbering would falsify that evidence chain.
+# Consumer: scripts/check_l0_sublayer.py (G-125/G-126) parses this function and
+# its .ps1 twin; KEEP BOTH IN SYNC.
+sublayer_of() {
+    case "$1" in
+        nexus-contracts|nexus-contracts-core|nexus-contracts-sparse|nexus-contracts-safety|nexus-contracts-seams|nexus-contracts-mca|nexus-contracts-memory) echo "0A" ;;
+        nexus-core|event-bus|nexus-telemetry) echo "0B" ;;
+        *) echo "" ;;
+    esac
+}
+
 # All layered crates (static completeness bound for check C2).
 # Authority for layer numbers: $layerMap in check_dependency_rules.ps1 -- both
 # lists must stay identical (see DRIFT WARNING in the header).
-layered_crates="nexus-contracts nexus-core event-bus mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
+layered_crates="nexus-contracts nexus-contracts-core nexus-contracts-sparse nexus-contracts-safety nexus-contracts-seams nexus-contracts-mca nexus-contracts-memory nexus-core event-bus nexus-telemetry mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
 # ADR-182 (2026-09-16, M10): acb-governor 退役,43 -> 42
 # 架构减法批次 (2026-09-20): +router-traits -> 43
 # ADR-193 (2026-09-27): router-traits 整 crate 退役(唯一消费方 osa 的 trait 实现为空壳,
@@ -124,7 +138,10 @@ layered_crates="nexus-contracts nexus-core event-bus mcp-mesh nmc-encoder hcw-wi
 #   model-router 已换成同为 L1 的现存 event-bus（见 mock_deps_of 注释），
 #   check_layer_map_parity.py 的 selftest 夹具本就用合成名 crate-NN。
 # 口径：此值必须等于 `Cargo.toml` workspace.members 实测数，勿硬编码追数。
-expected_crates=39
+# ADR-222 (2026-10-20): +nexus-telemetry -> 40 (L0-B core foundation, single-direction
+# ADR-222 D2 (2026-10-20): +nexus-contracts-core (L0-A sibling) -> 41
+# nexus-core -> nexus-telemetry; reverse would form a crate cycle via TaskKind/KindCounters)
+expected_crates=46
 
 # Inner-ring whitelist (is_inner_ring) and L0/L1 base (is_inner_base) helpers
 # were removed together with Check A by ADR-187 (2026-09-24); they were used

@@ -3,13 +3,13 @@
   <desc>GENERATED artifact. Regenerate with `python scripts/emit_architecture_views.py --write`; `--verify` fails on any hand edit. Numbers below come from `layers.txt` / `domains.txt` / `dependency.dot` in this same directory.</desc>
   <rect x="0" y="0" width="1240" height="1062" fill="#ffffff"/>
   <text x="28" y="46" font-size="24" font-weight="bold" fill="#111827">Chimera CLI (NEXUS-OMEGA) architecture — emitted view</text>
-  <text x="28" y="72" font-size="13" fill="#4b5563">39 crates · 11 layers · 4 domains · 136 non-optional internal edges · upward-edge violations (iron law) = 0</text>
+  <text x="28" y="72" font-size="13" fill="#4b5563">46 crates · 11 layers · 4 domains · 147 non-optional internal edges · upward-edge violations (iron law) = 0</text>
   <text x="28" y="92" font-size="13" fill="#4b5563">Dependencies may only point down (L(N)→L(N−1)) or sideways; cross-layer communication goes through event-bus (L1) or mcp-mesh (L10) only.</text>
   <line x1="28" y1="108" x2="1212" y2="108" stroke="#e5e7eb"/>
   <rect x="84" y="724" width="808" height="130" rx="8" fill="#eef2ff" stroke="#c7d2fe"/>
   <rect x="92" y="730" width="6" height="118" rx="3" fill="#c7d2fe"/>
   <text x="912" y="746" font-size="13" font-weight="bold" fill="#374151">D0 契约基座</text>
-  <text x="912" y="764" font-size="12" fill="#6b7280">L0-L1 · 3 crates · 3 intra-domain edges</text>
+  <text x="912" y="764" font-size="12" fill="#6b7280">L0-L1 · 10 crates · 14 intra-domain edges</text>
   <rect x="84" y="476" width="808" height="254" rx="8" fill="#ecfdf5" stroke="#a7f3d0"/>
   <rect x="92" y="482" width="6" height="242" rx="3" fill="#a7f3d0"/>
   <text x="912" y="498" font-size="13" font-weight="bold" fill="#374151">D1 认知与知识</text>
@@ -118,10 +118,24 @@
   <text x="117" y="763" font-size="13" fill="#111827">event-bus</text>
   <rect x="200" y="743" width="88" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
   <text x="207" y="763" font-size="13" fill="#111827">nexus-core</text>
+  <rect x="298" y="743" width="125" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="305" y="763" font-size="13" fill="#111827">nexus-telemetry</text>
   <rect x="28" y="804" width="56" height="32" rx="6" fill="#f3f4f6" stroke="#d1d5db"/>
   <text x="42" y="826" font-size="14" font-weight="bold" fill="#374151">L0</text>
   <rect x="110" y="805" width="125" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
   <text x="117" y="825" font-size="13" fill="#111827">nexus-contracts</text>
+  <rect x="245" y="805" width="162" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="252" y="825" font-size="13" fill="#111827">nexus-contracts-core</text>
+  <rect x="417" y="805" width="154" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="424" y="825" font-size="13" fill="#111827">nexus-contracts-mca</text>
+  <rect x="581" y="805" width="176" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="588" y="825" font-size="13" fill="#111827">nexus-contracts-memory</text>
+  <rect x="767" y="805" width="176" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="774" y="825" font-size="13" fill="#111827">nexus-contracts-safety</text>
+  <rect x="953" y="805" width="169" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="960" y="825" font-size="13" fill="#111827">nexus-contracts-seams</text>
+  <rect x="1132" y="805" width="176" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="1139" y="825" font-size="13" fill="#111827">nexus-contracts-sparse</text>
   <text x="28" y="880" font-size="13" font-weight="bold" fill="#374151">Inter-domain edges</text>
   <text x="28" y="900" font-size="12" fill="#4b5563">D1→D0 26</text>
   <text x="28" y="918" font-size="12" fill="#4b5563">D2→D0 29</text>

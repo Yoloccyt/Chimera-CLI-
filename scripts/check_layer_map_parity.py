@@ -61,7 +61,12 @@ DOC_LAYER_HEAD = re.compile(r"^L(\d+)\b")
 # ---------------------------------------------------------------------------
 
 def parse_sh(text):
-    """Return (case_dict, layered_list, expected_int) from check_dependency_rules.sh."""
+    """Return (case_dict, layered_list, expected_int) from check_dependency_rules.sh.
+
+    A crate named by two `case` arms with DIFFERENT layer numbers is legal bash
+    (last arm wins) but is a second truth inside one table, so it is refused here
+    rather than collapsed by the dict build below.
+    """
     m = re.search(r"layer_of\(\)\s*\{\s*case \"\$1\" in(.*?)esac", text, re.S)
     if not m:
         raise ValueError("sh: layer_of() case block not found")
@@ -70,8 +75,15 @@ def parse_sh(text):
         line = line.strip()
         mm = re.match(r"^([A-Za-z0-9_-]+(?:\|[A-Za-z0-9_-]+)*)\)\s*echo\s+(\d+)\s*;;$", line)
         if mm:
+            layer = int(mm.group(2))
             for name in mm.group(1).split("|"):
-                case[name] = int(mm.group(2))
+                if name in case and case[name] != layer:
+                    raise ValueError(
+                        "sh: layer_of() names '%s' twice with different layers "
+                        "(%d then %d); bash would silently keep the last arm and "
+                        "this gate would certify a table with two truths"
+                        % (name, case[name], layer))
+                case[name] = layer
     ml = re.search(r'^layered_crates="([^"]+)"', text, re.M)
     if not ml:
         raise ValueError("sh: layered_crates list not found")
@@ -83,11 +95,30 @@ def parse_sh(text):
 
 
 def parse_ps1(text):
-    """Return (layermap_dict, expected_int) from check_dependency_rules.ps1."""
+    """Return (layermap_dict, expected_int) from check_dependency_rules.ps1.
+
+    Duplicate keys are a PARSE ERROR for PowerShell itself (a hash literal "cannot
+    contain duplicate key"), yet building a Python dict from findall pairs collapses
+    them silently -- so this parser used to certify a table the interpreter refuses
+    to load, and `pwsh scripts/check_dependency_rules.ps1` could be broken while the
+    parity gate stayed green. Refuse instead: a table that cannot run has no parity.
+    """
     m = re.search(r"\$layerMap\s*=\s*@\{(.*?)\n\}", text, re.S)
     if not m:
         raise ValueError("ps1: $layerMap block not found")
     pair = re.findall(r"'([A-Za-z0-9_-]+)'\s*=\s*(\d+)", m.group(1))
+    seen, dups = set(), []
+    for key, _ in pair:
+        if key in seen:
+            dups.append(key)
+        seen.add(key)
+    if dups:
+        raise ValueError(
+            "ps1: $layerMap has duplicate key(s) %s -- PowerShell refuses to parse "
+            "this file, so parity cannot be certified (measured 2026-10-20: this "
+            "exact shape made the local iron-law script a ParserError while every "
+            "gate stayed green, because CI runs the .sh sibling)"
+            % ", ".join(sorted(set(dups))))
     return {k: int(v) for k, v in pair}, int(re.search(r"\$expectedCrates\s*=\s*(\d+)", text).group(1))
 
 
@@ -413,6 +444,27 @@ def selftest():
         doc_refused = True
     expect("selftest-17 unreadable doc block refuses to judge (no silent agree)",
            doc_refused)
+    # The two fixtures below are the shape that actually shipped broken once:
+    # a duplicated hashtable key is invisible to a dict-building parser.
+    dup_ps = ("$layerMap = @{\n    'alpha' = 1; 'beta' = 2; 'alpha' = 1\n}\n"
+              "$expectedCrates = 2\n")
+    ps_dup_refused = False
+    try:
+        parse_ps1(dup_ps)
+    except ValueError as exc:
+        ps_dup_refused = "duplicate key" in str(exc)
+    expect("selftest-18 ps1 duplicate hashtable key refuses to certify parity",
+           ps_dup_refused)
+    dup_sh = ('layer_of() {\n  case "$1" in\n    alpha) echo 1 ;;\n'
+              '    beta) echo 2 ;;\n    alpha) echo 3 ;;\n  esac\n}\n'
+              'layered_crates="alpha beta"\nexpected_crates=2\n')
+    sh_dup_refused = False
+    try:
+        parse_sh(dup_sh)
+    except ValueError as exc:
+        sh_dup_refused = "different layers" in str(exc)
+    expect("selftest-19 sh case arm naming one crate twice with different layers "
+           "is refused (bash last-wins must not pass as parity)", sh_dup_refused)
     # Derived, never a literal: this line used to read `total = 17`, which silently
     # under-reported as soon as a fixture was added (ADR-213 W-E added three, so the
     # summary claimed 17 while 20 ran). The sibling gate spells the same rule out --

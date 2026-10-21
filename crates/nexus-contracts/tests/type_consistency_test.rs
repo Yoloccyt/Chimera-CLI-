@@ -229,16 +229,16 @@ fn test_checkpoint_description_field() {
 }
 
 // ============================================================
-// 测试 5: L0 零 workspace crate 依赖保证(ADR-033)
+// 测试 5: L0-A 依赖白名单 + 仅允许 sibling 契约 crate（ADR-033 / ADR-222 D2）
 // ============================================================
 //
-// WHY 调整: 任务描述要求 "验证 Cargo.toml [dependencies] 为空",
-// 但 ADR-033 实际允许 serde/chrono/uuid 作为基础类型库例外(无运行时业务逻辑)。
-// 真正的约束是 "零 workspace crate 依赖"(禁止依赖 nexus-core/event-bus 等)。
-// 本测试通过解析 Cargo.toml 验证 [dependencies] 段不包含任何 workspace path 依赖。
+// WHY 调整（ADR-222 D2）：拆分后 umbrella 是 facade，合法依赖 6 个
+// `nexus-contracts-*` sibling（同为 machine layer 0，L0-A 内 DAG）；但仍禁止
+// 依赖 nexus-core/event-bus 等任何 L0-B/L1+ crate（那是 G-99/L0-R1 的红线）。
+// 外部依赖仍限 serde/chrono/uuid/thiserror。
 
 #[test]
-fn test_nexus_contracts_zero_workspace_crate_dependencies() {
+fn test_nexus_contracts_only_l0a_sibling_workspace_dependencies() {
     // 读取 nexus-contracts/Cargo.toml 验证 [dependencies] 段
     let cargo_toml_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     let content =
@@ -252,26 +252,34 @@ fn test_nexus_contracts_zero_workspace_crate_dependencies() {
     // thiserror 于 A0(2026-08-22)登记: 统一错误层级契约(errors.rs,WI-01 §6.6)
     // 需 thiserror derive——库层错误类型标准 §4.1: 37 个 error.rs 全部 thiserror 先例
     let allowed_external_deps = ["serde", "chrono", "uuid", "thiserror"];
+    let sibling_prefix = "nexus-contracts-";
 
-    // 验证 [dependencies] 段中无任何 workspace path 依赖(即无 workspace crate 依赖)
     for line in deps_section.lines() {
         let trimmed = line.trim();
         // 跳过空行与注释
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
-        // 检测 workspace path 依赖(形如 `nexus-core = { path = "..." }`)
+        let dep_name = trimmed.split('=').next().unwrap_or("").trim();
+        let is_sibling = dep_name.starts_with(sibling_prefix);
+        // workspace path 依赖：只允许 L0-A sibling（同层向下，ADR-222 D2）
         if trimmed.contains("path =") || trimmed.contains("path=") {
-            panic!(
-                "ADR-033 违规: [dependencies] 段发现 workspace path 依赖: {}",
-                trimmed
-            );
+            if !is_sibling {
+                panic!(
+                    "ADR-222 违规: [dependencies] 仅允许 L0-A sibling path 依赖，发现: {}",
+                    trimmed
+                );
+            }
+            continue;
+        }
+        // workspace = true 形态的 sibling 同样合法
+        if is_sibling {
+            continue;
         }
         // 验证外部依赖在白名单内
-        let dep_name = trimmed.split('=').next().unwrap_or("").trim();
         if !dep_name.is_empty() && !allowed_external_deps.contains(&dep_name) {
             panic!(
-                "ADR-033 违规: [dependencies] 段发现非白名单外部依赖 '{}',白名单: {:?}",
+                "ADR-033/ADR-222 违规: [dependencies] 段发现非白名单依赖 '{}'（外部白名单 {:?}；workspace 仅允许 nexus-contracts-* sibling）",
                 dep_name, allowed_external_deps
             );
         }

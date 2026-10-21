@@ -122,6 +122,16 @@ jobs:
           python3 scripts/check_l0_purity.py --selftest
           python3 scripts/check_l0_purity.py
 
+      # WHY: ADR-222 D1 把 L0 拆为 0A 纯契约 / 0B 核心基础面，但机器层号 0/1 刻意
+      # 不重排（116+ 份 ADR 以 L4 seccore 等层号引用历史证据，重排会让整条证据链
+      # 失真）。层号不动 ⇒ 「谁属于 L0-A」无法从数字直接读出，故需一道门专判方向：
+      # L0-A 不得声明依赖 L0-B，L0-B 不得依赖 L2+；层表多源一致仍由 G-45/G-46 负责
+      # （轴分工，不互抄基线）。亚层成员来自 .sh/.ps1 双源并互相对拍。
+      - name: L0 sub-layer direction (G-125)
+        run: |
+          python3 scripts/check_l0_sublayer.py --selftest
+          python3 scripts/check_l0_sublayer.py
+
       # WHY: PowerShell 5.1 parity 守门(ADR-198 G-85)——本仓将 .ps1 定位为
       # “Windows 权威执行体”，但 CI 与 gate_manifest 均以 pwsh（默认 UTF-8）调用，
       # 而无 BOM 且含非 ASCII 的文件在 5.1 下会按 ANSI 解码。2026-10-02 实测：
