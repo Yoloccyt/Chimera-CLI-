@@ -437,6 +437,14 @@ fn test_confirm_popup_no_dismisses() -> Result<(), Box<dyn std::error::Error>> {
 // 渲染测试(使用 TestBackend,无需真实终端)
 // ============================================================
 
+/// 与渲染侧同一归一化:TestBackend 逐格渲染 CJK/英文混排时会插入空格,
+/// 英文标签自身也含空格(Quest 的 En 名是 "Quest Tasks")。两侧必须**同时**
+/// 压缩空格再比较——只压渲染侧会让英文 locale 下的断言恒假(2026-10-21
+/// 实测:并行测试残留 En 时 flaky 的根因)。
+fn squash_spaces(s: &str) -> String {
+    s.chars().filter(|c| *c != ' ').collect()
+}
+
 #[test]
 fn test_render_produces_output() -> Result<(), Box<dyn std::error::Error>> {
     let mut app = make_app()?;
@@ -445,7 +453,7 @@ fn test_render_produces_output() -> Result<(), Box<dyn std::error::Error>> {
     // t! 求值、locale 无关;持 guard 串行化但不写全局 locale——不新增 En 窗口,
     // 避免污染同二进制内其余依赖默认中文的测试
     let _locale_guard = crate::i18n::locale_test_guard();
-    let panel_label = crate::t!(PanelId::Quest.name_key());
+    let panel_label = squash_spaces(crate::t!(PanelId::Quest.name_key()));
     let mut terminal = Terminal::new(backend)?;
     terminal.draw(|f| app.render(f))?;
 
@@ -456,10 +464,11 @@ fn test_render_produces_output() -> Result<(), Box<dyn std::error::Error>> {
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect();
     // WHY 压缩空白:TestBackend 逐格渲染 CJK 时字符间含空格
-    let compact: String = content.chars().filter(|c| *c != ' ').collect();
+    let compact = squash_spaces(&content);
     assert!(
-        compact.contains(panel_label),
-        "rendered output should contain panel info"
+        compact.contains(panel_label.as_str()),
+        "rendered output should contain panel info; locale={:?} panel_label={panel_label:?}\ncompact={compact:?}",
+        crate::i18n::current_locale()
     );
     Ok(())
 }
@@ -473,7 +482,7 @@ fn test_render_switches_panel_content() -> Result<(), Box<dyn std::error::Error>
     // i18n(B4-I):期望串与渲染同源经 t! 求值,locale 无关;不写全局 locale
     // (WHY 见 test_render_produces_output 注)
     let _locale_guard = crate::i18n::locale_test_guard();
-    let panel_label = crate::t!(PanelId::Parliament.name_key());
+    let panel_label = squash_spaces(crate::t!(PanelId::Parliament.name_key()));
     let mut terminal = Terminal::new(backend)?;
     terminal.draw(|f| app.render(f))?;
 
@@ -483,9 +492,9 @@ fn test_render_switches_panel_content() -> Result<(), Box<dyn std::error::Error>
         .iter()
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect();
-    let compact: String = content.chars().filter(|c| *c != ' ').collect();
+    let compact = squash_spaces(&content);
     assert!(
-        compact.contains(panel_label),
+        compact.contains(panel_label.as_str()),
         "rendered output should contain Parliament panel"
     );
     Ok(())
@@ -500,7 +509,7 @@ fn test_render_memory_panel() -> Result<(), Box<dyn std::error::Error>> {
     // i18n(B4-I):期望串与渲染同源经 t! 求值,locale 无关;不写全局 locale
     // (WHY 见 test_render_produces_output 注)
     let _locale_guard = crate::i18n::locale_test_guard();
-    let panel_label = crate::t!(PanelId::Memory.name_key());
+    let panel_label = squash_spaces(crate::t!(PanelId::Memory.name_key()));
     let mut terminal = Terminal::new(backend)?;
     terminal.draw(|f| app.render(f))?;
 
@@ -510,9 +519,9 @@ fn test_render_memory_panel() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect();
-    let compact: String = content.chars().filter(|c| *c != ' ').collect();
+    let compact = squash_spaces(&content);
     assert!(
-        compact.contains(panel_label),
+        compact.contains(panel_label.as_str()),
         "rendered output should contain Memory panel"
     );
     Ok(())
@@ -527,7 +536,7 @@ fn test_render_security_panel() -> Result<(), Box<dyn std::error::Error>> {
     // i18n(B4-I):期望串与渲染同源经 t! 求值,locale 无关;不写全局 locale
     // (WHY 见 test_render_produces_output 注)
     let _locale_guard = crate::i18n::locale_test_guard();
-    let panel_label = crate::t!(PanelId::Security.name_key());
+    let panel_label = squash_spaces(crate::t!(PanelId::Security.name_key()));
     let mut terminal = Terminal::new(backend)?;
     terminal.draw(|f| app.render(f))?;
 
@@ -537,9 +546,9 @@ fn test_render_security_panel() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect();
-    let compact: String = content.chars().filter(|c| *c != ' ').collect();
+    let compact = squash_spaces(&content);
     assert!(
-        compact.contains(panel_label),
+        compact.contains(panel_label.as_str()),
         "rendered output should contain Security panel"
     );
     Ok(())
@@ -580,7 +589,7 @@ fn test_render_help_panel() -> Result<(), Box<dyn std::error::Error>> {
     // i18n(B4-I):期望串与渲染同源经 t! 求值,locale 无关;不写全局 locale
     // (WHY 见 test_render_produces_output 注)
     let _locale_guard = crate::i18n::locale_test_guard();
-    let panel_label = crate::t!(PanelId::Help.name_key());
+    let panel_label = squash_spaces(crate::t!(PanelId::Help.name_key()));
     let mut terminal = Terminal::new(backend)?;
     terminal.draw(|f| app.render(f))?;
 
@@ -590,9 +599,9 @@ fn test_render_help_panel() -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect();
-    let compact: String = content.chars().filter(|c| *c != ' ').collect();
+    let compact = squash_spaces(&content);
     assert!(
-        compact.contains(panel_label),
+        compact.contains(panel_label.as_str()),
         "rendered output should contain Help panel content"
     );
     Ok(())
@@ -1548,7 +1557,7 @@ fn test_log_panel_content_uses_state() -> Result<(), Box<dyn std::error::Error>>
         .map(|c| c.symbol().chars().next().unwrap_or(' '))
         .collect();
     // WHY 压缩空白:TestBackend 逐格渲染中文时汉字间含空格("系 统 日 志")
-    let compact: String = content.chars().filter(|c| *c != ' ').collect();
+    let compact = squash_spaces(&content);
     assert!(compact.contains("系统日志"));
     assert!(content.contains("CacheHit"));
     Ok(())

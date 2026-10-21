@@ -829,31 +829,25 @@ impl DataPipeline {
                 // 高积压触发 1s 降频——events_this_tick 与旧 250ms 语义等价
                 // (250ms tick 下 latest_events.len() ≈ 本 tick drain 数)。
                 let backlog = events_this_tick;
-                match tick_mode {
-                    TickMode::Normal => {
-                        if backlog >= event_backlog_threshold {
-                            tick_mode = TickMode::Eco;
-                            current_tick_ms = eco_tick_ms;
-                            eco_countdown = 5;
-                            tracing::info!(
-                                "DataPipeline tick mode switched to Eco (backlog={backlog} >= threshold={event_backlog_threshold})"
-                            );
-                        }
+                let previous_mode = tick_mode;
+                let (next_mode, next_countdown) =
+                    eco_transition(tick_mode, eco_countdown, backlog, event_backlog_threshold);
+                tick_mode = next_mode;
+                eco_countdown = next_countdown;
+                match (previous_mode, tick_mode) {
+                    (TickMode::Normal, TickMode::Eco) => {
+                        current_tick_ms = eco_tick_ms;
+                        tracing::info!(
+                            "DataPipeline tick mode switched to Eco (backlog={backlog} >= threshold={event_backlog_threshold})"
+                        );
                     }
-                    TickMode::Eco => {
-                        if backlog >= event_backlog_threshold {
-                            eco_countdown = 5;
-                        } else {
-                            eco_countdown = eco_countdown.saturating_sub(1);
-                            if eco_countdown == 0 {
-                                tick_mode = TickMode::Normal;
-                                current_tick_ms = tick_ms;
-                                tracing::info!(
-                                    "DataPipeline tick mode switched back to Normal (backlog={backlog})"
-                                );
-                            }
-                        }
+                    (TickMode::Eco, TickMode::Normal) => {
+                        current_tick_ms = tick_ms;
+                        tracing::info!(
+                            "DataPipeline tick mode switched back to Normal (backlog={backlog})"
+                        );
                     }
+                    _ => {}
                 }
             }
         });
@@ -1063,6 +1057,48 @@ pub async fn backfill_resource_history(
                 "历史回填超时间预算,降级保持上次结果"
             );
             None
+        }
+    }
+}
+
+/// Eco 切换的纯状态转移 —— 把「backlog 越阈 ⇒ Eco / 连续 5 次低 backlog ⇒ 回 Normal」
+/// 从周期循环里抽出来，供确定性夹具直接驱动（ADR-222 R8-7：此前该规则零测试覆盖，
+/// 只知道 `TickMode` 的 display/serde 与配置默认值有测）。
+///
+/// 返回 `(mode, countdown)`；`current_tick_ms` 由调用方按 mode 派生，**不参与判定**——
+/// 模式是状态、时长是派生量，两者混在一起会让夹具只能靠 `sleep` 验证，从而重新变成
+/// 竞速测试（参见 data_test 里 1000 事件/秒 那条同型教训）。
+///
+/// 行为逐字等价于抽取前的内联 match：
+/// - Normal 且 `backlog >= threshold` → 切 Eco，倒计时重置为 5；否则模式与倒计时不动。
+/// - Eco 且 `backlog >= threshold` → 倒计时重置为 5（不退出）。
+/// - Eco 且 `backlog < threshold` → 倒计时减一；减到 0 才回 Normal（第 5 次才退出）。
+#[must_use]
+pub fn eco_transition(
+    mode: TickMode,
+    countdown: u32,
+    backlog: usize,
+    threshold: usize,
+) -> (TickMode, u32) {
+    match mode {
+        TickMode::Normal => {
+            if backlog >= threshold {
+                (TickMode::Eco, 5)
+            } else {
+                (TickMode::Normal, countdown)
+            }
+        }
+        TickMode::Eco => {
+            if backlog >= threshold {
+                (TickMode::Eco, 5)
+            } else {
+                let next = countdown.saturating_sub(1);
+                if next == 0 {
+                    (TickMode::Normal, 0)
+                } else {
+                    (TickMode::Eco, next)
+                }
+            }
         }
     }
 }

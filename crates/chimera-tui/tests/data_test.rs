@@ -216,7 +216,16 @@ async fn pipeline_handles_1000_events_per_second() {
     let config = DataSourceConfig {
         // 覆盖 test_config() 默认值 256 → 1000,确保 1000 个事件全部保留在 latest_events 中
         max_event_history: 1000,
-        tick_interval_ms: 250,
+        // 本测试断言的是「突发 1000 条不丢」，不是 Eco 降频本身。
+        // flaky 根因（单跑 3 次 1 过 2 败、失败轮均停在 128）：首轮 drain 到几条
+        // 由调度决定，而只要 ≥ 100 就命中 `event_backlog_threshold` 并切到 Eco
+        // （1s 节奏）；在 tick=250ms 的旧配置下“消费完”需要多个 Eco 周期，
+        // 与断言窗口正好重叠 ⇒ 能否跑完变成竞速。Eco 是正确的事件风暴保护，
+        // 错的是拿它当本测试的背景噪声——故把阈值抬到突发之上，并抬快 tick。
+        // 注意：流水线的 Eco 切换规则全仓无测试覆盖（仅 TickMode display/serde 与
+        // config 默认值有测），本轮不声称用它接盘；已登记为待裁 R8-7。
+        event_backlog_threshold: 1_000_000,
+        tick_interval_ms: 25,
         ..test_config()
     };
     let pipeline = DataPipeline::new(subscriber, config);
@@ -240,11 +249,11 @@ async fn pipeline_handles_1000_events_per_second() {
     }
     let publish_done = Instant::now();
 
-    // 轮询直到 snapshot 包含全部 1000 个事件。窗口 3s:事件唤醒使消费节奏
-    // 变为「更频繁、更小批」,突发 1000(事件率 ~4000/s)会触发 Eco 降频
-    // (1s 节奏,正确的事件风暴保护)——完整消费需一次 Eco 周期 + 大批处理,
-    // 与本测试自身的宽松断言口径对齐;3s 覆盖两个 Eco 周期,余量充足。
-    let deadline = publish_done + Duration::from_secs(3);
+    // 轮询直到 snapshot 包含全部 1000 个事件。窗口 10s 只当「流水线真的挂死」时的
+    // 看门狗：实测总耗时 ~1.8-2.4s 且六连跑全绿，其中绝大部分是上面 publish 环自身
+    // （每事件一条接收侧日志），不是消费滞后。旧配置（3s 窗口 + 250ms tick +
+    // Eco 1s）下“消费完”与窗口重叠，才是本测试 flaky 的真正成因。
+    let deadline = publish_done + Duration::from_secs(10);
     while Instant::now() < deadline {
         let snap = pipeline.snapshot();
         if snap.latest_events.len() == 1000 {
