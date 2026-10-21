@@ -152,6 +152,9 @@ L0 已完成七轮收口（ADR-212~221），边界被 ADR-212 决策 1/2 裁为�
 4. **ADR-193 的反转叙事**：本 ADR 已登记「+7 crate」与「架构减法」冲突；若治理委员会要求，须另立一份「crate 数政策」ADR，不在本 ADR 内扩展。
 5. **G-16 既有红**：维持 ADR-212:108「不修」；本轮不代改仓外 spec。
 6. **T-3/T-4/F-6/Q-3**：沿用 ADR-221 §11 的 defer 与触发条件，本轮不动。
+7. **R8-3 sibling 装配面按域新轴（defer）**：沿用 ADR-215 D-29 / ADR-221 D-29 的 defer。触发条件 = 出现装配面事故（错接/漏接/跨域直连）时立项；本 ADR 不预先划“按域装配”的轴，避免在无事故证据时先造抽象。
+8. **R8-8 seams 继承的 `NOT-IMPL-CN`（defer）**：触发条件 = 接缝实装批次，或 ADR-188 退役路径启动时同批清理；本轮只保证台账键随拆分迁移，不重写证据路径。
+9. **doctest 轴是 workflow-only，不新增 manifest 门（R8-10 的分轴）**：`ci.yml` 的 `doctest` job（ubuntu-latest / 工具链 1.97.1 / `cargo test --workspace --exclude chimera-e2e-tests --doc --no-fail-fast`）只承担**合入路径执行**，**不**登记为 `gate_manifest.toml` 门——manifest 是本地门集，而本地 windows-gnu 下 `chimera-mas` / `repo-wiki` 的 E0462/E0460 是平台条件、必然判红，把平台红包装成本地门只会制造假红。**实现偏离登记**：计划写“在 check job 末尾加一步”，实做为独立 job——check job `timeout-minutes: 15`，而 doctest 实测约 420s，混跑会压缩快轨余量且无法单独重跑；判定口径不变（同命令、同工具链、同 `--no-fail-fast`）。轴分工：本地以 `cargo test --doc` 的失败集归因（§8 R9 终态），合入以该 job 为准。
 
 ---
 
