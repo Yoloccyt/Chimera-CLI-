@@ -198,7 +198,9 @@ L0 已完成七轮收口（ADR-212~221），边界被 ADR-212 决策 1/2 裁为�
 
 **仍待补的覆盖缺口（已登记，不在本波夹带）**：流水线的 Eco 切换规则（`pipeline.rs` 的 backlog→Eco 与 5 次倒计时）全仓**无测试覆盖**——上述修法只是不再依赖它，不是验了它；见报告 §7 R8-7。**【R9 已收口】** 该判定已抽成纯函数 `eco_transition(mode, countdown, backlog, threshold)`，由 `configurable_tick_test.rs` 的 6 条确定性夹具驱动（边界 `>=` 语义、连续 5 次低 backlog 才退出、Eco 中重新越阈重置倒计时、Normal 不动倒计时、阈值 0 边界、纯函数可重复），不再依赖 `sleep`。
 
-**提交状态（R9 更新）**：上一版「全部改动在工作树、未 commit」已过时——R9 已完成分组提交（C3-1 原子拆分批 / C3-2 CI 门批 / C3-3 Eco 测试批 / C3-4 文档批），每组均按显式路径 `git add`，可独立 `git revert`。
+**提交状态（R9 更新）**：上一版「全部改动在工作树、未 commit」已过时——R9 已完成 分组提交（C3-1 原子拆分批 / C3-2 CI 门批 / C3-3 Eco 测试批 / C3-4 文档批），每组均按显式路径 `git add`，可独立 `git revert`。
+
+**R9 收口终态（2026-10-21 现取，HEAD `0a8361a` + 本条文档补）**：全量 light 门集 **`ok=120 / mismatch=1 / env-fail=0 / unknown=0 / skip=7 = 128/128`**（唯一红 = 既有 G-16，按 ADR-212:108 不修）；`cargo test --workspace --exclude chimera-e2e-tests --lib --bins --tests -j 2` **rc=0 / 11314 passed / 0 failed / 443 target / 65 ignored**；`-p chimera-e2e-tests --tests` **rc=0 / 316 passed / 0 failed / 35 target**（合计 **11630 / 0**）；`cargo check --workspace --all-targets` 与 `clippy -- -D warnings` 均 rc=0，逐包 fmt **47/47**（46 members + 根包）；`.sh`/`.ps1` 铁律双源均 **rc=0**（46/46）；doctest 46/46 target 跑完、266 passed / 27 failed（失败集仅 `chimera-mas` + `repo-wiki`，E0462/E0460 平台条件，与历史同集，非本轮回归）。**提交链**：`2c3cb32`（C3-1 原子拆分批，103 files）/ `4cb5889`（C3-2 G-127/128 + doctest job，3 files）/ `d0701d4`（C3-3 Eco 夹具 + 渲染断言归一化，5 files）/ `0a8361a`（C3-4 文档批，7 files）。R9 新增 **G-127/G-128**（`scripts/check_ps1_syntax.py`，Parser::ParseFile 真解析，双端钉定 UTF-8）并修复两处门红（**G-48** 棘轮 cap 470→464；**G-07** 新脚本与 `ci.yml` 同批 `git add`）。详细取证见 `docs/reports/L0-round9-closure_2026-10-21.md`（本地源，`*.md` 在 `.gitignore`）。
 
 ---
 
