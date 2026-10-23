@@ -63,9 +63,9 @@ async fn pipeline_with_history_backfills_and_persists() {
     let subscriber = EventSubscriber::new(bus.clone());
     let pipeline = DataPipeline::new_with_history(subscriber, fast_config(), Arc::new(history));
 
-    // 轮询等待回填进快照(首 tick 含 SysMetricsCollector::new 的系统全量
-    // 采集,Windows 上可达数秒;固定 sleep 会造成时序脆弱,与 data_test.rs
-    // 的 wait_for_events 同一模式)。build_scaled_timeout!(2.0):debug 8s/release 3s。
+    // 轮询等待回填进快照(首 tick 含 SysMetricsCollector::new 的首轮 CPU/内存
+    // 采样(W2 起定向刷新,不再 new_all 全量枚举);固定 sleep 会造成时序脆弱,
+    // 与 data_test.rs 的 wait_for_events 同一模式)。build_scaled_timeout!(2.0):debug 8s/release 3s。
     let deadline = std::time::Instant::now() + build_scaled_timeout!(2.0);
     let mut snap = pipeline.snapshot();
     while snap.resource_cpu_backfill.is_empty() && std::time::Instant::now() < deadline {
@@ -128,7 +128,7 @@ async fn plain_pipeline_keeps_backfill_fields_empty() {
     let pipeline = DataPipeline::new(subscriber, fast_config());
 
     // 轮询等待首个 tick(revision>0)后断言回填字段恒空;同样规避
-    // SysMetricsCollector 初始化耗时的时序脆弱。
+    // SysMetricsCollector 首轮采样耗时的时序脆弱。
     let deadline = std::time::Instant::now() + build_scaled_timeout!(2.0);
     let mut snap = pipeline.snapshot();
     while snap.revision == 0 && std::time::Instant::now() < deadline {

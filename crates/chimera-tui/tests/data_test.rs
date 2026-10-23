@@ -81,10 +81,10 @@ fn test_config() -> DataSourceConfig {
 
 /// 轮询等待 pipeline 快照包含指定数量的事件，最多等待 2 秒
 ///
-/// WHY 轮询而非固定 sleep: SysMetricsCollector::new() 调用
-/// sysinfo::System::new_all() 是同步阻塞操作，在 current_thread runtime
-/// (#[tokio::test] 默认)中会阻塞整个 runtime。固定 sleep(80ms) 不足以
-/// 覆盖初始化时间，导致 DataPipeline 在窗口内未处理事件，snapshot 中
+/// WHY 轮询而非固定 sleep: SysMetricsCollector::new() 构造期做首轮 CPU/内存采样
+/// （W2 起定向刷新，不再 new_all() 全量枚举进程表），该采样是同步操作，在
+/// current_thread runtime(#[tokio::test] 默认)中仍会占用 runtime。固定 sleep(80ms)
+/// 不足以覆盖初始化时间，导致 DataPipeline 在窗口内未处理事件，snapshot 中
 /// quest_list 为空。轮询等待确保 DataPipeline 至少处理完
 /// expected_event_count 个事件后才进行断言，与 live_data_test.rs 模式一致。
 async fn wait_for_events(pipeline: &DataPipeline, expected_event_count: usize) {
