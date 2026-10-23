@@ -19,9 +19,10 @@
 //! ## 配置优先级
 //! Figment 合并顺序(后者覆盖前者):
 //! 1. 内置默认值(`ChimeraConfig::default`)
-//! 2. 配置文件(默认 `~/.chimera/omega.yaml`,可由 `--config` 覆盖)
+//! 2. 配置文件(默认 `~/.chimera/omega.yaml`)
 //! 3. 环境变量(前缀 `CHIMERA_`,嵌套用 `__` 分隔,如 `CHIMERA_QUEST__MAX_TASKS_PER_QUEST`)
-//! 4. CLI 参数(目前仅 `--config` 影响配置加载路径,后续可扩展)
+//!
+//! `--config` 只选择配置文件路径，不进入 Figment（CLI 参数不是第 4 源）。
 //!
 //! ## 热加载方案(注释说明,骨架暂不实现)
 //! 配置热加载计划通过两种机制实现:
@@ -94,6 +95,8 @@ pub mod quest_loop;
 // Milestone C-3: rl-client 通道（HttpRlClient feature-gated，NoopRlClient 常驻）
 pub mod rl_client;
 pub mod selector_orchestrator;
+/// 命令装配分类(编译期穷尽,决定是否装配 AppContext)
+pub mod spec;
 
 // === 公开 API 重导出 ===
 pub use cli::{Cli, Commands, ConfigAction, QuestAction};

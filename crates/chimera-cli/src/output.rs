@@ -192,6 +192,27 @@ pub fn print_json<T: Serialize>(data: &T) -> Result<(), serde_json::Error> {
     Ok(())
 }
 
+/// 命令输出的唯一双通道入口。
+///
+/// - `json=true`  → stdout 输出 `{ "status":"ok","data":... }`
+/// - `json=false` → 执行人类可读闭包（由调用方决定 stdout/stderr）
+///
+/// WHY 统一入口：此前 30 处 `if json { print_json } else { ... }` 各写一遍，
+/// 新增命令或调整 envelope 时容易漏改；把分支收口到一个函数后，
+/// 各命令只描述"payload 是什么"与"人类可读怎么显示"。
+pub fn emit<T, F>(json: bool, payload: &T, human: F) -> anyhow::Result<()>
+where
+    T: Serialize,
+    F: FnOnce() -> anyhow::Result<()>,
+{
+    if json {
+        print_json(payload)?;
+    } else {
+        human()?;
+    }
+    Ok(())
+}
+
 /// JSON 输出 envelope — 错误响应的统一包装(Task 1.7.4 schema)
 #[derive(Debug, Serialize)]
 pub struct JsonError {

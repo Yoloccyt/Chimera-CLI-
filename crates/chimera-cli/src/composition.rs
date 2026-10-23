@@ -117,9 +117,18 @@ pub struct AppContext {
     #[cfg(feature = "r2_unfreeze")]
     pub evolution_orchestrator: Option<EvolutionOrchestrator>,
     /// 非 r2_unfreeze 构建下的字段占位(保持元组尺寸一致,无运行时足迹)
+    ///
+    /// WHY `fn() -> ()` 而非 `*const u8`：裸指针使 AppContext 变成 `!Send + !Sync`，
+    /// 任何未来 `tokio::spawn(dispatch)` 都会编译失败。函数指针是 Send+Sync 的零尺寸占位。
     #[cfg(not(feature = "r2_unfreeze"))]
-    pub _evolution_orchestrator_placeholder: std::marker::PhantomData<*const u8>,
+    pub _evolution_orchestrator_placeholder: std::marker::PhantomData<fn() -> ()>,
 }
+
+// 编译期断言：AppContext 必须可跨任务共享（防止未来 spawn 才暴露 !Send/!Sync）。
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<AppContext>();
+};
 
 /// 装配 AppContext（唯一组合根入口，C12）
 ///
@@ -145,7 +154,28 @@ pub struct AppContext {
 /// `#[tokio::test]`）满足此前置；同步上下文（如 proptest 闭包）须先建
 /// runtime 再 `block_on` 驱动（见 tests/composition_root_e2e.rs 范式）。
 pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
+    // 库调用方默认保 Auto：保持与既有 `EventBus::new()`+leaf opt-in 完全一致的语义
+    // （9 crate 10 处 try_enable_sharding 调用点零行为变更）。CLI 路径经
+    // `commands/mod.rs` 按 `spec::plan` 选定的策略调 `build_with_sharding`。
+    build_with_sharding(config, crate::spec::ShardingPolicy::Auto)
+}
+
+/// 装配 AppContext，并按宿主类型注入事件分片策略（性能重构 D1）。
+///
+/// 与 [`build`] 的唯一差异：`ShardingPolicy::Off` 时在 `EventBus::new()` 之后、
+/// 任何 leaf 组件（`GqepExecutor::new` / `SccCache::new`）构造之前调用
+/// `bus.without_sharding()`，屏蔽后续 `try_enable_sharding` 的 64 worker spawn。
+/// `Critical` mpsc 旁路、单流 broadcast、漏发率语义均不变（仅关并行扇出）。
+pub fn build_with_sharding(
+    config: &ChimeraConfig,
+    sharding: crate::spec::ShardingPolicy,
+) -> Result<AppContext> {
     let mut bus = EventBus::new();
+    // D1：one-shot 命令在此关闭分片 opt-in，必须早于任何触发 try_enable_sharding
+    // 的组件构造（gqep/scc）；显式 enable_sharding(n) 不受此开关影响（逃生门/测试）。
+    if sharding == crate::spec::ShardingPolicy::Off {
+        bus = bus.without_sharding();
+    }
     // O-1 (ADR-191 D1): 挂载 L1 BusLogger，激活全套 Prometheus 计数器。
     // 此前 `EventBus::new()` 置 logger=None（bus.rs）⇒ logging.rs 指标生产死码。
     // BusLogger 自带 per-instance Registry（非全局默认），多次构造不冲突；
@@ -208,6 +238,14 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
         version = %config.nexus.version,
         "AppContext assembled at composition root (C12, critical bypass wired, gea+gqep+scc wired)"
     );
+    // 性能重构 P2-3：细分启动段——把「本命令实际是否分片」显式化，使 one-shot Off
+    // 与长驻 Auto 的差异可归因（`assemble_ms` 只覆盖整段，不足以证明分片税已去掉）。
+    // 必须在 `bus` 移入 AppContext 之前读 `sharding_enabled()`。
+    tracing::info!(
+        sharding_policy = ?sharding,
+        sharding_enabled = bus.sharding_enabled(),
+        "startup phase: shard"
+    );
     // WI-D1：跨厂商辩论激活输入（opt-in，默认 None）。
     // 启用条件：config.model_router.cross_vendor_debate == true 且去重后 provider >= 2；
     // 否则保持 None（Parliament 走默认，行为与本字段引入前一致）。
@@ -259,6 +297,34 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
 pub fn build_app_server(ctx: AppContext) -> AppServer {
     let backend = Box::new(QuestBackend::with_engine(ctx.engine, ctx.bus));
     AppServer::with_backend(ctx.server_config, backend)
+}
+
+/// 轻量 QuestEngine 的唯一合法派生构造点（TUI 协议模式使用）。
+///
+/// WHY 放在组合根：`QuestEngine::new` 属于装配动作；命令层直接调用会被
+/// `check_composition_root.py` 记为绕过。
+pub fn build_engine(bus: &EventBus) -> Arc<QuestEngine> {
+    Arc::new(QuestEngine::new(bus.clone()))
+}
+
+/// TUI 检查点引擎的唯一合法派生构造点（供组合根门禁归零）。
+///
+/// WHY 放在组合根：`QuestEngine::with_checkpoints` 属于装配动作；
+/// 命令层直接调用会被 `check_composition_root.py` 记为绕过。
+pub fn build_checkpoint_engine(
+    bus: &EventBus,
+    checkpoint_dir: std::path::PathBuf,
+) -> Arc<QuestEngine> {
+    Arc::new(QuestEngine::with_checkpoints(
+        bus.clone(),
+        quest_engine::QuestConfig::default(),
+        checkpoint_dir,
+    ))
+}
+
+/// MCP 网格的唯一合法派生构造点（mcp 命令与 doctor 探针共用）。
+pub fn build_mesh(_config: &ChimeraConfig) -> mcp_mesh::McpMesh {
+    mcp_mesh::McpMesh::new(mcp_mesh::MeshConfig::default())
 }
 
 /// 注册 Critical 旁路订阅者并 spawn 后台日志消费者（C1 配套，C3 接线；M4-P2 由 build() 标准调用）
@@ -456,5 +522,30 @@ mod tests {
         let stats = ctx.scc.stats();
         assert_eq!(stats.entry_count, 0);
         assert!((stats.hit_rate - 0.0).abs() < f32::EPSILON);
+    }
+
+    /// 性能重构 D1 验收：`ShardingPolicy::Off` 装配的 AppContext，其 bus 不应启用分片——
+    /// `without_sharding()` 应在 gqep/scc 构造前屏蔽其 `try_enable_sharding`。
+    #[tokio::test]
+    async fn composition_build_with_sharding_off_keeps_single_stream() {
+        let ctx = build_with_sharding(&ChimeraConfig::default(), crate::spec::ShardingPolicy::Off)
+            .expect("Off 装配应成功");
+        assert!(
+            !ctx.bus.sharding_enabled(),
+            "one-shot 策略下 gqep/scc 的 try_enable_sharding 应被 without_sharding 屏蔽"
+        );
+    }
+
+    /// 性能重构 D1 验收：`ShardingPolicy::Auto`（= `build` 默认）应启用分片，
+    /// 与既有 leaf opt-in 语义一致（长驻宿主保留扇出）。
+    #[tokio::test]
+    async fn composition_build_default_still_enables_sharding() {
+        let ctx = build(&ChimeraConfig::default()).expect("默认(Auto) 装配应成功");
+        assert!(
+            ctx.bus.sharding_enabled(),
+            "长驻宿主默认应启用分片（与既有 leaf opt-in 语义一致）"
+        );
+        // 优雅清理：避免 64 worker 残留到测试 runtime（guard 也会在 drop 时 abort）
+        ctx.bus.shutdown_sharding().await;
     }
 }

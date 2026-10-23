@@ -66,6 +66,22 @@ pub trait AppTransport: Send + Sync {
     /// 推送服务端事件（下行）
     async fn send_event(&self, ev: &AppEvent) -> Result<(), TransportError>;
 
+    /// 批量推送服务端事件（下行）。默认逐条 `send_event`，保证所有实现（含测试桩
+    /// `MockTransport`、单向 `SseConnection`）向后兼容、无需覆写。
+    ///
+    /// # 契约（与逐条 `send_event` 等价）
+    /// - 输出字节与逐条调用完全一致（一个 op 的事件批次连续写出、不与其他 op 交错）；
+    /// - 失败点与逐条相同（逐帧 `?`；已写帧不可撤回）。
+    ///
+    /// 高频实现（[`IoTransport`]）覆写为**一次 writer 锁 + 单次 flush**，将下行帧的
+    /// syscall/flush 开销从 3×N 降为 2×N 写 + 1 flush，不改变并发/顺序语义（性能重构 D7）。
+    async fn send_events(&self, events: &[AppEvent]) -> Result<(), TransportError> {
+        for ev in events {
+            self.send_event(ev).await?;
+        }
+        Ok(())
+    }
+
     /// 回送协议级错误帧 — 帧解码失败时的 JSON-RPC error response（架构方向 F-c 终章）
     ///
     /// # 默认实现（降级语义）
@@ -186,6 +202,26 @@ where
         let mut writer = self.writer.lock().await;
         writer.write_all(frame.as_bytes()).await?;
         writer.write_all(b"\n").await?;
+        writer.flush().await?;
+        Ok(())
+    }
+
+    /// 覆写批量推送 — 一次 writer 锁内逐帧写入、末尾**单次 flush**（性能重构 D7）。
+    ///
+    /// 与逐条 [`send_event`](Self::send_event) 的字节输出完全一致（帧编码 + `\n`），
+    /// 仅把每事件一次 flush 改为整批一次：N 个事件从 3×N 次 syscall 降为 2×N 写 + 1 flush。
+    /// 锁内无跨事件共享状态变更（仅顺序写入），持锁与逐条版同量级；错误点与逐条一致。
+    async fn send_events(&self, events: &[AppEvent]) -> Result<(), TransportError> {
+        use tokio::io::AsyncWriteExt;
+        if events.is_empty() {
+            return Ok(());
+        }
+        let mut writer = self.writer.lock().await;
+        for ev in events {
+            let frame = crate::protocol::RpcCodec::encode_notification(ev)?;
+            writer.write_all(frame.as_bytes()).await?;
+            writer.write_all(b"\n").await?;
+        }
         writer.flush().await?;
         Ok(())
     }
@@ -419,5 +455,42 @@ mod tests {
         );
         // 行尾恰一个换行(NDJSON 纪律)
         assert!(line.ends_with('\n') && !line.ends_with("\n\n"));
+    }
+
+    /// 性能重构 D7：批量写与逐条写必须产生完全相同的字节（一个 op 事件批次连续、不交错）。
+    #[tokio::test]
+    async fn batch_send_events_matches_sequential_bytes() {
+        use nexus_contracts::app::AppEvent;
+        let ev1 = AppEvent::Error {
+            code: "E1".into(),
+            message: "one".into(),
+        };
+        let ev2 = AppEvent::Error {
+            code: "E2".into(),
+            message: "two".into(),
+        };
+
+        // 逐条 send_event（×2）
+        let seq = IoTransport::with_io(std::io::Cursor::new(Vec::new()), Vec::new());
+        seq.send_event(&ev1).await.expect("逐条1");
+        seq.send_event(&ev2).await.expect("逐条2");
+        let seq_bytes = seq.into_writer();
+
+        // 一次 send_events 批量
+        let bat = IoTransport::with_io(std::io::Cursor::new(Vec::new()), Vec::new());
+        bat.send_events(&[ev1, ev2]).await.expect("批量");
+        let bat_bytes = bat.into_writer();
+
+        assert_eq!(seq_bytes, bat_bytes, "批量写字节必须与逐条写完全一致");
+        assert_eq!(
+            bat_bytes.iter().filter(|&&b| b == b'\n').count(),
+            2,
+            "两帧两行（NDJSON）"
+        );
+
+        // 空批次：不写任何字节（serve/acp 无事件时调用路径）
+        let empty = IoTransport::with_io(std::io::Cursor::new(Vec::new()), Vec::new());
+        empty.send_events(&[]).await.expect("空批次应成功");
+        assert!(empty.into_writer().is_empty(), "空批次不得写入任何字节");
     }
 }

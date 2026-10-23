@@ -11,7 +11,7 @@
 //!
 //! # v3-engine M2 切换(ADR-061)
 //! 自研渲染路径默认启用,通过 `--no-v3-engine` flag 或 `CHIMERA_NO_V3_ENGINE=1`
-//! 环境变量可回退到 ratatui 路径。回退机制保留 2 个版本周期(v2.11.0-omega 移除)。
+//! 环境变量可回退到 ratatui 路径。兼容窗口已过期，当前保留（ADR-061 未修订）。
 //!
 //! # 超窗/RAG 链路生产接线(P1,ADR-072)
 //! `execute_with_ctx` 组合根创建 `OverWindowBridge`(挂 TUI 会话总线)并注入
@@ -108,14 +108,38 @@ fn assemble_quest_stack(
     ctx: &AppContext,
     checkpoint_dir: std::path::PathBuf,
 ) -> (Arc<quest_engine::QuestEngine>, tokio::task::JoinHandle<()>) {
-    let engine = Arc::new(quest_engine::QuestEngine::with_checkpoints(
-        ctx.bus.clone(),
-        quest_engine::QuestConfig::default(),
-        checkpoint_dir,
-    ));
+    let engine = crate::composition::build_checkpoint_engine(&ctx.bus, checkpoint_dir);
     let control_handle =
         quest_engine::spawn_control_subscriber(Arc::clone(&engine), ctx.bus.clone());
     (engine, control_handle)
+}
+
+/// TUI 后台任务句柄集合 —— 统一 abort，避免漏清 orphan task（§4.4 #7）。
+///
+/// WHY 不实现 `Drop`：清理需要先 abort 再 `pipeline.shutdown().await`，
+/// `Drop` 不能 async；用显式 `abort_all()` 保持顺序可见、可测。
+#[derive(Default)]
+struct RuntimeHandles {
+    control: Option<tokio::task::JoinHandle<()>>,
+    quest: Option<tokio::task::JoinHandle<()>>,
+    handshake: Option<tokio::task::JoinHandle<()>>,
+    action: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl RuntimeHandles {
+    fn abort_all(&mut self) {
+        for handle in [
+            self.control.take(),
+            self.quest.take(),
+            self.handshake.take(),
+            self.action.take(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            handle.abort();
+        }
+    }
 }
 
 /// 执行 tui 命令 — 兼容层 thin wrapper（M9 装配收敛，同 M4 六臂先例）
@@ -186,18 +210,22 @@ pub async fn execute_with_ctx(
         ));
 
         // Quest 编排器保留(EventBus 双向控制: TUI ↔ 编排器回环)
-        let engine = Arc::new(quest_engine::QuestEngine::new(bus.clone()));
-        let control_handle =
-            quest_engine::spawn_control_subscriber(Arc::clone(&engine), bus.clone());
-        let quest_handle = crate::orchestrator::spawn_quest_orchestrator(
-            bus.clone(),
-            Arc::clone(&engine),
-            orchestrator_config_from_env(),
-        );
+        let engine = crate::composition::build_engine(&bus);
+        let mut handles = RuntimeHandles {
+            control: Some(quest_engine::spawn_control_subscriber(
+                Arc::clone(&engine),
+                bus.clone(),
+            )),
+            quest: Some(crate::orchestrator::spawn_quest_orchestrator(
+                bus.clone(),
+                Arc::clone(&engine),
+                orchestrator_config_from_env(),
+            )),
+            ..Default::default()
+        };
 
         let run_result = app.run().context("TUI 协议模式运行失败");
-        control_handle.abort();
-        quest_handle.abort();
+        handles.abort_all();
         tracing::info!("TUI 协议模式退出");
         return run_result;
     }
@@ -235,6 +263,11 @@ pub async fn execute_with_ctx(
         Arc::clone(&engine),
         orchestrator_config_from_env(),
     );
+    let mut handles = RuntimeHandles {
+        control: Some(control_handle),
+        quest: Some(quest_handle),
+        ..Default::default()
+    };
 
     // §16.1 经验卡片闭环装配(Phase 10 审计修复 Wave 1):组合根接线
     // ExperienceCardBus 主链 — L3 SQLite 双流持久化(含 Critical 高分卡) +
@@ -287,7 +320,7 @@ pub async fn execute_with_ctx(
     // Concord W10 T10.2(ADR-082):启动协议握手应答器 — 响应 TUI 启动时
     // 发布的 TuiHello,协商兼容级别并回 TuiHelloAck(SEC-4 一次性);
     // 必须在 TUI run() 前 spawn(subscribe-before-spawn,不错过启动瞬间握手)。
-    let handshake_handle = crate::handshake::spawn_handshake_responder(bus.clone());
+    handles.handshake = Some(crate::handshake::spawn_handshake_responder(bus.clone()));
 
     let overwindow = build_overwindow_handle(bus.clone(), Arc::clone(&pipeline))?;
 
@@ -304,28 +337,23 @@ pub async fn execute_with_ctx(
     // P0 交互链:启动 Action 编排器,消费命令面板/斜杠/面板派发的 TuiActionRequested,
     // 按 action_id 域前缀路由:quest.* 驱动同一 engine 真实执行,回发 TuiActionCompleted/Failed。
     // UI 本地态动作由 TUI 本地 dispatch_action 处理,不到达此处(误达则回 Failed)。
-    let action_handle = crate::action_orchestrator::spawn_action_orchestrator(
+    handles.action = Some(crate::action_orchestrator::spawn_action_orchestrator(
         bus.clone(),
         Arc::clone(&engine),
         Some(overwindow),
         Some(chat_provider),
         // B2:/compact 策展配置随 TuiConfig 四源合并后透传编排器
         curation_cfg,
-    );
+    ));
 
     // 启动 TUI 事件循环(阻塞直到用户退出)
     // WHY 先保存结果再 shutdown:即使 run() 返回 Err,也必须清理 DataPipeline
     // 后台任务,避免 orphan task(§4.4 反模式 #7)。
     let run_result = app.run().context("TUI 运行失败");
 
-    // 中止上游控制订阅者;EventBus 仍由 pipeline 等持有,不会提前关闭。
-    control_handle.abort();
-    // 中止 Quest 编排器后台任务(避免 orphan task,§4.4 #7)。
-    quest_handle.abort();
-    // 中止握手应答器后台任务(Concord W10,避免 orphan task)。
-    handshake_handle.abort();
-    // 中止 Action 编排器后台任务(避免 orphan task,§4.4 #7)。
-    action_handle.abort();
+    // 统一中止上游后台任务（控制订阅者/编排器/握手/Action 编排）;
+    // EventBus 仍由 pipeline 等持有，不会提前关闭。
+    handles.abort_all();
 
     // 中止并清理数据管道后台任务。
     pipeline.shutdown().await;

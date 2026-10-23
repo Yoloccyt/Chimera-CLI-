@@ -22,16 +22,19 @@
 use anyhow::Result;
 use nexus_app_server::{AppServer, AppTransport, StdinTransport, TransportError};
 
+use crate::composition::AppContext;
 use crate::config::ChimeraConfig;
 
 /// 执行 serve 命令 — 事件循环直至 EOF（客户端断开）或 Ctrl+C（优雅关闭）
 pub async fn execute(config: &ChimeraConfig) -> Result<()> {
-    tracing::info!("chimera serve: 协议宿主启动（JSON-RPC v1 over stdio）");
-
-    // C1(2026-09-04): 真实核心装配——组合根集中构造 AppContext，
-    // QuestBackend 包装 L9 QuestEngine（此前 AppServer::new 默认 InMemoryBackend，
-    // 协议宿主对外承诺与实际能力脱节，F-A2-4）。
+    // 库调用方（非 dispatch）仍可独立装配；dispatch 路径走 execute_with_ctx。
     let ctx = crate::composition::build(config)?;
+    execute_with_ctx(ctx, config).await
+}
+
+/// 执行 serve 命令 — 复用 dispatch 已装配的 AppContext（消除二次装配）。
+pub async fn execute_with_ctx(ctx: AppContext, config: &ChimeraConfig) -> Result<()> {
+    tracing::info!("chimera serve: 协议宿主启动（JSON-RPC v1 over stdio）");
     tracing::info!(
         version = %config.nexus.version,
         "chimera serve: 真实核心装配完成（QuestBackend + critical 旁路订阅，C1/C12）"
@@ -88,10 +91,9 @@ async fn serve_loop(server: &AppServer, transport: &dyn AppTransport) -> Result<
         // 处理操作 → 事件推送（内闭外开：AppOp/AppEvent 协议面）
         match server.handle_op(&op).await {
             Ok(events) => {
-                for ev in &events {
-                    if let Err(e) = transport.send_event(ev).await {
-                        tracing::warn!(error = %e, "chimera serve: 事件推送失败");
-                    }
+                // 性能重构 D7：整批一次 flush（与逐条 send_event 字节等价）。
+                if let Err(e) = transport.send_events(&events).await {
+                    tracing::warn!(error = %e, count = events.len(), "chimera serve: 事件批推送失败");
                 }
             }
             Err(e) => {

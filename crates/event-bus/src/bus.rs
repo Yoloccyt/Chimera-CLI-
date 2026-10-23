@@ -19,10 +19,11 @@ use crate::types::{EventMetadata, EventSeverity, NexusEvent};
 // F-a(M0):ArcSwapOption 承载分片总线单一真值源(取代 Mutex<Option<Arc<_>>> +
 // AtomicBool 双表达 —— 双源真相靠手工 Release/Relaxed 配对维持,分叉即灰度时灵时不灵)
 use arc_swap::ArcSwapOption;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
+use tokio::task::JoinHandle;
 use tracing::warn;
 
 /// 默认广播容量
@@ -360,6 +361,20 @@ pub struct EventBus {
     /// WHY Arc<AtomicU64>:EventBus 派生 Clone,所有副本共享同一计数器;
     /// 无条件统计(分片启用与否均递增),供 T13 前哨观测 Critical 车道流量。
     critical_total: Arc<AtomicU64>,
+    /// 分片 opt-in 开关(性能重构 D1)—— 默认 `true`(保持既有 leaf
+    /// `try_enable_sharding` 行为)。`without_sharding()` 置 false 后,leaf 的
+    /// `try_enable_sharding` 在未被 `CHIMERA_BUS_SHARDS` 显式覆盖时早退,
+    /// 避免 one-shot 命令为 64 个常驻 worker 付费。
+    ///
+    /// WHY Arc<AtomicBool> + Relaxed:EventBus 派生 Clone,开关须跨副本共享;
+    /// 仅在低频的 try_enable_sharding 入口读一次(非 publish 热路径),
+    /// Relaxed 内存序足够(无跨变量同步需求)。
+    sharding_allowed: Arc<AtomicBool>,
+    /// 分片 worker 生命周期 guard(性能重构 D2)—— 持有 `spawn_workers`
+    /// 返回的 `JoinHandle`,最后一个 EventBus clone drop 时 abort worker,
+    /// 根治"worker 持强引用且无退出条件"导致的泄漏(与 composition_root_bench
+    /// 的 OOM 根因同源)。`Arc<OnceLock<..>>` 使 Clone 共享且仅触发一次 drop。
+    shard_guard: Arc<OnceLock<ShardWorkerGuard>>,
 }
 
 /// 单事件发布的共享实现(**宏形式**)—— `publish` 与 `publish_blocking` 的唯一路径
@@ -541,6 +556,42 @@ macro_rules! dispatch_one_impl {
     }};
 }
 
+/// 分片 worker 生命周期 guard（性能重构 D2）。
+///
+/// 持有 [`spawn_workers`](ShardedEventBus::spawn_workers) 返回的全部 `JoinHandle`。
+/// 当最后一个 [`EventBus`] clone drop（即 `Arc<OnceLock<ShardWorkerGuard>>` 归零）时，
+/// `Drop` abort 所有 worker，释放其持有的 `broadcast::Sender` 克隆与 `Arc<Notify>`——
+/// 根治"worker 持强引用且无退出条件"导致 `ShardedEventBus`/队列内存永不回收的泄漏。
+///
+/// [`shutdown_sharding`](EventBus::shutdown_sharding) 会先把句柄 `take_handles` 出来
+/// await（优雅排空）；届时 `Vec` 已空，`Drop` 不再 abort。两条路径互斥且幂等。
+struct ShardWorkerGuard {
+    handles: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl ShardWorkerGuard {
+    fn new(handles: Vec<JoinHandle<()>>) -> Self {
+        Self {
+            handles: Mutex::new(handles),
+        }
+    }
+
+    /// 取走全部尚未被取走的句柄（取走后 `Drop` 不会再 abort 它们）。
+    fn take_handles(&self) -> Vec<JoinHandle<()>> {
+        let mut guard = self.handles.lock().unwrap_or_else(|p| p.into_inner());
+        std::mem::take(&mut *guard)
+    }
+}
+
+impl Drop for ShardWorkerGuard {
+    fn drop(&mut self) {
+        let mut guard = self.handles.lock().unwrap_or_else(|p| p.into_inner());
+        for handle in std::mem::take(&mut *guard) {
+            handle.abort();
+        }
+    }
+}
+
 impl EventBus {
     /// 创建事件总线,使用默认容量(1024),不启用日志埋点
     pub fn new() -> Self {
@@ -571,6 +622,9 @@ impl EventBus {
             shard_bus: Arc::new(ArcSwapOption::empty()),
             enable_lock: Arc::new(Mutex::new(())),
             critical_total: Arc::new(AtomicU64::new(0)),
+            // 性能重构 D1/D2：默认允许分片 opt-in + 空 worker guard（与既有行为零变更）
+            sharding_allowed: Arc::new(AtomicBool::new(true)),
+            shard_guard: Arc::new(OnceLock::new()),
         }
     }
 
@@ -599,6 +653,9 @@ impl EventBus {
             shard_bus: Arc::new(ArcSwapOption::empty()),
             enable_lock: Arc::new(Mutex::new(())),
             critical_total: Arc::new(AtomicU64::new(0)),
+            // 性能重构 D1/D2：默认允许分片 opt-in + 空 worker guard（与既有行为零变更）
+            sharding_allowed: Arc::new(AtomicBool::new(true)),
+            shard_guard: Arc::new(OnceLock::new()),
         }
     }
 
@@ -631,6 +688,9 @@ impl EventBus {
             shard_bus: Arc::new(ArcSwapOption::empty()),
             enable_lock: Arc::new(Mutex::new(())),
             critical_total: Arc::new(AtomicU64::new(0)),
+            // 性能重构 D1/D2：默认允许分片 opt-in + 空 worker guard（与既有行为零变更）
+            sharding_allowed: Arc::new(AtomicBool::new(true)),
+            shard_guard: Arc::new(OnceLock::new()),
         }
     }
 
@@ -709,6 +769,43 @@ impl EventBus {
     // P1-T12 分片灰度开关 — 默认不启用,零回归
     // ============================================================
 
+    /// 关闭本总线（及其所有 Clone 副本）的 leaf 分片 opt-in（性能重构 D1）。
+    ///
+    /// one-shot 命令的组合根在构造 gqep/scc 之前调用，使后续任何
+    /// `try_enable_sharding` 早退，避免为 64 个常驻 worker 付费。不影响：
+    /// - 显式 `enable_sharding(n)`（测试/宿主强制）；
+    /// - `CHIMERA_BUS_SHARDS` 显式运维覆盖（见 `try_enable_sharding`）。
+    ///
+    /// 返回 `self` 以支持 `let bus = EventBus::new().without_sharding();`。
+    #[must_use = "返回应用开关后的总线，丢弃返回值等于没关闭"]
+    pub fn without_sharding(self) -> Self {
+        // sharding_allowed 为 Arc<AtomicBool>，store 经 &self 即可，无需 `mut self`。
+        self.sharding_allowed.store(false, Ordering::Relaxed);
+        self
+    }
+
+    /// 优雅关闭分片：唤醒全部 worker 排空各自队列，await 其退出，再释放槽位强引用。
+    ///
+    /// WHY 公开：长驻宿主（TUI/serve）退出前可显式调用，保证已入片但未汇入的
+    /// `Unordered` 事件不丢（worker 见 `draining` 标志后 drain-to-empty 再 break）。
+    /// 不调用亦可：[`ShardWorkerGuard`] 会在最后一个 `EventBus` clone drop 时 abort
+    /// worker（硬退出，进程 teardown 语义）。幂等：重复调用因句柄已被 take 而为 no-op。
+    pub async fn shutdown_sharding(&self) {
+        // 1) 置 draining + 唤醒（用 notify_one() 存 permit，避免 worker 尚未 await 时丢失唤醒）
+        if let Some(sb) = self.shard_bus.load_full() {
+            sb.request_drain();
+        }
+        // 2) 取走句柄并 await（worker 见 draining 且队列空后自行 break）
+        if let Some(guard) = self.shard_guard.get() {
+            for handle in guard.take_handles() {
+                // 忽略 JoinError：被 abort 或 panic 均视为已回收，不应因此中断关闭流程
+                let _ = handle.await;
+            }
+        }
+        // 3) 释放槽位强引用（worker 已退出不再持引用；ShardedEventBus 随最后一个 Arc drop 释放）
+        self.shard_bus.store(None);
+    }
+
     /// 启用分片并把结果显式化（ADR-197 A3）
     ///
     /// WHY 统一入口而不是各 crate 各自 `let _ =`：全仓 10 处调用点分布在 9 个 crate，
@@ -724,9 +821,29 @@ impl EventBus {
     /// 本方法的核心价值是**副作用（日志可见）**，返回值仅供调用方自行决定是否
     /// 追加记录，故不加 `#[must_use]`（避免调用点重新写回 `let _ =`）。
     pub fn try_enable_sharding(&self, component: &str) -> bool {
-        match self.enable_sharding(crate::shard::DEFAULT_SHARD_COUNT) {
+        // D1：组合根经 `without_sharding()` 屏蔽 leaf opt-in 时，此处早退（不 spawn
+        // worker），除非运维经 `CHIMERA_BUS_SHARDS` 显式覆盖（A/B 与故障排查逃生）。
+        // 显式 `enable_sharding(n)` 不受本开关影响（测试/宿主强制仍可用）。
+        if !self.sharding_allowed.load(Ordering::Relaxed)
+            && std::env::var_os("CHIMERA_BUS_SHARDS").is_none()
+        {
+            tracing::debug!(
+                component,
+                "分片被宿主策略关闭(without_sharding)，跳过 opt-in"
+            );
+            return false;
+        }
+        // T3.4：默认分片数不变（64）；`CHIMERA_BUS_SHARDS` 仅作为调优开关，
+        // 合法范围 1..=256（0 会在 ShardedEventBus::new 内回退 1，但这里显式拒绝，
+        // 避免“设 0 却悄悄变单片”的误配置）。
+        let shards = std::env::var("CHIMERA_BUS_SHARDS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| (1..=256).contains(n))
+            .unwrap_or(crate::shard::DEFAULT_SHARD_COUNT);
+        match self.enable_sharding(shards) {
             Ok(()) => {
-                tracing::debug!(component, "事件分片已启用");
+                tracing::debug!(component, shards, "事件分片已启用");
                 true
             }
             Err(EventBusError::ShardingAlreadyEnabled) => {
@@ -816,7 +933,17 @@ impl EventBus {
         // spawn 后注册(原版顺序):发布路径经 shard_bus.load() 只在注册后可见
         // 分片,不存在"已注册未 spawn"窗口,行为与 v2.27.1 完全一致。
         let sb = Arc::new(ShardedEventBus::new(n_shards, SHARD_CAPACITY));
-        sb.spawn_workers(self.sender.clone(), Arc::clone(&self.credit_flow), &handle);
+        // D2:spawn_workers 返回句柄;先把 guard 落到 OnceLock(仅首个 enable 成功),
+        // 再注册 shard_bus。set 失败(shutdown 后重复 enable)→ 丢弃刚 spawn 的 worker
+        // (guard 随返回值 drop 触发 abort,避免脱离托管的泄漏),拒绝重复启用。
+        let handles = sb.spawn_workers(self.sender.clone(), Arc::clone(&self.credit_flow), &handle);
+        if self
+            .shard_guard
+            .set(ShardWorkerGuard::new(handles))
+            .is_err()
+        {
+            return Err(EventBusError::ShardingAlreadyEnabled);
+        }
         self.shard_bus.store(Some(sb));
         Ok(())
     }
@@ -3032,24 +3159,22 @@ mod tests {
             1 + DEFAULT_SHARD_COUNT,
             "并发失败路径不得 spawn worker(引用计数翻倍 = 重复 spawn 泄漏)"
         );
-        // 安装的分片总线:worker 恰好一组(评审 Issue 1 的守护本意 = 不重复 spawn)
+        // 安装的分片总线:worker 恰好一组(评审 Issue 1 的守护本意 = 不重复 spawn)。
         //
-        // F-a 断言语义调整(2026-09-12,实测记录):ArcSwapOption 槽位占用期间,
-        // arc-swap 内部会为当前值多持 1 份强引用(区分实验:guard 存活/删除均 66,
-        // swap 清空槽位后 taken=65 = taken 1 + worker 64 —— +1 与槽位占用绑定,
-        // 非 spawn 翻倍、非泄漏;真正的重复-spawn 守护由上方 credit_flow 精确
-        // 计数承担,该断言在本测试中始终通过)。故本断言从"精确 65"放宽为
-        // "恰有一组 + arc-swap 内部缓存 ≤1":下界防 worker 丢失,上界防翻倍。
+        // 性能重构 D2 断言语义调整(2026-10-22):worker 现改持 `Weak<ShardedEventBus>`
+        // (根治旧设计"worker 持强引用且无退出条件"的内存泄漏 —— 即 composition_root_bench
+        // OOM 根因)。故分片总线的**强引用计数不再随 worker 数增长**:此刻仅 `load_full()`
+        // 返回的临时 guard(+ arc-swap 内部至多 1)持有强引用,worker 持 0 份。"不重复
+        // spawn" 的精确守护已由上方 `credit_flow == 1 + DEFAULT_SHARD_COUNT` 承担(每个
+        // spawn 出的 worker 恰持一份 `Arc<CreditFlow>`,失败路径不 spawn → 计数不翻倍)。
+        // 本断言相应反转:强引用计数必须**远小于** worker 数(旧断言是 `> worker 数`),
+        // 若未来 worker 重新持强引用(回退泄漏设计)即判红。
         let guard = bus.shard_bus.load_full();
         let sb = guard.as_ref().expect("分片总线必须已安装");
         let sb_count = Arc::strong_count(sb);
         assert!(
-            sb_count > DEFAULT_SHARD_COUNT,
-            "分片总线必须至少被槽位与全部 worker 持有(实测 {sb_count})"
-        );
-        assert!(
-            sb_count < 2 * (1 + DEFAULT_SHARD_COUNT),
-            "分片总线引用计数翻倍 = 重复 spawn worker(实测 {sb_count})"
+            sb_count < DEFAULT_SHARD_COUNT,
+            "worker 应只持 Weak 引用,分片总线强计数不得随 worker 数增长(实测 {sb_count})"
         );
     }
 
@@ -3072,6 +3197,83 @@ mod tests {
             "入片数 == 汇入数(影子双跑漏发率 = 0)"
         );
         assert_eq!(stats.shed_total, 0, "容量内发布不应触发 shed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn without_sharding_blocks_opt_in_and_propagates_to_clones() {
+        // 性能重构 D1：without_sharding 后 leaf 的 try_enable_sharding 应早退
+        // （即使有 runtime，否则 Handle::try_current 会成功 → 真启用）。对照总线可启用。
+        let bus = EventBus::new().without_sharding();
+        let clone = bus.clone();
+        assert!(
+            !bus.try_enable_sharding("test-blocked"),
+            "without_sharding 应屏蔽 leaf opt-in"
+        );
+        assert!(!bus.sharding_enabled());
+        assert!(
+            !clone.sharding_enabled(),
+            "开关应跨 Clone 共享（同一 Arc<AtomicBool>）"
+        );
+        // 对照：未关闭的总线在同 runtime 下 try_enable 应成功
+        let open = EventBus::new();
+        assert!(open.try_enable_sharding("test-open"), "默认允许 opt-in");
+        assert!(open.sharding_enabled());
+        open.shutdown_sharding().await; // 清理：避免 worker 泄漏到测试 runtime
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shard_workers_terminable_after_bus_drop() {
+        // 性能重构 D2（漏发内存泄漏回归守卫）：worker 仅持 Weak<ShardedEventBus>，
+        // 故最后一个 EventBus clone drop 后，分片总线必须被回收（旧设计 worker 持强
+        // 引用 → 永不回收 → composition_root_bench OOM）。用 Weak 直接观测，不依赖
+        // 全局计数，对并行测试鲁棒。
+        let weak_sb;
+        {
+            let bus = EventBus::new();
+            bus.enable_sharding(8).unwrap();
+            weak_sb = Arc::downgrade(bus.shard_bus.load_full().as_ref().expect("已安装分片总线"));
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            assert!(weak_sb.upgrade().is_some(), "投递期总线必须存活");
+        } // bus drop → 最后一个强引用释放（worker 持 Weak，不阻止回收）
+        for _ in 0..100 {
+            if weak_sb.upgrade().is_none() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(
+            weak_sb.upgrade().is_none(),
+            "EventBus drop 后 ShardedEventBus 必须被回收（worker 应仅持 Weak）"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_sharding_drains_queued_events_no_loss() {
+        // 性能重构 D2 优雅关闭：shutdown_sharding 应排空已入片但未汇入的事件，
+        // 漏发率 = 0，且订阅者能收到全部事件。
+        // 注：shutdown 会 store(None) 释放分片总线，故计数器必须在 shutdown **前**读 sharded_total，
+        // 汇入完整性在 shutdown **后**经订阅者侧验证（而非读已释放的计数器）。
+        let bus = EventBus::new();
+        bus.enable_sharding(4).unwrap();
+        let mut rx = bus.subscribe();
+        const N: usize = 50;
+        for _ in 0..N {
+            bus.publish(make_test_event()).await.unwrap();
+        }
+        // 入片计数在 publish 路径同步递增（try_push 内 fetch_add）
+        assert_eq!(
+            bus.shadow_stats().sharded_total,
+            N as u64,
+            "容量内事件应全部入片"
+        );
+        // 优雅排空：唤醒 worker 将其片 drain-to-empty 汇入 broadcast 后退出
+        bus.shutdown_sharding().await;
+        let received = drain_events(&mut rx, N, 1000).await;
+        assert_eq!(
+            received.len(),
+            N,
+            "shutdown 后订阅者应收到全部已入片事件（漏发率 = 0）"
+        );
     }
 
     #[tokio::test]

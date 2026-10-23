@@ -21,10 +21,11 @@
 //! 输出"成本不可见"并返回 `Ok`，不报错（对齐 `price_vector.rs` 的空向量约定）。
 
 use anyhow::Result;
+use serde::Serialize;
 
 use crate::config::{ChimeraConfig, ProviderConfig};
 use crate::output;
-use nexus_contracts::price_vector::PriceVector;
+use nexus_contracts::price_vector::{ModelPrice, PriceVector};
 
 /// 配置单价单位「USD / 1k tokens」→ `PriceVector` 单位「micro USD / 1k」。
 ///
@@ -53,21 +54,32 @@ pub(crate) fn price_vector_from_providers(providers: &[ProviderConfig]) -> Price
     }))
 }
 
+/// `cost` 的 JSON 载荷（typed，字段名编译期校验；字段序与原 `json!` 一致）。
+#[derive(Debug, Serialize)]
+struct CostPayload<'a> {
+    available: bool,
+    unit: &'static str,
+    providers_count: usize,
+    entries: &'a [ModelPrice],
+    cheapest_model: Option<&'a str>,
+    sample_estimate_cheapest_1000in_1000out_micro: Option<u64>,
+}
+
 /// 构造 `--json` envelope 的 payload（纯函数，便于测试与人类可读路径共用口径）。
 ///
 /// `sample_estimate_micro` = 最便宜模型「1000 in + 1000 out」的整数成本估算，
 /// 仅作量级示例（非真实调用）。向量空时 `available=false` 且样本为 `None`。
-fn build_payload(pv: &PriceVector) -> serde_json::Value {
+fn build_payload(pv: &PriceVector) -> CostPayload<'_> {
     let cheapest = pv.cheapest_model();
     let sample = cheapest.and_then(|m| pv.estimate_cost_micro(&m.model, 1000, 1000));
-    serde_json::json!({
-        "available": !pv.is_empty(),
-        "unit": "micro_usd_per_1k",
-        "providers_count": pv.entries.len(),
-        "entries": pv.entries,
-        "cheapest_model": cheapest.map(|m| m.model.clone()),
-        "sample_estimate_cheapest_1000in_1000out_micro": sample,
-    })
+    CostPayload {
+        available: !pv.is_empty(),
+        unit: "micro_usd_per_1k",
+        providers_count: pv.entries.len(),
+        entries: pv.entries.as_slice(),
+        cheapest_model: cheapest.map(|m| m.model.as_str()),
+        sample_estimate_cheapest_1000in_1000out_micro: sample,
+    }
 }
 
 /// 执行 `chimera cost` 子命令 — 只读展示统一价格向量。
@@ -76,45 +88,55 @@ fn build_payload(pv: &PriceVector) -> serde_json::Value {
 /// 无任何写操作/事件发布。
 pub async fn execute(cfg: &ChimeraConfig, json: bool) -> Result<()> {
     let pv = price_vector_from_providers(&cfg.model_router.providers);
+    render_cost(&pv, json)
+}
 
+/// LazyConfig pilot — 只解析 `model_router` section（`CHIMERA_LAZY_CONFIG=1` 时启用）。
+///
+/// 与 [`execute`] 输出完全一致；差异只在配置加载路径。默认关闭，
+/// 便于用 same-binary A/B 对照决定是否推广。
+pub async fn execute_lazy(config_path: Option<std::path::PathBuf>, json: bool) -> Result<()> {
+    let lazy = crate::config::LazyConfig::new(config_path)?;
+    let model_router = lazy.model_router()?;
+    let pv = price_vector_from_providers(&model_router.providers);
+    render_cost(&pv, json)
+}
+
+/// 渲染价格向量（两条加载路径共用，保证输出零差异）。
+fn render_cost(pv: &PriceVector, json: bool) -> Result<()> {
     if pv.is_empty() {
-        if json {
-            output::print_json(&build_payload(&pv))?;
-        } else {
+        return output::emit(json, &build_payload(pv), || {
             output::print_info(
                 "成本不可见：未配置任何 provider 单价（model_router.providers 为空）",
             );
+            Ok(())
+        });
+    }
+
+    output::emit(json, &build_payload(pv), || {
+        output::print_info(
+            "统一价格向量（单位：micro USD / 1k tokens，来源 model_router.providers）：",
+        );
+        let rows: Vec<Vec<String>> = pv
+            .entries
+            .iter()
+            .map(|e| {
+                vec![
+                    e.model.clone(),
+                    e.input_micro_per_1k.to_string(),
+                    e.output_micro_per_1k.to_string(),
+                ]
+            })
+            .collect();
+        output::print_table(&["model", "input_micro/1k", "output_micro/1k"], &rows);
+        if let Some(cheap) = pv.cheapest_model() {
+            output::print_success(&format!(
+                "最便宜模型（in+out 单价和最低）：{}（{} + {} micro/1k）",
+                cheap.model, cheap.input_micro_per_1k, cheap.output_micro_per_1k
+            ));
         }
-        return Ok(());
-    }
-
-    if json {
-        output::print_json(&build_payload(&pv))?;
-        return Ok(());
-    }
-
-    output::print_info(
-        "统一价格向量（单位：micro USD / 1k tokens，来源 model_router.providers）：",
-    );
-    let rows: Vec<Vec<String>> = pv
-        .entries
-        .iter()
-        .map(|e| {
-            vec![
-                e.model.clone(),
-                e.input_micro_per_1k.to_string(),
-                e.output_micro_per_1k.to_string(),
-            ]
-        })
-        .collect();
-    output::print_table(&["model", "input_micro/1k", "output_micro/1k"], &rows);
-    if let Some(cheap) = pv.cheapest_model() {
-        output::print_success(&format!(
-            "最便宜模型（in+out 单价和最低）：{}（{} + {} micro/1k）",
-            cheap.model, cheap.input_micro_per_1k, cheap.output_micro_per_1k
-        ));
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -177,13 +199,14 @@ mod tests {
     #[test]
     fn payload_shape_available_and_flags() {
         let pv = price_vector_from_providers(&[provider("m1", 1.0, 2.0)]);
-        let v = build_payload(&pv);
+        let v = serde_json::to_value(build_payload(&pv)).expect("payload 序列化失败");
         assert_eq!(v["available"], serde_json::json!(true));
         assert_eq!(v["providers_count"], serde_json::json!(1));
         assert_eq!(v["unit"], serde_json::json!("micro_usd_per_1k"));
         assert_eq!(v["cheapest_model"], serde_json::json!("m1"));
         // 空向量：available=false，样本 null
-        let empty = build_payload(&PriceVector::default());
+        let empty = serde_json::to_value(build_payload(&PriceVector::default()))
+            .expect("空 payload 序列化失败");
         assert_eq!(empty["available"], serde_json::json!(false));
         assert!(empty["sample_estimate_cheapest_1000in_1000out_micro"].is_null());
     }

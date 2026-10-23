@@ -60,11 +60,12 @@
 //! 汇入后按 ADR-125 批提交语义批量归还信用(信用流自动平衡)。
 //! 等待路径唯一原语是 `tokio::sync::Notify`(禁自旋/忙轮询,ADR-129)。
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 
 use crossbeam_queue::ArrayQueue;
 use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 use tracing::{debug, warn};
 
 use crate::credit_flow::CreditFlow;
@@ -165,8 +166,10 @@ pub struct ShadowStats {
 ///
 /// # 生命周期
 /// worker 由 [`spawn_workers`](Self::spawn_workers) 在 tokio runtime 上启动,
-/// 随 runtime 生命周期运行;`EventBus` drop 不停止 worker(灰度前哨期,
-/// 生产 runtime 常驻,测试 runtime 销毁时任务自动中止)。
+/// 仅持 `Weak<ShardedEventBus>` 引用（性能重构 D2）：当所有 [`EventBus`] clone drop
+/// 时，外层 guard abort worker 且分片总线可被回收；长驻宿主可经
+/// [`EventBus::shutdown_sharding`](crate::EventBus::shutdown_sharding) 优雅排空。
+/// （旧设计"worker 持强引用且无退出条件"导致重复 build 泄漏，已根治。）
 pub struct ShardedEventBus {
     /// 分片数(2 的幂,哈希取模可退化为位运算)
     n_shards: usize,
@@ -175,7 +178,10 @@ pub struct ShardedEventBus {
     /// 分片无锁队列数组(每片一个有界 MPSC)
     shards: Box<[ArrayQueue<NexusEvent>]>,
     /// 每片唤醒原语(ADR-129:等待路径唯一原语,禁自旋)
-    notifies: Box<[Notify]>,
+    ///
+    /// 性能重构 D2:`Arc<Notify>` 使 worker 可在 `await` 前克隆唤醒句柄并释放
+    /// `ShardedEventBus` 强引用 —— 否则 worker 持强引用会阻止总线 drop。
+    notifies: Box<[Arc<Notify>]>,
     /// 每片当前深度(指标 `bus_shard_depth{shard}`,AtomicU64 数组)
     depths: Box<[AtomicU64]>,
     /// 入分片事件总数(影子双跑前哨:漏发率分子)
@@ -186,6 +192,10 @@ pub struct ShardedEventBus {
     /// 首见 warn 后续 debug 的 once 语义由 fetch_add 返回值 `closed == 0` 承担,
     /// 无需额外标志位 —— 计数本身就是「首次」的无锁仲裁)
     merge_closed_total: AtomicU64,
+    /// 优雅排空标志(性能重构 D2)—— [`request_drain`](Self::request_drain) 置 true
+    /// 后，worker 将本片 drain-to-empty 再退出（而非在 `Notify` 上永久挂起）。
+    /// Acquire/Release 配对：发布者 `request_drain` Release 存，worker Acquire 读。
+    draining: AtomicBool,
 }
 
 impl std::fmt::Debug for ShardedEventBus {
@@ -216,7 +226,7 @@ impl ShardedEventBus {
         let shards: Vec<ArrayQueue<NexusEvent>> = (0..n)
             .map(|_| ArrayQueue::new(shard_capacity.max(1)))
             .collect();
-        let notifies: Vec<Notify> = (0..n).map(|_| Notify::new()).collect();
+        let notifies: Vec<Arc<Notify>> = (0..n).map(|_| Arc::new(Notify::new())).collect();
         let depths: Vec<AtomicU64> = (0..n).map(|_| AtomicU64::new(0)).collect();
         Self {
             n_shards: n,
@@ -227,6 +237,7 @@ impl ShardedEventBus {
             sharded_total: AtomicU64::new(0),
             merged_total: AtomicU64::new(0),
             merge_closed_total: AtomicU64::new(0),
+            draining: AtomicBool::new(false),
         }
     }
 
@@ -242,19 +253,40 @@ impl ShardedEventBus {
     /// 必须持有 tokio runtime(handle.spawn)。无 runtime 时调用方应自行
     /// 捕获 [`crate::EventBusError::ShardingRequiresRuntime`](crate::error::EventBusError::ShardingRequiresRuntime)
     /// 并降级(EventBus::enable_sharding 已处理)。
+    ///
+    /// # 返回
+    /// 每片一个 [`JoinHandle<()>`]，供调用方（`EventBus::enable_sharding`）纳入
+    /// [`ShardWorkerGuard`](crate::bus) 生命周期托管。worker 仅持本总线的 `Weak`，
+    /// 故这些句柄是阻止任务被回收的唯一强引用链（性能重构 D2）。
     pub fn spawn_workers(
         self: &Arc<Self>,
         sender: tokio::sync::broadcast::Sender<NexusEvent>,
         credit_flow: Arc<CreditFlow>,
         handle: &tokio::runtime::Handle,
-    ) {
-        for idx in 0..self.n_shards {
-            let sb = Arc::clone(self);
-            let tx = sender.clone();
-            let cf = Arc::clone(&credit_flow);
-            handle.spawn(async move {
-                shard_worker(&sb, idx, tx, cf).await;
-            });
+    ) -> Vec<JoinHandle<()>> {
+        // D2：worker 持 Weak<ShardedEventBus>，而非强引用。否则 worker 会阻止
+        // ShardedEventBus（及其 64×256 队列）在 EventBus drop 后回收 —— 即旧设计
+        // 重复 build 泄漏与 composition_root_bench OOM 的根因。
+        let weak = Arc::downgrade(self);
+        (0..self.n_shards)
+            .map(|idx| {
+                let weak = weak.clone();
+                let tx = sender.clone();
+                let cf = Arc::clone(&credit_flow);
+                handle.spawn(async move { shard_worker(weak, idx, tx, cf).await })
+            })
+            .collect()
+    }
+
+    /// 请求优雅排空（性能重构 D2，供 [`EventBus::shutdown_sharding`](crate::EventBus::shutdown_sharding)）。
+    ///
+    /// 置 `draining` 标志并对每片 `notify_one()`（无 waiter 时存 permit）：已 await 的 worker 被唤醒，
+    /// 尚未 await 的 worker 下次 `notified()` 立即返回（permit 语义避免丢失唤醒）。
+    /// worker 见标志后将本片 drain-to-empty 再 break，保证已入片事件不丢。
+    pub fn request_drain(&self) {
+        self.draining.store(true, Ordering::Release);
+        for n in self.notifies.iter() {
+            n.notify_one();
         }
     }
 
@@ -374,15 +406,24 @@ impl ShardedEventBus {
 ///   `bus_shard_depth{shard}` 恒为队列中未汇入事件数;
 /// - `merged_total` 与入片成功数最终一致(漏发率 = 0,由测试断言)。
 async fn shard_worker(
-    sb: &ShardedEventBus,
+    weak: Weak<ShardedEventBus>,
     shard: usize,
     sender: tokio::sync::broadcast::Sender<NexusEvent>,
     credit_flow: Arc<CreditFlow>,
 ) {
     let mut batch = Vec::with_capacity(SHARD_WORKER_BATCH);
     loop {
-        batch.clear();
+        // 每轮 upgrade 取一份强引用，处理完/挂起前释放（D2：不跨 await 持强引用）。
+        let sb = match weak.upgrade() {
+            Some(sb) => sb,
+            // 总线已释放：无强引用可持有，本片残留随 ShardedEventBus 一并 drop
+            //（进程 teardown 语义；正常投递期总线始终存活，不触发此分支）。
+            None => break,
+        };
+        let draining = sb.draining.load(Ordering::Acquire);
+
         // 攒批:最多 SHARD_WORKER_BATCH 条,一次 pop 循环(无锁队列,单片单消费者)
+        batch.clear();
         for _ in 0..SHARD_WORKER_BATCH {
             match sb.shards[shard].pop() {
                 Some(event) => {
@@ -392,41 +433,54 @@ async fn shard_worker(
                 None => break,
             }
         }
-        if batch.is_empty() {
-            // ADR-129 无自旋:队列空则挂起,由发布方 notify_one 唤醒
-            // WHY 每轮重新 notified():await 返回后 permit 已消费,需重新挂载
-            // (tokio Notify 官方模式,避免「检查空 → 等待」间入片的丢失唤醒)
-            sb.notifies[shard].notified().await;
-            continue;
-        }
-        let batch_len = batch.len() as u64;
-        for event in batch.drain(..) {
-            // 汇入既有 broadcast。语义登记(第三轮 F-A2/T1.1):
-            //   - tokio broadcast 的 `send` 错误形态只有「当下无订阅者」(Closed);
-            //     慢消费者 Lagged 发生在 recv 侧且已由订阅者层 `lagged_count` 计数
-            //     (两路径共用),此处不存在 Lagged 分支。
-            //   - merged_total 无条件递增的契约**保持不变**(漏发率等式口径),
-            //     但「入通道≠送达」由 `merge_closed_total` 单独归因。
-            //     无订阅者丢弃不视为错误(与 publish 单流同口径),
-            //     首见 warn 后续 debug —— 零订阅静默运行期不得刷屏(G-89 理据线)。
-            match sender.send(event) {
-                Ok(_) => {}
-                Err(_) => {
-                    let closed = sb.merge_closed_total.fetch_add(1, Ordering::Relaxed);
-                    if closed == 0 {
-                        warn!("分片汇入时零订阅者:merged_total 含此类丢弃,送达观测见 merge_closed_total");
-                    } else {
-                        debug!(
-                            merge_closed_total = closed + 1,
-                            "分片汇入零订阅者丢弃(已告警一次)"
-                        );
+        let popped = !batch.is_empty();
+        if popped {
+            let batch_len = batch.len() as u64;
+            for event in batch.drain(..) {
+                // 汇入既有 broadcast。语义登记(第三轮 F-A2/T1.1)：
+                //   - tokio broadcast 的 `send` 错误形态只有「当下无订阅者」(Closed)；
+                //     慢消费者 Lagged 发生在 recv 侧且已由订阅者层 `lagged_count` 计数。
+                //   - merged_total 无条件递增的契约保持不变（漏发率等式口径），
+                //     「入通道≠送达」由 merge_closed_total 单独归因，首见 warn 后续 debug。
+                match sender.send(event) {
+                    Ok(_) => {}
+                    Err(_) => {
+                        let closed = sb.merge_closed_total.fetch_add(1, Ordering::Relaxed);
+                        if closed == 0 {
+                            warn!("分片汇入时零订阅者:merged_total 含此类丢弃,送达观测见 merge_closed_total");
+                        } else {
+                            debug!(
+                                merge_closed_total = closed + 1,
+                                "分片汇入零订阅者丢弃(已告警一次)"
+                            );
+                        }
                     }
                 }
+                sb.merged_total.fetch_add(1, Ordering::Relaxed);
             }
-            sb.merged_total.fetch_add(1, Ordering::Relaxed);
+            // ADR-125 批提交语义:整批归还(降低 notify_waiters 唤醒频率)
+            credit_flow.release_many(batch_len);
         }
-        // ADR-125 批提交语义:整批归还(降低 notify_waiters 唤醒频率)
-        credit_flow.release_many(batch_len);
+
+        // 终止/挂起判定
+        if draining {
+            // 优雅排空：本片排空则退出；否则让出后继续 pop（不阻塞在 Notify 上）。
+            if sb.shards[shard].is_empty() {
+                break;
+            }
+            drop(sb);
+            tokio::task::yield_now().await;
+            continue;
+        }
+        if !popped {
+            // ADR-129 无自旋：队列空则挂起，由发布方 notify_one 唤醒。
+            // 克隆唤醒句柄并**释放强引用后**再 await（否则持强引用会阻止总线 drop）；
+            // 每轮重新 notified() 避免「检查空 → 等待」间入片的丢失唤醒。
+            let notify = Arc::clone(&sb.notifies[shard]);
+            drop(sb);
+            notify.notified().await;
+        }
+        // popped && !draining → 立即进入下一轮继续攒批
     }
 }
 

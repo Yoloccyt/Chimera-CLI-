@@ -26,6 +26,7 @@ use anyhow::Result;
 use nexus_app_server::{AppServer, AppTransport, StdinTransport, TransportError};
 use nexus_contracts::app::{AppEvent, AppOp};
 
+use crate::composition::AppContext;
 use crate::config::ChimeraConfig;
 
 // ============================================================
@@ -105,11 +106,14 @@ pub fn translate_event(ev: &AppEvent) -> Option<serde_json::Value> {
 
 /// 执行 acp 命令 — ACP JSON-RPC 2.0 over stdio 事件循环直至 EOF 或 Ctrl+C（优雅关闭）
 pub async fn execute(config: &ChimeraConfig) -> Result<()> {
-    tracing::info!("chimera acp: ACP 桥启动（JSON-RPC 2.0 over stdio）");
-
-    // C1(2026-09-04): 真实核心装配——与 serve 同源走集中组合根
-    // （QuestBackend 包装 L9 QuestEngine，替代 InMemory 桩，F-A2-4）。
+    // 库调用方（非 dispatch）仍可独立装配；dispatch 路径走 execute_with_ctx。
     let ctx = crate::composition::build(config)?;
+    execute_with_ctx(ctx, config).await
+}
+
+/// 执行 acp 命令 — 复用 dispatch 已装配的 AppContext（消除二次装配）。
+pub async fn execute_with_ctx(ctx: AppContext, config: &ChimeraConfig) -> Result<()> {
+    tracing::info!("chimera acp: ACP 桥启动（JSON-RPC 2.0 over stdio）");
     tracing::info!(
         version = %config.nexus.version,
         "chimera acp: 真实核心装配完成（QuestBackend + critical 旁路订阅，C1/C12）"
@@ -163,14 +167,20 @@ async fn acp_loop(server: &AppServer, transport: &dyn AppTransport) -> Result<()
 
         // 处理操作 → 事件推送（转译层输出 ACP 通知帧）
         match server.handle_op(&op).await {
-            Ok(events) => {
-                for ev in &events {
-                    if let Some(notification) = translate_event(ev) {
-                        if let Err(e) = transport.send_event(ev).await {
-                            tracing::warn!(error = %e, "chimera acp: 事件推送失败");
-                        }
+            Ok(mut events) => {
+                // 保序过滤：仅透传可转译为 ACP 通知的事件（与旧逐条 send 的输出集合/顺序一致）。
+                events.retain(|ev| match translate_event(ev) {
+                    Some(notification) => {
                         // 通知帧透传（协议面调试日志，不落 stdout——stdout 仅协议帧）
                         tracing::debug!(notification = %notification, "ACP 通知");
+                        true
+                    }
+                    None => false,
+                });
+                // 性能重构 D7：过滤后整批一次 flush（与逐条 send_event 字节等价）。
+                if !events.is_empty() {
+                    if let Err(e) = transport.send_events(&events).await {
+                        tracing::warn!(error = %e, count = events.len(), "chimera acp: 事件批推送失败");
                     }
                 }
             }

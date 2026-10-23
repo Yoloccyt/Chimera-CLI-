@@ -53,6 +53,19 @@ pub enum ChimeraCliError {
     IoError(#[from] std::io::Error),
 }
 
+/// 退出码语义档位 — 两套对外契约的唯一分流点。
+///
+/// WHY 两档而非一套数字：`main` 走 ADR-060 全局矩阵（0-6），
+/// `exec` 走 WI-02 契约（0/2/3/4）。两者都是对外契约，不能合并；
+/// 但必须共享同一变体分类，避免"改了一处忘了另一处"。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExitProfile {
+    /// ADR-060 全局矩阵（main / 人类命令）：0-6。
+    Global,
+    /// WI-02 exec 契约（CI/管道）：0 成功 / 2 审批拒绝 / 3 预算耗尽 / 4 工具失败。
+    Exec,
+}
+
 impl ChimeraCliError {
     /// 将错误变体映射到进程退出码(Task 0.2 ExitCode 矩阵)
     ///
@@ -90,6 +103,22 @@ impl ChimeraCliError {
             Self::PermissionDenied(_) => 5,
             Self::Timeout(_) => 6,
             Self::IoError(_) => 3,
+        }
+    }
+
+    /// 返回指定语义档位的退出码。
+    ///
+    /// `Global` 委托 [`Self::exit_code_value`]（ADR-060 单一真值源）；
+    /// `Exec` 实现 WI-02 的四类语义。新增错误变体时两个 match 都会
+    /// 编译失败，强制同时决定两档映射。
+    pub fn exit_code_for(&self, profile: ExitProfile) -> u8 {
+        match profile {
+            ExitProfile::Global => self.exit_code_value(),
+            ExitProfile::Exec => match self {
+                Self::PermissionDenied(_) => 2,
+                Self::EngineError(_) => 3,
+                _ => 4,
+            },
         }
     }
 
@@ -133,51 +162,75 @@ impl ChimeraCliError {
 mod tests {
     use super::*;
 
-    /// 验证 ExitCode 矩阵 7 变体映射完整(ADR-060 不变量)
+    /// 7 个变体 × Global 退出码的精确矩阵（ADR-060 不变量）。
+    ///
+    /// WHY 精确数值而非 Debug 字符串：旧测试只断言 `Debug` 含 "ExitCode"，
+    /// 任何数值都能通过，等于没有护栏。
+    fn matrix() -> Vec<(ChimeraCliError, u8)> {
+        vec![
+            (ChimeraCliError::NotImplemented("test".into()), 2),
+            (ChimeraCliError::ConfigError("test".into()), 1),
+            (ChimeraCliError::EngineError("test".into()), 3),
+            (ChimeraCliError::UserCancelled, 4),
+            (ChimeraCliError::PermissionDenied("test".into()), 5),
+            (ChimeraCliError::Timeout("test".into()), 6),
+            (
+                ChimeraCliError::IoError(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "missing file",
+                )),
+                3,
+            ),
+        ]
+    }
+
     #[test]
     fn test_exit_code_matrix_complete() {
-        let cases = [
-            (
-                ChimeraCliError::NotImplemented("test".into()),
-                "NotImplemented 应映射为 2",
-            ),
-            (
-                ChimeraCliError::ConfigError("test".into()),
-                "ConfigError 应映射为 1",
-            ),
-            (
-                ChimeraCliError::EngineError("test".into()),
-                "EngineError 应映射为 3",
-            ),
-            (ChimeraCliError::UserCancelled, "UserCancelled 应映射为 4"),
-            (
-                ChimeraCliError::PermissionDenied("test".into()),
-                "PermissionDenied 应映射为 5",
-            ),
-            (
-                ChimeraCliError::Timeout("test".into()),
-                "Timeout 应映射为 6",
-            ),
-        ];
-        for (err, msg) in &cases {
-            // ExitCode 无直接读取退出码值的稳定 API,但可通过 Debug 格式断言
-            // (ExitCode 的 Debug 输出包含其底层值,如 "ExitCode(2)")
-            let debug = format!("{:?}", err.exit_code());
-            assert!(debug.contains("ExitCode"), "{}(debug={})", msg, debug);
+        for (err, expected) in matrix() {
+            assert_eq!(
+                err.exit_code_value(),
+                expected,
+                "{} 的 Global 退出码应为 {}",
+                err.kind(),
+                expected
+            );
+        }
+    }
+
+    /// Exec profile 的 7 个变体映射必须精确（WI-02 契约）。
+    #[test]
+    fn test_exit_profile_exec_matrix() {
+        let expected_exec = [4, 4, 3, 4, 2, 4, 4];
+        for ((err, _), expected) in matrix().into_iter().zip(expected_exec) {
+            assert_eq!(
+                err.exit_code_for(ExitProfile::Exec),
+                expected,
+                "{} 的 Exec 退出码应为 {}",
+                err.kind(),
+                expected
+            );
+        }
+    }
+
+    /// Global profile 必须与既有 `exit_code_value` 完全一致（零行为变化）。
+    #[test]
+    fn test_exit_profile_global_delegates() {
+        for (err, expected) in matrix() {
+            assert_eq!(err.exit_code_for(ExitProfile::Global), expected);
+            assert_eq!(
+                err.exit_code_for(ExitProfile::Global),
+                err.exit_code_value()
+            );
         }
     }
 
     /// IoError 归类为 system_error(退出码 3),与 EngineError 同语义
     #[test]
     fn test_io_error_exit_code_is_system_error() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "missing file");
-        let err = ChimeraCliError::IoError(io_err);
-        let debug = format!("{:?}", err.exit_code());
-        // IoError 与 EngineError 共用退出码 3(system_error)
-        let engine_debug = format!("{:?}", ChimeraCliError::EngineError("x".into()).exit_code());
-        assert_eq!(
-            debug, engine_debug,
-            "IoError 与 EngineError 应映射到同一退出码(system_error=3)"
-        );
+        let err = ChimeraCliError::IoError(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "missing file",
+        ));
+        assert_eq!(err.exit_code_value(), 3);
     }
 }
