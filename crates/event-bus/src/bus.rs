@@ -859,8 +859,8 @@ impl EventBus {
         // worker），除非运维经 `CHIMERA_BUS_SHARDS` 显式覆盖（A/B 与故障排查逃生）。
         // 显式 `enable_sharding(n)` 不受本开关影响（测试/宿主强制仍可用）。
         //
-        // P2-5：**先严格解析再判策略**。旧实现只判 `var_os(..).is_none()`，  
-        // `CHIMERA_BUS_SHARDS=abc` 会绕过宿主策略且 `parse` 失败回退 64 分片，  
+        // P2-5：**先严格解析再判策略**。旧实现只判 `var_os(..).is_none()`，
+        // `CHIMERA_BUS_SHARDS=abc` 会绕过宿主策略且 `parse` 失败回退 64 分片，
         // 把 one-shot（Off）命令推到 Auto 档。非法值按「未设置」处理并告警一次。
         let raw_env = std::env::var("CHIMERA_BUS_SHARDS").ok();
         let env_shards = Self::resolve_shard_override(raw_env.as_deref());

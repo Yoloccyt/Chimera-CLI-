@@ -139,7 +139,8 @@ async fn commit_phase_fanout_is_concurrent() {
     );
     let participants = register_servers(&mesh, N);
 
-    let task = tokio::spawn(async move { mesh.execute_transaction(participants, "op".into()).await });
+    let task =
+        tokio::spawn(async move { mesh.execute_transaction(participants, "op".into()).await });
 
     // 收齐 N 个到达（串行实现只会有 1 个 → 2s 超时直接失败，不挂死）
     for i in 0..N {
@@ -151,10 +152,7 @@ async fn commit_phase_fanout_is_concurrent() {
     let peak = client.peak.load(Ordering::SeqCst);
     release.add_permits(N);
 
-    let result = task
-        .await
-        .expect("事务任务不应 panic")
-        .expect("事务应成功");
+    let result = task.await.expect("事务任务不应 panic").expect("事务应成功");
     assert!(result.success, "全部 commit 成功，事务应成功");
     assert_eq!(
         peak, N,

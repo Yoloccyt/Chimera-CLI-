@@ -344,7 +344,9 @@ mod tests {
         }
 
         async fn send_events(&self, _events: &[AppEvent]) -> Result<(), TransportError> {
-            Err(TransportError::Io(std::io::Error::other("batch channel down")))
+            Err(TransportError::Io(std::io::Error::other(
+                "batch channel down",
+            )))
         }
     }
 

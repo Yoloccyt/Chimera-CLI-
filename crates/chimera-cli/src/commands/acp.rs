@@ -180,7 +180,8 @@ async fn acp_loop(server: &AppServer, transport: &dyn AppTransport) -> Result<()
                 // 性能重构 D7：过滤后整批一次 flush；P2-3：批失败降级逐条隔离。
                 if !events.is_empty() {
                     let (delivered, batch_err) =
-                        nexus_app_server::transport::send_events_resilient(transport, &events).await;
+                        nexus_app_server::transport::send_events_resilient(transport, &events)
+                            .await;
                     if let Some(e) = batch_err {
                         tracing::warn!(
                             error = %e,
