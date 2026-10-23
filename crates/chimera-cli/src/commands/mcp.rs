@@ -19,6 +19,7 @@
 
 use anyhow::Result;
 use mcp_mesh::{McpMesh, MeshConfig};
+use serde::Serialize;
 
 use crate::cli::McpAction;
 use crate::config::ChimeraConfig;
@@ -53,6 +54,13 @@ pub async fn execute(
     }
 }
 
+/// `mcp list` 的 JSON 载荷（typed，字段名编译期校验）。
+#[derive(Debug, Serialize)]
+struct McpListPayload<'a> {
+    servers: &'a [String],
+    count: usize,
+}
+
 /// `mcp list` — 列出所有已注册 MCP 服务器(SubTask 1.8.2)
 ///
 /// 默认表格输出(`comfy-table`),`--json` 时输出 JSON 数组 envelope。
@@ -60,38 +68,37 @@ pub async fn execute(
 async fn list_servers(mesh: &McpMesh, json: bool) -> Result<()> {
     let server_ids = mesh.registry().list_all();
 
-    if json {
-        // JSON envelope: { "status": "ok", "data": [...] }
-        let payload = serde_json::json!({
-            "servers": server_ids,
-            "count": server_ids.len(),
-        });
-        output::print_json(&payload)?;
-    } else if server_ids.is_empty() {
-        // 空列表友好提示(到 stderr,不污染 stdout 数据流)
-        output::print_info("当前无 MCP 服务器(进程内 ephemeral mesh,不持久化)");
-    } else {
-        // 表格输出:Server ID / Endpoint / Capabilities / 存活状态
-        let rows: Vec<Vec<String>> = server_ids
-            .iter()
-            .filter_map(|sid| mesh.registry().get(sid))
-            .map(|server| {
-                // 先借 server 调用 is_alive,再 move server_id/endpoint
-                // WHY 顺序敏感:is_alive(&self) 借用整个 server,
-                // 若先 move server_id/endpoint 会导致 server 部分移动,
-                // 后续 is_alive 借用会触发 E0382(borrow of partially moved value)
-                let alive = server.is_alive(30_000);
-                vec![
-                    server.server_id,
-                    server.endpoint,
-                    server.capabilities.join(", "),
-                    if alive { "alive".into() } else { "dead".into() },
-                ]
-            })
-            .collect();
-        output::print_table(&["Server ID", "Endpoint", "Capabilities", "状态"], &rows);
-    }
-    Ok(())
+    let payload = McpListPayload {
+        servers: server_ids.as_slice(),
+        count: server_ids.len(),
+    };
+    output::emit(json, &payload, || {
+        if server_ids.is_empty() {
+            // 空列表友好提示(到 stderr,不污染 stdout 数据流)
+            output::print_info("当前无 MCP 服务器(进程内 ephemeral mesh,不持久化)");
+        } else {
+            // 表格输出:Server ID / Endpoint / Capabilities / 存活状态
+            let rows: Vec<Vec<String>> = server_ids
+                .iter()
+                .filter_map(|sid| mesh.registry().get(sid))
+                .map(|server| {
+                    // 先借 server 调用 is_alive,再 move server_id/endpoint
+                    // WHY 顺序敏感:is_alive(&self) 借用整个 server,
+                    // 若先 move server_id/endpoint 会导致 server 部分移动,
+                    // 后续 is_alive 借用会触发 E0382(borrow of partially moved value)
+                    let alive = server.is_alive(30_000);
+                    vec![
+                        server.server_id,
+                        server.endpoint,
+                        server.capabilities.join(", "),
+                        if alive { "alive".into() } else { "dead".into() },
+                    ]
+                })
+                .collect();
+            output::print_table(&["Server ID", "Endpoint", "Capabilities", "状态"], &rows);
+        }
+        Ok(())
+    })
 }
 
 /// `mcp serve` — 启动 MCP 服务器(SubTask 1.8.3)
@@ -110,6 +117,21 @@ async fn serve_server() -> Result<()> {
             .into(),
     )
     .into())
+}
+
+/// `mcp call` 的 JSON 载荷（typed，字段名编译期校验）。
+#[derive(Debug, Serialize)]
+struct McpCallResult<'a> {
+    success: bool,
+    transaction_id: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct McpCallPayload<'a> {
+    server: &'a str,
+    tool: &'a str,
+    args: &'a [String],
+    result: McpCallResult<'a>,
 }
 
 /// `mcp call <server> <tool> [args]` — 调用 MCP 工具(SubTask 1.8.4)
@@ -155,24 +177,22 @@ async fn call_tool(
         .await
         .map_err(|e| ChimeraCliError::EngineError(format!("MCP 工具调用失败: {e}")))?;
 
-    if json {
-        let payload = serde_json::json!({
-            "server": server,
-            "tool": tool,
-            "args": args,
-            "result": {
-                "success": result.success,
-                "transaction_id": result.transaction_id,
-            },
-        });
-        output::print_json(&payload)?;
-    } else {
+    let payload = McpCallPayload {
+        server,
+        tool,
+        args,
+        result: McpCallResult {
+            success: result.success,
+            transaction_id: &result.transaction_id,
+        },
+    };
+    output::emit(json, &payload, || {
         output::print_success(&format!(
             "MCP 工具调用完成: {server}/{tool}(transaction: {})",
             result.transaction_id
         ));
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// `mcp inspect <server>` — 输出服务器详情(SubTask 1.8.5)
@@ -182,9 +202,7 @@ async fn call_tool(
 async fn inspect_server(mesh: &McpMesh, server_id: &str, json: bool) -> Result<()> {
     match mesh.registry().get(server_id) {
         Some(server) => {
-            if json {
-                output::print_json(&server)?;
-            } else {
+            output::emit(json, &server, || {
                 // 人类可读:逐行打印服务器字段
                 println!("Server ID: {}", server.server_id);
                 println!("Endpoint: {}", server.endpoint);
@@ -198,8 +216,8 @@ async fn inspect_server(mesh: &McpMesh, server_id: &str, json: bool) -> Result<(
                         "dead"
                     }
                 );
-            }
-            Ok(())
+                Ok(())
+            })
         }
         None => Err(ChimeraCliError::EngineError(format!("MCP 服务器不存在: {server_id}")).into()),
     }

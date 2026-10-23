@@ -133,19 +133,16 @@ pub async fn execute_with_ctx(
         .await
         .map_err(|e| ChimeraCliError::EngineError(format!("议会审议失败: {e}")))?;
 
-    // 5. 输出
-    if json {
-        // JSON 模式:输出共识结果 + Quest 上下文 envelope
-        let payload = serde_json::json!({
-            "quest_id": quest.quest_id,
-            "quest_title": quest.title,
-            "task_count": quest.tasks.len(),
-            "thinking_mode": format!("{:?}", quest.thinking_mode),
-            "proposal_id": proposal_obj.proposal_id,
-            "consensus": consensus,
-        });
-        output::print_json(&payload)?;
-    } else {
+    // 5. 输出（统一双通道入口；payload 用引用构造，避免 move 后无法走人类可读分支）
+    let payload = ParliamentPayload {
+        quest_id: &quest.quest_id,
+        quest_title: &quest.title,
+        task_count: quest.tasks.len(),
+        thinking_mode: format!("{:?}", quest.thinking_mode),
+        proposal_id: &proposal_obj.proposal_id,
+        consensus: &consensus,
+    };
+    output::emit(json, &payload, || {
         // 人类可读模式:审议上下文到 stderr,共识结果到 stdout
         eprintln!("=== 议会审议 ===");
         eprintln!(
@@ -159,9 +156,19 @@ pub async fn execute_with_ctx(
         eprintln!("风险等级: {:.2}", proposal_obj.risk_level);
         eprintln!("--- 审议结果 ---");
         print_consensus_human(&consensus);
-    }
+        Ok(())
+    })
+}
 
-    Ok(())
+/// `parliament` 的 JSON 载荷（typed，字段名编译期校验）。
+#[derive(Debug, serde::Serialize)]
+struct ParliamentPayload<'a> {
+    quest_id: &'a str,
+    quest_title: &'a str,
+    task_count: usize,
+    thinking_mode: String,
+    proposal_id: &'a str,
+    consensus: &'a Consensus,
 }
 
 /// 人类可读模式输出共识结果(SubTask 1.4.2)

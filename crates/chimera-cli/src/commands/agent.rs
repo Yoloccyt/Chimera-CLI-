@@ -25,6 +25,7 @@ use std::time::Duration;
 use anyhow::Result;
 use chimera_mas::{AgentTask, QualityLevel, RootOrchestrator, TaskComplexity, MAX_AGENT_DEPTH};
 use nexus_core::{Task, TaskStatus};
+use serde::Serialize;
 
 use crate::cli::AgentAction;
 use crate::composition::AppContext;
@@ -84,6 +85,22 @@ pub async fn execute_with_ctx(
     }
 }
 
+/// `agent list` 的 JSON 载荷（typed）。
+#[derive(Debug, Serialize)]
+struct AgentSummary {
+    agent_id: String,
+    status: String,
+    current_task: Option<String>,
+    token_usage: u64,
+    memory_usage_mb: u64,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentListPayload<'a> {
+    count: usize,
+    agents: &'a [AgentSummary],
+}
+
 /// `agent list` — 列出所有 Agent(SubTask 1.10.2)
 ///
 /// 默认表格输出(`comfy-table`),`--json` 时输出 JSON 数组 envelope。
@@ -91,49 +108,67 @@ pub async fn execute_with_ctx(
 async fn list_agents(orchestrator: &RootOrchestrator, json: bool) -> Result<()> {
     let count = orchestrator.heartbeat_count().await;
 
-    if json {
-        // JSON envelope: { "status": "ok", "data": { "count": N, "agents": [...] } }
-        let mut agents = Vec::new();
-        for i in 0..count {
-            if let Some(hb) = orchestrator.get_heartbeat(&format!("agent-{i}")).await {
-                agents.push(serde_json::json!({
-                    "agent_id": hb.agent_id,
-                    "status": format!("{:?}", hb.status),
-                    "current_task": hb.current_task,
-                    "token_usage": hb.token_usage,
-                    "memory_usage_mb": hb.memory_usage_mb,
-                }));
-            }
+    // 一次采集，JSON 与人类可读共用同一份摘要（避免双循环）。
+    let mut agents: Vec<AgentSummary> = Vec::with_capacity(count);
+    for i in 0..count {
+        if let Some(hb) = orchestrator.get_heartbeat(&format!("agent-{i}")).await {
+            agents.push(AgentSummary {
+                agent_id: hb.agent_id,
+                status: format!("{:?}", hb.status),
+                current_task: hb.current_task,
+                token_usage: hb.token_usage,
+                memory_usage_mb: hb.memory_usage_mb,
+            });
         }
-        let payload = serde_json::json!({
-            "count": count,
-            "agents": agents,
-        });
-        output::print_json(&payload)?;
-    } else if count == 0 {
-        // 空列表友好提示(到 stderr,不污染 stdout 数据流)
-        output::print_info("当前无 Agent(进程内 ephemeral orchestrator,不持久化)");
-    } else {
-        // 表格输出:Agent ID / 状态 / 当前任务 / Token 使用 / 内存使用
-        let mut rows: Vec<Vec<String>> = Vec::with_capacity(count);
-        for i in 0..count {
-            let agent_id = format!("agent-{i}");
-            if let Some(hb) = orchestrator.get_heartbeat(&agent_id).await {
-                rows.push(vec![
-                    hb.agent_id,
-                    format!("{:?}", hb.status),
-                    hb.current_task.unwrap_or_else(|| "无".into()),
-                    hb.token_usage.to_string(),
-                    format!("{} MB", hb.memory_usage_mb),
-                ]);
-            }
-        }
-        output::print_table(
-            &["Agent ID", "状态", "当前任务", "Token 使用", "内存使用"],
-            &rows,
-        );
     }
-    Ok(())
+
+    let payload = AgentListPayload {
+        count,
+        agents: &agents,
+    };
+    output::emit(json, &payload, || {
+        if count == 0 {
+            // 空列表友好提示(到 stderr,不污染 stdout 数据流)
+            output::print_info("当前无 Agent(进程内 ephemeral orchestrator,不持久化)");
+        } else {
+            // 表格输出:Agent ID / 状态 / 当前任务 / Token 使用 / 内存使用
+            let rows: Vec<Vec<String>> = agents
+                .iter()
+                .map(|a| {
+                    vec![
+                        a.agent_id.clone(),
+                        a.status.clone(),
+                        a.current_task.clone().unwrap_or_else(|| "无".into()),
+                        a.token_usage.to_string(),
+                        format!("{} MB", a.memory_usage_mb),
+                    ]
+                })
+                .collect();
+            output::print_table(
+                &["Agent ID", "状态", "当前任务", "Token 使用", "内存使用"],
+                &rows,
+            );
+        }
+        Ok(())
+    })
+}
+
+/// `agent spawn` 的 JSON 载荷（typed）。
+#[derive(Debug, Serialize)]
+struct SpawnedAgent<'a> {
+    agent_id: &'a str,
+    agent_type: String,
+    depth: usize,
+    current_task_id: &'a Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct AgentSpawnPayload<'a> {
+    quadrant: &'a str,
+    task: &'a str,
+    parallel: bool,
+    spawned_count: usize,
+    agents: &'a [SpawnedAgent<'a>],
 }
 
 /// `agent spawn --quadrant <Q> --task <desc>` — 创建 Agent(SubTask 1.10.3)
@@ -214,28 +249,24 @@ async fn spawn_agent(
         }
     };
 
-    // 5. 输出
-    if json {
-        let agents: Vec<_> = handles
-            .iter()
-            .map(|h| {
-                serde_json::json!({
-                    "agent_id": h.agent_id,
-                    "agent_type": format!("{:?}", h.agent_type),
-                    "depth": h.depth,
-                    "current_task_id": h.current_task_id,
-                })
-            })
-            .collect();
-        let payload = serde_json::json!({
-            "quadrant": quadrant,
-            "task": task_desc,
-            "parallel": parallel,
-            "spawned_count": handles.len(),
-            "agents": agents,
-        });
-        output::print_json(&payload)?;
-    } else {
+    // 5. 输出（统一双通道入口；payload 用引用构造避免 move）
+    let agents: Vec<SpawnedAgent<'_>> = handles
+        .iter()
+        .map(|h| SpawnedAgent {
+            agent_id: &h.agent_id,
+            agent_type: format!("{:?}", h.agent_type),
+            depth: h.depth,
+            current_task_id: &h.current_task_id,
+        })
+        .collect();
+    let payload = AgentSpawnPayload {
+        quadrant,
+        task: task_desc,
+        parallel,
+        spawned_count: handles.len(),
+        agents: &agents,
+    };
+    output::emit(json, &payload, || {
         output::print_success(&format!(
             "Agent 创建成功: {} 个 Agent(象限: {}, 任务: {})",
             handles.len(),
@@ -248,8 +279,19 @@ async fn spawn_agent(
                 h.agent_id, h.agent_type, h.depth, MAX_AGENT_DEPTH
             );
         }
-    }
-    Ok(())
+        Ok(())
+    })
+}
+
+/// `agent inspect` 的 JSON 载荷（typed）。
+#[derive(Debug, Serialize)]
+struct AgentInspectPayload<'a> {
+    agent_id: &'a str,
+    status: String,
+    current_task: &'a Option<String>,
+    token_usage: u64,
+    memory_usage_mb: u64,
+    received_at: &'a str,
 }
 
 /// `agent inspect <id>` — 输出 Agent 详情(SubTask 1.10.4)
@@ -259,32 +301,39 @@ async fn spawn_agent(
 async fn inspect_agent(orchestrator: &RootOrchestrator, agent_id: &str, json: bool) -> Result<()> {
     match orchestrator.get_heartbeat(agent_id).await {
         Some(hb) => {
-            if json {
-                let payload = serde_json::json!({
-                    "agent_id": hb.agent_id,
-                    "status": format!("{:?}", hb.status),
-                    "current_task": hb.current_task,
-                    "token_usage": hb.token_usage,
-                    "memory_usage_mb": hb.memory_usage_mb,
-                    "received_at": hb.received_at.to_rfc3339(),
-                });
-                output::print_json(&payload)?;
-            } else {
+            let received_at = hb.received_at.to_rfc3339();
+            let payload = AgentInspectPayload {
+                agent_id: &hb.agent_id,
+                status: format!("{:?}", hb.status),
+                current_task: &hb.current_task,
+                token_usage: hb.token_usage,
+                memory_usage_mb: hb.memory_usage_mb,
+                received_at: &received_at,
+            };
+            output::emit(json, &payload, || {
                 // 人类可读:逐行打印 Agent 字段
                 println!("Agent ID: {}", hb.agent_id);
                 println!("状态: {:?}", hb.status);
                 println!(
                     "当前任务: {}",
-                    hb.current_task.unwrap_or_else(|| "无".into())
+                    hb.current_task.clone().unwrap_or_else(|| "无".into())
                 );
                 println!("Token 使用: {}", hb.token_usage);
                 println!("内存使用: {} MB", hb.memory_usage_mb);
-                println!("心跳时间: {}", hb.received_at.to_rfc3339());
-            }
-            Ok(())
+                println!("心跳时间: {}", received_at);
+                Ok(())
+            })
         }
         None => Err(ChimeraCliError::EngineError(format!("Agent 不存在: {agent_id}")).into()),
     }
+}
+
+/// `agent cancel` 的 JSON 载荷（typed，字段名编译期校验）。
+#[derive(Debug, Serialize)]
+struct AgentCancelPayload<'a> {
+    agent_id: &'a str,
+    cancelled: bool,
+    requested_by: &'static str,
 }
 
 /// `agent cancel <id>` — 取消 Agent(SubTask 1.10.5)
@@ -321,17 +370,15 @@ async fn cancel_agent(
     // 检查 Agent 是否存在(通过心跳注册表)
     match orchestrator.get_heartbeat(agent_id).await {
         Some(_) => {
-            if json {
-                let payload = serde_json::json!({
-                    "agent_id": agent_id,
-                    "cancelled": true,
-                    "requested_by": "chimera-cli",
-                });
-                output::print_json(&payload)?;
-            } else {
+            let payload = AgentCancelPayload {
+                agent_id,
+                cancelled: true,
+                requested_by: "chimera-cli",
+            };
+            output::emit(json, &payload, || {
                 output::print_success(&format!("Agent {agent_id} 已取消"));
-            }
-            Ok(())
+                Ok(())
+            })
         }
         None => Err(ChimeraCliError::EngineError(format!("Agent 不存在: {agent_id}")).into()),
     }

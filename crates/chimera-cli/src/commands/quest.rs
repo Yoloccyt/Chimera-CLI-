@@ -23,6 +23,7 @@
 
 use anyhow::Result;
 use quest_engine::QuestEngine;
+use serde::Serialize;
 
 use crate::cli::QuestAction;
 use crate::composition::AppContext;
@@ -81,29 +82,28 @@ pub async fn execute_with_ctx(
 async fn list_quests(engine: &QuestEngine, json: bool) -> Result<()> {
     let quests = engine.list_quests();
 
-    if json {
-        // JSON envelope: { "status": "ok", "data": [...] }
-        output::print_json(&quests)?;
-    } else if quests.is_empty() {
-        // 空列表友好提示(到 stderr,不污染 stdout 数据流)
-        output::print_info("当前无 Quest(进程内 ephemeral 引擎,不持久化)");
-    } else {
-        // 表格输出:ID / 标题 / 任务数 / 思考模式 / 优先级
-        let rows: Vec<Vec<String>> = quests
-            .iter()
-            .map(|q| {
-                vec![
-                    q.quest_id.clone(),
-                    q.title.clone(),
-                    q.tasks.len().to_string(),
-                    format!("{:?}", q.thinking_mode),
-                    q.priority.to_string(),
-                ]
-            })
-            .collect();
-        output::print_table(&["ID", "标题", "任务数", "思考模式", "优先级"], &rows);
-    }
-    Ok(())
+    output::emit(json, &quests, || {
+        if quests.is_empty() {
+            // 空列表友好提示(到 stderr,不污染 stdout 数据流)
+            output::print_info("当前无 Quest(进程内 ephemeral 引擎,不持久化)");
+        } else {
+            // 表格输出:ID / 标题 / 任务数 / 思考模式 / 优先级
+            let rows: Vec<Vec<String>> = quests
+                .iter()
+                .map(|q| {
+                    vec![
+                        q.quest_id.clone(),
+                        q.title.clone(),
+                        q.tasks.len().to_string(),
+                        format!("{:?}", q.thinking_mode),
+                        q.priority.to_string(),
+                    ]
+                })
+                .collect();
+            output::print_table(&["ID", "标题", "任务数", "思考模式", "优先级"], &rows);
+        }
+        Ok(())
+    })
 }
 
 /// `quest show <id>` — 查看 Quest 详情(SubTask 1.2.3)
@@ -112,33 +112,37 @@ async fn list_quests(engine: &QuestEngine, json: bool) -> Result<()> {
 /// 不存在时返回 EngineError(退出码 3)。
 async fn show_quest(engine: &QuestEngine, id: &str, json: bool) -> Result<()> {
     match engine.get_quest(id) {
-        Some(quest) => {
-            if json {
-                output::print_json(&quest)?;
-            } else {
-                // 人类可读:逐行打印 Quest 字段 + 任务列表
-                println!("Quest ID: {}", quest.quest_id);
-                println!("标题: {}", quest.title);
-                println!("思考模式: {:?}", quest.thinking_mode);
-                println!("优先级: {}", quest.priority);
-                if let Some(cp) = &quest.checkpoint_id {
-                    println!("最近检查点: {}", cp);
-                }
-                println!("任务列表 ({}):", quest.tasks.len());
-                for (i, task) in quest.tasks.iter().enumerate() {
-                    println!(
-                        "  {}. [{:?}] {} (依赖: {:?})",
-                        i + 1,
-                        task.status,
-                        task.description,
-                        task.dependencies
-                    );
-                }
+        Some(quest) => output::emit(json, &quest, || {
+            // 人类可读:逐行打印 Quest 字段 + 任务列表
+            println!("Quest ID: {}", quest.quest_id);
+            println!("标题: {}", quest.title);
+            println!("思考模式: {:?}", quest.thinking_mode);
+            println!("优先级: {}", quest.priority);
+            if let Some(cp) = &quest.checkpoint_id {
+                println!("最近检查点: {}", cp);
+            }
+            println!("任务列表 ({}):", quest.tasks.len());
+            for (i, task) in quest.tasks.iter().enumerate() {
+                println!(
+                    "  {}. [{:?}] {} (依赖: {:?})",
+                    i + 1,
+                    task.status,
+                    task.description,
+                    task.dependencies
+                );
             }
             Ok(())
-        }
+        }),
         None => Err(ChimeraCliError::EngineError(format!("Quest 不存在: {id}")).into()),
     }
+}
+
+/// `quest cancel` 的 JSON 载荷（typed，字段名编译期校验）。
+#[derive(Debug, Serialize)]
+struct CancelPayload<'a> {
+    quest_id: &'a str,
+    cancelled: bool,
+    requested_by: &'static str,
 }
 
 /// `quest cancel <id>` — 取消 Quest(SubTask 1.2.4)
@@ -173,18 +177,16 @@ async fn cancel_quest(
         .await
         .map_err(|e| ChimeraCliError::EngineError(e.to_string()))?;
 
-    if json {
-        // JSON envelope:返回取消确认
-        let payload = serde_json::json!({
-            "quest_id": id,
-            "cancelled": true,
-            "requested_by": "chimera-cli",
-        });
-        output::print_json(&payload)?;
-    } else {
+    // JSON envelope:返回取消确认；双通道统一走 emit。
+    let payload = CancelPayload {
+        quest_id: id,
+        cancelled: true,
+        requested_by: "chimera-cli",
+    };
+    output::emit(json, &payload, || {
         output::print_success(&format!("Quest {id} 已取消"));
-    }
-    Ok(())
+        Ok(())
+    })
 }
 
 /// `quest checkpoint <id>` — 创建检查点(SubTask 1.2.5)
@@ -194,17 +196,13 @@ async fn cancel_quest(
 /// 需要检查点功能时,应使用 `chimera tui`(长生命周期引擎 + 检查点持久化)。
 async fn checkpoint_quest(engine: &QuestEngine, id: &str, json: bool) -> Result<()> {
     match engine.save_checkpoint(id).await {
-        Ok(checkpoint) => {
-            if json {
-                output::print_json(&checkpoint)?;
-            } else {
-                output::print_success(&format!(
-                    "Quest {id} 检查点已创建: {}",
-                    checkpoint.checkpoint_id
-                ));
-            }
+        Ok(checkpoint) => output::emit(json, &checkpoint, || {
+            output::print_success(&format!(
+                "Quest {id} 检查点已创建: {}",
+                checkpoint.checkpoint_id
+            ));
             Ok(())
-        }
+        }),
         Err(e) => Err(ChimeraCliError::EngineError(format!("检查点创建失败: {e}")).into()),
     }
 }
