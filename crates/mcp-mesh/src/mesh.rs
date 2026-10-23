@@ -484,19 +484,41 @@ impl McpMesh {
     /// 一致真并发扇出，墙钟降为 ≈ max RTT。保留：
     /// - **失败范围最小化**（不立即 return，先试完所有参与者，最后统一报 CompensationFailed）；
     /// - **输入序可观测顺序**：committed/failed 按 `participant_servers` 输入序展开（与旧串行一致）；
-    /// - 回滚开关：`CHIMERA_MCP_SERIAL_COMMIT=1` 走串行分支（与旧行为逐位等价）。
+    /// - 回滚开关：`CHIMERA_MCP_SERIAL_COMMIT=1` 走串行分支（含 `ServerNotFound`
+    ///   循环层短路，与旧行为**逐位等价**）；并发分支把 `ServerNotFound` 归一为
+    ///   `CompensationFailed` 并入待补偿台账（集合语义，失败范围最小化）。
     ///
     /// Task 0.7 v2.9.0-omega 新增：指数退避重试 / 失败入待补偿队列 / Commit 成功后写 WAL。
     async fn commit_phase(&self, tx: &QuantumTransaction) -> Result<(), McpError> {
+        let serial = std::env::var("CHIMERA_MCP_SERIAL_COMMIT").as_deref() == Ok("1");
+        self.commit_phase_with_mode(tx, serial).await
+    }
+
+    /// `commit_phase` 的模式显式版本（`serial` 由环境开关或测试注入）。
+    ///
+    /// WHY 拆出参数而非常直接在测试里设 env：`CHIMERA_MCP_SERIAL_COMMIT` 是
+    /// 进程级变量，同二进制内的其它事务测试会被并行改成串行模式。
+    async fn commit_phase_with_mode(
+        &self,
+        tx: &QuantumTransaction,
+        serial: bool,
+    ) -> Result<(), McpError> {
         let tx_id = tx.transaction_id.clone();
         let n = tx.participant_servers.len();
-        let serial = std::env::var("CHIMERA_MCP_SERIAL_COMMIT").as_deref() == Ok("1");
 
         // 每参与者一个结果槽（None = 未回收，兼作防御）。按输入序 idx 存放，
         // 使 committed/failed 重建时仍为输入序（与旧串行 for 的可观测顺序一致）。
         let mut outcomes: Vec<Option<Result<(), McpError>>> = vec![None; n];
         if serial {
             for (idx, sid) in tx.participant_servers.iter().enumerate() {
+                // P1-3 逐位等价：旧实现在 **循环层** `registry.get(sid)?` 短路——
+                // 未注册（含校验后被并发摘除的竞态）立即 `ServerNotFound`，
+                // 且**不写**待补偿台账。此处显式复刻该语义。
+                if self.registry.get(sid).is_none() {
+                    return Err(McpError::ServerNotFound {
+                        server_id: sid.clone(),
+                    });
+                }
                 outcomes[idx] = Some(self.commit_one(sid, &tx_id).await);
             }
         } else {
@@ -570,8 +592,9 @@ impl McpMesh {
     /// 单个参与者的 commit（含指数退避重试），供 [`commit_phase`](Self::commit_phase) 并发/串行共用。
     ///
     /// WHY 拆出：串行与并发分支共享同一重试语义，避免两份潜在分叉（单一真值源）。
-    /// `ServerNotFound`（registry 未命中）立即返回不重试——该参与者不可达，重试无意义；
-    /// 与旧串行 `for` 对未注册服务器 `?` 短路的单参与者语义一致。
+    /// `ServerNotFound`（registry 未命中）立即返回不重试——该参与者不可达，重试无意义。
+    /// 串行分支在 `commit_phase_with_mode` 已做循环层短路（与旧行为逐位等价）；
+    /// 并发分支会把该错误收进 `outcomes`，最终归一为 `CompensationFailed`。
     async fn commit_one(&self, sid: &str, tx_id: &str) -> Result<(), McpError> {
         let max_retries = self.config.max_retries;
         let mut last_err: Option<McpError> = None;
@@ -1067,6 +1090,56 @@ mod tests {
                 .expect("注册失败");
         }
         mesh
+    }
+
+    /// P1-3：serial 2PC 必须与旧实现的**循环层 `?` 短路**逐位等价——
+    /// 未注册参与者立即 `ServerNotFound`，且**不写**待补偿台账。
+    #[tokio::test]
+    async fn serial_commit_short_circuits_unregistered_participant() {
+        let mesh = make_mesh_with_servers(1); // 只注册 s-0
+        let tx = QuantumTransaction::with_id(
+            "tx-serial-short-circuit".to_string(),
+            vec!["s-0".into(), "s-missing".into()],
+        );
+
+        let err = mesh
+            .commit_phase_with_mode(&tx, true)
+            .await
+            .expect_err("未注册参与者应短路返回错误");
+        assert!(
+            matches!(err, McpError::ServerNotFound { .. }),
+            "serial 分支必须与旧短路一致（ServerNotFound），实际 {err:?}"
+        );
+        assert_eq!(
+            mesh.pending_compensations.len(),
+            0,
+            "短路路径不得写待补偿台账（旧行为零台账）"
+        );
+    }
+
+    /// 并发分支的差异必须被显式钉住：同一未注册场景归一为
+    /// `CompensationFailed` 并入台账（集合语义、失败范围最小化）。
+    #[tokio::test]
+    async fn concurrent_commit_normalizes_unregistered_to_compensation_failed() {
+        let mesh = make_mesh_with_servers(1);
+        let tx = QuantumTransaction::with_id(
+            "tx-concurrent-normalize".to_string(),
+            vec!["s-0".into(), "s-missing".into()],
+        );
+
+        let err = mesh
+            .commit_phase_with_mode(&tx, false)
+            .await
+            .expect_err("未注册参与者应使事务失败");
+        assert!(
+            matches!(err, McpError::CompensationFailed { .. }),
+            "并发分支应将 ServerNotFound 归一为 CompensationFailed，实际 {err:?}"
+        );
+        assert_eq!(
+            mesh.pending_compensations.len(),
+            1,
+            "并发分支须登记待补偿台账（可 reconcile）"
+        );
     }
 
     #[tokio::test]
