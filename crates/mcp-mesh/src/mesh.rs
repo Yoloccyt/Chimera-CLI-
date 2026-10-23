@@ -104,6 +104,15 @@ fn init_wal_store(config: &MeshConfig) -> Option<Arc<WalStore>> {
     Some(Arc::new(WalStore::new(path)))
 }
 
+/// 指数退避毫秒数：`base * 2^min(attempt, 6)`。
+///
+/// WHY 位移封顶 6：不封顶时 `1 << 64` 在 debug panic、release 回绕；
+/// 且默认 `transaction_timeout_ms=200` 下，超预算的退避只会把「可重试」
+/// 变成「必超时」。base=50 时单次上限 3200ms（50 × 2^6）。
+fn backoff_ms(base: u64, attempt: u32) -> u64 {
+    base * (1u64 << attempt.min(6))
+}
+
 impl McpMesh {
     /// 创建 MCP Mesh(无 EventBus,默认 InProcessClient)
     ///
@@ -338,11 +347,11 @@ impl McpMesh {
     /// Prepare 阶段 — 并发向所有参与者发送 prepare 请求(带 max_retries 重试)
     ///
     /// 通过 `ParticipantClient::prepare` 发送请求,用 `FuturesUnordered` 并发 fanout。
-    /// 任一参与者失败(Nack / 网络错误)按指数退避(200ms / 400ms)重试,达 `max_retries`
+    /// 任一参与者失败(Nack / 网络错误)按指数退避(50ms / 100ms)重试,达 `max_retries`
     /// 仍失败则整体失败,触发 Abort+Rollback。
     ///
     /// Task 0.7 v2.9.0-omega 新增:
-    /// - 指数退避重试(`max_retries` 控制,默认 2,退避 200ms / 400ms)
+    /// - 指数退避重试(`max_retries` 控制,默认 2,退避 50ms / 100ms)
     /// - Prepare 成功后写 WAL `Prepare` entry(含已 ACK 参与者列表)
     ///
     /// # 参数
@@ -413,8 +422,9 @@ impl McpMesh {
                 });
 
             for attempt in 0..max_retries {
-                // 指数退避:200ms * 2^attempt(200ms / 400ms / 800ms...)
-                let backoff_ms = 200u64 * (1 << attempt);
+                // 指数退避(默认预算可完成一次重试):50ms * 2^min(attempt, 6)
+                // (50ms / 100ms / 200ms / 400ms / 800ms / 1600ms / 3200ms 封顶)
+                let backoff_ms = backoff_ms(50, attempt);
                 tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
 
                 let server = self
@@ -600,8 +610,10 @@ impl McpMesh {
         let mut last_err: Option<McpError> = None;
         for attempt in 0..=max_retries {
             if attempt > 0 {
-                // 指数退避:200ms * 2^(attempt-1)
-                let backoff_ms = 200u64 * (1 << (attempt - 1));
+                // 指数退避(默认 transaction_timeout_ms=200 内可完成首次重试):
+                // 50ms * 2^(attempt-1)，位移封顶 6 → 单次 ≤ 3200ms。
+                // WHY 基数 50ms 而非旧 200ms：旧值 ≥ 默认超时预算，重试在生产是死码。
+                let backoff_ms = backoff_ms(50, attempt - 1);
                 tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
             }
             let server = self
@@ -1073,6 +1085,99 @@ impl McpMesh {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Mutex;
+
+    /// 首次 commit 失败、后续成功的客户端（P2-1 预算验证用）。
+    #[derive(Default)]
+    struct FlakyOnceClient {
+        failed: Mutex<HashSet<String>>,
+    }
+
+    impl ParticipantClient for FlakyOnceClient {
+        fn prepare<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _t: &'a str,
+            _op: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn commit<'a>(
+            &'a self,
+            s: &'a MeshServer,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            // insert 返回 true = 首次调用
+            let first = {
+                let mut guard = self.failed.lock().unwrap_or_else(|e| e.into_inner());
+                guard.insert(s.server_id.clone())
+            };
+            if first {
+                let sid = s.server_id.clone();
+                Box::pin(async move {
+                    Err(McpError::NetworkError {
+                        server_id: sid,
+                        endpoint: String::new(),
+                        reason: "flaky first commit".into(),
+                    })
+                })
+            } else {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        fn rollback<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn query<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _q: &'a str,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+            Box::pin(async { Ok("ok".to_string()) })
+        }
+    }
+
+    /// P2-1：默认预算（200ms）内首次失败 + 50ms 退避重试必须能成功。
+    ///
+    /// 改前基数 200ms ≥ 预算 → 首次退避即被外层 timeout 取消（重试是死码）。
+    #[tokio::test]
+    async fn commit_retry_within_default_budget() {
+        let client = Arc::new(FlakyOnceClient::default());
+        let mesh = McpMesh::with_participant_client(
+            MeshConfig::default(),
+            None,
+            Arc::clone(&client) as Arc<dyn ParticipantClient>,
+        );
+        mesh.register_server(MeshServer::new("s-0", "203.0.113.1:80", vec![]))
+            .expect("注册失败");
+
+        let result = mesh
+            .execute_transaction(vec!["s-0".into()], "op".into())
+            .await
+            .expect("默认预算内应能完成首次失败 + 重试（改前必超时）");
+        assert!(result.success, "重试后 commit 应成功");
+    }
+
+    /// P2-1：位移封顶 6，极大 `max_retries` 不 panic/回绕，单次退避 ≤ 3200ms。
+    #[test]
+    fn backoff_is_bounded_for_large_max_retries() {
+        assert_eq!(backoff_ms(50, 0), 50);
+        assert_eq!(backoff_ms(50, 1), 100);
+        assert_eq!(backoff_ms(50, 6), 3200);
+        assert_eq!(backoff_ms(50, 70), 3200, "位移超 6 必被封印");
+        assert_eq!(backoff_ms(50, u32::MAX), 3200);
+    }
 
     fn make_mesh_with_servers(n: usize) -> McpMesh {
         // 事务超时用 30s 而非默认 200ms：16 线程全并行下 5 服务器 2PC
