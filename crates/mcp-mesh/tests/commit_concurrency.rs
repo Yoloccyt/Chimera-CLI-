@@ -127,9 +127,11 @@ async fn commit_phase_fanout_is_concurrent() {
     );
 
     const N: usize = 5;
-    let mut cfg = MeshConfig::default();
     // 宽松事务超时：等待测试释放期间不触发 TransactionTimeout（生产 200ms 语义不变）
-    cfg.transaction_timeout_ms = 5000;
+    let cfg = MeshConfig {
+        transaction_timeout_ms: 5000,
+        ..MeshConfig::default()
+    };
     let (client, mut arrived, release) = InflightClient::new();
     let client = Arc::new(client);
     let mesh = McpMesh::with_participant_client(
@@ -164,8 +166,10 @@ async fn commit_phase_fanout_is_concurrent() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn commit_phase_failure_keeps_minimal_scope() {
     const N: usize = 5;
-    let mut cfg = MeshConfig::default();
-    cfg.transaction_timeout_ms = 5000;
+    let cfg = MeshConfig {
+        transaction_timeout_ms: 5000,
+        ..MeshConfig::default()
+    };
     // s-2 在 commit 阶段始终失败
     let client = Arc::new(MockParticipantClient::new().fail_commit("s-2"));
     let mesh = McpMesh::with_participant_client(
