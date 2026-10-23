@@ -141,20 +141,30 @@ async fn test_10k_events_per_second_no_oom() {
     let received_clone = received.clone();
 
     // 消费任务:持续接收 Critical 事件并计数
-    // WHY 独立 spawn:消费方与发布方解耦,消费速率不受 publish 调用栈影响
-    let consumer = tokio::spawn(async move {
-        let mut count: u64 = 0;
-        // 循环接收直到收到预期总数或通道关闭
-        // 超时 5s 保护:若 5s 内无事件,认为发布方已停止
-        while let Some(_event) = tokio::time::timeout(Duration::from_secs(5), crit_rx.recv())
-            .await
-            .ok()
-            .flatten()
-        {
-            count = count.saturating_add(1);
-            received_clone.store(count, Ordering::Relaxed);
-        }
-        count
+    // WHY 独占 OS 线程 + 独立 current_thread runtime（P1 测试可靠性修复）：
+    // 消费者与发布者同 runtime 时，发布者的紧密循环（无挂起点）会饿死消费者；
+    // 全量 nextest 并行跑多个 test binary 时 CPU 超订，4096 容量被瞬时填满而
+    // 丢事件（实测 600K 丢 0.23%，隔离跑必过）——属测试隔离缺陷，非产品缺陷。
+    // 独立 runtime 由 OS 调度器保证公平；断言强度（100% 送达）保持不变。
+    let consumer = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("消费线程 runtime 创建失败");
+        rt.block_on(async move {
+            let mut count: u64 = 0;
+            // 循环接收直到收到预期总数或通道关闭
+            // 超时 5s 保护:若 5s 内无事件,认为发布方已停止
+            while let Some(_event) = tokio::time::timeout(Duration::from_secs(5), crit_rx.recv())
+                .await
+                .ok()
+                .flatten()
+            {
+                count = count.saturating_add(1);
+                received_clone.store(count, Ordering::Relaxed);
+            }
+            count
+        })
     });
 
     // 发布方:10K 事件/秒 × 60s = 600K 事件(spec.md L183 验收门槛)
@@ -179,10 +189,13 @@ async fn test_10k_events_per_second_no_oom() {
     // 等待消费方处理完所有事件(给 30s 缓冲,证明无 OOM)
     // WHY 30s 缓冲:600K 事件在 4 worker 线程下消费应远快于 60s 发布,
     // 30s 足够;若超时则证明系统卡死(疑似 OOM 或死锁)
-    let final_count = tokio::time::timeout(Duration::from_secs(30), consumer)
-        .await
-        .expect("消费方应在 30s 内处理完所有事件(证明无 OOM,无死锁)")
-        .expect("消费任务不应 panic");
+    let final_count = tokio::time::timeout(
+        Duration::from_secs(30),
+        tokio::task::spawn_blocking(move || consumer.join().expect("消费任务不应 panic")),
+    )
+    .await
+    .expect("消费方应在 30s 内处理完所有事件(证明无 OOM,无死锁)")
+    .expect("消费线程 join 不应失败");
 
     // 断言 1:Critical 事件 100% 送达(容量内)
     // spec.md L185:"Critical 事件 100% 送达(容量内)"
