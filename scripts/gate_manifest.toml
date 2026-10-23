@@ -1411,3 +1411,33 @@ kind = "light"
 test_kind = "cross_crate"
 note = "断言数以 --selftest **自报**，本行不抄数（ADR-218 D-44 / G-120 / G-122 / G-124 / G-126 同课：抄进散文的计数必比代码先腐烂）。全部断言走生产同一 judge()/judge_targets()，禁测试专用副本；代表性形态非穷尽：①干净夹具必绿 ②植入重复哈希键必红且诊断非空 ③植入缺右花括号必红且诊断带行号 ④host 缺失（rc=127）必判不可判定 ⑤host 意外错误码必判不可判定 ⑥host 超时（rc=124）必判不可判定 ⑦真树走多目标路径 rc=0 且报告以 [OK] 开头。宿主机无 PowerShell 时 selftest 自身退 2（不可判定），不得静默绿。任一断言不成立⇒退 1。"
 
+# ============================================================
+# G-129/G-130 -- L0-A sibling assembly ratchet (ADR-223 D3)
+# ------------------------------------------------------------
+# 为什么需要：ADR-222 的 1+6 拆分让 sibling 成为独立装配单元，而 G-91 只数
+# `nexus-contracts` 的**定义消费者**，看不见"某个 sibling 被消费者静默摘掉"。
+# 本门锁 crates/*/Cargo.toml 的生产 [dependencies] 边 `<sibling> -> <consumer>`：
+# dev/build/target 表不计（不进入产品装配面），umbrella 边记为 facade 但单列，
+# 外部队列另报（facade 不得掩盖外部消费者）。only-decrease：NEW/STALE 皆红；
+# 畸形/重复行、roster 非 7、边数低于地板均退 2（盲扫不得读作干净）。
+# 计数一律取门自报行，本 note 不抄数。
+# ============================================================
+[[gate]]
+id = "G-129"
+spec_ref = "ADR-223 D3 / ADR-215 D-29 / ADR-221 D-29（逐 crate 装配面棘轮）"
+cmd = "{python} scripts/check_l0a_sibling_assembly.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "L0-A sibling 装配面棘轮。口径：每个 crates/*/Cargo.toml 的生产 [dependencies]；边 = <sibling> -> <consumer>；dev/build/target 表不计（与 G-125 披露的 dev 边界同源）。umbrella（nexus-contracts）作为消费者记录为 facade，但门同时单报 external 数——facade 不得掩盖外部消费者。判据：exact key-set only-decrease（NEW 未登记红 / STALE 已丢红）；畸形或重复台账行、roster 非 7、边数低于地板均退 2（盲扫不得读作干净）。台账 scripts/l0a_sibling_assembly.txt 由 --emit 生成，禁手编。轴分工：G-91 数定义消费者、G-125 数 crate 级方向，本门数**装配边**，三者分母不同。"
+
+[[gate]]
+id = "G-130"
+spec_ref = "G-129 配套（门自身有牙，沿 G-120/G-122/G-124/G-126/G-128 先例）"
+cmd = "{python} scripts/check_l0a_sibling_assembly.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "断言数以 --selftest 自报，本行不抄数。全部断言走生产同一 judge()/collect_edges()/parse_ledger()，禁测试专用副本；代表性形态非穷尽：①dev-dependency 不得算装配边 ②umbrella facade 边必须被记录 ③clean 夹具绿 ④缺边必判 NEW 且点名两侧 ⑤多边必判 STALE 且点名两侧 ⑥重复台账行退 2 ⑦畸形行退 2 ⑧空目录（盲扫）退 2 ⑨roster 非 umbrella+6 退 2。任一断言不成立⇒退 1。"
+
+# ============================================================

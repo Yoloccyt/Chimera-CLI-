@@ -155,6 +155,14 @@ jobs:
           python3 scripts/check_ps1_syntax.py --selftest
           python3 scripts/check_ps1_syntax.py
 
+      # WHY(ADR-223 D3/D1): 1+6 拆分后 sibling 成为独立装配单元；G-91 只数定义消费者，看不见“某 sibling 被静默摘掉”。
+      # 本步锁 Cargo 装配边（only-decrease）；另一步锁 L0-B 外部依赖面。
+      - name: L0-A sibling assembly ratchet (G-129)
+        run: |
+          python3 scripts/check_l0a_sibling_assembly.py --selftest
+          python3 scripts/check_l0a_sibling_assembly.py
+
+
       # WHY: 加速器/推理栈排除门(ADR-195 V1/D5)——把"零 GPU 依赖"从一次性人工核对升为
       # 机器判据。当前排除靠 feature 非激活而非结构隔离:nmc-encoder 直接依赖
       # mel_spec="0.4",其可选 feature 面(wgpu/cuda/ort-tensor,default=[])可在零 ADR、

@@ -1,0 +1,13 @@
+# L0-A sibling assembly ratchet (G-129). Only-decrease key set of production
+# [dependencies] edges <sibling> -> <consumer> from crates/*/Cargo.toml.
+# Umbrella (nexus-contracts) edges are the ADR-222 D4 facade; external consumers
+# are reported separately by the gate. Refresh deliberately with --emit.
+nexus-contracts-core -> nexus-contracts
+nexus-contracts-core -> nexus-contracts-memory
+nexus-contracts-mca -> nexus-contracts
+nexus-contracts-mca -> nexus-contracts-memory
+nexus-contracts-memory -> nexus-contracts
+nexus-contracts-safety -> nexus-contracts
+nexus-contracts-seams -> nexus-contracts
+nexus-contracts-seams -> nexus-contracts-memory
+nexus-contracts-sparse -> nexus-contracts
