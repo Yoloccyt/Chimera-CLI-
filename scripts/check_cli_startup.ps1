@@ -5,12 +5,12 @@
 # 用法:
 #   .\scripts\check_cli_startup.ps1              # 默认: 测量 + 断言 (runs 10)
 #   .\scripts\check_cli_startup.ps1 -Runs 20     # 指定轮数(基线建立建议 20)
-#   .\scripts\check_cli_startup.ps1 -ThresholdMs 100  # 覆盖阈值
+#   .\scripts\check_cli_startup.ps1 -ThresholdMs 40   # 覆盖阈值
 #   .\scripts\check_cli_startup.ps1 -SkipAssert  # 仅测量输出,不断言(观测模式)
 #
 # WHY: 为 CLI 启动延迟建立可重复执行的机械基线——--version/--help/help
 #      三命令的进程启动 + clap 解析 + tokio 初始化延迟(Windows 实测
-#      2026-08-17: median 26.8~28.1ms)。阈值 100ms 为基线 ~3.5× 余量,
+#      2026-08-17: median 26.8~28.1ms)。阈值 40ms 为基线 ~1.4× 余量,
 #      防 CI 机器负载/防病毒扫描导致的假回归(与 bench_check 阈值惯例一致)。
 #
 # 依赖: hyperfine (cargo binstall hyperfine, 报告附录 D 已装 1.20.0)
@@ -22,6 +22,10 @@
 
 param(
     [int]$Runs = 10,
+    # P1-4（wave-4）：阈值复位为 100ms。
+    # WHY：40ms 取自 Windows 本地实测（26-29ms × 1.4）；CI 跑在 ubuntu 托管
+    # runner，未经 runner 标定就收紧会把环境噪声变成假红。40ms 保留为本地观测
+    # 目标（`-ThresholdMs 40`）；收紧前需 runner 连续 5 次 `-s` 采样。
     [double]$ThresholdMs = 100.0,
     [switch]$SkipAssert
 )
@@ -59,7 +63,10 @@ Write-Host "[INFO] binary: $binPath ($([math]::Round((Get-Item $binPath).Length 
 & $hyperfine.Source --warmup 3 --runs $Runs --export-json $outJson `
     -n 'version'   "$quotedBin --version" `
     -n 'help'      "$quotedBin --help" `
-    -n 'help-cmd'  "$quotedBin help"
+    -n 'help-cmd'  "$quotedBin help" `
+    -n 'cost-json' "$quotedBin --no-banner --no-color --json cost" `
+    -n 'config-path' "$quotedBin --no-banner --no-color config path" `
+    -n 'completions-bash' "$quotedBin --no-banner --no-color completions bash"
 if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 1) {
     Write-Host "[ERROR] hyperfine 执行失败 (退出码 $LASTEXITCODE)" -ForegroundColor Red
     exit 1

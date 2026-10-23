@@ -27,6 +27,11 @@
 set -euo pipefail
 
 RUNS=10
+# P1-4（wave-4）：阈值复位为 100ms。
+# WHY：40ms 取自 **Windows 本地** 实测（26-29ms × 1.4）；CI 实际跑在 ubuntu
+# 托管 runner（冷 page cache / 邻租户抖动），未经 runner 标定就收紧会把
+# 「环境噪声」变成「门禁假红」。40ms 保留为**本地观测目标**（`-t 40`）。
+# 收紧前置条件：runner 上 `-s` 连续 5 次采样后，再按实测分布重新定阈值。
 THRESHOLD_MS=100.0
 SKIP_ASSERT=false
 
@@ -75,7 +80,10 @@ echo "[INFO] binary: $BIN_PATH ($(du -h "$BIN_PATH" | cut -f1))"
 hyperfine --warmup 3 --runs "$RUNS" --export-json "$OUT_JSON" \
   -n 'version'  "\"$BIN_PATH\" --version" \
   -n 'help'     "\"$BIN_PATH\" --help" \
-  -n 'help-cmd' "\"$BIN_PATH\" help" >/dev/null 2>&1 || true
+  -n 'help-cmd' "\"$BIN_PATH\" help" \
+  -n 'cost-json' "\"$BIN_PATH\" --no-banner --no-color --json cost" \
+  -n 'config-path' "\"$BIN_PATH\" --no-banner --no-color config path" \
+  -n 'completions-bash' "\"$BIN_PATH\" --no-banner --no-color completions bash" >/dev/null 2>&1 || true
 # hyperfine 对单个命令失败返回非零,统一由下方断言处理
 
 if [ ! -f "$OUT_JSON" ]; then
