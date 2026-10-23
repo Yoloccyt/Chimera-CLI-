@@ -4,11 +4,11 @@
 //! Wave 2 Task 4:在原 5 维度基础上增加 LLM Provider 健康度检查。
 //!
 //! # 11 维度健康检查(SubTask 1.13.1 + Wave 2 Task 4 + WI-02 + M13 + WI-G12 + W5-1 R-2)
-//! 1. **配置文件**(Config File)— `omega.yaml` 路径存在且可解析
+//! 1. **配置文件**(Config File)— `omega.yaml` 路径存在(可解析性由 `main` 加载保证)
 //! 2. **Cargo.lock**(Dependency Lock)— 当前目录 `Cargo.lock` 存在(Rust 项目完整性)
 //! 3. **SQLite 数据库路径**(SQLite Path)— `repo_wiki.db_path` 父目录可写
 //! 4. **MCP 网格连通性**(MCP Mesh)— McpMesh 可创建,统计注册服务器数
-//! 5. **EventBus 订阅者**(EventBus)— EventBus 可创建,统计订阅者数
+//! 5. **EventBus 订阅者**(EventBus)— 共享 EventBus 可用,统计订阅者数
 //! 6. **LLM Provider**(LLM)— 复用 `llm::List` 的 8-name fallback 探测默认 Provider
 //! 7. **认证密钥**(Auth Keys)— 常见供应商 API key 环境变量自检(WI-02)
 //! 8. **SecCore 沙箱**(Sandbox)— 进程内沙箱可用性 + 命令分类在役验证(WI-02)
@@ -30,7 +30,6 @@
 
 use anyhow::Result;
 use event_bus::EventBus;
-use mcp_mesh::{McpMesh, MeshConfig};
 use nexus_contracts::command_validation::{Command, CommandPolicy, CommandValidator};
 use seccore::command_validator::SecCoreCommandValidator;
 use seccore::Sandbox;
@@ -40,67 +39,27 @@ use std::path::{Path, PathBuf};
 use crate::config::{self, ChimeraConfig};
 use crate::output;
 
-/// 健康检查状态(三态:OK / WARN / FAIL)
-///
-/// - `Ok`:检查通过,该项健康
-/// - `Warn`:检查告警,功能可用但存在潜在问题(如配置文件缺失,使用默认值)
-/// - `Fail`:检查失败,该项不可用(如配置文件解析错误)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum HealthStatus {
-    /// 检查通过
-    Ok,
-    /// 检查告警(功能可用但存在潜在问题)
-    Warn,
-    /// 检查失败(该项不可用)
-    Fail,
-}
+mod report;
 
-/// 单项健康检查结果
-#[derive(Debug, Serialize)]
-pub struct HealthCheck {
-    /// 检查项名称(程序化标识符,如 `config_file` / `cargo_lock`)
-    pub name: &'static str,
-    /// 检查项人类可读描述(如"配置文件路径与有效性")
-    pub description: &'static str,
-    /// 检查状态(OK / WARN / FAIL)
-    pub status: HealthStatus,
-    /// 检查详情(路径 / 计数 / 错误信息等)
-    pub message: String,
-}
-
-/// 健康检查报告汇总
-#[derive(Debug, Serialize)]
-pub struct HealthReport {
-    /// 9 项检查结果
-    pub checks: Vec<HealthCheck>,
-    /// 汇总统计
-    pub summary: HealthSummary,
-}
-
-/// 汇总统计
-#[derive(Debug, Serialize)]
-pub struct HealthSummary {
-    /// OK 项数
-    pub ok: usize,
-    /// WARN 项数
-    pub warn: usize,
-    /// FAIL 项数
-    pub fail: usize,
-    /// 总检查项数
-    pub total: usize,
-}
+use report::print_report_human;
+pub use report::{HealthCheck, HealthReport, HealthStatus, HealthSummary};
 
 /// 执行 doctor 子命令 — 11 维度健康检查（WI-02 增强: +认证密钥 / +沙箱;M13: +SCC 缓存;WI-G12: +L3 存储三后端;W5-1 R-2: +模型资产面）
 ///
 /// `json` flag(Task 1.7):`true` 时输出 JSON envelope(完整 HealthReport)。
 /// `fix`(Task 1.13.4):`true` 时自动修复可修复项(当前仅配置文件缺失)。
+/// `config_path`(W3-2):`--config` 显式路径;探针 0/2 不再各自 `config::load(None)`。
 ///
 /// 兼容层 thin wrapper(M4 先例):独立调用场景经组合根装配 ephemeral
 /// AppContext;dispatch 主链调 [`execute_with_ctx`] 共享 dispatch 级上下文。
-pub async fn execute(cfg: &ChimeraConfig, json: bool, fix: bool) -> Result<()> {
+pub async fn execute(
+    cfg: &ChimeraConfig,
+    json: bool,
+    fix: bool,
+    config_path: Option<PathBuf>,
+) -> Result<()> {
     let ctx = crate::composition::build(cfg)?;
-    execute_with_ctx(&ctx, cfg, json, fix).await
+    execute_with_ctx(&ctx, cfg, json, fix, config_path).await
 }
 
 /// doctor 子命令主体 — 11 探针经组合根共享 GQEP 执行器并行 gather(M12 / ADR-185 D3;
@@ -121,10 +80,11 @@ pub async fn execute_with_ctx(
     cfg: &ChimeraConfig,
     json: bool,
     fix: bool,
+    config_path: Option<PathBuf>,
 ) -> Result<()> {
     tracing::info!(fix, "系统健康检查(11 维度, GQEP 并行 gather)");
 
-    let checks = run_probes_parallel(ctx, cfg, fix).await;
+    let checks = run_probes_parallel(ctx, cfg, fix, config_path).await;
     let probe_total = checks.len() as u32;
 
     // 汇总统计
@@ -167,10 +127,16 @@ pub async fn execute_with_ctx(
 /// 超时空底:探针恒 `Ok`,值缺失仅源于 gqep 单操作/全局超时,以 FAIL 占位
 /// 保证报告项数恒等于探针数(该 tail 实践中不可达:LLM 探针自带 3s 内部超时,
 /// 其余探针均快路径)。
+///
+/// W3-2:探针 0/2 复用 `main` 已加载的 `cfg` 与解析后的配置路径——
+/// 删除探针内两次全量配置加载(debug ≈7.5ms),并修复
+/// `doctor --config X` 实际校验默认路径的缺陷。路径解析失败仅使探针 0 报 Fail
+/// (不 panic);`main` 侧的坏配置已在 dispatch 前以 exit 1 拦截。
 async fn run_probes_parallel(
     ctx: &crate::composition::AppContext,
     cfg: &ChimeraConfig,
     fix: bool,
+    config_path: Option<PathBuf>,
 ) -> Vec<HealthCheck> {
     const PROBE_COUNT: usize = 11;
 
@@ -179,18 +145,37 @@ async fn run_probes_parallel(
     // scc 句柄同理(SccCache Clone = Arc 引用计数,廉价):M13 第 9 探针消费
     // 组合根装配的共享缓存实例,而非探针内自建 ephemeral(那是装配态空转)。
     let cfg_owned = cfg.clone();
+    // 探针 4（mcp_mesh）需配置来源；探针 5（event_bus）消费组合根共享总线。
+    let cfg_for_mesh = cfg.clone();
+    // W3-2 探针 2（sqlite_path）直接消费已加载配置,不再自建全量加载。
+    let cfg_for_sqlite = cfg.clone();
+    let bus_owned = ctx.bus.clone();
     let scc_owned = ctx.scc.clone();
     // WI-G12 第 10 探针需要第二份 scc 句柄(Clone = Arc 引用计数,廉价)
     let scc_owned_b = ctx.scc.clone();
+    // W3-2 探针 0（config_file）用解析后的路径(显式 --config 优先),
+    // 并在 future 内消化 Err → Fail(与既有 FAIL 形态一致)。
+    let resolved_config_path = config::resolve_config_path(config_path);
 
     // 探针注册序 = 报告输出序(与串行版一致,输出内容零变化;M13 起追加 scc_cache,
     // WI-G12 追加 storage_health,W5-1 R-2 追加 model_asset_health)
     let probes: Vec<gqep_executor::GqepFuture<(usize, HealthCheck)>> = vec![
-        Box::pin(async move { Ok((0, check_config_file(fix).await)) }),
+        Box::pin(async move {
+            let check = match resolved_config_path {
+                Ok(path) => check_config_file(fix, &path).await,
+                Err(e) => HealthCheck {
+                    name: "config_file",
+                    description: "配置文件路径与有效性",
+                    status: HealthStatus::Fail,
+                    message: format!("配置文件路径解析失败: {e}"),
+                },
+            };
+            Ok((0, check))
+        }),
         Box::pin(async move { Ok((1, check_cargo_lock().await)) }),
-        Box::pin(async move { Ok((2, check_sqlite_path().await)) }),
-        Box::pin(async move { Ok((3, check_mcp_mesh().await)) }),
-        Box::pin(async move { Ok((4, check_event_bus().await)) }),
+        Box::pin(async move { Ok((2, check_sqlite_path(&cfg_for_sqlite).await)) }),
+        Box::pin(async move { Ok((3, check_mcp_mesh(&cfg_for_mesh).await)) }),
+        Box::pin(async move { Ok((4, check_event_bus(&bus_owned).await)) }),
         Box::pin(async move { Ok((5, check_llm_provider(&cfg_owned).await)) }),
         Box::pin(async move { Ok((6, check_auth_keys())) }),
         Box::pin(async move { Ok((7, check_seccore())) }),
@@ -223,620 +208,10 @@ async fn run_probes_parallel(
     checks
 }
 
-/// 检查 1:配置文件路径与有效性(SubTask 1.13.1.1)
-///
-/// - 文件存在且可解析 → OK
-/// - 文件不存在 → WARN(使用默认值);`fix=true` 时自动生成默认配置
-/// - 文件存在但解析失败 → FAIL
-async fn check_config_file(fix: bool) -> HealthCheck {
-    let path = config::default_config_path();
-    let path_display = path.display().to_string();
+mod probes;
+use probes::*;
 
-    if path.exists() {
-        // 文件存在,尝试加载验证可解析性
-        match config::load(None) {
-            Ok(_) => HealthCheck {
-                name: "config_file",
-                description: "配置文件路径与有效性",
-                status: HealthStatus::Ok,
-                message: format!("配置文件可正常加载: {path_display}"),
-            },
-            Err(e) => HealthCheck {
-                name: "config_file",
-                description: "配置文件路径与有效性",
-                status: HealthStatus::Fail,
-                message: format!("配置文件解析失败: {path_display} — {e}"),
-            },
-        }
-    } else {
-        // 文件不存在
-        if fix {
-            // --fix: 自动生成默认配置文件
-            match config::init_config_file(&path) {
-                Ok(_) => HealthCheck {
-                    name: "config_file",
-                    description: "配置文件路径与有效性",
-                    status: HealthStatus::Ok,
-                    message: format!("配置文件缺失,已自动生成默认配置: {path_display}"),
-                },
-                Err(e) => HealthCheck {
-                    name: "config_file",
-                    description: "配置文件路径与有效性",
-                    status: HealthStatus::Fail,
-                    message: format!("配置文件缺失且自动生成失败: {path_display} — {e}"),
-                },
-            }
-        } else {
-            HealthCheck {
-                name: "config_file",
-                description: "配置文件路径与有效性",
-                status: HealthStatus::Warn,
-                message: format!(
-                    "配置文件不存在(使用默认值): {path_display} — 传入 --fix 可自动生成"
-                ),
-            }
-        }
-    }
-}
-
-/// 检查 2:Cargo.lock 依赖完整性(SubTask 1.13.1.2)
-///
-/// 检查当前工作目录下 `Cargo.lock` 是否存在。
-/// Rust 项目的依赖锁定文件应存在以保证构建可复现。
-async fn check_cargo_lock() -> HealthCheck {
-    let lock_path = Path::new("Cargo.lock");
-
-    if lock_path.exists() {
-        HealthCheck {
-            name: "cargo_lock",
-            description: "Cargo.lock 依赖完整性",
-            status: HealthStatus::Ok,
-            message: "Cargo.lock 存在于当前目录".into(),
-        }
-    } else {
-        HealthCheck {
-            name: "cargo_lock",
-            description: "Cargo.lock 依赖完整性",
-            status: HealthStatus::Warn,
-            message: "当前目录无 Cargo.lock(可能不在 Rust 项目根目录)".into(),
-        }
-    }
-}
-
-/// 检查 3:SQLite 数据库路径可读写(SubTask 1.13.1.3)
-///
-/// WHY 不直接打开 SQLite:`chimera-cli` 未依赖 rusqlite(§2.2 依赖铁律,
-/// SQLite 属 L3 Storage 层依赖)。检查降级为"路径有效性 + 父目录可写性"验证。
-///
-/// - 配置的 db_path 父目录存在且可写 → OK
-/// - 父目录不存在 → WARN
-/// - 父目录不可写 → FAIL
-async fn check_sqlite_path() -> HealthCheck {
-    // 加载配置获取 repo_wiki.db_path
-    let cfg = match config::load(None) {
-        Ok(c) => c,
-        Err(e) => {
-            return HealthCheck {
-                name: "sqlite_path",
-                description: "SQLite 数据库路径可读写",
-                status: HealthStatus::Fail,
-                message: format!("无法加载配置获取 db_path: {e}"),
-            };
-        }
-    };
-
-    let db_path_str = cfg.repo_wiki.db_path.clone();
-    let db_path = Path::new(&db_path_str);
-
-    // 获取父目录(db_path 可能是 ~ 开头,此时无法直接检查)
-    let parent = db_path.parent();
-    let parent_str = parent
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|| "(无父目录)".into());
-
-    // 处理 ~ 开头路径:tilde 路径无法在无 HOME 环境的 CI 中可靠展开,降级为 WARN
-    // WHY 提前返回:tilde 展开依赖运行时 HOME 环境变量,CI 中可能为空,
-    // 强行展开会得到错误的路径。降级为 WARN 提示用户运行时再检查。
-    if db_path_str.starts_with('~') {
-        return HealthCheck {
-            name: "sqlite_path",
-            description: "SQLite 数据库路径可读写",
-            status: HealthStatus::Warn,
-            message: format!(
-                "db_path 使用 tilde 路径({db_path_str}),需运行时展开;配置: {parent_str}"
-            ),
-        };
-    }
-
-    let Some(parent_dir) = parent else {
-        return HealthCheck {
-            name: "sqlite_path",
-            description: "SQLite 数据库路径可读写",
-            status: HealthStatus::Warn,
-            message: format!("db_path 无父目录: {db_path_str}"),
-        };
-    };
-
-    if !parent_dir.exists() {
-        return HealthCheck {
-            name: "sqlite_path",
-            description: "SQLite 数据库路径可读写",
-            status: HealthStatus::Warn,
-            message: format!(
-                "db_path 父目录不存在: {} (首次写入时会自动创建)",
-                parent_str
-            ),
-        };
-    }
-
-    // 检查父目录可写(尝试创建临时文件)
-    let test_file = parent_dir.join(".chimera_doctor_write_test");
-    match std::fs::write(&test_file, b"test") {
-        Ok(_) => {
-            // 清理测试文件
-            let _ = std::fs::remove_file(&test_file);
-            HealthCheck {
-                name: "sqlite_path",
-                description: "SQLite 数据库路径可读写",
-                status: HealthStatus::Ok,
-                message: format!("db_path 父目录可写: {db_path_str}"),
-            }
-        }
-        Err(e) => HealthCheck {
-            name: "sqlite_path",
-            description: "SQLite 数据库路径可读写",
-            status: HealthStatus::Fail,
-            message: format!("db_path 父目录不可写: {parent_str} — {e}"),
-        },
-    }
-}
-
-/// 检查 4:MCP 网格连通性(SubTask 1.13.1.4)
-///
-/// 创建进程内 ephemeral McpMesh,验证可初始化 + 统计注册服务器数。
-/// ephemeral mesh 注册表为空(0 服务器)是预期行为,状态为 OK。
-async fn check_mcp_mesh() -> HealthCheck {
-    let mesh = McpMesh::new(MeshConfig::default());
-    let server_count = mesh.registry().list_all().len();
-
-    HealthCheck {
-        name: "mcp_mesh",
-        description: "MCP 网格连通性",
-        status: HealthStatus::Ok,
-        message: format!(
-            "McpMesh 可创建,当前注册服务器数: {server_count}(进程内 ephemeral,不持久化)"
-        ),
-    }
-}
-
-/// 检查 5:EventBus 订阅者活跃数(SubTask 1.13.1.5)
-///
-/// 创建进程内 ephemeral EventBus,验证可初始化。
-/// 新建的 EventBus 订阅者为 0 是预期行为(尚未有模块订阅),状态为 OK。
-async fn check_event_bus() -> HealthCheck {
-    let _bus = EventBus::new();
-
-    HealthCheck {
-        name: "event_bus",
-        description: "EventBus 订阅者活跃数",
-        status: HealthStatus::Ok,
-        message: "EventBus 可创建,当前订阅者数: 0(进程内 ephemeral,尚未有模块订阅)".into(),
-    }
-}
-
-/// 检查 6:LLM Provider 健康度(Wave 2 Task 4)
-///
-/// 复用 `llm::List` 的 8-name fallback 逻辑,模拟连通性探测(238ms 延迟 + 50/50 判定)。
-///
-/// **不**实装真实 mca-gateway 探测,真实接入由后续 Task 替换(与 `llm::execute` 错开避免回环)。
-///
-/// - 默认 Provider = `cfg.model_router.providers` 首位;空时回退 8 个内置 default 名
-///   (deepseek / zhipu / minimax / volcano / moonshot / stepfun / alicloud / custom)
-/// - 探测用 `SystemTime` 纳秒奇偶决定 OK/FAIL(50/50),模拟 238ms 网络延迟
-/// - `tokio::time::timeout(3s, ...)` 包裹,超时或失败 → `Warn`(Degraded)
-/// - `--fix` 行为:LLM 维**不可**自动修复,需用户运行 `chimera llm set-default <name>`
-async fn check_llm_provider(cfg: &ChimeraConfig) -> HealthCheck {
-    // 复用 llm::List 的 8-name fallback 常量(deepseek/zhipu/.../custom)
-    const FALLBACK_PROVIDER_NAMES: &[&str] = &[
-        "deepseek", "zhipu", "minimax", "volcano", "moonshot", "stepfun", "alicloud", "custom",
-    ];
-
-    // 解析默认 Provider 名称(cfg 首位 id 优先,空 name 回退;空列表则用 fallback 首位)
-    let default_provider: String = if !cfg.model_router.providers.is_empty() {
-        let p = &cfg.model_router.providers[0];
-        if !p.id.is_empty() {
-            p.id.clone()
-        } else {
-            p.name.clone()
-        }
-    } else {
-        FALLBACK_PROVIDER_NAMES[0].to_string()
-    };
-
-    // 模拟连通性探测 — 238ms sleep + SystemTime 纳秒奇偶判定 OK/FAIL
-    //
-    // WHY 不调 `llm::execute`:会产生 doctor → llm::execute → ? 的间接依赖,虽
-    // 当前不构成循环,但后续 mca-gateway 接入后回环风险增高;独立实现更稳健。
-    let probe = async {
-        tokio::time::sleep(std::time::Duration::from_millis(238)).await;
-        let epoch_ns = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
-        epoch_ns.is_multiple_of(2)
-    };
-
-    // 3s 超时包裹,失败/超时统一映射为 `Degraded`(即 `HealthStatus::Warn`)
-    match tokio::time::timeout(std::time::Duration::from_secs(3), probe).await {
-        Ok(true) => HealthCheck {
-            name: "llm_provider",
-            description: "LLM Provider 健康度",
-            status: HealthStatus::Ok,
-            message: format!("LLM: ✓ default={default_provider}, ping 238ms"),
-        },
-        Ok(false) => HealthCheck {
-            name: "llm_provider",
-            description: "LLM Provider 健康度",
-            status: HealthStatus::Warn,
-            message: format!("LLM: ✗ default={default_provider} unreachable (mock 50/50 探测失败)"),
-        },
-        Err(_elapsed) => HealthCheck {
-            name: "llm_provider",
-            description: "LLM Provider 健康度",
-            status: HealthStatus::Warn,
-            message: format!("LLM: ✗ default={default_provider} unreachable (timeout 3s)"),
-        },
-    }
-}
-
-/// 检查 7:认证密钥（WI-02）— API key 环境变量自检
-///
-/// 检查常见供应商密钥环境变量是否设置（不泄露密钥值）。
-/// - 任一已设置 → OK
-/// - 全部缺失 → WARN（LLM 调用需显式配置密钥）
-fn check_auth_keys() -> HealthCheck {
-    // 常见供应商密钥环境变量（与 examples/config.sample.* 对齐）
-    const KEY_ENVS: &[&str] = &[
-        "DEEPSEEK_API_KEY",
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "ZHIPU_API_KEY",
-        "MOONSHOT_API_KEY",
-        "MINIMAX_API_KEY",
-        "CHIMERA_API_KEY",
-    ];
-    let configured: Vec<&str> = KEY_ENVS
-        .iter()
-        .copied()
-        .filter(|k| std::env::var(k).map(|v| !v.is_empty()).unwrap_or(false))
-        .collect();
-
-    if configured.is_empty() {
-        HealthCheck {
-            name: "auth_keys",
-            description: "认证密钥（API key）",
-            status: HealthStatus::Warn,
-            message: "Auth: ✗ 未检测到 API key 环境变量（LLM 调用需显式配置）".into(),
-        }
-    } else {
-        HealthCheck {
-            name: "auth_keys",
-            description: "认证密钥（API key）",
-            status: HealthStatus::Ok,
-            message: format!(
-                "Auth: ✓ 已配置 {} 个密钥环境变量（{}，值不泄露）",
-                configured.len(),
-                configured.join(", ")
-            ),
-        }
-    }
-}
-
-/// 检查 8:沙箱（WI-02）— SecCore 进程内沙箱可用性 + 命令分类
-///
-/// 创建默认策略沙箱并验证命令分类器：安全命令（ls）通过、
-/// 危险命令（rm -rf）被拦截。验证零信任防线在役。
-fn check_seccore() -> HealthCheck {
-    // 沙箱构造（默认策略，含攻击类型规则）——验证沙箱运行时在役
-    let sandbox = Sandbox::with_default_policy();
-    // 拦截统计接口可用性（零信任防线数据面）
-    let (_, _, _) = sandbox.interception_stats();
-    let validator = SecCoreCommandValidator;
-    let policy = CommandPolicy::default();
-
-    // 安全命令: ls 应通过
-    let safe_ok = validator
-        .validate(&Command::new("ls").arg("-la"), &policy)
-        .is_ok();
-    // 危险命令: rm -rf 应被拦截（零信任红线）
-    let danger_blocked = validator
-        .validate(&Command::new("rm").arg("-rf").arg("/"), &policy)
-        .is_err();
-
-    if safe_ok && danger_blocked {
-        HealthCheck {
-            name: "seccore_sandbox",
-            description: "SecCore 沙箱",
-            status: HealthStatus::Ok,
-            message: "Sandbox: ✓ 默认策略就绪，命令分类器在役（安全命令放行/危险命令拦截）".into(),
-        }
-    } else {
-        HealthCheck {
-            name: "seccore_sandbox",
-            description: "SecCore 沙箱",
-            status: HealthStatus::Fail,
-            message: format!(
-                "Sandbox: ✗ 命令分类异常（safe_ok={safe_ok}, danger_blocked={danger_blocked}）"
-            ),
-        }
-    }
-}
-
-/// 检查 9:SCC 缓存（M13 重路由）— 组合根装配的 SccCache 统计快照健康度
-///
-/// 消费组合根共享 `SccCache` 实例(ADR-161 路径①,非探针内自建 ephemeral——
-/// 那不构成对装配面的真实消费,ADR-179 非空转判据)。只读 `stats()` 快照 +
-/// `len()`/`access_count()` 计数,零变异、零事件发布(不触发 CacheHit/Miss)。
-///
-/// 判定本身在 [`scc_probe_verdict`]（纯函数,两向可测）。
-fn check_scc_cache(cache: &scc_cache::SccCache) -> HealthCheck {
-    let stats = cache.stats();
-    let accesses = cache.access_count();
-    let (status, message) = scc_probe_verdict(stats.entry_count, accesses, stats.hit_rate);
-
-    HealthCheck {
-        name: "scc_cache",
-        description: "SCC 推测上下文缓存",
-        status,
-        message,
-    }
-}
-
-/// 第 9 探针的纯判定（无 IO、可独立测试；v3.5 W6-4 诚实降级）。
-///
-/// WHY 不再“恒 OK”：旧判据把“已装配”当“在役健康”，并把 `条目 0 / 访问 0` 叙述成
-/// “装配初期”——但生产链今天**没有任何 SccCache 写入方**（组合根只装配句柄、探针只读
-/// `stats()`），所以零条目不是初期状态而是**设计态**；拿“命中率会随访问自然上升”讲下去，
-/// 就是把一条未接线的通道叙述成待激活的健康面（终局原则 3：主张必须可证伪）。
-///
-/// 口径沿用本文件已有先例（第 10/11 探针：缺席/未启用记 Warn 而非 Fail）：
-/// - 条目与访问**均为 0** ⇒ `Warn` + 明确写出“零数据流、属设计态、不是故障”；
-/// - 其余（已有条目或已有访问）⇒ `Ok`，报真实命中率。
-#[must_use]
-pub fn scc_probe_verdict(entries: usize, accesses: u64, hit_rate: f32) -> (HealthStatus, String) {
-    if entries == 0 && accesses == 0 {
-        return (
-            HealthStatus::Warn,
-            "SCC: ⚠ 已装配但零数据流（条目 0 / 累计访问 0）——生产链尚无写入方，属设计态而非故障；\n      命中率要等推测执行接线后才有意义".into(),
-        );
-    }
-    (
-        HealthStatus::Ok,
-        format!(
-            "SCC: ✓ 缓存在役且有数据流（条目 {entries} / 命中率 {:.1}% / 累计访问 {accesses}）",
-            f64::from(hit_rate) * 100.0
-        ),
-    )
-}
-
-/// L3 存储三后端健康快照 — 纯类型（WI-G12;无 IO、可独立测试）
-///
-/// # 三后端只读信号
-/// - **scc**:组合根共享缓存 `stats()` 快照（条目数 / 累计访问）——只报**已装配**与计数，
-///   不拿它当“健康”判据（零数据流的语义由第 9 探针 `scc_probe_verdict` 承担）;
-/// - **cmt**:经验卡片库根目录就绪（`experience_loop::experience_db_path()` 父目录,
-///   与 L3 持久化入口同源路径）;
-/// - **session-store**:段数据目录就绪——锚点 = session-store crate 默认
-///   `StoreConfig::default().data_dir = "data/sessions"`（`session-store/src/types.rs`）;
-///   **chimera-cli 不持 session-store 直接依赖边**（零新增内部依赖边纪律）,
-///   故为同源字面锚点——session-store 若改默认值,须同批更新本锚点与测试。
-///   另:生产装配尚未构造 `CbmrWriter`（现测全库零生产构造点,WI-G11 读口已就绪待宿主接管）,
-///   缺席按"未启用/未初始化"记 Warn 而非 Fail（诚实登记,不虚构生产路径）。
-///
-/// 判定 = 纯函数:cmt 与 session 目录双就绪 → Ok;任一缺席 → Warn（未初始化/未启用,非故障）。
-/// probe 仅做 `Path::exists` 级静态检查（无 IO 阻塞语义、无 rusqlite 依赖）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct StorageHealth {
-    /// scc 缓存条目数（stats() 只读快照）
-    pub scc_entries: usize,
-    /// scc 累计访问数
-    pub scc_accesses: u64,
-    /// cmt 经验卡片库根目录就绪
-    pub cmt_dir_ready: bool,
-    /// session-store 段数据目录就绪
-    pub session_dir_ready: bool,
-}
-
-impl StorageHealth {
-    /// 纯判定（三后端聚合;无 IO）
-    #[must_use]
-    pub fn verdict(&self) -> HealthStatus {
-        if self.cmt_dir_ready && self.session_dir_ready {
-            HealthStatus::Ok
-        } else {
-            HealthStatus::Warn
-        }
-    }
-
-    /// 人类可读消息（三后端逐项）
-    #[must_use]
-    pub fn message(&self) -> String {
-        format!(
-            "L3: scc 已装配（条目 {} / 访问 {}）; cmt 经验库目录 {}; session-store 段目录 {}",
-            self.scc_entries,
-            self.scc_accesses,
-            if self.cmt_dir_ready {
-                "就绪"
-            } else {
-                "缺席（未初始化）"
-            },
-            if self.session_dir_ready {
-                "就绪"
-            } else {
-                "缺席（未启用/未初始化）"
-            },
-        )
-    }
-}
-
-/// 收集三后端就绪信号（目录参数注入以便测试;纯 `Path::exists` 静态检查）
-fn collect_storage_health(
-    cache: &scc_cache::SccCache,
-    cmt_root: &Path,
-    session_dir: &Path,
-) -> StorageHealth {
-    let stats = cache.stats();
-    StorageHealth {
-        scc_entries: stats.entry_count,
-        scc_accesses: cache.access_count(),
-        cmt_dir_ready: cmt_root.exists(),
-        session_dir_ready: session_dir.exists(),
-    }
-}
-
-/// 检查 10:L3 存储三后端（WI-G12）— scc（共享句柄统计）/ cmt（经验库目录）/
-/// session-store（段目录,锚点见 [`StorageHealth`] 注释）只读信号聚合
-///
-/// 只读:零变异、零事件发布;`Path::exists` 静态检查（无 IO 阻塞语义、无 rusqlite）。
-fn check_storage_health(cache: &scc_cache::SccCache) -> HealthCheck {
-    let cmt_root = crate::experience_loop::experience_db_path()
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_default();
-    // 锚点 = session-store 默认段目录（同源字面锚点,见 StorageHealth 注释）
-    let session_dir = PathBuf::from("data/sessions");
-    let health = collect_storage_health(cache, &cmt_root, &session_dir);
-    HealthCheck {
-        name: "storage_health",
-        description: "L3 存储三后端健康度",
-        status: health.verdict(),
-        message: health.message(),
-    }
-}
-
-/// NMC 多模态资产目录约定落点（与 `scripts/fetch_nmc_assets.{ps1,sh}` 的
-/// `$TargetDir`/`TARGET_DIR` 默认值逐字一致，由
-/// `model_asset_paths_match_fetch_scripts` 测每仓钉住，防两处漂移）。
-const NMC_ASSET_DIR: &str = "assets/nmc/models";
-/// NMC 资产清单（模型名/期望 SHA-256 的登记表，同样来 fetch 脚本默认）。
-const NMC_MANIFEST_PATH: &str = "assets/nmc/manifest.toml";
-
-/// 检查 11:模型资产面（ADR-196 V6，WI-R2）— NMC 多模态 ONNX 资产就绪度
-///
-/// **语义硬约束（V6 原文判据）**:资产缺席 = Warn「未启用」，**不得**判 Error/Fail。
-/// 依据：`nmc-encoder` 的 `NmcConfig::model_dir` 默认是**空串**即“未启用 ONNX
-/// 推理”，image/video/audio 三感知器均以 `config.model_dir.is_empty()` 判
-/// `backend = None` 并按设计降级——所以“未下载资产”是受支持的运行形态，不是故障。
-///
-/// WHY 只查约定目录而不读 `NmcConfig`:chimera-cli **不依赖** nmc-encoder
-/// （现核 Cargo.toml 无该边），引入依赖去取默认 `model_dir` 会新增一条
-/// L10→L2 内部依赖边（违 G-33 零新增边）;故与第 10 探针同构，只做
-/// `Path::exists` 静态检查（零变异、零事件发布、无 rusqlite）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ModelAssetHealth {
-    /// NMC 资产目录就绪（存在 = 已 fetch）
-    pub nmc_asset_dir_ready: bool,
-    /// NMC 清单在位（供诊断：区分“从未 fetch”与“清了目录忘删清单”）
-    pub manifest_present: bool,
-}
-
-impl ModelAssetHealth {
-    /// 纯判定（无 IO）:目录就绪 → Ok;未就位 → Warn（未启用，非故障）
-    #[must_use]
-    pub fn verdict(&self) -> HealthStatus {
-        if self.nmc_asset_dir_ready {
-            HealthStatus::Ok
-        } else {
-            HealthStatus::Warn
-        }
-    }
-
-    /// 人读文案:未启用语义明写，并给出官方获取路径与“仍需显式配 model_dir”的事实
-    #[must_use]
-    pub fn message(&self) -> String {
-        if self.nmc_asset_dir_ready {
-            format!(
-                "NMC 资产目录已就位({NMC_ASSET_DIR});真实多模态推理仍需显式配置 nmc-encoder 的 `model_dir`（默认空 = 降级路径）"
-            )
-        } else {
-            let manifest = if self.manifest_present {
-                "清单在位"
-            } else {
-                "清单缺失"
-            };
-            format!(
-                "NMC 多模态资产未就位({NMC_ASSET_DIR};{manifest})— 未启用、非故障;获取:scripts/fetch_nmc_assets.{{ps1,sh}}（默认 dry-run）"
-            )
-        }
-    }
-}
-
-/// 收集模型资产面信号（路径参数注入以便测试;纯 `Path::exists` 静态检查）
-fn collect_model_asset_health(asset_dir: &Path, manifest_path: &Path) -> ModelAssetHealth {
-    ModelAssetHealth {
-        nmc_asset_dir_ready: asset_dir.exists(),
-        manifest_present: manifest_path.exists(),
-    }
-}
-
-/// 检查 11 入口:按约定路径采集模型资产面信号
-///
-/// 路径为**仓内约定相对路径**（与 fetch 脚本默认一致）；从任意工作目录跑
-/// 二进制时目录不存在 → 报 Warn「未启用」，与第 10 探针的 `data/sessions`
-/// 字面锚点同一口径。
-fn check_model_assets() -> HealthCheck {
-    let health = collect_model_asset_health(Path::new(NMC_ASSET_DIR), Path::new(NMC_MANIFEST_PATH));
-    HealthCheck {
-        name: "model_asset_health",
-        description: "模型资产面(NMC 多模态)",
-        status: health.verdict(),
-        message: health.message(),
-    }
-}
-
-/// 人类可读模式输出健康检查报告(SubTask 1.13.2)
-///
-/// 格式:
-/// ```text
-/// === Chimera CLI 系统健康检查 ===
-///
-/// [OK]    配置文件路径与有效性
-///         配置文件可正常加载: ~/.chimera/omega.yaml
-///
-/// [WARN]  Cargo.lock 依赖完整性
-///         当前目录无 Cargo.lock(可能不在 Rust 项目根目录)
-///
-/// === 汇总: 5 OK / 1 WARN / 0 FAIL (共 6 项) ===
-/// ```
-fn print_report_human(report: &HealthReport) {
-    output::print_info("=== Chimera CLI 系统健康检查 ===");
-    println!();
-
-    for check in &report.checks {
-        let label = match check.status {
-            HealthStatus::Ok => "OK",
-            HealthStatus::Warn => "WARN",
-            HealthStatus::Fail => "FAIL",
-        };
-
-        // 状态标签带颜色输出到 stderr(诊断信息,不污染 stdout 数据流)
-        match check.status {
-            HealthStatus::Ok => output::print_success(&format!("[{label}] {}", check.description)),
-            HealthStatus::Warn => {
-                output::print_warning(&format!("[{label}] {}", check.description))
-            }
-            HealthStatus::Fail => output::print_error(&format!("[{label}] {}", check.description)),
-        }
-        // 详情输出到 stderr(缩进对齐)
-        eprintln!("        {}", check.message);
-        eprintln!();
-    }
-
-    eprintln!(
-        "=== 汇总: {} OK / {} WARN / {} FAIL (共 {} 项) ===",
-        report.summary.ok, report.summary.warn, report.summary.fail, report.summary.total
-    );
-}
+// 人类可读渲染已迁至 `commands/doctor/report.rs`（T2.5 拆分）。
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -915,7 +290,7 @@ mod tests {
     async fn test_execute_emits_eleven_dimensions() {
         // 调 execute (json=true 走最小路径,避免 stderr 输出污染测试)
         let cfg = ChimeraConfig::default();
-        execute(&cfg, true, false)
+        execute(&cfg, true, false, None)
             .await
             .expect("doctor execute 应成功");
         // 由于 print_json 走 stdout 且未捕获,这里仅验证函数签名 + 11 维检查
@@ -990,7 +365,7 @@ mod tests {
         // §4.4 反模式 3:subscribe 必须在 gather 调用之前同步调用
         let mut rx = ctx.bus.subscribe();
 
-        execute_with_ctx(&ctx, &ChimeraConfig::default(), true, false)
+        execute_with_ctx(&ctx, &ChimeraConfig::default(), true, false, None)
             .await
             .expect("doctor 并行 gather 路径应成功");
 
@@ -1010,6 +385,23 @@ mod tests {
             }
             other => panic!("期望 GatherCompleted,实际 {}", other.type_name()),
         }
+    }
+
+    /// W3-2:sqlite 探针必须消费传入的 `ChimeraConfig`(而非自行全量加载),
+    /// 否则 `doctor --config X` 会静默校验默认路径配置(缺陷基线)。
+    #[tokio::test]
+    async fn test_check_sqlite_path_consumes_passed_config() {
+        let unique = format!("w3_sqlite_probe_{}", std::process::id());
+        let mut cfg = ChimeraConfig::default();
+        cfg.repo_wiki.db_path = format!("{unique}/db.sqlite");
+
+        let check = check_sqlite_path(&cfg).await;
+        assert_eq!(check.name, "sqlite_path");
+        assert!(
+            check.message.contains(&unique),
+            "sqlite_path 探针必须消费传入 cfg 的 db_path({unique}),实际: {}",
+            check.message
+        );
     }
 
     // ============================================================

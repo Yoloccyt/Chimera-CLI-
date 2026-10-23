@@ -1298,6 +1298,47 @@ fn test_doctor_json_outputs_report_envelope() {
     );
 }
 
+/// W3-2：`chimera doctor --config <path>` 必须校验并消费显式配置文件。
+///
+/// 缺陷基线（wave-3 Task 0）：`config_file`/`sqlite_path` 探针各自
+/// `config::load(None)` 走默认路径 —— `--config` 被静默忽略,
+/// 报告里的 db_path 与配置文件路径都指向默认 `~/.chimera/omega.yaml`。
+/// 本测试用唯一父目录名做指纹,断言报告消息来自显式配置。
+#[test]
+fn test_doctor_honors_explicit_config_path() {
+    let bin = env!("CARGO_BIN_EXE_chimera");
+    let dir = TempDir::new().expect("创建临时目录失败");
+    let explicit = dir.path().join("explicit_doctor.yaml");
+    let unique_parent = format!("w3_doctor_explicit_{}", std::process::id());
+    std::fs::write(
+        &explicit,
+        format!("repo_wiki:\n  db_path: \"{unique_parent}/db.sqlite\"\n"),
+    )
+    .expect("写入临时配置失败");
+
+    let output = std::process::Command::new(bin)
+        .args(["--no-banner", "--json", "doctor", "--config"])
+        .arg(explicit.to_str().expect("临时路径应为 UTF-8"))
+        .output()
+        .expect("执行 chimera 二进制失败");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "doctor --config 应成功,实际退出码: {:?}, stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains(&unique_parent),
+        "sqlite_path 探针必须消费 --config 的 db_path({unique_parent}),实际 stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("explicit_doctor.yaml"),
+        "config_file 探针必须校验 --config 指定的配置文件,实际 stdout: {stdout}"
+    );
+}
+
 /// 测试 `chimera doctor --fix` 自动修复配置文件缺失(SubTask 1.13.4)
 ///
 /// `--fix` flag 在配置文件缺失时自动生成默认 omega.yaml。
@@ -1604,4 +1645,231 @@ fn test_panic_hook_outputs_panic_message() {
         "stderr 应包含 panic 相关信息,实际: {}",
         stderr
     );
+}
+
+// === T0.3: help 文案真值守卫 ===
+//
+// WHY 子进程断言：help 文本由 clap 在解析阶段直接输出，只有真实执行二进制
+// 才能覆盖 `-h/--help` 与 `chimera help <cmd>` 两条路径。
+// 本测试锁定“不得回退到已删除实体/错误默认值”的契约，不锁定完整文案。
+
+/// help 输出不得包含已删除 crate、旧默认路径与幽灵 flag；doctor 维数必须为 11。
+#[test]
+fn help_text_has_no_stale_references() {
+    let bin = env!("CARGO_BIN_EXE_chimera");
+
+    let help_arg_sets: &[&[&str]] = &[
+        &["--no-banner", "--no-color", "--help"],
+        &["--no-banner", "--no-color", "llm", "--help"],
+        &["--no-banner", "--no-color", "chat", "--help"],
+        &["--no-banner", "--no-color", "tui", "--help"],
+        &["--no-banner", "--no-color", "help", "doctor"],
+    ];
+
+    for args in help_arg_sets {
+        let output = std::process::Command::new(bin)
+            .args(*args)
+            .env("RUST_LOG", "error")
+            .output()
+            .expect("执行 chimera 二进制失败");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{stdout}\n{stderr}");
+
+        for stale in ["model-router", "~/.aether", "--no-examples"] {
+            assert!(
+                !combined.contains(stale),
+                "help {:?} 不应包含陈旧引用 {:?}; 实际输出: {}",
+                args,
+                stale,
+                combined
+            );
+        }
+    }
+
+    let output = std::process::Command::new(bin)
+        .args(["--no-banner", "--no-color", "help", "doctor"])
+        .env("RUST_LOG", "error")
+        .output()
+        .expect("执行 chimera 二进制失败");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("11 维检查"),
+        "help doctor 应写 \"11 维检查\", 实际: {}",
+        stdout
+    );
+
+    let output = std::process::Command::new(bin)
+        .args(["--no-banner", "--no-color", "chat", "--help"])
+        .env("RUST_LOG", "error")
+        .output()
+        .expect("执行 chimera 二进制失败");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("6 个 slash"),
+        "chat --help 应写 \"6 个 slash 命令\", 实际: {}",
+        stdout
+    );
+}
+
+// === T1.5: 子命令级 `--json` 兼容 flag 的必要性守卫 ===
+//
+// B4a 门禁结果（2026-10-22 实测）：`chimera quest list --json` 被 clap 拒绝
+// （unexpected argument）。原因是 `json` 字段挂在 `Commands::Quest` 上，而
+// `list` 是嵌套子命令；全局 `--json` 也不会穿透到嵌套子命令之后。
+// 故 **B4b（删除局部 flag）不执行**，局部 flag 保留为兼容面。
+// 本测试锁定"正确的使用位置"与"嵌套后置形式确实不被接受"两条契约。
+
+/// 局部 `--json` 只在所属命令层级生效；嵌套子命令之后的形式必须被拒绝。
+#[test]
+fn test_subcommand_json_compat_flags_are_required() {
+    let bin = env!("CARGO_BIN_EXE_chimera");
+    let accepted: &[&[&str]] = &[
+        &["quest", "--json", "list", "--help"],
+        &["wiki", "test", "--json", "--help"],
+        &["grep", "x", "--json", "--help"],
+        &["parliament", "x", "--json", "--help"],
+        &["audit", "--json", "--help"],
+        &["doctor", "--json", "--help"],
+    ];
+
+    for args in accepted {
+        let output = std::process::Command::new(bin)
+            .args(*args)
+            .env("RUST_LOG", "error")
+            .output()
+            .expect("执行 chimera 二进制失败");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "{:?} 应被 clap 接受，实际退出码 {:?}，stderr: {}",
+            args,
+            output.status.code(),
+            stderr
+        );
+        assert!(
+            !stderr.contains("unexpected argument"),
+            "{:?} 不应报 unexpected argument，stderr: {}",
+            args,
+            stderr
+        );
+    }
+
+    // 负向契约：嵌套子命令之后的 `--json` 不被接受（B4b 因此不执行）。
+    let output = std::process::Command::new(bin)
+        .args(["quest", "list", "--json", "--help"])
+        .env("RUST_LOG", "error")
+        .output()
+        .expect("执行 chimera 二进制失败");
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "quest list --json 应被 clap 拒绝（exit 2）"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("unexpected argument '--json'"),
+        "stderr 应说明 --json 位置错误，实际: {}",
+        stderr
+    );
+}
+
+// === T1.2: 组合根按需装配黑盒探针 ===
+//
+// WHY 用 `CHIMERA_CRITICAL_WAL_PATH` 指向目录：`composition::build` 会尝试
+// 把它当 WAL 文件打开，失败即 `warn!("Critical WAL 打开失败...")`。
+// 因此该 warning 是否出现，可作为"是否真的执行了组合根装配"的黑盒探针。
+// 依赖点：composition.rs 的 WAL 读取是 build() 内唯一读取点。
+
+/// NoContext 命令不应触发组合根装配；FullContext 命令应触发。
+#[test]
+fn test_help_does_not_assemble_composition_root() {
+    let bin = env!("CARGO_BIN_EXE_chimera");
+    let dir = TempDir::new().expect("创建临时目录失败");
+    let wal_as_dir = dir.path().join("wal-as-dir");
+    std::fs::create_dir_all(&wal_as_dir).expect("创建目录失败");
+
+    let help = std::process::Command::new(bin)
+        .args(["--no-banner", "--no-color", "help"])
+        .env("RUST_LOG", "warn")
+        .env("CHIMERA_CRITICAL_WAL_PATH", &wal_as_dir)
+        .output()
+        .expect("执行 chimera help 失败");
+    let help_stderr = String::from_utf8_lossy(&help.stderr);
+    assert!(
+        !help_stderr.contains("Critical WAL 打开失败"),
+        "help 属 NoContext，不应触发组合根装配；stderr: {}",
+        help_stderr
+    );
+
+    let doctor = std::process::Command::new(bin)
+        .args(["--no-banner", "--no-color", "doctor"])
+        .env("RUST_LOG", "warn")
+        .env("CHIMERA_CRITICAL_WAL_PATH", &wal_as_dir)
+        .output()
+        .expect("执行 chimera doctor 失败");
+    let doctor_stderr = String::from_utf8_lossy(&doctor.stderr);
+    assert!(
+        doctor_stderr.contains("Critical WAL 打开失败"),
+        "doctor 属 FullContext，应触发组合根装配；stderr: {}",
+        doctor_stderr
+    );
+}
+
+// === T1.3: `config path` 必须尊重显式 `--config` ===
+
+#[test]
+fn test_config_path_respects_explicit_config() {
+    let bin = env!("CARGO_BIN_EXE_chimera");
+    let dir = TempDir::new().expect("创建临时目录失败");
+    let explicit = dir.path().join("explicit.yaml");
+
+    let output = std::process::Command::new(bin)
+        .args([
+            "--no-banner",
+            "--no-color",
+            "--config",
+            explicit.to_str().expect("临时路径应为 UTF-8"),
+            "config",
+            "path",
+        ])
+        .output()
+        .expect("执行 chimera config path 失败");
+
+    assert!(
+        output.status.success(),
+        "config path 应成功，实际退出码: {:?}, stderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        explicit.display().to_string(),
+        "config path 应输出显式 --config 路径"
+    );
+}
+
+// === T2.7: 兼容垫片声明守卫 ===
+//
+// WHY：兼容 flag 的价值在于“被遗忘时有人提醒”。本测试把 `--legacy-exit-code`
+// 写进显式清单：移除它必须同批删除本行并更新 ADR-060，否则测试会红。
+
+#[test]
+fn compat_shims_are_declared() {
+    use clap::CommandFactory;
+
+    let cmd = chimera_cli::cli::Cli::command();
+    let longs: Vec<String> = cmd
+        .get_arguments()
+        .filter_map(|a| a.get_long().map(str::to_string))
+        .collect();
+
+    const DEPRECATED_SHIMS: &[&str] = &["legacy-exit-code"];
+    for shim in DEPRECATED_SHIMS {
+        assert!(
+            longs.iter().any(|l| l == shim),
+            "兼容垫片 --{shim} 缺失；若已移除，请同批更新 ADR-060 与 release note"
+        );
+    }
 }
