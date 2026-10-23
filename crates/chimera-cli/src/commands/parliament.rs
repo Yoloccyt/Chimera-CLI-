@@ -3,7 +3,7 @@
 //! v2.9.0-omega Task 1.4:替换 NotImplemented 占位,真实调用 Parliament::deliberate。
 //!
 //! # 流程
-//! 1. 构造进程内 EventBus + QuestEngine + Parliament(共享 EventBus)
+//! 1. 使用组合根共享的 EventBus + QuestEngine + Parliament(dispatch 级单例)
 //! 2. 将 proposal 文本封装为 UserIntent,经 QuestEngine::create_quest 分解为 Quest
 //!    (对齐 §5.2 数据流:用户输入 → Quest 分解 → Parliament 审议)
 //! 3. 从 Quest 构建 Proposal(proposal_id / quest_id / content / risk_level)

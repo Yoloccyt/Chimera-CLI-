@@ -2,7 +2,7 @@
 //!
 //! 状态(ADR-181 发现 1 订正;接线清单 2026-10-05 第三轮 T1.3 重测):PRODUCTION-WIRED ——
 //! cmt-tiering/efficiency-monitor/faae-router/gqep-executor/mlc-engine/nmc-encoder/
-//! osa-coordinator/scc-cache/omega-learner 九处运行时 opt-in `try_enable_sharding(...)`
+//! osa-coordinator/scc-cache/omega-learner 等 10 处运行时 opt-in `try_enable_sharding(...)`
 //! (无 tokio runtime 自动降级单流,幂等拒绝重复启用);旧述「五处含 gsoe」已失实
 //! ——gsoe-evolution 实测零调用(第三轮审计 F-X5 漂移 #4),非"未接线"定性与本行无关。
 //!

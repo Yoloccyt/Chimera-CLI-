@@ -272,7 +272,7 @@ async fn pipeline_handles_1000_events_per_second() {
 
     // 端到端时序:事件唤醒使突发消费节奏变为「即时唤醒 + Eco 降频保护」——
     // 突发 1000(事件率 ~4000/s)触发 Eco(1s 节奏)属**预期行为**,完整消费
-    // 需一次 Eco 周期(~2.2s)。灾难性回归(事件丢失/死循环)由上方 3s deadline
+    // 需一次 Eco 周期(~2.2s)。灾难性回归(事件丢失/死循环)由上方 10s 看门狗
     // 轮询单点拦截(拿不到 1000 即 panic);精确时序仍由 criterion bench
     // (data_pipeline_snapshot_latency / data_pipeline_throughput)在受控环境度量。
 }

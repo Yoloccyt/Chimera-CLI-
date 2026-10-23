@@ -72,7 +72,7 @@ pub struct HealthSummary {
 /// ```
 pub fn print_report_human(report: &HealthReport) {
     output::print_info("=== Chimera CLI 系统健康检查 ===");
-    println!();
+    eprintln!();
 
     for check in &report.checks {
         let label = match check.status {

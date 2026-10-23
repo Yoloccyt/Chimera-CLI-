@@ -598,9 +598,9 @@ impl DataPipeline {
                 // (max_event_history 有界截断)+ 克隆替换:latest_events 始终
                 // =「最近 max_event_history 条事件」,与 EventStream 面板语义一致。
                 // WHY clone 而非 move:deque 残留继续累积(跨 tick 合并)。
-                // 事件驱动分批）：仅当本 tick 有新事件入队时才重建快照（复用旧 Arc
-                // 避免 O(N) 深拷贝）；trim 仅在 push 后改变长度，无新事件时 deque 不变。
-                // 若未来引入时间淘汰（非仅随 push），需改为 `events_this_tick>0 || trimmed_this_tick`。
+                // 重建守卫：仅当本 tick 有新事件时替换快照（复用旧 Arc 避免 O(N)
+                // 深拷贝）；无新事件时 deque 不变。若未来引入时间淘汰（非仅随 push），
+                // 需改为 `events_this_tick > 0 || trimmed_this_tick`。
                 if should_replace_event_snapshot(events_this_tick) {
                     latest_events = Arc::new(latest_event_deque.clone());
                 }

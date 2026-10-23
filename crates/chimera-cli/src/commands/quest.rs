@@ -9,14 +9,15 @@
 //! - `quest checkpoint <id>` — 创建检查点,输出 checkpoint_id
 //!
 //! # 设计决策(WHY)
-//! - **进程内 ephemeral 引擎**:与 `chimera run` 一致,每次调用创建独立 QuestEngine。
+//! - **共享组合根引擎**:与 `chimera run` 一致,经 dispatch 共享 `ctx.engine`
+//!   (进程内装配；注册表不跨进程持久化)。
 //!   这意味着 `quest list` 在新进程中返回空列表(Quest 注册表不跨进程持久化)。
 //!   真实 Quest 管理请用 `chimera tui`(长生命周期引擎)。CLI quest 命令主要用于:
 //!   1. 脚本化场景:配合 `chimera run` 的输出 Quest ID 管道传递
 //!   2. 检查点管理:对已持久化的 Quest 创建检查点
 //!   3. 测试与诊断:验证 QuestEngine API 可达性
 //! - **`quest cancel` 的 idempotent 语义**:QuestEngine::cancel_quest 对不存在的
-//!   quest_id 视为幂等成功(见 engine.rs:745 注释),不会返回错误。
+//!   quest_id 视为幂等成功(见 `QuestEngine::cancel_quest` 的幂等语义注释),不会返回错误。
 //!
 //! v2.9.0-omega Task 1.7:接受 `json` flag(成功 envelope 在各子命令输出)
 //! v2.9.0-omega Task 1.11:`quest cancel` 调用 `confirm` 触发 permission prompt

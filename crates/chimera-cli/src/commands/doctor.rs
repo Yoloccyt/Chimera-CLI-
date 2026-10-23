@@ -26,7 +26,7 @@
 //!   其余项(Cargo.lock / SQLite 路径 / MCP / EventBus / LLM Provider / 认证密钥 / 沙箱 / SCC 缓存 / L3 存储三后端 / 模型资产面)需用户手动处理。
 //! - **LLM 维**走独立 mock 探测(238ms sleep + 50/50 判定)而非调用 `llm::execute`,
 //!   避免 doctor → llm → dispatch → ... 链式回环;真实 mca-gateway 接入在后续 Task 完成。
-//! - **3s 超时**:`tokio::time::timeout` 包裹 LLM 探测,失败不阻塞其他 5 维度的渲染。
+//! - **3s 超时**:`tokio::time::timeout` 包裹 LLM 探测,失败不阻塞其余 10 维度的渲染。
 
 use anyhow::Result;
 use event_bus::EventBus;

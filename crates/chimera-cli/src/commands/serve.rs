@@ -131,8 +131,6 @@ mod tests {
 
     /// T-1：serve_loop 逐帧处理（ThreadStart→TurnSubmit）后遇 EOF 正常返回 Ok，
     /// 且把 ThreadStart 产出事件经 send_event 推送（覆盖新增循环体与 EOF 退出，G7）。
-    /// T-1：serve_loop 逐帧处理（ThreadStart→TurnSubmit）后遇 EOF 正常返回 Ok，
-    /// 且把 ThreadStart 产出事件经 send_event 推送（覆盖新增循环体与 EOF 退出，G7）。
     /// TurnSubmit 用未知 thread 以顺带验证“处理失败不中断循环”的降级路径。
     #[tokio::test]
     async fn serve_loop_processes_frames_and_stops_on_eof() {

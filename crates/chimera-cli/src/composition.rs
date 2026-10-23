@@ -12,13 +12,12 @@
 //!        → build_app_server() → AppServer（真实 QuestBackend，C3 旁路由 build 保证）
 //! ```
 //!
-//! 装配收敛实况（M4 P1+P2 + M9，2026-09 批次）：chat/run/exec/quest/parliament/
-//! agent/tui 七命令已迁离自建 `EventBus::new()`，经 dispatch 共享本模块装配的
-//! AppContext（命令保留原签名 thin wrapper，内部转组合根 ephemeral 装配；
-//! tui 臂的带检查点引擎基于共享 bus 臂内构造，B1 行为零变化，
-//! 见 commands/tui.rs `assemble_quest_stack`）。
-//! 生产代码命令级自建总线装配点已清零；doctor 的
-//! `check_event_bus` 是健康探针（验证总线可构造），非命令装配，有意保留。
+//! 装配收敛实况（M4 P1+P2 + M9 + wave-1，2026-10 批次）：chat/run/exec/quest/
+//! parliament/agent/tui 等 FullContext 命令已迁离自建 `EventBus::new()`，经
+//! dispatch 共享本模块装配的 AppContext（serve/acp 走 `build_app_server`；
+//! tui 的带检查点引擎经 `assemble_quest_stack` 基于共享 bus 装配）。
+//! 生产代码命令级自建总线装配点已清零；doctor 的 `check_event_bus` 消费
+//! 组合根共享 bus 并统计订阅者数（健康探针，非命令装配，有意保留）。
 
 use crate::config::ChimeraConfig;
 use anyhow::{Context, Result};

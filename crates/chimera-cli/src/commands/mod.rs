@@ -181,7 +181,7 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
             .await
         }
         // Task 1.13: 系统健康检查 — 全局 --json 优先,子命令级 --json 兼容保留
-        // M12 / ADR-185 D3:doctor 已迁共享 AppContext,9 探针(M13 起 +scc_cache)经 gqep 并行 gather
+        // M12 / ADR-185 D3:doctor 已迁共享 AppContext,11 探针(M13 +scc_cache、W5-1 +model_assets)经 gqep 并行 gather
         // W3-2:线程化 --config 显式路径,探针 0/2 复用已加载 cfg(不再重复 config::load)
         Some(Commands::Doctor { json, fix }) => {
             doctor::execute_with_ctx(
