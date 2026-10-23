@@ -108,8 +108,8 @@ fn load_full_surface_fixture_matches_default() {
     let tmp = TempDir::new().expect("创建临时目录失败");
     let path = tmp.path().join("full.yaml");
     // JSON 是 YAML 子集，figment 的 Yaml provider 可直接解析。
-    let full = serde_json::to_string_pretty(&config::default_config())
-        .expect("default 应可序列化为 JSON");
+    let full =
+        serde_json::to_string_pretty(&config::default_config()).expect("default 应可序列化为 JSON");
     std::fs::write(&path, full).expect("写入夹具失败");
 
     let loaded = config::load(Some(path)).expect("全键面夹具应可加载");

@@ -225,8 +225,7 @@ pub fn load(config_path: Option<PathBuf>) -> Result<ChimeraConfig> {
     // (两者都调 `Default::default()`),但省去一次 14 段全量序列化 + Dict 深合并。
     // WHY 不在此处再挂 defaults:serde 已能对缺失/部分/空文件逐段回填,
     // 显式 `null`/类型错误两路径仍为 Err(坏配置 → exit 1 契约不变)。
-    let figment = Figment::from(Yaml::file(&path))
-        .merge(Env::prefixed("CHIMERA_").split("__"));
+    let figment = Figment::from(Yaml::file(&path)).merge(Env::prefixed("CHIMERA_").split("__"));
 
     figment
         .extract::<ChimeraConfig>()

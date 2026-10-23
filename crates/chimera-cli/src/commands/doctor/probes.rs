@@ -14,10 +14,9 @@ use super::*;
 /// WHY 不再二次 parse:探针曾各自全量加载 14 段配置
 /// (debug ≈3.7ms/次),且走**默认路径** → `doctor --config X` 实际校验默认文件。
 pub(super) async fn check_config_file(fix: bool, config_path: &Path) -> HealthCheck {
-    let path = config_path;
-    let path_display = path.display().to_string();
+    let path_display = config_path.display().to_string();
 
-    if path.exists() {
+    if config_path.exists() {
         HealthCheck {
             name: "config_file",
             description: "配置文件路径与有效性",
@@ -28,7 +27,7 @@ pub(super) async fn check_config_file(fix: bool, config_path: &Path) -> HealthCh
         // 文件不存在
         if fix {
             // --fix: 自动生成默认配置文件
-            match config::init_config_file(&path) {
+            match config::init_config_file(config_path) {
                 Ok(_) => HealthCheck {
                     name: "config_file",
                     description: "配置文件路径与有效性",
