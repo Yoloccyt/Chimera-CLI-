@@ -177,10 +177,17 @@ async fn acp_loop(server: &AppServer, transport: &dyn AppTransport) -> Result<()
                     }
                     None => false,
                 });
-                // 性能重构 D7：过滤后整批一次 flush（与逐条 send_event 字节等价）。
+                // 性能重构 D7：过滤后整批一次 flush；P2-3：批失败降级逐条隔离。
                 if !events.is_empty() {
-                    if let Err(e) = transport.send_events(&events).await {
-                        tracing::warn!(error = %e, count = events.len(), "chimera acp: 事件批推送失败");
+                    let (delivered, batch_err) =
+                        nexus_app_server::transport::send_events_resilient(transport, &events).await;
+                    if let Some(e) = batch_err {
+                        tracing::warn!(
+                            error = %e,
+                            delivered,
+                            total = events.len(),
+                            "chimera acp: 事件批推送失败，已降级逐条重试"
+                        );
                     }
                 }
             }

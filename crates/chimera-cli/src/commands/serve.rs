@@ -91,9 +91,16 @@ async fn serve_loop(server: &AppServer, transport: &dyn AppTransport) -> Result<
         // 处理操作 → 事件推送（内闭外开：AppOp/AppEvent 协议面）
         match server.handle_op(&op).await {
             Ok(events) => {
-                // 性能重构 D7：整批一次 flush（与逐条 send_event 字节等价）。
-                if let Err(e) = transport.send_events(&events).await {
-                    tracing::warn!(error = %e, count = events.len(), "chimera serve: 事件批推送失败");
+                // 性能重构 D7：整批一次 flush；P2-3：批失败降级逐条，隔离不可编码事件。
+                let (delivered, batch_err) =
+                    nexus_app_server::transport::send_events_resilient(transport, &events).await;
+                if let Some(e) = batch_err {
+                    tracing::warn!(
+                        error = %e,
+                        delivered,
+                        total = events.len(),
+                        "chimera serve: 事件批推送失败，已降级逐条重试"
+                    );
                 }
             }
             Err(e) => {
