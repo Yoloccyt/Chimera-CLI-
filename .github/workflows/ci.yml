@@ -559,11 +559,11 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Type check (workspace, all targets)
-        run: cargo check --workspace --all-targets
-
+      # WHY 删除独立 `cargo check`（T1.7）：clippy 使用 clippy-driver 重编全部
+      # crate，不复用 check 的 rmeta；`--all-targets` 已含类型检查，保留 check
+      # 等于同一 workspace 多跑一整轮编译。
       - name: Clippy (deny warnings)
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --jobs 2 -- -D warnings
 
       # WHY 预编译安装(2026-09-28 工具链效率重构):原先 machete/typos/taplo 三个工具
       # 各走 `cargo install --locked`,即在 2 核 runner 上从源码编译,单次 PR 合计
@@ -622,14 +622,14 @@ jobs:
 
       - name: Test (workspace, 快速回归)
         # WHY 命令裁剪(2026-08-05 实测,冷全量 ~30min):
-        # - --exclude chimera-e2e-tests:根 package 33 个 E2E/压测 [[test]] 独立二进制的
-        #   口径注（2026-10-10 现取，防下一轮误判为陈旧数字）：33 = `tests/e2e/*` 31 + `tests/stress/*` 2；
-        #   根 Cargo.toml 的 [[test]] 声明共 **41**，分解 = 37 个带 path（31 e2e + 6 非 e2e，
-        #   含 2 个 stress 与 owasp/dependency-rules/composition/nexus-contracts 定向测）+ 4 个未写 path
-        #   （走 Cargo 默认 `tests/<name>.rs`）——“41”与“33”不是同一个口径，不得互校。
+        # - --exclude chimera-e2e-tests:根 package 的 E2E/压测 [[test]] 独立二进制的
+        #   口径注（2026-10-22 现取，防下一轮误判为陈旧数字）：根 Cargo.toml 的
+        #   [[test]] 声明共 **35**，分解 = 31 个 `tests/e2e/*` + 2 个 `tests/stress/*`
+        #   + 2 个非 e2e（owasp_top10 / composition_root_omega_learner_test）；
+        #   此前“41”为陈旧值，已按 `Select-String -CaseSensitive '^\[\[test\]\]'` 实测订正。
         #   编译+链接+运行移出快轨,由下方 e2e job 并行承担(门禁不丢失);
-        #   “不丢失”的两端证据（2026-10-10 逐条核对）：排除是**按 package 级**
-        #   （`--exclude chimera-e2e-tests` 排除根包全部 41 个 [[test]]），而 e2e job 跑
+        #   “不丢失”的两端证据：排除是**按 package 级**
+        #   （`--exclude chimera-e2e-tests` 排除根包全部 35 个 [[test]]），而 e2e job 跑
         #   `cargo nextest run -p chimera-e2e-tests -E 'not binary(/stress/)'` ⇒ 同一包内除压测外
         #   全跑；剩下的压测由 `stress.yml`（nightly 03:00 UTC，`-E 'binary(/stress/)'`）接住。
         #   ⇒ 改任何一个过滤式都会破这个闭合，三条（快轨 exclude / e2e -E / stress.yml -E）必须同批看。
@@ -653,7 +653,9 @@ jobs:
         # WHY 必须带 --workspace(2026-08-19 修复):nextest 的 --exclude 仅在与
         # --workspace 搭配时合法;缺省时默认只跑当前 package,报 "--exclude can
         # only be used together with --workspace" 而 CI exit 101(测试 1s 即败)。
-        run: cargo nextest run --workspace --profile ci-fast --exclude chimera-e2e-tests -E 'not binary(/stress/)' --no-fail-fast
+        # WHY --build-jobs 2（T1.7）：CI runner 为 2 核，cargo 默认 jobs=4 会超订；
+        # 注意 nextest 的 `-j/--jobs` 是 test-threads 的别名，这里要限制的是编译并行。
+        run: cargo nextest run --workspace --profile ci-fast --exclude chimera-e2e-tests -E 'not binary(/stress/)' --build-jobs 2 --no-fail-fast
 
       # WHY: sccache 命中率统计(始终运行,即便测试失败也能观察缓存效果)。
       # 用于评估跨 job 编译缓存复用率,指导缓存策略调优。
@@ -708,12 +710,16 @@ jobs:
       - name: Test (chimera-e2e-tests)
         # P9-T2: 排除 stress binary(1000-iter 压测),由独立 stress.yml 在 nightly 触发;
         #        ci-fast 档收敛硬编码等待(scale=0.1)以加速 PR 反馈。
+        # 性能重构 D8：再排除 formal_verifier binary —— 其由下方“Formal verification
+        #   gate”步骤专项运行(见下一 step)，避免同一 job 内重复执行。两步骤 filter 的
+        #   并集仍为“非 stress 全量”(not stress ∧ not formal_verifier ∪ formal_verifier
+        #   = not stress)，覆盖不降。改任一 filter 须同批看另一处。
         env:
           CHIMERA_BACKPRESSURE_SECS: '5'
           CHIMERA_TEST_TIMEOUT_SCALE: '0.1'
           # ultra-plan: 同上,快轨收敛 mcp-mesh 事务集成测试。
           CHIMERA_MCP_TXN_COUNT: '100'
-        run: cargo nextest run -p chimera-e2e-tests -E 'not binary(/stress/)' --no-fail-fast
+        run: cargo nextest run -p chimera-e2e-tests -E 'not binary(/stress/) and not binary(/formal_verifier/)' --no-fail-fast
 
       # C2(2026-09-04): Formal verification gate — 形式化验证器语义显式接线
       # WHY(ADR-052 待办 2): 7 个验证器(gsoe-evolution/parliament/event-bus/

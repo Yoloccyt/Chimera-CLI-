@@ -724,6 +724,22 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 
+# ============================================================
+# Wave-2 — 本地/低内存 bench 档（不参与 CI 阈值；不改 [profile.bench]/release）
+#
+# WHY: criterion 默认继承 [profile.release] 的 lto=true + codegen-units=1；
+#      全 workspace 单 CU fat LTO 在 15GB 机上 OOM（见
+#      docs/reports/toolchain-perf-baseline-2026-10-22.md §4）。本档仅服务
+#      本地测量与同档相对对照（Off vs Auto 同档可比），绝不入三表阈值。
+#      绝对值 SLO 仍由 release 档 event-bus bench（bus_bench/bus_shard_bench）负责。
+# 使用: CARGO_TARGET_DIR=target/bench-lite cargo bench --profile bench-lite ...
+# ============================================================
+[profile.bench-lite]
+inherits = "release"
+lto = false
+codegen-units = 16
+opt-level = 1
+
 # Milestone D-3:评估-进化-协同三位一体闭环 E2E
 [[test]]
 name = "trinity_loop_e2e"

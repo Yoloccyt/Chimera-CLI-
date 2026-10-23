@@ -1,7 +1,8 @@
 # =============================================================================
 # .config/nextest.toml — P9-T2 测试档位 profile 配置
 # =============================================================================
-# Purpose: 定义三档 nextest profile,支撑 P9-T2 测试运行时间优化的回归分级。
+# Purpose: 定义 5 档 nextest profile（default / ci-fast / full / stress / slo），
+#          支撑 P9-T2 测试运行时间优化的回归分级。
 #          - ci-fast: PR 快轨(默认),使用 CHIMERA_TEST_TIMEOUT_SCALE=0.1,
 #                     排除根 package E2E/压测 binary。
 #                     ⚠ 排除手段是命令行 `-E 'not binary(/stress/)'`,
@@ -11,8 +12,9 @@
 #                     互斥资源串行，不能做“按名字排除”，参下方 slo 档说明）。
 #          - default (= full): 完整档(开发本地 / Release 验收),
 #                     跑所有非 #[ignore] 测试,scale 缺省 1.0。
-#          - stress: 压测档,仅跑 test-group = "stress" 的目标
-#                    (1000-iter 压测 + bench 阈值验证),由 nightly/manual 触发。
+#          - stress: 压测档,仅跑 binary 名含 "stress" 的目标
+#                    (1000-iter 压测 + bench 阈值验证),由 nightly/manual 触发;
+#                    过滤式由命令行 `-E 'binary(/stress/)'` 指定（非 test-group）。
 # Refs:    .trae/specs/p9-t2-test-runtime-optimization/{spec,tasks}.md
 #          .github/workflows/{ci,stress}.yml
 # =============================================================================
@@ -44,6 +46,12 @@ fail-fast = false
 [profile.ci-fast]
 inherits = "default"
 # CI 命令: cargo nextest run --profile ci-fast -E 'not binary(/stress/)'
+# 性能重构 D8：为快轨加挂死护栏（与 slo 档同形制）。slow-timeout 基于“无输出”而非
+# 墙钟——仅终止连续 `period × terminate-after`（=180s）无任何输出的真挂死用例，
+# 不误杀“持续有输出的慢测试”；把挂死发现时间从 job 级 15min（ci.yml）压到 ≤3min。
+[profile.ci-fast.slow-timeout]
+period = '60s'
+terminate-after = 3
 
 # =============================================================================
 # full 档 —— Release 验收 / 开发本地

@@ -153,11 +153,37 @@ fn bench_14_sections_concurrent(c: &mut Criterion) {
     group.finish();
 }
 
+/// LazyConfig pilot：`model_router` 单 section vs 全量 `load()`。
+///
+/// WHY 用临时 omega.yaml：固定输入，避免用户真实配置影响读数；两路径读同一文件。
+fn bench_lazy_vs_full_model_router(c: &mut Criterion) {
+    let tmp = tempfile::TempDir::new().expect("临时目录创建失败");
+    let path = tmp.path().join("omega.yaml");
+    chimera_cli::config::init_config_file(&path).expect("生成默认配置失败");
+
+    let mut group = c.benchmark_group("config_model_router_load");
+    group.bench_function("full_load", |b| {
+        b.iter(|| {
+            let cfg = chimera_cli::config::load(Some(path.clone())).expect("全量加载失败");
+            black_box(cfg.model_router.providers.len())
+        });
+    });
+    group.bench_function("lazy_model_router", |b| {
+        b.iter(|| {
+            let lazy = LazyConfig::new(Some(path.clone())).expect("懒加载构建失败");
+            let section = lazy.model_router().expect("model_router 解析失败");
+            black_box(section.providers.len())
+        });
+    });
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_single_section_first_access,
     bench_single_section_cached_access,
     bench_14_sections_sequential,
     bench_14_sections_concurrent,
+    bench_lazy_vs_full_model_router,
 );
 criterion_main!(benches);
