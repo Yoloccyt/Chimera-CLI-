@@ -47,7 +47,7 @@ use crate::permission::{self, PermissionCtx};
 /// `Chimera_全模型亲和适配体系设计文档_v1.0.md`;`mca-gateway` 侧**无同名枚举**
 /// (仅 `AffinityError`),故本清单与该 crate 不构成编译期耦合——
 /// 增删此处的名字不会触发对侧失败,反之亦然。
-const FALLBACK_PROVIDER_NAMES: &[&str] = &[
+pub(crate) const FALLBACK_PROVIDER_NAMES: &[&str] = &[
     "deepseek", "zhipu", "minimax", "volcano", "moonshot", "stepfun", "alicloud", "custom",
 ];
 

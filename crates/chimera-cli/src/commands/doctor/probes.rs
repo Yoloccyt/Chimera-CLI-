@@ -160,8 +160,10 @@ pub(super) async fn check_sqlite_path(cfg: &ChimeraConfig) -> HealthCheck {
 ///
 /// 经组合根派生工厂构造 McpMesh，验证可初始化 + 统计注册服务器数。
 /// ephemeral mesh 注册表为空(0 服务器)是预期行为,状态为 OK。
-pub(super) async fn check_mcp_mesh(cfg: &ChimeraConfig) -> HealthCheck {
-    let mesh = crate::composition::build_mesh(cfg);
+///
+/// 注：`build_mesh()` 当前使用默认 `MeshConfig`（无配置透传）；本探针是唯一调用方。
+pub(super) async fn check_mcp_mesh() -> HealthCheck {
+    let mesh = crate::composition::build_mesh();
     let server_count = mesh.registry().list_all().len();
 
     HealthCheck {
@@ -190,7 +192,8 @@ pub(super) async fn check_event_bus(bus: &EventBus) -> HealthCheck {
 
 /// 检查 6:LLM Provider 健康度(Wave 2 Task 4)
 ///
-/// 复用 `llm::List` 的 8-name fallback 逻辑,模拟连通性探测(238ms 延迟 + 50/50 判定)。
+/// 复用 `llm` 包内的 `FALLBACK_PROVIDER_NAMES` 常量（单一真值源），
+/// 模拟连通性探测（238ms 延迟 + 50/50 判定）。
 ///
 /// **不**实装真实 mca-gateway 探测,真实接入由后续 Task 替换(与 `llm::execute` 错开避免回环)。
 ///
@@ -200,10 +203,8 @@ pub(super) async fn check_event_bus(bus: &EventBus) -> HealthCheck {
 /// - `tokio::time::timeout(3s, ...)` 包裹,超时或失败 → `Warn`(Degraded)
 /// - `--fix` 行为:LLM 维**不可**自动修复,需用户运行 `chimera llm set-default <name>`
 pub(super) async fn check_llm_provider(cfg: &ChimeraConfig) -> HealthCheck {
-    // 复用 llm::List 的 8-name fallback 常量(deepseek/zhipu/.../custom)
-    const FALLBACK_PROVIDER_NAMES: &[&str] = &[
-        "deepseek", "zhipu", "minimax", "volcano", "moonshot", "stepfun", "alicloud", "custom",
-    ];
+    // 单一真值源：直接引用 `llm` 包内常量（勿在探针里再写一份副本）。
+    use crate::commands::llm::FALLBACK_PROVIDER_NAMES;
 
     // 解析默认 Provider 名称(cfg 首位 id 优先,空 name 回退;空列表则用 fallback 首位)
     let default_provider: String = if !cfg.model_router.providers.is_empty() {

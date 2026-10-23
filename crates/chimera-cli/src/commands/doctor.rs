@@ -145,8 +145,6 @@ async fn run_probes_parallel(
     // scc 句柄同理(SccCache Clone = Arc 引用计数,廉价):M13 第 9 探针消费
     // 组合根装配的共享缓存实例,而非探针内自建 ephemeral(那是装配态空转)。
     let cfg_owned = cfg.clone();
-    // 探针 4（mcp_mesh）需配置来源；探针 5（event_bus）消费组合根共享总线。
-    let cfg_for_mesh = cfg.clone();
     // W3-2 探针 2（sqlite_path）直接消费已加载配置,不再自建全量加载。
     let cfg_for_sqlite = cfg.clone();
     let bus_owned = ctx.bus.clone();
@@ -174,7 +172,7 @@ async fn run_probes_parallel(
         }),
         Box::pin(async move { Ok((1, check_cargo_lock().await)) }),
         Box::pin(async move { Ok((2, check_sqlite_path(&cfg_for_sqlite).await)) }),
-        Box::pin(async move { Ok((3, check_mcp_mesh(&cfg_for_mesh).await)) }),
+        Box::pin(async move { Ok((3, check_mcp_mesh().await)) }),
         Box::pin(async move { Ok((4, check_event_bus(&bus_owned).await)) }),
         Box::pin(async move { Ok((5, check_llm_provider(&cfg_owned).await)) }),
         Box::pin(async move { Ok((6, check_auth_keys())) }),

@@ -18,7 +18,7 @@ use anyhow::Result;
 
 use crate::cli::{Cli, Commands};
 use crate::config::ChimeraConfig;
-use crate::error::{ChimeraCliError, ExitProfile};
+use crate::error::ChimeraCliError;
 use crate::permission::PermissionCtx;
 
 /// P2-T9: ACP 桥（Agent Client Protocol,JSON-RPC 2.0 over stdio,转译层隔离）
@@ -109,7 +109,7 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
                 Err(e) => {
                     if let Some(ce) = e.downcast_ref::<ChimeraCliError>() {
                         eprintln!("exec error: {}", ce.message());
-                        std::process::exit(ce.exit_code_for(ExitProfile::Exec) as i32);
+                        std::process::exit(exec::exec_exit_code(ce) as i32);
                     }
                     eprintln!("exec error: {e:?}");
                     std::process::exit(4); // 工具失败默认码

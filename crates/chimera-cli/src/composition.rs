@@ -322,8 +322,11 @@ pub fn build_checkpoint_engine(
     ))
 }
 
-/// MCP 网格的唯一合法派生构造点（mcp 命令与 doctor 探针共用）。
-pub fn build_mesh(_config: &ChimeraConfig) -> mcp_mesh::McpMesh {
+/// MCP 网格的唯一合法派生构造点（当前唯一调用方：doctor 的 MCP 探针）。
+///
+/// 注：`chimera mcp` 命令不走本构造点（旧注释「mcp 命令与 doctor 探针共用」是错的）；
+/// 此处使用 `MeshConfig::default()`，未来需要配置透传时在此扩展。
+pub fn build_mesh() -> mcp_mesh::McpMesh {
     mcp_mesh::McpMesh::new(mcp_mesh::MeshConfig::default())
 }
 
