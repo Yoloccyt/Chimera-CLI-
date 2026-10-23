@@ -70,6 +70,17 @@ WHY：① **默认必须零行为变更**。实施计划对 A1 的风险缓解�
 - 9 处分片启用改为 `EventBus::try_enable_sharding(component)`：降级方向不变，但结果按类别落日志（幂等 `AlreadyEnabled` → `debug!` 并返回 true；runtime 缺位 → 首次 `warn!` 后续 `debug!`）；
 - **明确不算缺陷**的对照组：`hcw-window/src/parallel.rs:270` 的 `unwrap_or(0)`、`osa-coordinator/src/parallel.rs:198/207/222` 的 `unwrap_or(&heuristic)` 是空入参保护与文档化启发式回退，不改动。
 
+#### D4 追加修订（2026-10-22 · 工具链性能与并行调度重构）
+
+D4 把 9 处分片启用收敛到统一入口 `try_enable_sharding`（解决 S-4 不可归因）。本轮在其上加一层**宿主感知策略**，并把「是否分片」的决策点从 leaf 构造函数副作用上提到组合根：
+
+- **bus 级策略闸门**：`EventBus` 新增 `sharding_allowed: Arc<AtomicBool>`（`new()` 默认 `true` ⇒ **D4 的 9 crate/10 处 leaf 行为零变更**）与 `without_sharding()`；`try_enable_sharding` 入口在开关关且未设 `CHIMERA_BUS_SHARDS` 时早退（显式 `enable_sharding(n)` 不受影响，保逃生门）。默认库语义与运维覆盖均不变。
+- **leaf opt-in 保留**：`gqep-executor`/`scc-cache` 等仍在构造处 `try_enable_sharding(...)`（表达「本组件意图分片」），是否生效由 bus 级策略裁定——**决策点单一化**，不在各 leaf 复制宿主判断。
+- **组合根注入策略**：`spec::CommandPlan::FullContext { sharding: Auto|Off }` 为穷尽真值表；one-shot CLI 命令（run/exec/quest/parliament/agent/doctor）走 `Off`（免 64 常驻 worker + 16384 事件槽的启动税），长驻宿主（chat/tui/serve/acp/None）走 `Auto`。事件语义、Critical mpsc 旁路、漏发率等式均不变（仅关并行扇出）。
+- **worker 可终止生命周期（根治 S-4 相邻泄漏）**：`ShardedEventBus` 的 worker 由持 `Arc` 强引用改为 `Weak` + `Arc<Notify>`，`spawn_workers` 返回 `JoinHandle` 交由 `EventBus.shard_guard: Arc<OnceLock<ShardWorkerGuard>>` 托管，最后一个 `EventBus` clone drop 时 `abort`；长驻宿主可 `shutdown_sharding().await` 优雅排空。旧设计「worker 持强引用且无退出条件」致重复 `build()` 泄漏（`composition_root_bench` OOM 根因），本修订根治。
+
+验证：`event-bus` 301 + `chimera-cli` 全量 + 消费侧 11 crate `nextest ci-fast` 2477 passed / 0 failed；见 `docs/reports/toolchain-perf-baseline-2026-10-22.md`。
+
 ### D5 立 `scripts/check_dead_contract_apis.py` 作为回归护栏（暂不成门）
 
 WIRED 项必须有 ≥1 生产调用点，回落到 0 即 FAIL；尚未接线项标 DEFERRED 并写理据，一旦出现真实使用则提示"升级为 WIRED"。脚本带**双向夹具** `--selftest`（真阳 + 真阴），防止"正则匹配不到任何东西 ⇒ 永远绿"的假守护。
