@@ -4,11 +4,11 @@ L0  nexus-contracts-core   BACKEND=memory   PROD=0   CONS=2   MATURITY=TRUE  :: 
 L0  nexus-contracts-mca    BACKEND=memory   PROD=0   CONS=2   MATURITY=TRUE  :: NEXUS-OMEGA L0-A 契约域 — `mca`（ADR-222 D2）
 L0  nexus-contracts-memory BACKEND=memory   PROD=0   CONS=1   MATURITY=TRUE  :: NEXUS-OMEGA L0-A 契约域 — `memory`（ADR-222 D2）
 L0  nexus-contracts-safety BACKEND=memory   PROD=0   CONS=1   MATURITY=TRUE  :: NEXUS-OMEGA L0-A 契约域 — `safety`（ADR-222 D2）
-L0  nexus-contracts-seams  BACKEND=memory   PROD=0   CONS=2   MATURITY=NOT-IMPL-CN :: NEXUS-OMEGA L0-A 契约域 — `seams`（ADR-222 D2）
+L0  nexus-contracts-seams  BACKEND=memory   PROD=0   CONS=2   MATURITY=TRUE  :: NEXUS-OMEGA L0-A 契约域 — `seams`（ADR-222 D2）
 L0  nexus-contracts-sparse BACKEND=memory   PROD=0   CONS=1   MATURITY=TRUE  :: NEXUS-OMEGA L0-A 契约域 — `sparse`（ADR-222 D2）
-L1  event-bus              BACKEND=fs       PROD=104 CONS=34  MATURITY=NOT-IMPL-CN :: 事件总线 — 基于 tokio::broadcast + MessagePack 的跨层通信通道
-L1  nexus-core             BACKEND=fs       PROD=2   CONS=23  MATURITY=NOT-IMPL-CN :: 核心状态与领域类型 — 维护 NexusState、UserIntent、CLV 等全局领域模型
-L1  nexus-telemetry        BACKEND=memory   PROD=0   CONS=1   MATURITY=TRUE  :: NEXUS-OMEGA L0-B 核心基础面 — 计算面遥测契约与上报编排（ADR-222 D3）
+L1  event-bus              BACKEND=fs       PROD=104 CONS=34  MATURITY=TRUE  :: 事件总线 — 基于 tokio::broadcast + MessagePack 的跨层通信通道
+L1  nexus-core             BACKEND=fs       PROD=2   CONS=23  MATURITY=TRUE  :: 核心状态与领域类型 — 维护 NexusState、UserIntent、CLV 等全局领域模型
+L1  nexus-telemetry        BACKEND=memory   PROD=2   CONS=1   MATURITY=TRUE  :: NEXUS-OMEGA L0-B 核心基础面 — 计算面遥测契约与上报编排（ADR-222 D3）
 L2  hcw-window             BACKEND=memory   PROD=6   CONS=3   MATURITY=NOT-IMPL-CN :: 分层上下文窗口 - 4K/32K/128K/1M 四级上下文窗口管理
 L2  mlc-engine             BACKEND=sqlite   PROD=6   CONS=1   MATURITY=PLACEHOLDER-CN :: 四级潜在记忆引擎  L0-L3 神经形态记忆分级存储与检索
 L2  nmc-encoder            BACKEND=fs       PROD=1   CONS=3   MATURITY=DEFERRED|PLACEHOLDER-CN :: 神经多模态上下文编码器 — 将多模态输入编码为统一的潜在表示
@@ -38,7 +38,7 @@ L9  gea-activator          BACKEND=memory   PROD=3   CONS=2   MATURITY=TRUE  :: 
 L9  mas-sched              BACKEND=memory   PROD=0   CONS=1   MATURITY=TRUE  :: mas-sched — 多代理调度器控制面（P3-T2，v4.0 WI-29）
 L9  nexus-hook             BACKEND=memory   PROD=0   CONS=0   MATURITY=TRUE  :: nexus-hook — 生命周期 Hook 系统（P3-T3，v4.0 WI-24）
 L9  quest-engine           BACKEND=fs       PROD=21  CONS=2   MATURITY=TRUE  :: 长期任务引擎 — Quest 分解、检查点持久化与思考模式治理
-L10 chimera-cli            BACKEND=fs       PROD=25  CONS=0   MATURITY=NOT-IMPL-CN|PLACEHOLDER-EN|SIMPLIFIED-CN :: Chimera CLI — NEXUS-OMEGA AI 编码代理的命令行入口
+L10 chimera-cli            BACKEND=fs       PROD=25  CONS=0   MATURITY=NOT-IMPL-CN|PLACEHOLDER-EN :: Chimera CLI — NEXUS-OMEGA AI 编码代理的命令行入口
 L10 chimera-tui            BACKEND=sqlite   PROD=77  CONS=1   MATURITY=SIMPLIFIED-CN :: Chimera TUI — 基于 Ratatui 的多面板终端用户界面
 L10 chtc-bridge            BACKEND=memory   PROD=2   CONS=0   MATURITY=MOCK-ONLY :: 跨平台工具兼容桥 — 5 大 IDE 的工具调用兼容适配层
 L10 csn-substitutor        BACKEND=memory   PROD=2   CONS=0   MATURITY=TRUE  :: 能力替代网络(CSN)— 能力降级链,在缺失时自动寻找替代实现
