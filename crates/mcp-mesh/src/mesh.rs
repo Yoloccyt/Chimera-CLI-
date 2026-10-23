@@ -479,76 +479,70 @@ impl McpMesh {
     /// 任一参与者失败按指数退避重试;达 `max_retries` 仍失败则记录到待补偿队列
     /// (`pending_compensations`),由 `reconcile_pending_transactions()` 后续处理。
     ///
-    /// Task 0.7 v2.9.0-omega 新增:
-    /// - 指数退避重试
-    /// - 失败参与者入待补偿队列(2PC 经典问题:Commit 阶段失败需人工介入)
-    /// - Commit 成功后写 WAL `Commit` entry
+    /// 性能重构并行化(P1-1)：旧实现虽文档称「并发」但实为串行 `for`（每参与者
+    /// 内嵌 `sleep` 退避），commit 阶段墙钟 ≈ Σ 参与者 RTT。现与 `prepare`/`rollback`
+    /// 一致真并发扇出，墙钟降为 ≈ max RTT。保留：
+    /// - **失败范围最小化**（不立即 return，先试完所有参与者，最后统一报 CompensationFailed）；
+    /// - **输入序可观测顺序**：committed/failed 按 `participant_servers` 输入序展开（与旧串行一致）；
+    /// - 回滚开关：`CHIMERA_MCP_SERIAL_COMMIT=1` 走串行分支（与旧行为逐位等价）。
+    ///
+    /// Task 0.7 v2.9.0-omega 新增：指数退避重试 / 失败入待补偿队列 / Commit 成功后写 WAL。
     async fn commit_phase(&self, tx: &QuantumTransaction) -> Result<(), McpError> {
-        let max_retries = self.config.max_retries;
-        let mut committed: Vec<String> = Vec::with_capacity(tx.participant_servers.len());
-        let mut failed_participants: Vec<String> = Vec::new();
+        let tx_id = tx.transaction_id.clone();
+        let n = tx.participant_servers.len();
+        let serial = std::env::var("CHIMERA_MCP_SERIAL_COMMIT").as_deref() == Ok("1");
 
-        for sid in &tx.participant_servers {
-            let server = self
-                .registry
-                .get(sid)
-                .ok_or_else(|| McpError::ServerNotFound {
-                    server_id: sid.clone(),
-                })?;
-
-            let mut last_err: Option<McpError> = None;
-            for attempt in 0..=max_retries {
-                if attempt > 0 {
-                    // 指数退避:200ms * 2^(attempt-1)
-                    let backoff_ms = 200u64 * (1 << (attempt - 1));
-                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                }
-                match self
-                    .participant_client
-                    .commit(&server, &tx.transaction_id)
-                    .await
-                {
-                    Ok(()) => {
-                        committed.push(sid.clone());
-                        last_err = None;
-                        break;
-                    }
-                    Err(e) => {
-                        warn!(
-                            transaction_id = %tx.transaction_id,
-                            server_id = %sid,
-                            attempt,
-                            max_retries,
-                            error = %e,
-                            "Commit 重试失败"
-                        );
-                        last_err = Some(e);
-                    }
-                }
+        // 每参与者一个结果槽（None = 未回收，兼作防御）。按输入序 idx 存放，
+        // 使 committed/failed 重建时仍为输入序（与旧串行 for 的可观测顺序一致）。
+        let mut outcomes: Vec<Option<Result<(), McpError>>> = vec![None; n];
+        if serial {
+            for (idx, sid) in tx.participant_servers.iter().enumerate() {
+                outcomes[idx] = Some(self.commit_one(sid, &tx_id).await);
             }
+        } else {
+            // FuturesUnordered 并发扇出：每个 future 内嵌指数退避重试（复用 commit_one）。
+            let mut futures: FuturesUnordered<_> = tx
+                .participant_servers
+                .iter()
+                .enumerate()
+                .map(|(idx, sid)| {
+                    let sid = sid.clone();
+                    // 捕获 `&str`（Copy）而非 move 外层 `tx_id` String，避开 FnMut 闭包
+                    // 的所有权冲突；`tx_id` 在 commit_phase 作期间一直有效。
+                    let tx_ref = tx_id.as_str();
+                    async move { (idx, self.commit_one(&sid, tx_ref).await) }
+                })
+                .collect();
+            while let Some((idx, res)) = futures.next().await {
+                outcomes[idx] = Some(res);
+            }
+        }
 
-            if let Some(err) = last_err {
-                failed_participants.push(sid.clone());
-                // 入待补偿队列:Commit 阶段失败需人工介入或后续 reconcile
-                self.pending_compensations
-                    .entry(tx.transaction_id.clone())
-                    .or_insert_with(|| PendingCompensation {
-                        transaction_id: tx.transaction_id.clone(),
-                        failed_participants: Vec::new(),
-                        retries: 0,
-                        created_at: chrono::Utc::now(),
-                    })
-                    .failed_participants
-                    .push(sid.clone());
-                // 不立即返回 Err — 继续尝试其他参与者,让失败范围最小化
-                let _ = err;
+        // 按输入序展开为 committed / failed（集合语义，顺序与旧实现一致）。
+        let mut committed: Vec<String> = Vec::with_capacity(n);
+        let mut failed_participants: Vec<String> = Vec::new();
+        for (idx, sid) in tx.participant_servers.iter().enumerate() {
+            match outcomes[idx].take() {
+                Some(Ok(())) => committed.push(sid.clone()),
+                // None = 理论上不可达（每个 idx 必被回收）；防御性归为失败，不谎报成功。
+                Some(Err(_)) | None => failed_participants.push(sid.clone()),
             }
         }
 
         if !failed_participants.is_empty() {
-            // 部分参与者 Commit 失败:返回错误但已写入待补偿队列
+            // 入待补偿队列（Commit 阶段失败需人工介入或后续 reconcile），按输入序。
+            self.pending_compensations
+                .entry(tx_id.clone())
+                .or_insert_with(|| PendingCompensation {
+                    transaction_id: tx_id.clone(),
+                    failed_participants: Vec::new(),
+                    retries: 0,
+                    created_at: chrono::Utc::now(),
+                })
+                .failed_participants
+                .extend(failed_participants.iter().cloned());
             return Err(McpError::CompensationFailed {
-                transaction_id: tx.transaction_id.clone(),
+                transaction_id: tx_id.clone(),
                 retries: 0,
                 failed_participants,
             });
@@ -571,6 +565,47 @@ impl McpMesh {
         }
 
         Ok(())
+    }
+
+    /// 单个参与者的 commit（含指数退避重试），供 [`commit_phase`](Self::commit_phase) 并发/串行共用。
+    ///
+    /// WHY 拆出：串行与并发分支共享同一重试语义，避免两份潜在分叉（单一真值源）。
+    /// `ServerNotFound`（registry 未命中）立即返回不重试——该参与者不可达，重试无意义；
+    /// 与旧串行 `for` 对未注册服务器 `?` 短路的单参与者语义一致。
+    async fn commit_one(&self, sid: &str, tx_id: &str) -> Result<(), McpError> {
+        let max_retries = self.config.max_retries;
+        let mut last_err: Option<McpError> = None;
+        for attempt in 0..=max_retries {
+            if attempt > 0 {
+                // 指数退避:200ms * 2^(attempt-1)
+                let backoff_ms = 200u64 * (1 << (attempt - 1));
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+            }
+            let server = self
+                .registry
+                .get(sid)
+                .ok_or_else(|| McpError::ServerNotFound {
+                    server_id: sid.to_string(),
+                })?;
+            match self.participant_client.commit(&server, tx_id).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    warn!(
+                        transaction_id = %tx_id,
+                        server_id = %sid,
+                        attempt,
+                        max_retries,
+                        error = %e,
+                        "Commit 重试失败"
+                    );
+                    last_err = Some(e);
+                }
+            }
+        }
+        // 循环结束仍有错误 = 重试耗尽（至少执行过一次 commit，last_err 必为 Some）。
+        Err(last_err.unwrap_or_else(|| McpError::ServerNotFound {
+            server_id: sid.to_string(),
+        }))
     }
 
     /// Rollback 阶段 — 并发向所有参与者发送 rollback 请求(best-effort)
