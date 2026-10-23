@@ -4,7 +4,7 @@
 //! BACKEND:  fs
 //! PRODUCERS: 104 ActivationCacheStats,ActivationThresholdAdjusted,AffinityCapabilityNegotiated,AffinityQuotaExhausted,AffinityUnknownField…
 //! CONSUMERS: 34 chimera-cli,chimera-mas,chimera-tui,chtc-bridge,cmt-tiering…
-//! MATURITY: NOT-IMPL-CN
+//! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! 事件总线 — 基于 tokio::broadcast + MessagePack 的跨层通信通道
 //!

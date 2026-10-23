@@ -40,14 +40,15 @@ use nexus_contracts::reward::RewardSignal;
 
 /// 变体总数锁定值(2026-09-20 实测 enum = 146,含 SecurityInterceptionReported;
 /// L4 深度优化 P1-1:FormalVerificationFailed 升入 Critical 后 18/11/117 分布;
-/// ADR-197:+ComputePoolSaturated(Normal/System)= 152,分布 20/11/121)
-const VARIANT_COUNT_LOCK: usize = 152;
+/// ADR-197:+ComputePoolSaturated(Normal/System)= 152,分布 20/11/121;
+/// ADR-223 D2:+TelemetryCalibrationApplied / TelemetryReporterDegraded = 154,分布 20/11/123)
+const VARIANT_COUNT_LOCK: usize = 154;
 /// severity 分布锁定值(Critical,与 bus.rs CRITICAL_TOTAL = 20 一致)
 const CRITICAL_LOCK: usize = 20;
 /// severity 分布锁定值(Info)
 const INFO_LOCK: usize = 11;
 /// severity 分布锁定值(Normal)
-const NORMAL_LOCK: usize = 121;
+const NORMAL_LOCK: usize = 123;
 
 /// 变体清单第 1 段（`NexusEvent::UserIntentEncoded` … `NexusEvent::ContextWindowSwitched`，声明序连续切片）
 ///
@@ -1092,10 +1093,20 @@ fn variant_samples_chunk_6() -> Vec<NexusEvent> {
             epistemic: "Fact".into(),
             provenance: None,
         },
+        // ADR-223 D2:遥测治理面事件样本(整型/只读计数,无浮点相等语义)
+        NexusEvent::TelemetryCalibrationApplied {
+            metadata: EventMetadata::new("test"),
+            applied_rows: 1,
+        },
+        NexusEvent::TelemetryReporterDegraded {
+            metadata: EventMetadata::new("test"),
+            requested_period_secs: 0,
+            effective_period_secs: 1,
+        },
     ]
 }
 
-/// 构造全部 152 个 NexusEvent 变体的最小实例清单(enum 声明序)
+/// 构造全部 154 个 NexusEvent 变体的最小实例清单(enum 声明序)
 ///
 /// WHY 每变体一个构造器: 把"变体清单"变成编译期契约 —— 变体改名/删除立即
 /// 编译错误;新增变体未登记时,下方计数锁与序数表交叉断言失败。
@@ -1274,6 +1285,9 @@ fn variant_ordinals(event: &NexusEvent) -> u32 {
         NexusEvent::BlackboardEntry { .. } => 151,
         // ADR-197:新增变体尾号登记(序数只增不改,避免历史序数全量位移)
         NexusEvent::ComputePoolSaturated { .. } => 152,
+        // ADR-223 D2:遥测双事件(尾号续增)
+        NexusEvent::TelemetryCalibrationApplied { .. } => 153,
+        NexusEvent::TelemetryReporterDegraded { .. } => 154,
     }
 }
 

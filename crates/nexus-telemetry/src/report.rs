@@ -10,7 +10,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use event_bus::EventBus;
+use event_bus::{EventBus, EventMetadata, NexusEvent};
 
 use crate::source::SaturationSource;
 
@@ -79,6 +79,15 @@ pub fn reporter_tick(source: &dyn SaturationSource, bus: &EventBus) -> TickRepor
     let applied = source.apply_calibration();
     if applied > 0 {
         tracing::info!(applied, "HTS 阈值表由 SPRT 校准写入（apply 模式）");
+        // ADR-223 D2:校准写表是可审计的治理动作，除 tracing 外必须上总线。
+        // 本函数是同步的 ⇒ 用 publish_blocking（与 bus.rs 的宏形式单一真源同通道），
+        // 不新增异步边界；发布失败只降级为 warn，不让观测面反噬上报主循环。
+        if let Err(err) = bus.publish_blocking(NexusEvent::TelemetryCalibrationApplied {
+            metadata: EventMetadata::new("nexus-telemetry"),
+            applied_rows: applied,
+        }) {
+            tracing::warn!(error = ?err, "TelemetryCalibrationApplied 发布失败");
+        }
     }
     // 校准证据输出：每 kind 一行（阈值校准是否已发生必须可审计，而不是
     // 只能靠“事后抽库”发现——本仓 Phase A 的教训就是静默无输出等于无守护）
@@ -105,7 +114,7 @@ pub fn reporter_tick(source: &dyn SaturationSource, bus: &EventBus) -> TickRepor
 /// 饱和观测上报器句柄（由装配层启动,与吞吐/拦截率上报器同族）
 ///
 /// # 参数
-/// - `bus`:事件总线（`ComputePoolSaturated` 的发布通道）；
+/// - `bus`:事件总线（`ComputePoolSaturated` 与 ADR-223 D2 遥测治理事件的发布通道）；
 /// - `period_secs`:采样周期秒数，`0` 按 `1` 处理（见 [`clamped_period`]）；
 /// - `source`:有状态遥测源，装配层注入。
 ///
@@ -117,6 +126,18 @@ pub fn spawn_saturation_reporter(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let period = clamped_period(period_secs);
+        // ADR-223 D2:配置降级只在启动时发一次 —— 把“输入被静默改写”从 tracing-only
+        // 提升为可订阅事件面；不随 tick 刷屏。
+        if period.as_secs() != period_secs {
+            if let Err(err) = bus.publish_blocking(NexusEvent::TelemetryReporterDegraded {
+                metadata: EventMetadata::new("nexus-telemetry"),
+                requested_period_secs: period_secs,
+                effective_period_secs: period.as_secs(),
+            }) {
+                // 观测面事件发布失败不阻塞上报主循环（与 ComputePoolSaturated 同纪律）。
+                tracing::warn!(error = ?err, "TelemetryReporterDegraded 发布失败");
+            }
+        }
         loop {
             tokio::time::sleep(period).await;
             reporter_tick(source.as_ref(), &bus);

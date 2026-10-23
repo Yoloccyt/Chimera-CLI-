@@ -163,6 +163,44 @@ pub enum NexusEvent {
         hottest_kind: String,
     },
 
+    /// 遥测校准写表完成 (ADR-223 D2) — SPRT 校准在 apply 模式写入 HTS 阈值表时发布(广播级 Normal)。
+    ///
+    /// # 触发
+    /// 周期上报的一次 tick 中 `SaturationSource::apply_calibration()` 返回的写入行数 > 0。
+    /// 非 apply 模式恒为 0 ⇒ 不发布(不为零变化刷屏)。
+    ///
+    /// # 为何是 Normal 而非 Critical
+    /// 本事件只报告治理动作结果,不改变请求语义、不承载必须送达的否决/预算类信号;
+    /// 因此不进 `is_critical_mpsc_event` 与 `LANE_FORBIDDEN_SHARD` 两张清单。
+    ///
+    /// # 使用场景
+    /// - efficiency-monitor 订阅后把“阈值被改写”计入 RuntimeAuditor 治理证据
+    /// - 与 `tracing::info!` 同点发出:日志可读、总线可订阅,两条证据面不互斥
+    TelemetryCalibrationApplied {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 本轮写入 HTS 阈值表的行数(>0)
+        applied_rows: usize,
+    },
+
+    /// 遥测上报器启动期配置降级 (ADR-223 D2) — `period_secs == 0` 被钳到 1s 时发布一次。
+    ///
+    /// # 为何单独成事件
+    /// `clamped_period` 是本 crate 唯一一条“输入被静默改写”的规则;若只在 tracing 里写,
+    /// 运维无法通过事件面发现“配置写了 0、系统按 1s 跑”。本事件只在启动时发一次,
+    /// 不随 tick 刷屏。
+    ///
+    /// # 为何是 Normal
+    /// 配置降级是启动期可观测性信号,不改变对外结果语义,不进 mpsc 旁路与分片禁区。
+    TelemetryReporterDegraded {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 装配层传入的原始周期(秒)
+        requested_period_secs: u64,
+        /// 实际生效周期(秒)
+        effective_period_secs: u64,
+    },
+
     // ============================================================
     // L1 Core → L2 Memory:全局状态变更
     // ============================================================

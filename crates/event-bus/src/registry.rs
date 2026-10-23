@@ -324,6 +324,9 @@ define_event_registry! {
     HcwRecallDegraded => Normal, System;
     // ADR-197:L1 计算池饱和观测面事件（由装配层周期上报；非 Critical、不进分片禁区）
     ComputePoolSaturated => Normal, System;
+    // ADR-223 D2:L0-B 遥测治理面事件（校准写表结果 / 启动期配置降级；观测面，非 Critical）
+    TelemetryCalibrationApplied => Normal, System;
+    TelemetryReporterDegraded => Normal, System;
     OverWindowFallbackTriggered => Normal, System;
     // Milestone B-2:Ambient 资源恢复(与 BudgetExceeded 成对)
     ResourceRecovered => Normal, Quest;

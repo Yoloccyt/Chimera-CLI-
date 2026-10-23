@@ -18,7 +18,12 @@ use std::collections::HashSet;
 
 use crate::types::NexusEvent;
 
-/// 事件主题 — 10 类分类覆盖全部 152 个 NexusEvent 变体
+/// 事件主题 — 10 类分类覆盖全部 154 个 NexusEvent 变体
+///
+/// WHY 本行保留计数：它是 `scripts/check_doc_drift.sh` 的 DECLS 锚点（唯一被机器对拍
+/// 的声明位）——删掉数字不会消除口径，只会让锚锈断退 2。改本行必须与
+/// `crates/event-bus/tests/variant_count_test.rs` 的锁和 `scripts/doc_count_freeze.txt`
+/// 同批，否则 drift 门判红。
 ///
 /// WHY 10 类分类：按架构层职责划分，每个 topic 对应一个功能域。
 /// FilteredSubscriber 订阅指定 topic 集合，仅接收匹配事件，

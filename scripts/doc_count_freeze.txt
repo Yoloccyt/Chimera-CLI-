@@ -22,7 +22,7 @@
 #   (docs still say "9 categories" in crates/event-bus), workspace 43 members.
 # =============================================================================
 
-nexus_event_variants = 152
+nexus_event_variants = 154
 event_topic_variants = 10
 workspace_crates = 46
 # ADR-222 (2026-10-20): +nexus-telemetry (L0-B core foundation), 39 -> 40.
@@ -50,3 +50,9 @@ workspace_crates = 46
 # It is a dated audit record under .gitignore'd docs/reports/ and is kept as-is
 # (只加注不改写 discipline), so the mismatch is registered as visible debt.
 drift = docs/reports/DOC-AUDIT-FACTS_2026-09-20.md | workspace_crates | 39
+
+# ADR-223 D2 (2026-10-23): the same dated audit record still declares 152 variants
+# (the lock moved to 154 when the two telemetry events landed). Registered rather
+# than edited: the file is a .gitignore'd audit snapshot and the house discipline
+# for historical records is annotate-only, never rewrite.
+drift = docs/reports/DOC-AUDIT-FACTS_2026-09-20.md | nexus_event_variants | 152
