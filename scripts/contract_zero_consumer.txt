@@ -22,7 +22,7 @@
 # Why there is no minimum: `zero` is the debt -- wiring types up drives it to
 # 0, and a floor there would make this gate's green depend on the defect.
 #
-# CLAIM defs=236 zero=75 one=86 ge2=75 gap=161 baseline=161 rows=75 sum=OK
+# CLAIM defs=236 zero=74 one=87 ge2=75 gap=161 baseline=161 rows=74 sum=OK
 AffinityOverrides | consumers=0 | declared_in=mca/affinity
 AgreementTrendPoint | consumers=0 | declared_in=safety/calibration
 BadCaseConversion | consumers=0 | declared_in=safety/calibration
@@ -64,7 +64,6 @@ MemoryManagementContract | consumers=0 | declared_in=spec/harness_dimensions
 MetadataBridge | consumers=0 | declared_in=core_domain/event_v2
 ModalityKind | consumers=0 | declared_in=mca/affinity
 ModelConfig | consumers=0 | declared_in=mca/omni_message
-ModelPrice | consumers=0 | declared_in=mca/price_vector
 MonthlyEvalReport | consumers=0 | declared_in=safety/calibration
 NamespaceQuota | consumers=0 | declared_in=memory/quota
 NamespaceQuotaV2 | consumers=0 | declared_in=core_domain/event_v2
