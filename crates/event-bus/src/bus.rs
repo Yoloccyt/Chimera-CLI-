@@ -787,23 +787,48 @@ impl EventBus {
     /// 优雅关闭分片：唤醒全部 worker 排空各自队列，await 其退出，再释放槽位强引用。
     ///
     /// WHY 公开：长驻宿主（TUI/serve）退出前可显式调用，保证已入片但未汇入的
-    /// `Unordered` 事件不丢（worker 见 `draining` 标志后 drain-to-empty 再 break）。
-    /// 不调用亦可：[`ShardWorkerGuard`] 会在最后一个 `EventBus` clone drop 时 abort
-    /// worker（硬退出，进程 teardown 语义）。幂等：重复调用因句柄已被 take 而为 no-op。
+    /// `Unordered` 事件不丢。不调用亦可：[`ShardWorkerGuard`] 会在最后一个
+    /// `EventBus` clone drop 时 abort worker（硬退出，进程 teardown 语义）。
+    /// 幂等：重复调用因槽位/句柄已被 take 而为 no-op。
+    ///
+    /// # 关闭协议（P1-1 顺序不可换）
+    /// 1. `request_drain()` → worker drain-to-empty；
+    /// 2. **先把 `shard_bus` 置 None** → 此后 `try_shard_publish` 直接回退 broadcast，
+    ///    不再有「worker 已退出却仍入片」的路径；
+    /// 3. await worker 退出；
+    /// 4. 等待在飞发布者释放 Arc（`strong_count` 收敛到 1）—— 收敛后无任何
+    ///    「已 load_full 但未 push」的在飞事件；
+    /// 5. 残留队列兜底补投 broadcast 并归还信用（覆盖 empty 检查与 break 之间的极端窗口）。
     pub async fn shutdown_sharding(&self) {
-        // 1) 置 draining + 唤醒（用 notify_one() 存 permit，避免 worker 尚未 await 时丢失唤醒）
-        if let Some(sb) = self.shard_bus.load_full() {
-            sb.request_drain();
-        }
-        // 2) 取走句柄并 await（worker 见 draining 且队列空后自行 break）
+        // 1) 取快照；未启用/已关闭 → 幂等返回
+        let Some(sb) = self.shard_bus.load_full() else {
+            return;
+        };
+        // 2) 置 draining + 唤醒（notify_one 存 permit，避免 worker 尚未 await 时丢失唤醒）
+        sb.request_drain();
+        // 3) 先切断新入片（顺序关键，见 rustdoc §关闭协议）
+        self.shard_bus.store(None);
+        // 4) 取走句柄并 await（worker 见 draining 且队列空后自行 break）
         if let Some(guard) = self.shard_guard.get() {
             for handle in guard.take_handles() {
                 // 忽略 JoinError：被 abort 或 panic 均视为已回收，不应因此中断关闭流程
                 let _ = handle.await;
             }
         }
-        // 3) 释放槽位强引用（worker 已退出不再持引用；ShardedEventBus 随最后一个 Arc drop 释放）
-        self.shard_bus.store(None);
+        // 5) 等待在飞 publisher 完成 try_push（worker 已退出，额外强引用只来自它们）
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+        while Arc::strong_count(&sb) > 1 && std::time::Instant::now() < deadline {
+            tokio::task::yield_now().await;
+        }
+        // 6) 残余兜底：极端竞态窗口（push 落在 worker 最后一次 empty 检查之后）
+        let residual = sb.drain_residual(&self.sender);
+        if residual > 0 {
+            self.credit_flow.release_many(residual);
+            tracing::warn!(
+                residual,
+                "sharding shutdown 兜底补投残余事件（极端竞态窗口）"
+            );
+        }
     }
 
     /// 启用分片并把结果显式化（ADR-197 A3）
@@ -3274,6 +3299,56 @@ mod tests {
             N,
             "shutdown 后订阅者应收到全部已入片事件（漏发率 = 0）"
         );
+    }
+
+    /// P1-1 并发排空：`shutdown_sharding()` 与持续 `publish(Unordered)` 重叠时，
+    /// **不得**出现「入片成功但永不汇入」的静默丢事件。
+    ///
+    /// 判定口径选「订阅者实收数 == 发布成功数」而非计数器：
+    /// shutdown 后 `shadow_stats()` 随 `store(None)` 归零，计数器不可读；
+    /// 而丢事件必然表现为订阅者少收（未汇入 broadcast）。
+    ///
+    /// 改前失效链：worker 见 `draining && is_empty()` 即 break，而 `try_push`
+    /// 无 draining 判定、槽位仍在（`store(None)` 在 await 之后）—— break 后入片的
+    /// 事件返回 Ok 却永不汇入。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_publish_and_shutdown_loses_nothing() {
+        const ROUNDS: usize = 10;
+        const PRODUCERS: usize = 8;
+        const N: usize = 400;
+
+        for round in 0..ROUNDS {
+            // 容量远大于 N：避免慢消费者 Lagged 造成假丢
+            let bus = EventBus::with_capacity(16_384);
+            bus.enable_sharding(8).expect("启用分片应成功");
+            let mut rx = bus.subscribe();
+
+            let mut handles = Vec::new();
+            for _ in 0..PRODUCERS {
+                let b = bus.clone();
+                handles.push(tokio::spawn(async move {
+                    for _ in 0..(N / PRODUCERS) {
+                        b.publish(make_test_event()).await.expect("publish 应成功");
+                    }
+                }));
+            }
+
+            // 让部分发布先入片，再与排空并发（关键竞态窗口）
+            tokio::task::yield_now().await;
+            bus.shutdown_sharding().await;
+
+            for h in handles {
+                h.await.expect("producer 不应 panic");
+            }
+
+            let received = drain_events(&mut rx, N, 3000).await;
+            assert_eq!(
+                received.len(),
+                N,
+                "round {round}: shutdown 与发布并发时不得丢事件（实收 {} / {N}）",
+                received.len()
+            );
+        }
     }
 
     #[tokio::test]

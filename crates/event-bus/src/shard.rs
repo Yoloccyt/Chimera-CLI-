@@ -290,10 +290,38 @@ impl ShardedEventBus {
         }
     }
 
+    /// 关闭期兜底：把各片残留事件 pop 后补投 broadcast（P1-1）。
+    ///
+    /// WHY 必要：worker 的退出判定是「draining && is_empty()」，与发布者 push
+    /// 之间仍有极小窗口（push 发生在 empty 检查之后、worker break 之前）。
+    /// `EventBus::shutdown_sharding` 在 worker 已退出且在飞 Arc 收敛后调用本方法，
+    /// 把这类残余补投与 worker 同口径地汇入 broadcast。
+    ///
+    /// 返回补投条数；调用方负责 `CreditFlow::release_many(drained)` 归还信用。
+    pub(crate) fn drain_residual(
+        &self,
+        sender: &tokio::sync::broadcast::Sender<NexusEvent>,
+    ) -> u64 {
+        let mut drained = 0u64;
+        for idx in 0..self.n_shards {
+            while let Some(event) = self.shards[idx].pop() {
+                self.depths[idx].fetch_sub(1, Ordering::Relaxed);
+                // 与 worker 同口径：send 无人接收记 merge_closed_total，
+                // merged_total 无条件计入（漏发率等式的分母）。
+                if sender.send(event).is_err() {
+                    self.merge_closed_total.fetch_add(1, Ordering::Relaxed);
+                }
+                self.merged_total.fetch_add(1, Ordering::Relaxed);
+                drained += 1;
+            }
+        }
+        drained
+    }
+
     /// 尝试入片(Unordered 事件专用)
     ///
     /// - 成功:递增深度 + 唤醒 worker + 累计 `sharded_total`,返回 `Ok(())`;
-    /// - 失败(片满):返回 `Err(event)`,由调用方(EventBus)按 CBF 信用流裁决
+    /// - 失败(片满或关闭期):返回 `Err(event)`,由调用方(EventBus)按 CBF 信用流裁决
     ///   (有信用重试、无信用 shed 回退 broadcast)。
     ///
     /// # 事件所有权
@@ -303,10 +331,19 @@ impl ShardedEventBus {
     /// # 64KiB 载荷断言
     /// debug 构建下序列化检查载荷 ≤ 64KiB(超过视为实现 bug,panic 于 debug;
     /// release 零开销 —— `debug_assert!` 表达式不被求值)。
+    ///
+    /// # 关闭期语义(P1-1)
+    /// `draining` 置位后返回 `Err(event)`：调用方(EventBus)走既有 broadcast 回退，
+    /// 避免「worker 已退出但事件仍能入片」的静默丢失。
     #[must_use = "入片结果决定是否回退 broadcast,忽略将导致事件丢失"]
     // WHY allow(result_large_err):Err 返回事件所有权供调用方回退 broadcast（接口契约,避免热路径 clone）
     #[allow(clippy::result_large_err)]
     pub fn try_push(&self, event: NexusEvent) -> Result<(), NexusEvent> {
+        // 关闭期早退：worker 已进入 drain-to-empty 并可能已退出，再入片会
+        // 返回 Ok 却永不汇入（信用也不归还）。交回调用方回退 broadcast。
+        if self.draining.load(Ordering::Acquire) {
+            return Err(event);
+        }
         debug_assert!(
             payload_within_limit(&event),
             "事件载荷超过 {MAX_EVENT_PAYLOAD_BYTES} 字节(64KiB 断言)"
