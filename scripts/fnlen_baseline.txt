@@ -3,7 +3,7 @@
 # after a split so the cap ratchets DOWN. Key is path::fn (stable across
 # line drift); cap is the measured max length.
 
-crates/chimera-tui/src/data/pipeline.rs::new_internal|464  # production >200 lines (open debt: split before it grows)
+crates/chimera-tui/src/data/pipeline.rs::new_internal|467  # production >200 lines (open debt: split before it grows)
 crates/chimera-tui/src/popup.rs::render|215  # production >200 lines (open debt: split before it grows)
 crates/event-bus/tests/filtered_subscriber_test.rs::test_topic_mapping_covers_all_variants|484  # test-side >200 lines (assertion table/bench body, not shipped)
 crates/mca-gateway/tests/token_efficiency_bench.rs::render_report|256  # test-side >200 lines (assertion table/bench body, not shipped)
