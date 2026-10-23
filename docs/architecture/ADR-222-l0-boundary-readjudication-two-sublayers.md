@@ -205,6 +205,8 @@ L0 已完成七轮收口（ADR-212~221），边界被 ADR-212 决策 1/2 裁为�
 
 **R9 收口终态（2026-10-21 现取，HEAD `0a8361a` + 本条文档补）**：全量 light 门集 **`ok=120 / mismatch=1 / env-fail=0 / unknown=0 / skip=7 = 128/128`**（唯一红 = 既有 G-16，按 ADR-212:108 不修）；`cargo test --workspace --exclude chimera-e2e-tests --lib --bins --tests -j 2` **rc=0 / 11314 passed / 0 failed / 443 target / 65 ignored**；`-p chimera-e2e-tests --tests` **rc=0 / 316 passed / 0 failed / 35 target**（合计 **11630 / 0**）；`cargo check --workspace --all-targets` 与 `clippy -- -D warnings` 均 rc=0，逐包 fmt **47/47**（46 members + 根包）；`.sh`/`.ps1` 铁律双源均 **rc=0**（46/46）；doctest 46/46 target 跑完、266 passed / 27 failed（失败集仅 `chimera-mas` + `repo-wiki`，E0462/E0460 平台条件，与历史同集，非本轮回归）。**提交链**：`2c3cb32`（C3-1 原子拆分批，103 files）/ `4cb5889`（C3-2 G-127/128 + doctest job，3 files）/ `d0701d4`（C3-3 Eco 夹具 + 渲染断言归一化，5 files）/ `0a8361a`（C3-4 文档批，7 files）。R9 新增 **G-127/G-128**（`scripts/check_ps1_syntax.py`，Parser::ParseFile 真解析，双端钉定 UTF-8）并修复两处门红（**G-48** 棘轮 cap 470→464；**G-07** 新脚本与 `ci.yml` 同批 `git add`）。详细取证见 `docs/reports/L0-round9-closure_2026-10-21.md`（本地源，`*.md` 在 `.gitignore`）。
 
+**doctest 归因订正（ADR-223 轮观测，2026-10-23）**：本 ADR 与 R9 报告曾把两个 E0462 target 定为“windows-gnu 平台条件”。R10 在**全量重编**后的同一工具链、同一命令（`cargo test --workspace --exclude chimera-e2e-tests --doc --no-fail-fast -j 2`）下实测 **46/46 doc target 全绿、293 passed / 0 failed** ⇒ 原来的“平台不可解”结论应降级为**产物/元数据状态相关**（proc-macro 以 staticlib 形态被缓存时触发），而非不可变的平台限制。不影响 R9 当时“同集同因、非回归”的判定，但**下游不应再把它当永久豁免**：clean/全量重编可持续观测到绿。
+
 ---
 
 ## 9. 附录：L0-B 依赖白名单与新增流程（R9 收口 R8-1）
