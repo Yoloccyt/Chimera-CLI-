@@ -4,7 +4,7 @@
 //! BACKEND:  memory
 //! PRODUCERS: 0 -
 //! CONSUMERS: 2 nexus-contracts,nexus-contracts-memory
-//! MATURITY: NOT-IMPL-CN
+//! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! NEXUS-OMEGA L0-A 契约域 — `seams`（ADR-222 D2）
 //!

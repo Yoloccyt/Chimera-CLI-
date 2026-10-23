@@ -102,6 +102,13 @@ NEGATION = (
     u"\u5df2\u66ff\u6362", u"\u5df2\u5347\u7ea7",   # "already replaced/upgraded"
     u"\u96f6\u547d\u4e2d", u"\u65e0\u6b64",         # "zero hits"; "no such"
     u"\u5e7b\u7075", u"\u52ff\u7167\u6284",         # "phantom"; "do not copy"
+    # ADR-223 D4: an author narrating a design that was NEVER built (event-bus
+    # dynamic_registry: "DynamicEventRouter ... never implemented; ADR-173 froze
+    # that track") is a refutation of the symbol, not a self-declaration of
+    # unfinished code. Measured cost of not having it: one of the three L0
+    # NOT-IMPL-CN rows was pure narration of an abandoned symbol, and the ledger
+    # charged it as WIP debt for rounds.
+    u"\u4ece\u672a\u5b9e\u73b0",                     # "was never implemented"
 )
 
 

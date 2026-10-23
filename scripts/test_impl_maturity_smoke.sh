@@ -15,7 +15,8 @@
 #   2. the same marker, registered        -> rc=0  (baseline honoured, no noise)
 #   3. a registered marker that vanished  -> rc=1  (allowance must not outlive debt)
 #   4. a malformed baseline row           -> rc=2  (config error, never a fake red)
-# Exit: 0 all four hold, 1 any assertion fails.
+#   5. a WIP phrase refuted by the negation vocabulary -> rc=0 (narration is not debt)
+# Exit: 0 all five hold, 1 any assertion fails.
 # =============================================================================
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -79,8 +80,21 @@ run 1 "a vacated allowance is STALE" "\[STALE\] demo.MOCK-ONLY"
 printf 'demo.MOCK-ONLY = one\n' > "$WORK/scripts/impl_maturity_baseline.txt"
 run 2 "malformed baseline is a config error" "needs .crate.LABEL=<count>"
 
+# 5. a phrase that only *narrates* an absent design must NOT be scored.
+#    The line below embeds the marker (wei-shi-xian) inside "cong-wei-shi-xian"
+#    ("was never implemented"), which ADR-223 D4 added to NEGATION. Written with
+#    raw UTF-8 byte escapes so this script stays ASCII on disk.
+cat > "$WORK/crates/demo/src/lib.rs" <<RS
+//! demo crate
+//! DynamicEventRouter: $(printf '\xe4\xbb\x8e\xe6\x9c\xaa\xe5\xae\x9e\xe7\x8e\xb0'), ADR-173 frozen
+#![forbid(unsafe_code)]
+pub fn f() {}
+RS
+printf '' > "$WORK/scripts/impl_maturity_baseline.txt"
+run 0 "a negated WIP phrase is refuted, not scored" ""
+
 if [ "$fail" = 0 ]; then
-  echo "[OK] all four ratchet behaviours observed on the real scan path"
+  echo "[OK] all five ratchet behaviours observed on the real scan path"
   exit 0
 fi
 echo "[FAIL] at least one assertion did not hold -- the gate is not trustworthy"
