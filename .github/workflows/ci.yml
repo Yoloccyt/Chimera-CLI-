@@ -162,6 +162,10 @@ jobs:
           python3 scripts/check_l0a_sibling_assembly.py --selftest
           python3 scripts/check_l0a_sibling_assembly.py
 
+      - name: L0-B dependency surface ratchet (G-131)
+        run: |
+          python3 scripts/check_l0b_dep_surface.py --selftest
+          python3 scripts/check_l0b_dep_surface.py
 
       # WHY: 加速器/推理栈排除门(ADR-195 V1/D5)——把"零 GPU 依赖"从一次性人工核对升为
       # 机器判据。当前排除靠 feature 非激活而非结构隔离:nmc-encoder 直接依赖

@@ -1441,3 +1441,29 @@ test_kind = "cross_crate"
 note = "断言数以 --selftest 自报，本行不抄数。全部断言走生产同一 judge()/collect_edges()/parse_ledger()，禁测试专用副本；代表性形态非穷尽：①dev-dependency 不得算装配边 ②umbrella facade 边必须被记录 ③clean 夹具绿 ④缺边必判 NEW 且点名两侧 ⑤多边必判 STALE 且点名两侧 ⑥重复台账行退 2 ⑦畸形行退 2 ⑧空目录（盲扫）退 2 ⑨roster 非 umbrella+6 退 2。任一断言不成立⇒退 1。"
 
 # ============================================================
+
+# ============================================================
+# G-131/G-132 -- L0-B external dependency surface (ADR-223 D1)
+# ------------------------------------------------------------
+# 为什么需要：ADR-222 D3 给 L0-B 的是"较宽门"，R8-1 当时以"避免门膨胀"为由
+# 未设冻结门；R9 之后 event-bus 分片新增 without_sharding/request_drain，依赖面
+# 需要机器陈述。本门只锁外部依赖台账（约十条级），不锁 event-bus 的 281 个
+# pub fn（后者登记为后续可选轴）。workspace 内部边的方向仍归 G-125，不重复判。
+# ============================================================
+[[gate]]
+id = "G-131"
+spec_ref = "ADR-223 D1（L0-B 依赖面 only-decrease；反转 R8-1 的不设门决定）"
+cmd = "{python} scripts/check_l0b_dep_surface.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "L0-B 外部依赖面棘轮。口径：nexus-core / event-bus / nexus-telemetry 的 [dependencies] + [build-dependencies] + target 专属 dependencies/build-dependencies；dev-dependencies 不计（与 G-125 同边界）；workspace 内部边被排除（方向归 G-125，避免一事两判）。判据：only-decrease（NEW 外部依赖红并须另立 ADR / STALE 红）；畸形或重复行、L0-B crate 缺失、外部行数低于地板均退 2。台账 scripts/l0b_dep_freeze.txt 由 --emit 生成。轴分工：本门只锁外部依赖面，L0-B public fn 面不在本门辖区（后续可选轴）。"
+
+[[gate]]
+id = "G-132"
+spec_ref = "G-131 配套（门自身有牙，沿 G-120/G-122/G-124/G-126/G-128/G-130 先例）"
+cmd = "{python} scripts/check_l0b_dep_surface.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "断言数以 --selftest 自报，本行不抄数。全部断言走生产同一 judge()/collect_edges()/parse_ledger()；代表性形态非穷尽：①dev-dependency 被排除 ②workspace 内部边被排除 ③build-dependency 被计入 ④target 专属依赖被计入 ⑤三个 L0-B crate 均被扫描 ⑥clean 夹具绿 ⑦缺行判 NEW 并点名 ⑧多行判 STALE 并点名 ⑨重复行退 2 ⑩畸形行退 2 ⑪任一 L0-B crate 缺失退 2。任一断言不成立⇒退 1。"
