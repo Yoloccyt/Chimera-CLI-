@@ -831,6 +831,15 @@ impl EventBus {
         }
     }
 
+    /// 解析 `CHIMERA_BUS_SHARDS` 覆盖值（严格：仅 `1..=256` 的整数）。
+    ///
+    /// WHY 抽纯函数：可无环境变量竞态地锁定「非法值 = 未设置」语义；
+    /// 同时避免只判存在性导致误配置绕过宿主策略。
+    fn resolve_shard_override(raw: Option<&str>) -> Option<usize> {
+        raw.and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| (1..=256).contains(n))
+    }
+
     /// 启用分片并把结果显式化（ADR-197 A3）
     ///
     /// WHY 统一入口而不是各 crate 各自 `let _ =`：全仓 10 处调用点分布在 9 个 crate，
@@ -849,9 +858,24 @@ impl EventBus {
         // D1：组合根经 `without_sharding()` 屏蔽 leaf opt-in 时，此处早退（不 spawn
         // worker），除非运维经 `CHIMERA_BUS_SHARDS` 显式覆盖（A/B 与故障排查逃生）。
         // 显式 `enable_sharding(n)` 不受本开关影响（测试/宿主强制仍可用）。
-        if !self.sharding_allowed.load(Ordering::Relaxed)
-            && std::env::var_os("CHIMERA_BUS_SHARDS").is_none()
-        {
+        //
+        // P2-5：**先严格解析再判策略**。旧实现只判 `var_os(..).is_none()`，  
+        // `CHIMERA_BUS_SHARDS=abc` 会绕过宿主策略且 `parse` 失败回退 64 分片，  
+        // 把 one-shot（Off）命令推到 Auto 档。非法值按「未设置」处理并告警一次。
+        let raw_env = std::env::var("CHIMERA_BUS_SHARDS").ok();
+        let env_shards = Self::resolve_shard_override(raw_env.as_deref());
+        if raw_env.is_some() && env_shards.is_none() {
+            static ENV_WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !ENV_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    component,
+                    value = %raw_env.as_deref().unwrap_or_default(),
+                    "CHIMERA_BUS_SHARDS 非法（需 1..=256 的整数），按未设置处理"
+                );
+            }
+        }
+        if !self.sharding_allowed.load(Ordering::Relaxed) && env_shards.is_none() {
             tracing::debug!(
                 component,
                 "分片被宿主策略关闭(without_sharding)，跳过 opt-in"
@@ -861,20 +885,19 @@ impl EventBus {
         // T3.4：默认分片数不变（64）；`CHIMERA_BUS_SHARDS` 仅作为调优开关，
         // 合法范围 1..=256（0 会在 ShardedEventBus::new 内回退 1，但这里显式拒绝，
         // 避免“设 0 却悄悄变单片”的误配置）。
-        let shards = std::env::var("CHIMERA_BUS_SHARDS")
-            .ok()
-            .and_then(|v| v.parse::<usize>().ok())
-            .filter(|n| (1..=256).contains(n))
-            .unwrap_or(crate::shard::DEFAULT_SHARD_COUNT);
+        let shards = env_shards.unwrap_or(crate::shard::DEFAULT_SHARD_COUNT);
         match self.enable_sharding(shards) {
             Ok(()) => {
                 tracing::debug!(component, shards, "事件分片已启用");
                 true
             }
             Err(EventBusError::ShardingAlreadyEnabled) => {
-                // 幂等重复启用：分片事实上已可用，不得记为降级
-                tracing::debug!(component, "事件分片已处于启用态（幂等）");
-                true
+                // P2-4：诚实返回——重复 enable 且分片仍在 → true；但
+                // `shutdown_sharding` 后 `shard_bus=None` 而 guard 已 set（无法重启用），
+                // 此时必须返回 false，不得谎报「分片可用」。
+                let enabled = self.sharding_enabled();
+                tracing::debug!(component, enabled, "事件分片已处于启用态（幂等）");
+                enabled
             }
             Err(e) => {
                 static WARNED_ONCE: std::sync::atomic::AtomicBool =
@@ -3349,6 +3372,34 @@ mod tests {
                 received.len()
             );
         }
+    }
+
+    /// P2-5：`CHIMERA_BUS_SHARDS` 严格解析——非法值等同未设置，
+    /// 不得绕过 `without_sharding()` 宿主角色的 Off 策略。
+    #[test]
+    fn env_shard_override_parsing_is_strict() {
+        assert_eq!(EventBus::resolve_shard_override(Some("1")), Some(1));
+        assert_eq!(EventBus::resolve_shard_override(Some("8")), Some(8));
+        assert_eq!(EventBus::resolve_shard_override(Some("256")), Some(256));
+        assert_eq!(EventBus::resolve_shard_override(Some("0")), None);
+        assert_eq!(EventBus::resolve_shard_override(Some("257")), None);
+        assert_eq!(EventBus::resolve_shard_override(Some("abc")), None);
+        assert_eq!(EventBus::resolve_shard_override(Some("")), None);
+        assert_eq!(EventBus::resolve_shard_override(None), None);
+    }
+
+    /// P2-4：`shutdown_sharding` 后 `shard_bus=None` 但 guard 已 set（无法重启），
+    /// `try_enable_sharding` 必须诚实返回 false，不得谎报「分片可用」。
+    #[tokio::test]
+    async fn try_enable_after_shutdown_reports_false() {
+        let bus = EventBus::new();
+        assert!(bus.try_enable_sharding("test"), "首次启用应成功");
+        bus.shutdown_sharding().await;
+        assert!(!bus.sharding_enabled(), "shutdown 后分片应为关闭态");
+        assert!(
+            !bus.try_enable_sharding("test"),
+            "shutdown 后不得谎报分片可用（guard 已 set，无法重启用）"
+        );
     }
 
     #[tokio::test]
