@@ -606,7 +606,9 @@ async fn pipeline_snapshot_includes_net_rate_history() {
     let pipeline = DataPipeline::new(subscriber, test_config());
 
     // 轮询等待 ≥3 个重 tick(50ms tick;无事件唤醒时全部为定时重 tick)
-    let deadline = Instant::now() + Duration::from_secs(3);
+    // 10s 只当「流水线真的挂死」的看门狗（断言强度不变）：全量 nextest 并行
+    // （1764 用例/多 test binary）下 runtime 可被饥饿 >3s，旧 3s 窗口会假红。
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         let snap = pipeline.snapshot();
         if snap.net_rx_history.len() >= 3 {
