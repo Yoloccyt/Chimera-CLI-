@@ -351,8 +351,9 @@ pub async fn execute_with_ctx(
     // 后台任务,避免 orphan task(§4.4 反模式 #7)。
     let run_result = app.run().context("TUI 运行失败");
 
-    // 统一中止上游后台任务（控制订阅者/编排器/握手/Action 编排）;
-    // EventBus 仍由 pipeline 等持有，不会提前关闭。
+    // 中止受管的四个后台句柄（控制订阅者/编排器/握手/Action 编排）；
+    // `_quest_loop`/`_ambient_handle` 未纳入 RuntimeHandles，持有至函数结束
+    // （TUI 后即进程终止，属进程 teardown 语义；若未来 TUI 可重入需纳入 abort 集）。
     handles.abort_all();
 
     // 中止并清理数据管道后台任务。

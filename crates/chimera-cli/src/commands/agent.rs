@@ -187,8 +187,10 @@ async fn spawn_agent(
     parallel: bool,
     json: bool,
 ) -> Result<()> {
-    // 1. 验证象限参数(Q1-Q4 或完整名称)
-    let _quadrant = parse_quadrant(quadrant)?;
+    // 1. 验证并**规范化**象限参数(Q1-Q4 或完整名称)
+    // WHY 不只校验：`q1` 等非规范写法如只用于校验会被丢弃到 payload，
+    // 下游按字符串匹配象限时行为不一致（P3-3）。
+    let quadrant = parse_quadrant(quadrant)?.name();
 
     // 2. 构造 AgentTask(Simple=1 agent,Medium=2 agents 并行)
     // WHY 使用 parallel 决定复杂度:parallel=true 时创建 2 个并行 Agent
@@ -470,5 +472,21 @@ mod tests {
         execute(&AgentAction::List, &config, true, false, &perm, false)
             .await
             .expect("wrapper 正常路径应成功");
+    }
+
+    /// P3-3：象限参数必须被**规范化**后再输出（`q1` 与 `Implementation` 同义）。
+    #[test]
+    fn quadrant_names_are_canonical() {
+        assert_eq!(
+            parse_quadrant("q1").expect("q1 应合法").name(),
+            "Implementation"
+        );
+        assert_eq!(
+            parse_quadrant("Implementation")
+                .expect("完整名称应合法")
+                .name(),
+            "Implementation"
+        );
+        assert!(parse_quadrant("q9").is_err(), "非法象限必须报错");
     }
 }

@@ -364,38 +364,43 @@ impl McpMesh {
         // WHY 逐个参与者串行重试而非并发重试:并发重试需要复杂的状态机跟踪每个参与者的
         // 重试次数,且 prepare 阶段允许部分慢参与者。这里采用并发首次 + 失败者串行重试
         // 的混合策略:首次并发 fanout,失败的参与者按指数退避串行重试。
-        let mut futures: FuturesUnordered<_> = tx
-            .participant_servers
-            .iter()
-            .map(|sid| {
-                let sid = sid.clone();
-                async move {
-                    let server =
-                        self.registry
-                            .get(&sid)
-                            .ok_or_else(|| McpError::ServerNotFound {
-                                server_id: sid.clone(),
+        let mut futures: FuturesUnordered<_> =
+            tx.participant_servers
+                .iter()
+                .map(|sid| {
+                    let sid = sid.clone();
+                    async move {
+                        let sid_for_result = sid.clone();
+                        let result = async {
+                            let server = self.registry.get(&sid).ok_or_else(|| {
+                                McpError::ServerNotFound {
+                                    server_id: sid.clone(),
+                                }
                             })?;
-                    self.participant_client
-                        .prepare(&server, &tx.transaction_id, op)
-                        .await
-                        .map(|_| sid.clone())
-                }
-            })
-            .collect();
+                            self.participant_client
+                                .prepare(&server, &tx.transaction_id, op)
+                                .await
+                        }
+                        .await;
+                        // 错误必须携带真实 sid（P3-4）：旧实现 `map(|_| sid.clone())`
+                        // 在 Err 时丢掉 sid，调用方只能 `find(|(_, _)| true)` 恒取首错。
+                        (sid_for_result, result)
+                    }
+                })
+                .collect();
 
         // 收集首次失败的参与者(网络错误才重试;Nack 协议错误直接放弃)
         let mut failed_participants: Vec<(String, McpError)> = Vec::new();
-        while let Some(result) = futures.next().await {
+        while let Some((sid, result)) = futures.next().await {
             match result {
-                Ok(sid) => acked.push(sid),
+                Ok(()) => acked.push(sid),
                 Err(e) => {
                     // ProtocolError(Nack)不重试 — 参与者明确拒绝,重试无意义
                     if matches!(e, McpError::ProtocolError { .. }) {
                         return Err(e);
                     }
-                    // NetworkError 收集后重试
-                    failed_participants.push((String::new(), e)); // sid 在下面填回
+                    // NetworkError 收集后重试（携带真实 sid）
+                    failed_participants.push((sid, e));
                 }
             }
         }
@@ -413,7 +418,7 @@ impl McpMesh {
         for sid in failed_sids {
             let mut last_err = failed_participants
                 .iter()
-                .find(|(_, _)| true)
+                .find(|(s, _)| s == &sid)
                 .map(|(_, e)| e.clone())
                 .unwrap_or_else(|| McpError::NetworkError {
                     server_id: sid.clone(),
