@@ -114,10 +114,18 @@ impl ChimeraCliError {
     pub fn exit_code_for(&self, profile: ExitProfile) -> u8 {
         match profile {
             ExitProfile::Global => self.exit_code_value(),
+            // 逐变体穷尽（**不得**用 `_ =>` 兜底）：新增错误变体时，本 match 与
+            // `exit_code_value` 会**同时**编译失败，强制同时决定两档映射。
+            // WI-02 四类语义：2 审批拒绝 / 3 引擎故障 / 4 其余（含工具超时）；
+            // 未列出的变体归 4 是**明确列举**而非静默默认。
             ExitProfile::Exec => match self {
                 Self::PermissionDenied(_) => 2,
                 Self::EngineError(_) => 3,
-                _ => 4,
+                Self::NotImplemented(_)
+                | Self::ConfigError(_)
+                | Self::UserCancelled
+                | Self::Timeout(_)
+                | Self::IoError(_) => 4,
             },
         }
     }
