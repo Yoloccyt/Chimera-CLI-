@@ -132,6 +132,14 @@ fn main() -> std::process::ExitCode {
             }
         }
     } else {
+        // D5 性能路径仍跳过 14 段全量解析，但 `--config` 的**路径合法性**
+        // 必须与需要配置的命令一致（P2-6）：否则 `--config ../escape.yaml help`
+        // 会静默 exit 0，使「拒绝 `..` 穿越」只在部分命令上成立。
+        // 只调 `resolve_config_path`（不建 Figment、不读 YAML），保留免解析收益。
+        if let Err(e) = config::resolve_config_path(cli.config.clone()) {
+            tracing::error!(error = %e, "配置路径校验失败");
+            return exit_with(&cli, ChimeraCliError::ConfigError(e.to_string()).into());
+        }
         ChimeraConfig::default()
     };
     if need_full_config {

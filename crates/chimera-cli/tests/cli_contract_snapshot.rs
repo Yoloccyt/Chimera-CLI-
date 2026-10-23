@@ -337,3 +337,70 @@ fn cli_contract_snapshot() {
         failures.join("\n")
     );
 }
+
+/// P2-6：`--config` 的路径合法性必须与命令类无关。
+///
+/// 修复前：`help` 属 NoContext（不加载配置）→ `--config ../escape.yaml help` 静默 exit 0，
+/// 与 `config show` 的 exit 1 形成矛盾；修复后：main 对 NoContext 也做轻量路径校验。
+#[test]
+fn help_with_traversal_config_exits_1() {
+    let home = TempDir::new().expect("创建隔离 HOME 目录失败");
+    let output = command(
+        home.path(),
+        &[
+            "--no-banner",
+            "--no-color",
+            "--config",
+            "../escape.yaml",
+            "help",
+        ],
+    )
+    .output()
+    .expect("启动 chimera 失败");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "`--config ../escape.yaml help` 必须 exit 1（与 config show 一致）"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ConfigError"),
+        "stderr 应含 ConfigError，实际: {stderr}"
+    );
+}
+
+/// P2-6：`--config` 指向**内容非法**的 YAML 时，需要配置的命令仍须 exit 1
+/// （ADR-060 user_error），补上黑盒进程级契约。
+#[test]
+fn config_show_rejects_malformed_yaml() {
+    let home = TempDir::new().expect("创建隔离 HOME 目录失败");
+    let bad = home.path().join("bad.yaml");
+    std::fs::write(&bad, "nexus: [broken\n").expect("写入坏配置失败");
+    let bad_str = bad.to_str().expect("临时路径应为 UTF-8");
+
+    let output = command(
+        home.path(),
+        &[
+            "--no-banner",
+            "--no-color",
+            "--config",
+            bad_str,
+            "config",
+            "show",
+        ],
+    )
+    .output()
+    .expect("启动 chimera 失败");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "坏 YAML 必须 exit 1（ConfigError 契约）"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ConfigError"),
+        "stderr 应含 ConfigError，实际: {stderr}"
+    );
+}
