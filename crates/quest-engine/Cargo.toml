@@ -40,9 +40,6 @@ hex = { workspace = true }
 tempfile = { workspace = true }
 # repo-wiki:L5 知识沉淀，端到端集成测试需验证 Quest 结果可生成 Wiki 条目
 repo-wiki = { workspace = true }
-# nexus-contracts:L0 契约，同时为生产依赖 (BudgetTier,ADR-054 决策 3) 与
-# 测试用类型来源(MCA ThinkingPreference,RoutingRequest 字段);tests/ 目录使用
-nexus-contracts = { workspace = true }
 # criterion:基准测试框架,用于 TTG 模式选择延迟基准(SubTask 35.6)
 criterion = { workspace = true }
 # proptest:属性测试框架,用于 TTG 不变量验证(SubTask 37.7)

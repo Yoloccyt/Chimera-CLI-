@@ -201,4 +201,14 @@ nexus-contracts|nexus-contracts-memory   # L0-A -> L0-A, same layer 0; umbrella 
 nexus-contracts-memory|nexus-contracts-core  # L0-A -> L0-A; measured edge from the module dependency DAG: memory/token_evidence -> core_domain/{checkpoint,graph_identity}, memory/memory_pyramid needs nothing from core. ADR-222 D2 lists memory -> core/mca/seams.
 nexus-contracts-memory|nexus-contracts-mca   # L0-A -> L0-A; memory/experience_card -> mca/omni_message (TokenUsage), ADR-222 D2 DAG.
 nexus-contracts-memory|nexus-contracts-seams # L0-A -> L0-A; memory/memory_pyramid -> seams/rl_hooks (RLActionVector/RLStateVector), ADR-222 D2 DAG.
+# --- registered 2026-10-25: M21 (l0l10-r1 C-08) pre-existing production edges
+# that --emit never emitted: both crates ALSO re-declared the dep in
+# [dev-dependencies], and parse_declared's last-write-wins classified the
+# production entry as dev-only, so the edge was invisible to G-32/33 (this
+# file) and G-75/76 alike. Both are REAL production edges (src references
+# below) and lawful downward L(N)->L(0) edges (ADR-033). The redundant
+# [dev-dependencies] re-declarations were removed in the same commit; they
+# bought nothing because tests/benches already see [dependencies].
+pvl-layer|nexus-contracts      # L7->L0 down; production edge since Phase 7 s12.1 (pvl-layer/Cargo.toml [dependencies]); src refs: card_generator.rs / dynamic_depth.rs / segment_validation.rs / trajectory_score.rs (ExperienceCard / ExecutionStatus / ErrorSignature contract types)
+quest-engine|nexus-contracts   # L9->L0 down; BudgetTier type source after the ADR-054 decision-3 lift (quest-engine/Cargo.toml [dependencies]); src refs: ttg.rs / arbitration.rs / checkpoint.rs / engine.rs / long_task_map.rs / long_term_credit.rs / search_tree.rs
 

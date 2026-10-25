@@ -49,8 +49,6 @@ tokio-test = { workspace = true }
 # JSON 序列化测试(config.rs serde 往返测试)
 serde_json = { workspace = true }
 # P9-T2: 测试等待缩放工具(CHIMERA_TEST_TIMEOUT_SCALE 协议)
-# Phase 7: nexus-contracts 已提升为正式依赖(dev-dep 条目保留供测试目标直接使用)
-nexus-contracts = { workspace = true }
 
 # 性能基准配置:harness=false 以使用 criterion 自定义 main
 [[bench]]

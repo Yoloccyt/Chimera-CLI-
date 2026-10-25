@@ -43,6 +43,7 @@ import argparse
 import os
 import re
 import sys
+import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CRATES = os.path.join(ROOT, "crates")
@@ -86,9 +87,26 @@ def parse_declared(manifest_path):
 
     Inline tables ([dependencies.foo]) are normalised to the section they live
     under so they are classified the same as section-body declarations.
+
+    Production-section-first (M21 / l0l10-r1 C-08): a key already classified
+    as `[dependencies]` is never downgraded by a LATER dev/build declaration
+    of the same key. Dual-section declarations (dep listed in [dependencies]
+    AND re-declared in [dev-dependencies], e.g. pvl-layer/quest-engine ->
+    nexus-contracts) used to end up classified dev-only via last-write-wins,
+    hiding real production edges from every consumer of this parser (E-a gate,
+    G-32/33 edge freeze, G-75/76 ratchet). The dev re-declaration is redundant
+    in Cargo semantics anyway: tests/benches already see [dependencies].
     """
     declared = {}
     section = None
+
+    def classify(key, eff):
+        # Production classification is sticky: a dev/build re-declaration of
+        # a key already known to be a production dep must not shadow it.
+        if declared.get(key) == DEP_SECTION and eff != DEP_SECTION:
+            return
+        declared[key] = eff
+
     with open(manifest_path, encoding="utf-8-sig", errors="ignore") as fh:
         for raw in fh:
             line = raw.split("#", 1)[0].strip()
@@ -99,7 +117,7 @@ def parse_declared(manifest_path):
                 head = sec.split(".")[0]
                 if "." in sec and head in (DEP_SECTION,) + DEV_SECTIONS:
                     section = head
-                    declared[sec.split(".", 1)[1].strip('"')] = head
+                    classify(sec.split(".", 1)[1].strip('"'), head)
                 elif sec in (DEP_SECTION,) + DEV_SECTIONS:
                     section = sec
                 elif sec.startswith("target."):
@@ -118,7 +136,7 @@ def parse_declared(manifest_path):
                 eff = section
             m = re.match(r'^"?([A-Za-z0-9_\-]+)"?\s*=', line)
             if m:
-                declared[m.group(1)] = eff
+                classify(m.group(1), eff)
     return declared
 
 
@@ -260,6 +278,47 @@ def selftest():
         if got != expected:
             print("[SELFTEST] mismatch for %r: expected %s got %s" % (line, expected, got))
             ok = False
+    # declaration parsing: production-section-first on dual-section manifests
+    # (M21 / l0l10-r1 C-08): a dep declared in [dependencies] AND re-declared
+    # in [dev-dependencies] (section body OR inline table) must keep the
+    # production classification -- last-write-wins used to downgrade it to
+    # dev-only, hiding the production edge from every gate importing this
+    # parser (E-a, G-32/33 freeze, G-75/76 ratchet).
+    dual_manifest = (
+        "[package]\n"
+        'name = "dual"\n'
+        "\n"
+        "[dependencies]\n"
+        "nexus-contracts = { workspace = true }\n"
+        "\n"
+        "[dependencies.inline-prod]\n"
+        "workspace = true\n"
+        "\n"
+        "[dev-dependencies]\n"
+        "nexus-contracts = { workspace = true }\n"
+        "criterion = { workspace = true }\n"
+        "\n"
+        "[dev-dependencies.inline-prod]\n"
+        "workspace = true\n"
+        "\n"
+        "[dev-dependencies.nexus-core]\n"
+        "workspace = true\n"
+    )
+    with tempfile.TemporaryDirectory() as td:
+        mp = os.path.join(td, "Cargo.toml")
+        with open(mp, "w", encoding="utf-8") as fh:
+            fh.write(dual_manifest)
+        dual = parse_declared(mp)
+    for key in ("nexus-contracts", "inline-prod"):
+        if dual.get(key) != DEP_SECTION:
+            print("[SELFTEST] dual-section dep %r classified %r, expected %r"
+                  % (key, dual.get(key), DEP_SECTION))
+            ok = False
+    for key in ("criterion", "nexus-core"):
+        if dual.get(key) != "dev-dependencies":
+            print("[SELFTEST] dev-only dep %r classified %r, expected 'dev-dependencies'"
+                  % (key, dual.get(key)))
+            ok = False
     # declaration parsing: section classification + inline table normalisation
     ok = ok and DEP_SECTION == "dependencies" and DEV_SECTIONS == ("dev-dependencies", "build-dependencies")
     if not ok:
@@ -267,6 +326,8 @@ def selftest():
     print("[SELFTEST] all constructed cases classified correctly:")
     print("           usage: 4 true positives / 5 noise classes suppressed "
           "(comment/string/doc/ident-shadow)")
+    print("           parse: dual-section declarations keep production class "
+          "(body + inline), dev-only stays dev")
     return 0
 
 
