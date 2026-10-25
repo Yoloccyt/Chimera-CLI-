@@ -423,7 +423,11 @@ pub(crate) fn compute_decision_hash(proposal: &Proposal, opinions: &[Opinion]) -
 /// 发布共识达成事件(Critical 级)
 ///
 /// WHY Critical:ConsensusReached 事件丢失会导致 GSOE/AutoDPO
-/// 无法消费共识结果(§2.2 依赖铁律),必须标注 Critical 确保投递
+/// 无法消费共识结果(§2.2 依赖铁律)。历史例外:4 个广播专属
+/// Critical 之一(registry.rs 双清单),投递保障不来自 mpsc——
+/// 本事件走 broadcast 通道(publish().await,非 mpsc 旁路),
+/// 订阅方 Lagged 时仍可能丢失;纳入 mpsc 旁路属双清单变更,
+/// 须另立 ADR(G-117/118 约束)。
 pub async fn publish_consensus_event(
     event_bus: &EventBus,
     quest_id: &str,
