@@ -4,8 +4,9 @@
 //! 对应任务: **P2-T7**（手册 W10-12 并行窗口）
 //!
 //! # 四后端三档（v4.0 WI-14 + ADR-001 先例）
-//! 后端优先级降级链：Seatbelt（macOS）→ Landlock+seccomp（Linux）→
-//! bwrap（bubblewrap 容器）→ ProcessFence（进程级兜底）。
+//! 后端优先级降级链按 target_os 拆分（C-20）：macOS 首选 Seatbelt（sandbox-exec）；
+//! Linux 首选 Landlock+seccomp → bwrap（bubblewrap 容器）；其余平台 bwrap →
+//! ProcessFence；ProcessFence（进程级兜底）为全平台链尾兜底。
 //! Windows 平台实现 ProcessFence（命令校验 + 子进程隔离近似）；
 //! Landlock/Seatbelt/bwrap 为平台 cfg 占位（Linux/macOS CI 承接完整能力）。
 //!
@@ -46,6 +47,52 @@ pub enum OsBackend {
     ProcessFence,
 }
 
+/// 平台族 — target_os 判定的可测试投影（C-20）
+///
+/// WHY 私有枚举而非散落 cfg：`available()` 原非 Windows 分支无平台检测，
+/// 把 Seatbelt（macOS 专属）排在 Linux 链首位——`select()` 会做出潜伏的
+/// 错误平台选择。将 cfg 收敛到 `current()` 单点、链构造交给纯函数
+/// [`OsBackend::for_platform`]，跨平台排序可在任意宿主上以注入方式单测。
+///
+/// WHY `#[allow(dead_code)]`：单宿主非测试构建只构造 `current()` 的 cfg
+/// 激活变体（如 Windows 宿主仅 `Windows`），其余变体由跨平台单测构造——
+/// 这是平台投影枚举的固有形态，非死码。
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum PlatformFamily {
+    /// macOS（Seatbelt/sandbox-exec 原生）
+    MacOs,
+    /// Linux（Landlock+seccomp / bwrap）
+    Linux,
+    /// Windows（仅进程围栏，无 OS 级沙箱 API 接线）
+    Windows,
+    /// 其余平台（BSD 等：不承诺平台专属后端，bwrap → ProcessFence）
+    Other,
+}
+
+impl PlatformFamily {
+    /// 编译期平台检测（每平台恰好一个 cfg 臂激活）
+    #[cfg(target_os = "macos")]
+    fn current() -> Self {
+        Self::MacOs
+    }
+
+    #[cfg(target_os = "linux")]
+    fn current() -> Self {
+        Self::Linux
+    }
+
+    #[cfg(target_os = "windows")]
+    fn current() -> Self {
+        Self::Windows
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    fn current() -> Self {
+        Self::Other
+    }
+}
+
 /// 三档模式（v4.0 WI-14）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SandboxMode {
@@ -58,25 +105,31 @@ pub enum SandboxMode {
 }
 
 impl OsBackend {
-    /// 平台可用后端列表（按优先级降序）
+    /// 平台可用后端列表（按优先级降序，按 target_os 拆分，C-20）
     ///
-    /// Windows：仅 ProcessFence（Job Object 由平台 API 承接，std 层校验先行）
-    #[cfg(target_os = "windows")]
+    /// Windows：仅 ProcessFence（Job Object 由平台 API 承接，std 层校验先行）；
+    /// macOS：首选 Seatbelt；Linux：首选 Landlock；其余平台：Bwrap → ProcessFence。
+    /// 各链均以 ProcessFence 收尾（全平台进程围栏兜底，ADR-001 降级链）。
     #[must_use]
     pub fn available() -> Vec<Self> {
-        vec![Self::ProcessFence]
+        Self::for_platform(PlatformFamily::current())
     }
 
-    /// 非 Windows：按优先级 Seatbelt → Landlock → Bwrap → ProcessFence
-    #[cfg(not(target_os = "windows"))]
+    /// 按平台族构造后端优先级链（纯函数，C-20 单测注入面）
+    ///
+    /// 平台专属后端只出现在所属平台链内（Seatbelt→macOS、Landlock→Linux），
+    /// 杜绝"Linux 首选 Seatbelt"一类跨平台错误选择。
     #[must_use]
-    pub fn available() -> Vec<Self> {
-        vec![
-            Self::Seatbelt,
-            Self::Landlock,
-            Self::Bwrap,
-            Self::ProcessFence,
-        ]
+    fn for_platform(family: PlatformFamily) -> Vec<Self> {
+        match family {
+            // Seatbelt（sandbox-exec）为 macOS 专属，不进其他平台链
+            PlatformFamily::MacOs => vec![Self::Seatbelt, Self::ProcessFence],
+            // Landlock+seccomp 为 Linux 专属；bwrap 容器兜底次之
+            PlatformFamily::Linux => vec![Self::Landlock, Self::Bwrap, Self::ProcessFence],
+            PlatformFamily::Windows => vec![Self::ProcessFence],
+            // 其余平台不承诺 Seatbelt/Landlock（平台专属能力），bwrap 可用则优先
+            PlatformFamily::Other => vec![Self::Bwrap, Self::ProcessFence],
+        }
     }
 
     /// 选择首个可用后端（降级链：None 表示全部不可用 → 调用方按 ADR-001
@@ -306,6 +359,50 @@ mod tests {
         assert!(OsBackend::select().is_some());
         // 全平台 ProcessFence 必须可用（兜底）
         assert!(backends.contains(&OsBackend::ProcessFence));
+    }
+
+    #[test]
+    fn available_per_platform_split() {
+        // C-20：按 target_os 拆分后的各平台链（注入断言，任意宿主可测）
+        // macOS 首选 Seatbelt，且不得混入 Linux 专属 Landlock
+        let mac = OsBackend::for_platform(PlatformFamily::MacOs);
+        assert_eq!(mac.first().copied(), Some(OsBackend::Seatbelt));
+        assert!(!mac.contains(&OsBackend::Landlock));
+        // Linux 首选 Landlock，且不得混入 macOS 专属 Seatbelt
+        let linux = OsBackend::for_platform(PlatformFamily::Linux);
+        assert_eq!(linux.first().copied(), Some(OsBackend::Landlock));
+        assert!(!linux.contains(&OsBackend::Seatbelt));
+        // 其余平台：Bwrap → ProcessFence，两个平台专属后端均不入选
+        let other = OsBackend::for_platform(PlatformFamily::Other);
+        assert_eq!(other, vec![OsBackend::Bwrap, OsBackend::ProcessFence]);
+        // Windows：仅 ProcessFence
+        let win = OsBackend::for_platform(PlatformFamily::Windows);
+        assert_eq!(win, vec![OsBackend::ProcessFence]);
+    }
+
+    #[test]
+    fn available_matches_current_platform_and_keeps_fallback_tail() {
+        // 不变式一：任何平台链都以 ProcessFence 收尾（全平台兜底，ADR-001）
+        for family in [
+            PlatformFamily::MacOs,
+            PlatformFamily::Linux,
+            PlatformFamily::Windows,
+            PlatformFamily::Other,
+        ] {
+            let chain = OsBackend::for_platform(family);
+            assert_eq!(
+                chain.last().copied(),
+                Some(OsBackend::ProcessFence),
+                "链尾 ProcessFence 兜底缺失: {family:?}"
+            );
+        }
+        // 不变式二：宿主实测 available() 与 cfg 检测的平台链一致，
+        // select() 恒取链首（降级链正确性）
+        assert_eq!(
+            OsBackend::available(),
+            OsBackend::for_platform(PlatformFamily::current())
+        );
+        assert_eq!(OsBackend::select(), OsBackend::available().first().copied());
     }
 
     #[test]
