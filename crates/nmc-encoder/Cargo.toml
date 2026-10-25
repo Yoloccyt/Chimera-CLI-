@@ -32,15 +32,15 @@ ndarray = { workspace = true }
 # 分词器: 为 TextPerceptor ONNX 推理提供 tokenizers 分词 (all-MiniLM-L6-v2)
 # WHY: tokenizers 0.21 在 Rust 生态中提供高性能 SentencePiece/BPE 分词，
 # 与 tract-onnx 纯 Rust 推理栈一致，支持 #![forbid(unsafe_code)]
-tokenizers = "0.21"
+tokenizers = { workspace = true }
 # Mel 频谱生成: 为 Whisper encoder 计算 log-mel 频谱
 # WHY: 当前 preprocess_audio 生成零填充占位张量，mel_spec 库提供纯 Rust
 # Mel 频谱计算，与 #![forbid(unsafe_code)] 哲学一致
-mel_spec = "0.4"
+mel_spec = { workspace = true }
 # WAV 音频解码: 解析 WAV 文件头部与 PCM 数据
 # WHY: 当前 preprocess_audio 无法生成非零 Mel 频谱，需要 hound 解码
 # WAV 文件为 f32 PCM 数据
-hound = "3.5"
+hound = { workspace = true }
 
 [dev-dependencies]
 # 属性测试框架(嵌入不变量验证)
