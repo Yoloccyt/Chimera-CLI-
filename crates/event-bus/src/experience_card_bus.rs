@@ -16,9 +16,10 @@
 //!
 //! # 设计约束
 //!
-//! - **不新增 NexusEvent 变体**: 卡片流为独立数据面（broadcast + mpsc），
-//!   遵循 ADR-065 决策 4 先例（流式数据面走 bounded mpsc 不进事件枚举），
-//!   避免 L1 多触点适配（registry.rs 单一声明点展开分类表）
+//! - **不新增 NexusEvent 变体**: 卡片流为独立数据面（broadcast + bounded mpsc），
+//!   遵循 ADR-065 决策 4（流式数据面走 bounded mpsc 不进事件枚举）；
+//!   Critical 旁路与 EventBus 同容量（[`CRITICAL_CHANNEL_CAPACITY`] = 4096），
+//!   满时采样丢弃计数，避免 L1 多触点适配（registry.rs 单一声明点展开分类表）
 //! - **无持锁跨 await**: 索引读写均为同步短临界区（DashMap 无锁并发读），
 //!   `publish` 为同步方法（broadcast send + mpsc send 均非阻塞）
 //! - **subscribe 先于 spawn**: `new()` 同步持有 receiver，防止事件静默丢失
@@ -34,6 +35,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::bus::CRITICAL_CHANNEL_CAPACITY;
 use dashmap::DashMap;
 use nexus_contracts::experience_card::{ExperienceCard, ThreeFactorScore};
 use tokio::sync::{broadcast, mpsc};
@@ -55,15 +57,16 @@ pub struct GlobalCardStats {
 /// 经验卡片总线 — 双通道分级投递 + 四索引快速检索
 ///
 /// `Clone` 派生（broadcast Sender + DashMap/Arc 语义），所有副本共享索引与通道。
-/// Critical 通道为 fan-out 模式（Arc<Mutex<Vec<Sender>>>，EventBus critical_tx 先例）：
+/// Critical 通道为 fan-out 模式（Arc<Mutex<Vec<mpsc::Sender>>>，与 EventBus
+/// `critical_tx` 同构：bounded Sender + 满载采样丢弃计数 + 差值单次 warn）：
 /// 每次 `subscribe_critical` 创建独立 channel，publish 时遍历投递，
 /// 确保高分卡片送达所有活跃订阅者。
 #[derive(Debug, Clone)]
 pub struct ExperienceCardBus {
     /// 中分卡片广播通道（0.5 < score ≤ 0.8）
     card_broadcast: broadcast::Sender<ExperienceCard>,
-    /// 高分卡片 Critical 旁路（score > 0.8，fan-out 确保送达）
-    card_critical: Arc<Mutex<Vec<mpsc::UnboundedSender<ExperienceCard>>>>,
+    /// 高分卡片 Critical 旁路（score > 0.8，fan-out；bounded 4096 防慢消费者 OOM）
+    card_critical: Arc<Mutex<Vec<mpsc::Sender<ExperienceCard>>>>,
     /// 索引 1: task_id → cards（任务级检索，Arc 共享——DashMap 深拷贝语义下
     /// Clone 副本必须共享索引，否则并发发布者写入的索引不可见）
     task_index: Arc<DashMap<Box<str>, Vec<ExperienceCard>>>,
@@ -77,6 +80,9 @@ pub struct ExperienceCardBus {
     total_cards: Arc<AtomicU64>,
     /// 已评估卡片数
     total_evaluated: Arc<AtomicU64>,
+    /// Critical 旁路满载采样丢弃计数（单调递增；与 EventBus
+    /// `critical_dropped_count` 同口径，供运维告警与饱和单测断言）
+    critical_dropped_count: Arc<AtomicU64>,
 }
 
 impl ExperienceCardBus {
@@ -95,6 +101,7 @@ impl ExperienceCardBus {
             error_index: Arc::new(DashMap::new()),
             total_cards: Arc::new(AtomicU64::new(0)),
             total_evaluated: Arc::new(AtomicU64::new(0)),
+            critical_dropped_count: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -131,9 +138,25 @@ impl ExperienceCardBus {
 
         // ---- 分级投递 ----
         if card.score > 0.8 {
-            // 高分走 Critical 旁路（fan-out，确保送达所有活跃订阅者）
+            // 高分走 Critical 旁路（fan-out）——try_send + 满载采样丢弃计数，
+            // 语义对齐 EventBus::send_critical_mpsc：Full 计数并保留 Sender
+            // （临时满载，下次可能成功）、Closed 移除（receiver 已 drop）；
+            // retain 闭包外按差值单次 warn，避免满载期日志刷屏。
+            let dropped_before = self.critical_dropped_count.load(Ordering::Relaxed);
             let mut criticals = self.card_critical.lock().unwrap_or_else(|e| e.into_inner());
-            criticals.retain(|tx| tx.send(card.clone()).is_ok());
+            criticals.retain(|tx| match tx.try_send(card.clone()) {
+                Ok(()) => true,
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    // WHY Relaxed: 统计指标非控制流信号（EventBus 同口径）
+                    self.critical_dropped_count.fetch_add(1, Ordering::Relaxed);
+                    true
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => false,
+            });
+            let dropped = self.critical_dropped_count.load(Ordering::Relaxed) - dropped_before;
+            if dropped > 0 {
+                tracing::warn!(dropped_count = dropped, "高分经验卡片被丢弃(Critical 订阅者通道满)");
+            }
         } else if card.score > 0.5 {
             // 中分走 broadcast（尽力投递，慢消费者可 Lagged）
             let _ = self.card_broadcast.send(card);
@@ -150,10 +173,12 @@ impl ExperienceCardBus {
 
     /// 订阅高分卡片 Critical 流（score > 0.8）
     ///
-    /// 返回 unbounded mpsc Receiver，高分卡片确保送达。
-    /// fan-out 模式：每次调用创建独立 channel（EventBus critical_tx 先例）。
-    pub fn subscribe_critical(&self) -> mpsc::UnboundedReceiver<ExperienceCard> {
-        let (tx, rx) = mpsc::unbounded_channel();
+    /// 返回 bounded mpsc Receiver（容量 [`CRITICAL_CHANNEL_CAPACITY`] = 4096，
+    /// 与 EventBus Critical 旁路同值）：通道满时发布方采样丢弃并计数
+    /// （见 [`ExperienceCardBus::critical_dropped_count`]），不阻塞发布热路径。
+    /// fan-out 模式：每次调用创建独立 channel（与 EventBus `critical_tx` 同构）。
+    pub fn subscribe_critical(&self) -> mpsc::Receiver<ExperienceCard> {
+        let (tx, rx) = mpsc::channel(CRITICAL_CHANNEL_CAPACITY);
         let mut criticals = self.card_critical.lock().unwrap_or_else(|e| e.into_inner());
         criticals.push(tx);
         rx
@@ -224,6 +249,14 @@ impl ExperienceCardBus {
     /// 广播通道容量（测试/运维监控）
     pub fn broadcast_capacity(&self) -> usize {
         CARD_BROADCAST_CAPACITY
+    }
+
+    /// Critical 旁路累计丢弃高分卡片数（满载采样丢弃，单调递增不重置）
+    ///
+    /// 与 EventBus::critical_dropped_count 同口径：供运维采样告警与
+    /// 饱和行为断言；WHY Relaxed：统计指标非控制流信号，无需强一致性。
+    pub fn critical_dropped_count(&self) -> u64 {
+        self.critical_dropped_count.load(Ordering::Relaxed)
     }
 }
 
@@ -450,6 +483,43 @@ mod tests {
         assert_eq!(bus.get_global_stats().total_cards, 400);
         // 任务索引分片正确
         assert_eq!(bus.get_cards_by_task("task-3").len(), 50);
+    }
+
+    // ---------- Critical 通道有界化（饱和丢弃，C-12/M05） ----------
+
+    #[test]
+    fn critical_channel_saturated_drops_and_counts() {
+        let bus = ExperienceCardBus::new();
+        // 订阅后不消费：receiver 保持存活（_rx_alive 不 drop），4096 容量占满
+        let _rx_alive = bus.subscribe_critical();
+        // 容量 + 64 张高分卡片：前 4096 进通道，后 64 张 Full 采样丢弃
+        for i in 0..(CRITICAL_CHANNEL_CAPACITY + 64) {
+            bus.publish(card(
+                &format!("sat-{i}"),
+                "t-sat",
+                0.9,
+                ExecutionStatus::Success,
+            ));
+        }
+        // 丢弃计数 = 溢出部分（满载丢弃留痕，不静默）
+        assert_eq!(bus.critical_dropped_count(), 64);
+        // 索引不受投递丢弃影响（降级路径仍保留审计面）
+        assert_eq!(
+            bus.get_cards_by_task("t-sat").len(),
+            CRITICAL_CHANNEL_CAPACITY + 64
+        );
+        assert_eq!(bus.get_global_stats().total_cards, CRITICAL_CHANNEL_CAPACITY as u64 + 64);
+    }
+
+    #[test]
+    fn critical_closed_receiver_not_counted_as_dropped() {
+        let bus = ExperienceCardBus::new();
+        {
+            let _rx = bus.subscribe_critical();
+        } // drop receiver → 后续 try_send 返回 Closed
+        bus.publish(card("c-closed", "t1", 0.9, ExecutionStatus::Success));
+        // Closed（无订阅者）与 Full（满载）语义区分：不计入丢弃计数
+        assert_eq!(bus.critical_dropped_count(), 0);
     }
 
     // ---------- 广播容量 ----------

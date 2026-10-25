@@ -326,7 +326,8 @@ fn spawn_card_persistence_subscriber(
         loop {
             // 两通道任意到达即持久化(Critical 高分卡不再丢失)
             // WHY 类型差异:broadcast 分流 recv 返回 Result(Lagged 可观测);
-            // Critical 分流为 mpsc::UnboundedReceiver,recv 返回 Option(None=关闭)。
+            // Critical 分流为 bounded mpsc::Receiver(容量 4096,满载时发布方
+            // 采样丢弃计数),recv 返回 Option(None=关闭)——消费端签名两态一致。
             let card = tokio::select! {
                 r = rx_broadcast.recv() => match r {
                     Ok(c) => c,
