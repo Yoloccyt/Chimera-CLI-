@@ -1467,3 +1467,34 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "断言数以 --selftest 自报，本行不抄数。全部断言走生产同一 judge()/collect_edges()/parse_ledger()；代表性形态非穷尽：①dev-dependency 被排除 ②workspace 内部边被排除 ③build-dependency 被计入 ④target 专属依赖被计入 ⑤三个 L0-B crate 均被扫描 ⑥clean 夹具绿 ⑦缺行判 NEW 并点名 ⑧多行判 STALE 并点名 ⑨重复行退 2 ⑩畸形行退 2 ⑪任一 L0-B crate 缺失退 2。任一断言不成立⇒退 1。"
+
+# ============================================================
+# G-133/G-134 -- 并行红线双源门（M15 三脱节收口）
+# ------------------------------------------------------------
+# 为什么需要：check_parallel_redlines.ps1 自 P1-T13 起就在盘上执行四条并行禁令
+# （禁自旋 / IO-on-rayon / rayon::join 多闭包 / 同步锁持锁跨 await），十六源手册
+# §5.3 红线 3（阻塞 IO 永不进 rayon）与 ADR-202 §4 I11 均把它当门禁判据引用，
+# 但 gate_manifest 与全部 workflow 零登记零调用——「手册有文、脚本在盘、门册无号」
+# 三脱节，判据载体不存在，「零命中是波次收口门禁」只能靠记性。本对门把 .ps1 入册
+# 为 Windows 权威执行体（G-134），补逐条等价的 .sh 形态接进 ci.yml check job
+# （G-133），沿 G-04/G-05 双源先例。两源判定逐条等价（含测试模块豁免口径与
+# R3 自原始行首个 "(" 起数逗号的计数口径），唯一差异是执行体（pwsh / bash+awk）。
+# ============================================================
+[[gate]]
+id = "G-133"
+spec_ref = "十六源手册 §5.3 红线 3（阻塞 IO 永不进 rayon）/ ADR-202 §4 I11"
+cmd = "bash scripts/check_parallel_redlines.sh"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "并行红线静态门（bash 形态，CI 接线）。四条禁令与 G-134(.ps1) 逐条等价：①禁自旋 wait_spin/spin_loop/yield_now（测试模块豁免）②spawn_compute 单行闭包内 .await ③rayon::join 多闭包 ④同步锁 .lock() 与 .await 同行；扫描面 = crates/*/src/**/*.rs，文件数由门自报。定位：静态近似的纪律扫描（精确保证靠既有测试与代码审查），零命中是波次收口门禁。"
+
+[[gate]]
+id = "G-134"
+spec_ref = "十六源手册 §5.3 红线 3（阻塞 IO 永不进 rayon）/ ADR-202 §4 I11"
+cmd = "pwsh -NoProfile -File scripts/check_parallel_redlines.ps1"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "并行红线静态门（PowerShell 权威执行体，P1-T13 原始载体）；与 G-133 逐条等价"
+ci_exempt = "CI 经 check_parallel_redlines.sh(G-133)执行;.ps1 是 Windows 权威执行体,CI(Linux)无 pwsh,故本机/收口跑"

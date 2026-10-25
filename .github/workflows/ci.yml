@@ -564,6 +564,16 @@ jobs:
       - name: Function-length audit scripts smoke test
         run: bash scripts/test_fnlen_smoke.sh
 
+      # WHY(M15/C-05): 并行红线静态门(G-133)——check_parallel_redlines.ps1(P1-T13)
+      # 自述「零命中是波次收口门禁」,十六源手册 §5.3 红线 3(阻塞 IO 永不进 rayon)与
+      # ADR-202 §4 I11 把它当门禁复测判据引用,但此前 gate_manifest 与全部 workflow
+      # 均零登记零调用(「手册有文、脚本在盘、门册无号」三脱节),判据载体不存在。
+      # 本步接入与 .ps1 逐条等价的 bash 形态(四条禁令:禁自旋/IO-on-rayon/
+      # rayon::join 多闭包/同步锁持锁跨 await);.ps1 仍为 Windows 权威执行体
+      # (G-134,沿 G-04/G-05 双源先例)。零 cargo、秒级。
+      - name: Parallel redlines static gate (G-133)
+        run: bash scripts/check_parallel_redlines.sh
+
       # WHY: ubuntu-latest 预装 stable 工具链;显式补齐 rustfmt/clippy 组件以防缺失。
       - name: Ensure rustfmt & clippy components
         run: rustup component add rustfmt clippy
