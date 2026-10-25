@@ -32,7 +32,7 @@
 //!
 //! | 子系统 | 规模 | 当前唯一引用面 |
 //! |---|---|---|
-//! | [`token_ledger`] | 约 0.6k 行 | 仅 chimera-tui 的跨目录漂移测 |
+//! | [`token_ledger`] | 约 0.6k 行 | 仅测试面：cmt-tiering 集成测类型消费（card_persistence_closed_loop_test）+ chimera-tui 漂移测仅事件名匹配（无类型/模块消费） |
 //! | [`segment_per`] | 约 0.4k 行 | 仅本 crate 测试 |
 //! | `membrane`（`MembraneFilter`） | 约 1k 行 | 仅本 crate bench |
 //! | `pattern_index`（`PatternIndex`） | 约 0.3k 行 | 仅本 crate bench |
