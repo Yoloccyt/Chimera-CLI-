@@ -30,6 +30,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use nexus_contracts::command_validation::{Command, CommandPolicy};
+use sha2::{Digest, Sha256};
 
 use crate::error::SecCoreError;
 use crate::policy::validate_command;
@@ -153,7 +154,9 @@ impl OsBackend {
 /// 决策级快照：恢复 = 用快照校验状态重建隔离上下文。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxSnapshot {
-    /// 策略指纹（命令白名单版本）
+    /// 策略指纹（白名单 + 阻断模式内容的 SHA-256 hex，见 [`hash_policy_content`]）
+    ///
+    /// 内容寻址：同策略恒同值、异策略必异值，跨进程/跨时间可比（C-21）。
     pub policy_fingerprint: Arc<str>,
     /// 校验状态计数（已放行/已拒绝）
     pub allowed_ops: u64,
@@ -287,10 +290,41 @@ fn is_escape_attempt(program: &str, args: &[String]) -> bool {
     false
 }
 
+/// 计算命令策略内容的 SHA-256 指纹（C-21，修复登记册 L09）
+///
+/// 哈希内容 = 排序后白名单 + 按序阻断模式（pattern/attack_type/description）。
+/// 替代旧 `format!("{:p}", Arc 指针)`——指针地址在 ASLR 下跨进程/跨时间不可比，
+/// 冒充"策略指纹"属语义性缺陷（全仓零消费点，无迁移面）。
+fn hash_policy_content(policy: &CommandPolicy) -> String {
+    // WHY 排序：allowed_commands 是 HashSet，迭代序不确定；
+    // 不排序则同一策略两次快照指纹漂移，破坏"同策略同指纹"语义
+    let mut allowed: Vec<&str> = policy.allowed_commands.iter().map(String::as_str).collect();
+    allowed.sort_unstable();
+
+    let mut hasher = Sha256::new();
+    for cmd in allowed {
+        hasher.update(b"allow\x00");
+        hasher.update(cmd.as_bytes());
+        hasher.update(b"\x00");
+    }
+    // 阻断模式保持 Vec 原序入哈希（检查顺序敏感，顺序本身即策略语义）；
+    // 字段以 \x00 分隔防拼接歧义（沿 audit.rs hash_command 先例）
+    for bp in &policy.blocked_patterns {
+        hasher.update(b"block\x00");
+        hasher.update(bp.pattern.as_bytes());
+        hasher.update(b"\x00");
+        hasher.update(format!("{:?}", bp.attack_type).as_bytes());
+        hasher.update(b"\x00");
+        hasher.update(bp.description.as_bytes());
+        hasher.update(b"\x00");
+    }
+    hex::encode(hasher.finalize())
+}
+
 impl SandboxProvider for ProcessFence {
     fn snapshot(&self) -> Result<SandboxSnapshot, SecCoreError> {
         Ok(SandboxSnapshot {
-            policy_fingerprint: Arc::from(format!("{:p}", self.policy.as_ref())),
+            policy_fingerprint: Arc::from(hash_policy_content(&self.policy)),
             allowed_ops: self.allowed_ops,
             denied_ops: self.denied_ops,
             taken_at_ms: std::time::SystemTime::now()
@@ -487,5 +521,68 @@ mod tests {
         let args = vec!["--help".to_string()];
         // 白名单外命令 → 策略拒绝或放行（依 default_secure 白名单），不得 panic
         let _ = f.check("unknown-cmd-xyz", &args);
+    }
+
+    #[test]
+    fn fingerprint_same_policy_same_value() {
+        // C-21：指纹来自策略内容而非 Arc 指针地址——
+        // 两次独立堆分配（地址不同）的相同策略必须产出相同指纹
+        let policy = CommandPolicy::default_secure();
+        let f1 = ProcessFence::new(Arc::new(policy.clone()), SandboxMode::Standard);
+        let f2 = ProcessFence::new(Arc::new(policy), SandboxMode::Standard);
+        let s1 = f1.snapshot().expect("快照1");
+        let s2 = f2.snapshot().expect("快照2");
+        // SHA-256 hex 编码恒 64 字符（内容寻址形态自检）
+        assert_eq!(s1.policy_fingerprint.len(), 64);
+        assert_eq!(
+            s1.policy_fingerprint, s2.policy_fingerprint,
+            "同策略必须同指纹（内容哈希，与分配地址无关）"
+        );
+    }
+
+    #[test]
+    fn fingerprint_independent_of_insertion_order() {
+        // HashSet 迭代序不确定：集合内容相同即同指纹（白名单排序后入哈希）
+        let a = CommandPolicy::new()
+            .allow_command("cat")
+            .allow_command("echo")
+            .allow_command("ls");
+        let b = CommandPolicy::new()
+            .allow_command("ls")
+            .allow_command("cat")
+            .allow_command("echo");
+        let fa = ProcessFence::new(Arc::new(a), SandboxMode::Standard);
+        let fb = ProcessFence::new(Arc::new(b), SandboxMode::Standard);
+        assert_eq!(
+            fa.snapshot().expect("快照a").policy_fingerprint,
+            fb.snapshot().expect("快照b").policy_fingerprint,
+            "白名单集合相同（插入序不同）必须同指纹"
+        );
+    }
+
+    #[test]
+    fn fingerprint_differs_for_different_policy() {
+        // C-21：异策略必异指纹——白名单增一条
+        let base = CommandPolicy::default_secure();
+        let f_base = ProcessFence::new(Arc::new(base.clone()), SandboxMode::Standard);
+        let extended = base.clone().allow_command("newcmd-for-fingerprint-test");
+        let f_ext = ProcessFence::new(Arc::new(extended), SandboxMode::Standard);
+        assert_ne!(
+            f_base.snapshot().expect("基线快照").policy_fingerprint,
+            f_ext.snapshot().expect("扩白名单快照").policy_fingerprint,
+            "白名单不同必须指纹不同"
+        );
+        // 阻断模式增一条（白名单不变）
+        let blocked = base.block_pattern(
+            "dangerous-fingerprint-marker",
+            nexus_contracts::command_validation::AttackType::Tamper,
+            "测试注入的拦截模式",
+        );
+        let f_blk = ProcessFence::new(Arc::new(blocked), SandboxMode::Standard);
+        assert_ne!(
+            f_base.snapshot().expect("基线快照2").policy_fingerprint,
+            f_blk.snapshot().expect("增拦截快照").policy_fingerprint,
+            "阻断模式不同必须指纹不同"
+        );
     }
 }
