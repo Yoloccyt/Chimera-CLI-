@@ -12,7 +12,20 @@
 //! 洪峰）+ 每任务超时（防单任务卡死）+ 结果保序（槽位写入，输入序输出）。
 //!
 //! 与 ComputeBridge（L-a rayon）分工：LLM 类调用 → 本模块；纯计算 → L-a。
-//! 门禁：PVL 吞吐 2×【待验证】——并发度默认 4（LLM 限流保守值，配置可调）。
+//! 性能主张【待验证】未闭环：benches/produce_verify.rs 无 2× 对比断言、
+//! tests/concurrent.rs 走 mpsc 流水线不经本模块（登记 ADR-224）——
+//! 并发度默认 4（LLM 限流保守值，配置可调）。
+//!
+//! # 装配态口径（零装配自审；沿 event-bus lib.rs 先例）
+//!
+//! 本模块生产零装配：lib.rs:84 pub mod 导出后全仓零消费者，
+//! verifier.rs/producer.rs 未接线；接线/GATED/退役三选一挂 ADR-224。
+//! 反查证据（2026-10-25 实测）：`VerifyConcurrency` 全仓 8 处命中全在
+//! 本文件自身（:24/:31/:40 定义与 impl + cfg(test) 测试 5 处），
+//! verifier.rs/producer.rs 对本模块零引用——整模块生产死码，不得被
+//! 当作已生效能力引用。接线前置（吞吐对拍基准证 2× 主张、并发度默认 4
+//! 的依据、与 PVL mpsc 主管线的关系）登记 ADR-224；若裁决退役，须连
+//! lib.rs:84 导出行与 Cargo.toml 相关注释一并清理。
 
 use std::future::Future;
 use std::time::Duration;
