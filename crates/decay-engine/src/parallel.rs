@@ -51,9 +51,11 @@
 //!   [`apply_decay_pure`] 纯计算;闭包内禁 IO / await / 持锁（红线 §7.5.3 纪律⑥）。
 //!
 //! # 失败语义
-//! 单能力衰减失败（`CapabilityLevel::new` 越界,理论不可达——clamp 保证 ∈ [0,1]）
-//! 经 Result 逐项传播,不阻断同批其他能力（与串行逐项一致）。池内 panic 被
-//! catch_unwind 隔离,防御性回退串行（理论不可达:闭包纯计算）。
+//! 单能力衰减失败两类:① ViolationPenalty severity 域违规(负值/NaN/±∞,
+//! C-18 拒绝面,可达);② `CapabilityLevel::new` 越界(理论不可达——clamp
+//! 保证 ∈ [0,1])。失败经 Result 逐项传播,不阻断同批其他能力（与串行逐项
+//! 一致）。池内 panic 被 catch_unwind 隔离,防御性回退串行（理论不可达:
+//! 闭包纯计算）。
 
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -164,7 +166,9 @@ pub(crate) struct DecayOutcome {
 /// 语义对齐（行为锁定,断言测试覆盖）:
 /// - `TimeDecay`:level -= elapsed × rate（线性,默认）或 level × exp(-elapsed/τ)
 ///   （指数,P1-4 共享 `nexus_core::decay` 公式）;冻结跳过;触发自动冻结检查;
-/// - `ViolationPenalty`:level -= penalty × severity;冻结跳过;触发自动冻结检查;
+/// - `ViolationPenalty`:level -= penalty × severity(severity ∈ [0.0, +∞),
+///   负值/非有限值拒绝 —— 与引擎路径同型的 C-18 域校验);冻结跳过;
+///   触发自动冻结检查;
 /// - `Freeze`:level = 0 且 frozen = true（Skeptic 否决,幂等由调用方守卫）;
 /// - `Restore`:level += elapsed × restore_rate（clamp [0,1]）;冻结跳过;
 /// - 自动冻结:衰减类事件后 level ≤ freeze_threshold 且未冻结 → 置 0 + 冻结
@@ -172,7 +176,9 @@ pub(crate) struct DecayOutcome {
 /// - `last_decay_at` 更新在**提交阶段**统一进行（批量路径以统一 `now` 为基准,
 ///   与串行单次 `decay` 每次调用各自取 now 的语义不同——批量 = 快照语义）。
 ///
-/// 失败面:level 越界经 `CapabilityLevel::new` 返回 [`DecayError::InvalidLevel`]
+/// 失败面:① ViolationPenalty severity 域违规(负值/NaN/±∞)返回
+/// [`DecayError::InvalidSeverity`]（C-18 可达拒绝面）;② level 越界经
+/// `CapabilityLevel::new` 返回 [`DecayError::InvalidLevel`]
 /// （理论不可达:全部输出经 clamp 保证 ∈ [0,1],签名保留错误面与现有代码风格一致）。
 pub(crate) fn apply_decay_pure(
     level: f32,
@@ -211,6 +217,13 @@ pub(crate) fn apply_decay_pure(
         1 => {
             if frozen {
                 return Ok(DecayOutcome { level, frozen });
+            }
+            // C-18(M10):severity 域校验 — 与 engine.rs ViolationPenalty 分支同型
+            // (frozen 短路后、惩罚计算前),拒绝负值/非有限值,不 clamp。
+            if !event.severity.is_finite() || event.severity < 0.0 {
+                return Err(DecayError::InvalidSeverity {
+                    value: event.severity,
+                });
             }
             let penalty = config.event_decay_penalty * event.severity;
             let lower = config.min_level.max(0.0);
@@ -584,6 +597,90 @@ mod tests {
             &config,
         );
         assert!(matches!(res, Err(DecayError::ConfigError(_))));
+    }
+
+    // ============================================================
+    // C-18(M10): severity 域校验 — 负值/NaN/±∞ 拒绝(与引擎路径同型)
+    // ============================================================
+
+    #[test]
+    fn test_apply_violation_penalty_invalid_severity_rejected() {
+        let config = DecayConfig::default();
+        for bad in [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            -1e-7,
+            -0.5,
+            -100.0,
+        ] {
+            let res = apply_decay_pure(
+                0.8,
+                false,
+                Instant::now(),
+                Instant::now(),
+                DecayEventParam {
+                    kind: 1,
+                    severity: bad,
+                },
+                &config,
+            );
+            assert!(
+                matches!(res, Err(DecayError::InvalidSeverity { value }) if value.to_bits() == bad.to_bits()),
+                "severity={bad} 应被拒绝为 InvalidSeverity(原值回传)"
+            );
+        }
+    }
+
+    /// 冻结能力 + 非法 severity → frozen 短路优先(与引擎 ViolationPenalty
+    /// 分支同型:冻结态对一切事件免疫,不触发域校验)
+    #[test]
+    fn test_apply_violation_penalty_invalid_severity_frozen_skipped() {
+        let config = DecayConfig::default();
+        let out = apply_decay_pure(
+            0.8,
+            true,
+            Instant::now(),
+            Instant::now(),
+            DecayEventParam {
+                kind: 1,
+                severity: -1.0,
+            },
+            &config,
+        )
+        .expect("冻结能力应原样返回");
+        assert_eq!(out.level, 0.8);
+        assert!(out.frozen, "冻结状态必须保留");
+    }
+
+    /// 非法 severity 在串行/并行批量路径产生逐位一致的 Err
+    /// (C-18 双路径同型守卫 — 拒绝语义不因路由切换而漂移)
+    #[test]
+    fn test_batch_invalid_severity_serial_parallel_consistent() {
+        let bad = f32::NAN;
+        let snapshots = Arc::new(vec![DecaySnapshot {
+            level: 0.8,
+            frozen: false,
+            last_decay_at: Instant::now(),
+        }]);
+        let events = Arc::new(vec![DecayEventParam {
+            kind: 1,
+            severity: bad,
+        }]);
+        let cfg = Arc::new(DecayConfig::default());
+        let now = Instant::now();
+        let serial = decay_batch_core(&snapshots, &events, &cfg, now, false);
+        let parallel = decay_batch_core(&snapshots, &events, &cfg, now, true);
+        assert_eq!(serial.len(), 1);
+        assert_eq!(parallel.len(), 1);
+        for (label, out) in [("serial", serial), ("parallel", parallel)] {
+            match out.into_iter().next().unwrap() {
+                Err(DecayError::InvalidSeverity { value }) => {
+                    assert_eq!(value.to_bits(), bad.to_bits(), "{label} 错误值应原值回传");
+                }
+                other => panic!("{label} 期望 Err(InvalidSeverity),实际 {other:?}"),
+            }
+        }
     }
 
     // ============================================================

@@ -20,6 +20,17 @@ pub enum DecayError {
     #[error("无效的能力等级 {0}:必须在 [0.0, 1.0] 范围内")]
     InvalidLevel(f32),
 
+    /// 违规惩罚严重程度为负值或非有限值（NaN/±∞）— C-18(M10) severity 域校验
+    ///
+    /// 域约束 ∈ [0.0, +∞)。WHY 拒绝而非 clamp:负 severity 会把惩罚翻转为
+    /// 奖励（level 不降反升,权限提升攻击面,ADR-002 惩罚语义）;NaN 则经
+    /// 浮点传播污染 level。沿 [`InvalidLevel`] 的「构造/入口校验拒绝」先例。
+    #[error("无效的严重程度 {value}:必须为 [0.0, +∞) 内的有限值(负值/NaN/±∞ 拒绝)")]
+    InvalidSeverity {
+        /// 被拒绝的原始 severity 输入值(原值回传,便于调用方定位)
+        value: f32,
+    },
+
     /// 指定 ID 的能力未找到
     #[error("能力未找到: {0}")]
     CapabilityNotFound(String),

@@ -123,7 +123,11 @@ pub enum DecayEvent {
     ViolationPenalty {
         /// 能力 ID(event 自包含,便于广播到 event-bus)
         capability_id: String,
-        /// 严重程度(1.0 为标准,>1.0 加重,<1.0 减轻)
+        /// 严重程度(1.0 为标准,>1.0 加重,0.0..<1.0 减轻)
+        ///
+        /// 域约束 ∈ [0.0, +∞):负值/非有限值(NaN/±∞)在引擎惩罚计算前被
+        /// 拒绝([`DecayError::InvalidSeverity`]),而非 clamp —— 负 severity
+        /// 会把惩罚翻转为奖励(权限提升攻击面,ADR-002 惩罚语义)。
         severity: f32,
     },
     /// 冻结能力(对应 Skeptic 否决权)

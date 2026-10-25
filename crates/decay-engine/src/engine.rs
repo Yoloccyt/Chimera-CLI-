@@ -114,6 +114,7 @@ impl DecayEngine {
     /// 根据事件类型更新能力等级:
     /// - [`DecayEvent::TimeDecay`]:level -= elapsed × time_decay_rate
     /// - [`DecayEvent::ViolationPenalty`]:level -= event_decay_penalty × severity
+    ///   (severity ∈ [0.0, +∞),负值/非有限值在惩罚计算前拒绝)
     /// - [`DecayEvent::Freeze`]:level = 0.0, frozen = true
     /// - [`DecayEvent::Restore`]:level += restore_rate × elapsed(若未冻结)
     ///
@@ -238,6 +239,13 @@ impl DecayEngine {
                 if cap.frozen {
                     debug!(capability_id = id, "能力已冻结,跳过违规惩罚");
                     return Ok(cap.level);
+                }
+                // C-18(M10):severity 域校验 — 负值/非有限值拒绝,不 clamp。
+                // WHY:负 severity 使惩罚变奖励(level 不降反升,权限提升攻击面,
+                // ADR-002 惩罚语义);NaN 经浮点传播污染 level。此处是 formal.rs
+                // M2 属性 #6(衰减单调性)的运行时执行点。
+                if !severity.is_finite() || severity < 0.0 {
+                    return Err(DecayError::InvalidSeverity { value: severity });
                 }
                 let penalty = config.event_decay_penalty * severity;
                 let lower = config.min_level.max(0.0);
@@ -658,5 +666,32 @@ mod tests {
             }
             other => panic!("期望 DecayMetricsReported,收到 {other:?}"),
         }
+    }
+
+    /// C-18(M10):冻结能力 + 非法 severity → frozen 短路优先(不触发域校验)
+    ///
+    /// 语义锁定:守卫位于 frozen 检查之后(计划锚点「penalty 计算前」),
+    /// 冻结态对一切事件免疫——与 TimeDecay/Restore 的 frozen-first 语义
+    /// 及 formal.rs 冻结区间属性一致;负 severity 对 level=0 的冻结能力
+    /// 无提权面。未冻结路径的拒绝语义由 tests/proptest.rs 不变量 8 覆盖。
+    #[test]
+    fn violation_penalty_invalid_severity_frozen_skipped() {
+        let engine = DecayEngine::new(DecayConfig::default());
+        engine
+            .register_capability("cap", "cap", 0.6)
+            .expect("register 失败");
+        engine.freeze("cap", "test").expect("freeze 失败");
+
+        let level = engine
+            .decay(
+                "cap",
+                DecayEvent::ViolationPenalty {
+                    capability_id: "cap".into(),
+                    severity: -1.0,
+                },
+            )
+            .expect("冻结能力应跳过惩罚(不触发域校验)");
+        assert_eq!(level.value(), 0.0);
+        assert!(engine.is_frozen("cap").expect("is_frozen 失败"));
     }
 }
