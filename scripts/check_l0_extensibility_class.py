@@ -30,9 +30,11 @@ NEW types both red out; the policy direction (closed -> open) is allowed but cos
 
 What it judges
 --------------
-Input surface: `crates/nexus-contracts/src/**/*.rs`, blanked by the SAME lexer as G-99/G-105
-and with `#[cfg(test)]` tails masked (imported, not re-implemented). Test-only declarations
-never enter the class ledger.
+Input surface: the `src/` tree of every L0-A crate -- the umbrella plus its 6 siblings
+(ADR-222 D2), taken from `l0_roster.L0A_DIR_NAMES`, the single roster source G-125
+cross-checks -- blanked by the SAME lexer as G-99/G-105 and with `#[cfg(test)]` tails
+masked (imported, not re-implemented). Test-only declarations never enter the class
+ledger.
 
   NEW            a public type with no row -> red (declare its class deliberately)
   STALE          a row whose type is gone -> red (rename/delete must drop the row)
