@@ -168,10 +168,10 @@ note = "ignored 全集（本机已实测资源不可行，正确通道是 CI slo
 id = "G-16"
 spec_ref = "Spec 全局（审计器自盲区反查）"
 cmd = "{python} scripts/audit_spec_coverage.py"
-expect = 0
+expect = 1
 kind = "light"
 test_kind = "cross_crate"
-note = "反查 Spec 抽出的任务/风险/命名交付物/新事实是否都有审计项、判据登记或在盘上；防止 audit_phaseR_spec.py 自身漏抄要求"
+note = "反查 Spec 抽出的任务/风险/命名交付物/新事实是否都有审计项、判据登记或在盘上；防止 audit_phaseR_spec.py 自身漏抄要求；按设计为红：仓外 spec 缓存指向 ADR-212 W3 搬移前 util.rs 路径（G-10 同款 expect=1 语义）"
 ci_exempt = "收口审计项:Spec 覆盖度反查,收口时跑"
 
 
