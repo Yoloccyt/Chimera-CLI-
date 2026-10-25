@@ -2,7 +2,7 @@
 //! LAYER:    L7
 //! ROLE:     SSRA 黏液式快速适配 — 预编译模板 + 运行时低延迟融合
 //! BACKEND:  memory
-//! PRODUCERS: 2 RedTeamAudit,SsraFusionCompleted
+//! PRODUCERS: 1 SsraFusionCompleted
 //! CONSUMERS: 0 -
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END

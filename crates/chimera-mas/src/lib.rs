@@ -2,7 +2,7 @@
 //! LAYER:    L9
 //! ROLE:     CHIMERA Multi-Agent Synergy (MAS) 子系统
 //! BACKEND:  memory
-//! PRODUCERS: 13 AgentConsultRequested,AgentConsultResponded,AgentContextOverflow,AgentHeartbeat,AgentTaskCompleted…
+//! PRODUCERS: 9 AgentConsultRequested,AgentContextOverflow,AgentTaskCompleted,AgentTaskDelegated,AgentTaskFailed…
 //! CONSUMERS: 1 chimera-cli
 //! MATURITY: NOT-IMPL-CN|PLACEHOLDER-CN|SIMPLIFIED-CN
 //! CRATE-CONTRACT END

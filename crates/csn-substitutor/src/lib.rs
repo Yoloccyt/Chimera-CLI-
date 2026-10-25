@@ -2,7 +2,7 @@
 //! LAYER:    L10
 //! ROLE:     能力替代网络(CSN)— 能力降级链,在缺失时自动寻找替代实现
 //! BACKEND:  memory
-//! PRODUCERS: 2 CsnSubstitutionTriggered,McpMeshTransactionCompleted
+//! PRODUCERS: 1 CsnSubstitutionTriggered
 //! CONSUMERS: 0 -
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END

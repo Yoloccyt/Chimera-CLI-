@@ -2,7 +2,7 @@
 //! LAYER:    L2
 //! ROLE:     分层上下文窗口 - 4K/32K/128K/1M 四级上下文窗口管理
 //! BACKEND:  memory
-//! PRODUCERS: 6 ContextCompressed,ContextWindowSwitched,HcwRecallDegraded,HcwRecallReported,OmniSparseMasksComputed…
+//! PRODUCERS: 5 ContextCompressed,ContextWindowSwitched,HcwRecallDegraded,HcwRecallReported,OverWindowFallbackTriggered
 //! CONSUMERS: 3 chimera-cli,chimera-mas,mca-gateway
 //! MATURITY: NOT-IMPL-CN
 //! CRATE-CONTRACT END

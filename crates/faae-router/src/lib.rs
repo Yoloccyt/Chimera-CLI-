@@ -2,7 +2,7 @@
 //! LAYER:    L6
 //! ROLE:     Function-as-Expert 语义路由 — 工具即专家的语义化路由调度
 //! BACKEND:  memory
-//! PRODUCERS: 6 EntropyBalanced,ExpertRegistered,ExpertRouted,ExpertUnregistered,ParentSelected…
+//! PRODUCERS: 4 EntropyBalanced,ExpertRegistered,ExpertRouted,ExpertUnregistered
 //! CONSUMERS: 1 chimera-cli
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END

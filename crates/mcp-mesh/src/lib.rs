@@ -2,7 +2,7 @@
 //! LAYER:    L10
 //! ROLE:     MCP 量子网格 — Model Context Protocol 的量子化网格通信层
 //! BACKEND:  fs
-//! PRODUCERS: 4 ChtcToolCallReceived,McpMeshTransactionCompleted,McpMessageReceived,McpNodeHeartbeat
+//! PRODUCERS: 3 McpMeshTransactionCompleted,McpMessageReceived,McpNodeHeartbeat
 //! CONSUMERS: 1 chimera-cli
 //! MATURITY: NOT-IMPL-CN|PLACEHOLDER-CN
 //! CRATE-CONTRACT END

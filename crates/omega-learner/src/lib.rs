@@ -2,7 +2,7 @@
 //! LAYER:    L6
 //! ROLE:     NEXUS-OMEGA L6 学习层 — omega-learner Bandit 六接缝
 //! BACKEND:  memory
-//! PRODUCERS: 3 ModelRouteSelected,RewardSignalReported,StreamSessionCompleted
+//! PRODUCERS: 1 RewardSignalReported
 //! CONSUMERS: 0 -
 //! MATURITY: NOT-IMPL-CN
 //! CRATE-CONTRACT END

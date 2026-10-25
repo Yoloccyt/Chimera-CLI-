@@ -2,7 +2,7 @@
 //! LAYER:    L1
 //! ROLE:     事件总线 — 基于 tokio::broadcast + MessagePack 的跨层通信通道
 //! BACKEND:  fs
-//! PRODUCERS: 104 ActivationCacheStats,ActivationThresholdAdjusted,AffinityCapabilityNegotiated,AffinityQuotaExhausted,AffinityUnknownField…
+//! PRODUCERS: 3 BusThroughputReported,SlowConsumerDropped,TokenLedgerRecorded
 //! CONSUMERS: 34 chimera-cli,chimera-mas,chimera-tui,chtc-bridge,cmt-tiering…
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END

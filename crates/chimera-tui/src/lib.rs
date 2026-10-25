@@ -2,7 +2,7 @@
 //! LAYER:    L10
 //! ROLE:     Chimera TUI — 基于 Ratatui 的多面板终端用户界面
 //! BACKEND:  sqlite
-//! PRODUCERS: 77 AgentTaskFailed,AhirtProbeCompleted,AsaIntervention,AuditFindingRaised,BlackboardEntry…
+//! PRODUCERS: 9 CacheHit,QuestCancelRequested,QuestPauseRequested,QuestPriorityChanged,QuestResumeRequested…
 //! CONSUMERS: 1 chimera-cli
 //! MATURITY: SIMPLIFIED-CN
 //! CRATE-CONTRACT END

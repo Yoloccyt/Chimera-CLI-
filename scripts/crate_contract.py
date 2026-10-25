@@ -47,6 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import check_declared_dep_usage as ddu        # manifest parsing, one dialect
 import check_impl_maturity_claims as maturity  # maturity labels, one vocabulary
+import check_l0_purity as l0pure               # blank_rust + test_tail_mask (G-99 lexer family)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LAYER_SCRIPT = os.path.join(ROOT, "scripts", "check_dependency_rules.sh")
@@ -179,28 +180,211 @@ def derive_backend(crate_dir, index):
 def derive_producers(crate_dir):
     """List NexusEvent variants CONSTRUCTED (not matched) in this crate's src.
 
-    Match arms read `NexusEvent::X { .. } =>` and `NexusEvent::X(a, b) =>`, so a
-    line containing `=>` is dropped. Blind spot worth stating: a constructor
-    passed as a value without `=>` on the same line would count as produced.
-    The header is a claim about event production, so over-reporting is the
-    conservative direction -- it makes "who publishes this?" answerable, never
-    silently empty.
+    Production semantics only (D3/M03: the header field promises "constructed
+    in src/", so pattern positions, prose and test fixtures must not count):
+      * comments and string literals are blanked first (check_l0_purity's
+        blank_rust -- the same lexer the G-99 family judges by), so doc
+        examples like `/// matches!(e, NexusEvent::QuestCreated {..})` cannot
+        register as constructions;
+      * `#[cfg(test)] mod ...` tails are masked (check_l0_purity's
+        test_tail_mask) -- a fixture constructing an event proves nothing
+        about production;
+      * a line containing `=>` is dropped wholesale (single-line match arms);
+      * multi-line `matches!(...)` spans are masked by paren tracking, which
+        covers both the single-line form and the wrapped form where the
+        pattern sits alone on a later line (chimera-tui panels shape);
+      * `let`-pattern scrutinees are dropped positionally: the occurrence must
+        not sit between a `(if|while)? let` keyword and the `=` that separates
+        pattern from expression. This keeps `let ev = NexusEvent::X {..}`
+        (construction, after the `=`) and `if let Err(e) = bus.publish(
+        NexusEvent::X {..})` (construction inside the expression) while
+        dropping `if let NexusEvent::X {..} = ev` and plain `let
+        NexusEvent::X {..} = ev` destructure patterns;
+      * a variant line is a multi-line match arm when an arm arrow `=>`
+        appears at group depth 0 before any top-level `;` (statement-aware
+        scan from the occurrence's own opening brace/paren). Depth awareness
+        is what keeps both directions honest: nested arrows/semicolons
+        (closures, inner matches inside the literal) cannot decide it, and a
+        finished construction statement (`};`) ends the scan before a LATER
+        match's arrows can mis-attach -- the parliament debate/mod.rs
+        `certify_if_reviewed` shape (construction at :228, unrelated
+        `Ok(()) => true` at :235) must stay counted. Or-pattern arms are the
+        same scan with each alternative's braces opening and closing at
+        depth 0 until the shared arrow (event-bus membrane.rs carries one
+        fourteen-alternative arm; ARM_SCAN_LINES sits above it with headroom).
+    What stays counted: a constructor passed as a value (rare; the honest
+    residual of a line-based pass). What no longer happens: prose, tests and
+    pattern positions inflating PRODUCERS.
     """
     src = os.path.join(ROOT, "crates", crate_dir, "src")
     if not os.path.isdir(src):
         return []
     out = set()
     for dirpath, _d, files in os.walk(src):
-        for f in files:
+        for f in sorted(files):
             if not f.endswith(".rs"):
                 continue
-            with open(os.path.join(dirpath, f), encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    if "=>" in line:
+            path = os.path.join(dirpath, f)
+            if _declared_cfg_test_module(path):
+                continue
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                code = l0pure.blank_rust(fh.read())
+            lines = code.splitlines()
+            tail = l0pure.test_tail_mask(lines)
+            mspan = _matches_span_mask(lines)
+            for i, line in enumerate(lines):
+                if "NexusEvent::" not in line or tail[i] or mspan[i] or "=>" in line:
+                    continue
+                for m in EVENT_OCC.finditer(line):
+                    if _in_let_pattern(line, m.start()):
                         continue
-                    if "NexusEvent::" in line:
-                        out.update(re.findall(r"NexusEvent::([A-Z]\w*)\s*[({]", line))
+                    if _arm_arrow_after(lines, i, m.end() - 1, ARM_SCAN_LINES):
+                        continue
+                    out.add(m.group(1))
     return sorted(out)
+
+
+# An occurrence is a construction only when it introduces the value: `X {` or
+# `X(`. Pattern positions reuse the same two shapes, so the regex alone cannot
+# tell them apart -- position context does.
+EVENT_OCC = re.compile(r"NexusEvent::([A-Z]\w*)\s*[({]")
+# `let` / `if let` / `while let` introduce a PATTERN before the `=` separator.
+LET_ANCHOR = re.compile(r"\b(?:if\s+|while\s+)?let\b")
+# The pattern/expression separator: a single `=` that is not part of ==, =>,
+# <=, >=, !=. Those operators never separate a let-pattern from its scrutinee.
+EQ_SEP = re.compile(r"(?<![!=<>])=(?!=|>)")
+# Arm-scan line budget: the in-tree record is one fourteen-alternative arm
+# (event-bus membrane.rs, arrow at +14); 32 leaves headroom. An arm longer
+# than the budget would count as produced (over-report), so grow it if a
+# wider arm ever lands -- the selftest fixture pins today's shape.
+ARM_SCAN_LINES = 32
+
+
+def _matches_span_mask(lines):
+    """True for every line inside a `matches!(...)` macro span.
+
+    Everything inside the macro's parentheses is scrutinee-plus-patterns, so
+    no construction can hide there. Paren depth is tracked across lines on
+    code already blanked by blank_rust, where parentheses are real syntax.
+    """
+    mask = [False] * len(lines)
+    depth = 0
+    for i, line in enumerate(lines):
+        inside_at_start = depth > 0
+        opened_here = False
+        j = 0
+        while j < len(line):
+            if depth == 0 and line.startswith("matches!(", j):
+                depth = 1
+                opened_here = True
+                j += len("matches!(")
+                continue
+            if depth > 0:
+                if line[j] == "(":
+                    depth += 1
+                elif line[j] == ")":
+                    depth -= 1
+                j += 1
+                continue
+            j += 1
+        mask[i] = inside_at_start or opened_here or depth > 0
+    return mask
+
+
+def _in_let_pattern(line, pos):
+    """True when the occurrence at `pos` sits in a let-PATTERN (pre-`=`)."""
+    m = LET_ANCHOR.search(line)
+    if m is None or m.start() >= pos:
+        return False
+    sep = EQ_SEP.search(line, m.end())
+    return sep is None or sep.start() > pos
+
+
+def _arm_arrow_after(lines, i, col, max_lines):
+    """True when the occurrence opening at lines[i][col] belongs to a match
+    arm: an `=>` shows up at group depth 0 before a top-level `;`, or on the
+    far side of the wrapping group the occurrence sits in.
+
+    `col` points at the occurrence's own `{`/`(` (EVENT_OCC guarantees one),
+    so the scan starts inside the literal it must judge. Only depth-0 arrows
+    and semicolons decide -- arrows inside the literal's nested closures or
+    inner matches are inert, which is exactly the discrimination a fixed line
+    window cannot make. Going NEGATIVE means an enclosing group the scan never
+    saw open has closed (the `Ok(NexusEvent::X {..}) => {` subscriber shape:
+    the `(` opens before the occurrence); whether it is an arm is then decided
+    by what follows on that line -- `}) => {` is an arm, `});` is a finished
+    construction statement, a bare `}` (fn-tail construction) is not. A
+    line-leading `=>` on the next non-blank line counts too (pathological
+    formatting only; rustfmt never emits it, but a missed arrow is the
+    over-report direction this gate exists to close).
+    """
+    depth = 0
+    for j in range(i, min(len(lines), i + max_lines)):
+        line = lines[j]
+        k = col if j == i else 0
+        while k < len(line):
+            ch = line[k]
+            if ch in "{(":
+                depth += 1
+            elif ch in "})":
+                depth -= 1
+                if depth < 0:
+                    rest = line[k + 1:]
+                    if "=>" in rest:
+                        return True
+                    if rest.strip():
+                        return False
+                    # blank remainder: only a line-leading arrow (next
+                    # non-blank line) can still make this an arm
+                    for ln in lines[j + 1:j + 3]:
+                        if not ln.strip():
+                            continue
+                        return ln.strip().startswith("=>")
+                    return False
+            elif depth == 0:
+                if ch == ";":
+                    return False
+                if ch == "=" and line.startswith("=>", k):
+                    return True
+            k += 1
+    return False
+
+
+def _declared_cfg_test_module(path):
+    """True when the WHOLE file is a test module: its parent declares
+    `#[cfg(test)] mod <stem>;`, so the gating attribute lives in another file
+    and test_tail_mask (same-file) cannot see it.
+
+    Measured shapes: chimera-tui src/app/tests.rs and parliament
+    src/debate/tests.rs (both gated in their mod.rs). The stem guard keeps the
+    parent-file scan off ordinary module files; the declaration must still
+    carry the attribute, so pub test-utility modules (nexus-contracts
+    testutil/test_scale.rs, compiled unconditionally on purpose) stay in the
+    production face.
+    """
+    stem = os.path.splitext(os.path.basename(path))[0]
+    if stem != "tests" and not stem.startswith("test_"):
+        return False
+    d = os.path.dirname(path)
+    # src/app/tests.rs -> src/app/mod.rs | src/app.rs ; src/tests.rs (a child
+    # of the crate root) -> src/lib.rs. All three spellings are legal Rust 2018
+    # parents; probing costs one stat each and a miss is just "not a test file".
+    parents = [os.path.join(d, "mod.rs"),
+               os.path.join(d, "lib.rs"),
+               os.path.join(os.path.dirname(d), os.path.basename(d) + ".rs")]
+    decl = re.compile(r"#\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*(?:#[^\n]*\n\s*)*"
+                      r"(?:pub\s*\([^)]*\)\s+)?(?:pub\s+)?mod\s+"
+                      + re.escape(stem) + r"\s*;")
+    for parent in parents:
+        if not os.path.exists(parent):
+            continue
+        try:
+            with open(parent, encoding="utf-8", errors="replace") as fh:
+                if decl.search(fh.read()):
+                    return True
+        except OSError:
+            continue
+    return False
 
 
 def _table_kind(line):
@@ -484,7 +668,119 @@ def _fixture():
         body = fh.read()
     with open(gp, "wb") as fh:
         fh.write(BOM + body.replace(b"\n", b"\r\n"))
+    # alpha carries the producer-derivation fixtures (C-03/M03): every shape
+    # here is one the old line loop mis-counted on the real tree. Only
+    # RealConstructed and ExprConstruct may survive derive_producers.
+    with open(os.path.join(tmp, "crates", "alpha", "src", "producers_fixture.rs"),
+              "w", encoding="utf-8") as fh:
+        fh.write(PRODUCER_FIXTURE)
+    # file-level test module: gated by `#[cfg(test)] mod tests;` in lib.rs, so
+    # neither test_tail_mask (same-file attribute) nor the arm rules can see
+    # the gate -- _declared_cfg_test_module must (chimera-tui app/tests.rs
+    # shape; CacheMiss was over-reported through exactly this hole).
+    with open(os.path.join(tmp, "crates", "alpha", "src", "tests.rs"),
+              "w", encoding="utf-8") as fh:
+        fh.write("pub fn fixture() -> NexusEvent {\n"
+                 "    NexusEvent::FileTailConstructed { id: 4 }\n}\n")
+    with open(os.path.join(tmp, "crates", "alpha", "src", "lib.rs"),
+              "a", encoding="utf-8") as fh:
+        fh.write("\n#[cfg(test)]\nmod tests;\n")
     return tmp
+
+
+# Every line mirrors a measured real-tree shape (2026-10-25):
+#   - comment/string prose mentioning variants (event-bus bus.rs doc lines)
+#   - single-line and wrapped matches! (efficiency-monitor monitor.rs:51,
+#     chimera-tui panels event_stream.rs/log.rs)
+#   - if-let scrutinee (mcp-mesh mesh.rs:783) and plain let-destructure
+#     (efficiency-monitor recall_collector.rs:125)
+#   - construction AFTER the `=` of an if-let (event-bus token_ledger.rs:139
+#     shape: `if let Err(e) = bus.publish(NexusEvent::X {..})`) -- must COUNT
+#   - multi-line match arm with the arrow at +3 (parliament strategy_cap.rs)
+#     and at +5 (osa six_dimension.rs / csn-substitutor lib.rs -- why
+#     ARM_WINDOW is 8, not the plan-drafted 3)
+#   - or-pattern chain (chimera-tui event_stream.rs severity bands) and a
+#     14-alternative chain with the arrow at +14 (event-bus membrane.rs:344
+#     category arm -- why the chain walk exists, no fixed window covers it)
+#   - cfg(test) tail construction (omega-learner s9_integration.rs:271) and a
+#     whole-file test module gated from the parent (chimera-tui app/tests.rs)
+#   - a construction whose NEXT statement is a match with arm arrows 3 lines
+#     below (parliament debate/mod.rs certify_if_reviewed shape) -- must
+#     COUNT; only a depth-aware arm scan can tell it from a real arm
+#   - the Ok(...)-wrapped pair: `Ok(NexusEvent::X {..}) => {}` is an arm
+#     (strategy_cap.rs:382 / handshake.rs:88 subscriber shape), while
+#     `Ok(NexusEvent::Y {..});` is a real construction -- same wrapping,
+#     opposite verdicts, decided by what follows the closing paren
+PRODUCER_FIXTURE = """
+fn prod(ev: &NexusEvent, bus: &mut Bus) {
+    let _a = NexusEvent::RealConstructed { id: 1 };
+    // prose mention: NexusEvent::CommentMentioned { .. } must not count
+    let _s = "NexusEvent::StringMentioned { .. }";
+    let _m1 = matches!(ev, NexusEvent::MatchesSingle { .. });
+    let _m2 = matches!(
+        ev,
+        NexusEvent::MatchesWrapped { .. }
+    );
+    let (_m1, _m2) = (_m1, _m2);
+    if let NexusEvent::IfLetScrutinee { .. } = ev {}
+    let NexusEvent::LetDestructured { .. } = ev;
+    match ev {
+        NexusEvent::MultilineArm {
+            a,
+            ..
+        } => {}
+        NexusEvent::FiveGapArm {
+            f1,
+            f2,
+            f3,
+            f4,
+        } => {}
+        NexusEvent::OrPatternA { .. }
+        | NexusEvent::OrPatternB { .. } => 2,
+        NexusEvent::ChainStart { .. }
+        | NexusEvent::ChainMid1 { .. }
+        | NexusEvent::ChainMid2 { .. }
+        | NexusEvent::ChainMid3 { .. }
+        | NexusEvent::ChainMid4 { .. }
+        | NexusEvent::ChainMid5 { .. }
+        | NexusEvent::ChainMid6 { .. }
+        | NexusEvent::ChainMid7 { .. }
+        | NexusEvent::ChainMid8 { .. }
+        | NexusEvent::ChainMid9 { .. }
+        | NexusEvent::ChainMid10 { .. }
+        | NexusEvent::ChainMid11 { .. }
+        | NexusEvent::ChainMid12 { .. }
+        | NexusEvent::ChainEnd { .. } => 3,
+        _ => {}
+    }
+    if let Err(_e) = bus.publish(NexusEvent::ExprConstruct { id: 2 }) {}
+    let _wrapped: Result<NexusEvent, ()> = Ok(NexusEvent::OkWrappedReal {
+        id: 5,
+    });
+    match bus.recv().await {
+        Ok(NexusEvent::OkWrappedArm {
+            id,
+            ..
+        }) => {}
+        _ => {}
+    }
+    let nearby = NexusEvent::NearbyMatchCounted {
+        id: 9,
+    };
+    match bus.send(nearby) {
+        Ok(()) => true,
+        Err(_e) => false,
+    }
+}
+
+#[cfg(test)]
+mod producer_tests {
+    #[test]
+    fn tail_only() {
+        let _t = NexusEvent::TailConstructed { id: 3 };
+    }
+}
+"""
 
 
 def selftest():
@@ -519,6 +815,14 @@ def selftest():
         # the checker rejects the field-shaped value.
         caught.append(("ROLE is the crate's own sentence, not a block field",
                        bool(got) and got["ROLE"] == "beta -- the crate's own role sentence"))
+        # C-03/M03: the producer face must see constructions, not pattern
+        # positions / prose / test tails. The fixture plants the shapes that
+        # must vanish and the three that must survive; set equality pins both
+        # sides.
+        caught.append(("PRODUCERS counts only real constructions",
+                       derive_producers("alpha") ==
+                       sorted({"RealConstructed", "ExprConstruct",
+                               "NearbyMatchCounted", "OkWrappedReal"})))
         caught.append(("clean fixture passes", check() == 0))
         _mutate(tmp, "beta", "ROLE", "LAYER:    L2")
         caught.append(("ROLE that echoes a block field is caught", check() == 1))

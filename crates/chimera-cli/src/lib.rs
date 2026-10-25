@@ -2,7 +2,7 @@
 //! LAYER:    L10
 //! ROLE:     Chimera CLI — NEXUS-OMEGA AI 编码代理的命令行入口
 //! BACKEND:  fs
-//! PRODUCERS: 25 CacheHit,ClaimIssued,ClaimRetracted,CoordinationRatioReported,GatherCompleted…
+//! PRODUCERS: 13 ClaimIssued,ClaimRetracted,OperationTimedOut,ParentSelected,StopRulingIssued…
 //! CONSUMERS: 0 -
 //! MATURITY: NOT-IMPL-CN|PLACEHOLDER-EN
 //! CRATE-CONTRACT END
