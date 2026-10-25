@@ -421,7 +421,7 @@ cmd = "bash scripts/check_doc_drift.sh"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "NexusEvent 变体/EventTopic 类/workspace crate 三计数:代码实测锚定 doc_count_freeze.txt(146/10/41,2026-09-20 重锁,router-traits 批次后);文档漂移未登记=红"
+note = "NexusEvent 变体/EventTopic 类/workspace crate 三计数:代码实测锚定 doc_count_freeze.txt(冻结台账为唯一权威源,重锁史见该文件注记,本行不抄三计数值);计数现值一律取门自报 [OK] 行,免责语:计数随代码增删漂移、勿以本行为准(G-01/G-126 同纪律,抄进散文的计数必然比代码先腐烂——本行曾抄 2026-09-20 重锁时点「146/10/41」,其后冻结台账重锁已漂移而散文停旧值,就地删快照改指针);文档漂移未登记=红"
 
 # 双源"判据"对拍门（Q15，2026-09-21）。check_layer_map_parity（C10）只对拍两张
 # 数据表，看不见判据分歧：2026-09-18 一次标注 "FIXED 2026-09-18, ADR-XXX" 的改动
@@ -455,7 +455,8 @@ kind = "light"
 test_kind = "cross_crate"
 note = "双源判据对拍：Check A 已由 ADR-187（α′）从 .sh/.ps1 双侧退役，P3|Check A 分歧消除 ⇒ expect 由设计性红 1 翻 0；余 4 条 arity 差异仍按语言惯例登记于 gate_predicate_baseline.txt（只减不增）"
 
-# 文档"名单"门（F6，2026-09-21）。check_doc_drift 只钉基数（146/10/41），所以
+# 文档"名单"门（F6，2026-09-21）。check_doc_drift 只钉基数（三计数现值以
+# doc_count_freeze.txt 与 G-37 门自报 [OK] 行为准,此处不抄数——G-126 同纪律），所以
 # CODE_WIKI §5.5 写出不存在的 `SecurityAuditCompleted`、把 `RouterStatsReported`
 # 写成 `RouterStatsUpdated` 时计数照绿——基数正确掩盖了枚举面腐烂。本门把表格行里的
 # PascalCase 类型名对拍 crates/ 全量标识符；存量 81 条不可证名全部登记为可见债
@@ -610,7 +611,7 @@ cmd = "{python} scripts/check_impl_maturity_claims.py"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "现势基线守住：108 处自述 WIP 标记 / 22 crate / 37 行棘轮（只减不增）；新增一个假实现即判红，删掉一处须同步下调基线"
+note = "现势基线守住（只减不增）：标记数/涉及 crate 数/基线行数一律取门自报 [INFO] 行（权威源 = scripts/impl_maturity_baseline.txt 冻结台账，行归零即删），本行不抄数（G-01/G-126 同纪律，抄进散文的计数必然比代码先腐烂——本行曾抄 2026-09 时点快照「108 处 / 22 crate / 37 行」，其后基线清理已漂移而散文停旧值，就地删快照改指针）；新增一个假实现即判红，删掉一处须同步下调基线"
 
 # --- 已退役 crate 悬空引用门（架构减法 B0-4, 设计方案 v2.30 §6 B0 / §3.3）------
 # 动机：批次 A（38c72e6）删 crate 时留下 4 处功能性悬空引用——fuzz/Cargo.toml
@@ -663,9 +664,11 @@ note = "现势账本 9 条债务 / 10 条 optional 内部边：7 DECORATIVE(r2_i
 # 动机：把「零 Stub」与「已装配」两句对外宣称变成每个 crate 头部一段可机检的
 # 声明。LAYER 取 scripts/check_dependency_rules.sh 的 layer_of()（唯一机器权威）,
 # CONSUMERS 取非 optional 生产依赖边（与可达性门同量纲）, MATURITY 复用成熟度门
-# 词表, ROLE 从 crate 自己的 //! 首行采集（41/41 有, 非代写）。
-# 落地方式：41 个 lib.rs 各插入 8 行 `//!` 内部文档注释（安装证据: 新增 328 行 /
-# 删除 0 行 / 非 //! 新增 0 行 / 行尾与 BOM 41/41 保真）。
+# 词表, ROLE 从 crate 自己的 //! 首行采集（全量有, 非代写;覆盖数以 G-59 门自报
+# [INFO] 行为准, 本处不抄数——G-01/G-126 同纪律:抄进散文的计数必比代码先腐烂）。
+# 落地方式：安装批对当时全量 lib.rs 各插入 8 行 `//!` 内部文档注释（安装证据为
+# 该批时点 diff 快照: 全部新增皆 //! 行、零删除、行尾与 BOM 全量保真——时点事件
+# 记录, 其后的现势覆盖数仍以 G-59 自报为准, 本处不抄安装时点数值）。
 [[gate]]
 id = "G-58"
 spec_ref = "架构减法 v2.30 §4 / B0-5 crate 契约头"
@@ -682,7 +685,7 @@ cmd = "{python} scripts/crate_contract.py --check"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "41/41 crate 的契约头与磁盘实测一致（改依赖面不改头即红）；刷新口令 --install 会重写派生行而保留 ROLE 人工修订"
+note = "全量 crate 的契约头与磁盘实测一致（改依赖面不改头即红）；覆盖数（crates checked / contract blocks valid）一律取门自报 [INFO] 行，本行不抄数（G-01/G-126 同纪律，抄进散文的计数必然比代码先腐烂——本行曾抄架构减法时点「41/41」，其后 crate 面增删已漂移（2026-10-25 实跑自报 46/46）而散文停旧值，就地删快照改指针）；刷新口令 --install 会重写派生行而保留 ROLE 人工修订"
 
 # --- path 依赖可解析门（架构减法 B0-3, 设计方案 v2.30 §6 B0）------------------
 # 动机：悬空的 `path = "..."` 使整份 manifest 无法解析，后果不是"某个 target 编译失败"
@@ -772,7 +775,7 @@ cmd = "{python} scripts/check_event_ownership.py"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "真树：146 变体 = 133 有生产态构造 + 13 无（账本 event_ownership_baseline.txt 13 行；计数随事件增删漂移，现值以 check_event_ownership.py 自报为准、勿逐值追逐；首版曾误报 18，三枚假阳性见报告 §24.1）。新增未登记的零 emit 变体即红；账本行拿到真生产者后不删行亦红（实测两向：GAP-S 与 GAP-E 各翻红一次后逐字节还原）"
+note = "真树：变体总数 = 有生产态构造 + 无构造（账本 event_ownership_baseline.txt，账本行数即无构造数）——三计数一律以门自报 [INFO] 行为准，本行不抄数（计数随事件增删漂移、勿逐值追逐；G-01/G-126 同纪律，抄进散文的计数必然比代码先腐烂——本行曾抄 2026-09 时点快照「146 = 133 + 13 / 账本 13 行」，其后事件面增删已漂移（2026-10-25 实跑自报 154 = 136 + 18）而散文停旧值，就地删快照改指针；首版曾误报 18，三枚假阳性见报告 §24.1）。新增未登记的零 emit 变体即红；账本行拿到真生产者后不删行亦红（实测两向：GAP-S 与 GAP-E 各翻红一次后逐字节还原）"
 
 # 配置样例派生门（架构减法 v2.30 §6 B5「配置样例修复」，agents.md §10.5 自 2026-09-22
 # 起挂🟡 的仓库工件项）。根因不是那 9 个字节，是仓库为一个已有唯一权威渲染
