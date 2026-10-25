@@ -286,7 +286,7 @@ L1   Core ─────── nexus-core · event-bus · nexus-telemetry [ADR-
 
 ***
 
-### 3.3 L3 Storage (4 crates,v2.28 新增 session-store)
+### 3.3 L3 Storage (3 crates + 1 退役注记,v2.28 新增 session-store)
 
 #### [scc-cache](file:///d:/Chimera%20CLI/crates/scc-cache)
 
