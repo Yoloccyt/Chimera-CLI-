@@ -135,7 +135,7 @@ pub mod seam;
 /// S9 接缝 — 通道路由学习器(MCA M3,RouteLLM 落点,ADR-065)
 ///
 /// LinUCB 臂空间 = provider × model × thinking_mode(~40 臂),影子模式合规;
-/// 不触 R2 冻结面(不 import gsoe-evolution/auto-dpo,无 evolve/RL 训练路径)。
+/// 不触 R2 冻结面(不 import gsoe-evolution;auto-dpo 已退役 ADR-193;无 evolve/RL 训练路径)。
 pub mod s9_route;
 
 /// S9 会话集成 — 将 StreamSessionCompleted 事件桥接到 S9RouteLearner(P1-2)

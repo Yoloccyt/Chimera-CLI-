@@ -26,8 +26,8 @@
 //!
 //! # R2 冻结红线(ADR-042)兼容
 //! 学习路由只产出 `SelectorPolicy::Learned` **建议**,沿用影子模式(ADR-043)
-//! 与本地 fallback,**不触碰 R2 冻结面**:本模块不 import gsoe-evolution /
-//! auto-dpo,无 evolve/RL 训练路径,只做在线 LinUCB bandit 选择。
+//! 与本地 fallback,**不触碰 R2 冻结面**:本模块不 import gsoe-evolution
+//! (auto-dpo 已退役,ADR-193),无 evolve/RL 训练路径,只做在线 LinUCB bandit 选择。
 //!
 //! # 40 臂决策延迟(性能红线,arm.rs L23 假设 ~10 臂)
 //! 40 臂是既有设计假设的 4 倍,`select_arm` = O(K·d²) = 40×36 ≈ 1440 flops,
