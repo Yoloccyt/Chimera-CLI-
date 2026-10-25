@@ -10,8 +10,9 @@
 //! - 支持手动覆盖,但受预算档位约束(Degraded 档位不允许覆盖为 Deep)
 //!
 //! # 依赖方向(§2.2 依赖铁律)
-//! TTG 是 L9 层,可向下依赖 L3 DECB(订阅 BudgetAdjusted 事件)。
-//! 不能向上依赖 L8 Parliament(通过事件解耦)。
+//! TTG 是 L9 层;DECB(decb-governor)为 L8 层,本 crate 与其无直接依赖边,
+//! BudgetAdjusted 事件经 event-bus 订阅联动(跨层通信只走 Event Bus)。
+//! 与 Parliament(L8)亦无依赖边,同样经事件解耦。
 //!
 //! # 事件集成
 //! TtgGovernor 可选持有 `EventBus`,在模式切换时自动发布 `ThinkingModeSwitched` 事件。
