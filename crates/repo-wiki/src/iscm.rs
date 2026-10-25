@@ -75,7 +75,7 @@ impl Layer {
     ///
     /// 返回 `None` 表示字符串不是有效的层标识(不阻断查询,由调用方决定降级策略)。
     ///
-    /// WHY:未实现 `std::str::FromStr` trait — 该 trait 要求返回 `Result<Self, Err>`,
+    /// WHY:刻意不实现 `std::str::FromStr` trait — 该 trait 要求返回 `Result<Self, Err>`,
     /// 而本方法返回 `Option<Self>` 更适合"非错误即缺失"的语义(无效层标识不属于
     /// 需要传播的错误,降级为 `None` 即可)。clippy 警告已显式抑制。
     #[allow(clippy::should_implement_trait)]

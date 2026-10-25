@@ -103,7 +103,7 @@ cmd = "bash scripts/check_crate_reachability.sh"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "可达性棘轮（28 可达 / 14 冻结孤岛 + 1 GATED(mca-gateway) / new_gaps=0；权威值当场由脚本自报，勿写死）"
+note = "可达性棘轮（权威值当场由脚本自报，勿写死）"
 
 [[gate]]
 id = "G-10"
@@ -592,7 +592,7 @@ cmd = "{python} scripts/check_impl_maturity_claims.py --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "分类器有牙（8/8 计分标签全覆盖 + 6 类否定式/噪声抑制；四态裁决 new/grown/rotate/stale 各产一次；畸形基线退 2）"
+note = "分类器有牙（8/8 计分标签全覆盖 + 否定式/噪声抑制词表以脚本 selftest 自报数为准；四态裁决 new/grown/rotate/stale 各产一次；畸形基线退 2）"
 
 [[gate]]
 id = "G-52"

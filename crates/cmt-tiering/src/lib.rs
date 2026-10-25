@@ -4,7 +4,7 @@
 //! BACKEND:  sqlite
 //! PRODUCERS: 3 CapabilityTierStatsReported,CapabilityTiered,LsctTierSwitched
 //! CONSUMERS: 1 chimera-cli
-//! MATURITY: NOT-IMPL-CN
+//! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! 能力内存四级分层 — 热/温/冷/冰四级能力存储与自动迁移
 //!

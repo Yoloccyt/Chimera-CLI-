@@ -144,7 +144,7 @@ pub struct AuditChain {
     ///
     /// `#[serde(skip)]`:仅运行时注入,不参与序列化(持久化/反序列化时缺失
     /// 字段由 serde 用 `Default::default()` 补为 `None`,`EventBus` 已实现 `Default`)。
-    /// 不参与 `Debug`/`PartialEq`(EventBus 未实现 `Debug`/`PartialEq`)。
+    /// 不参与 `Debug`/`PartialEq`(EventBus 无 `Debug`/`PartialEq` 实现)。
     #[serde(skip)]
     event_bus: Option<EventBus>,
 }

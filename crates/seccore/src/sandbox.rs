@@ -385,7 +385,7 @@ impl Sandbox {
         // WHY Span::current().record:instrument fields 表达式只能引用函数参数,不能引用
         // 局部变量 `spec.risk_score` / `tier`。声明空占位字段后用 record 填充是 tracing
         // 处理"运行时才能确定的 span 字段"的惯用法,确保 span 元信息完整可用。
-        // WHY tracing::field::debug:&tier 是自定义 enum,未实现 tracing::Value,
+        // WHY tracing::field::debug:&tier 是自定义 enum,不满足 tracing::Value 约束,
         // 用 debug() 包装为 Debug Value(?value 是宏语法,record 方法不接受)
         tracing::Span::current()
             .record("risk_score", spec.risk_score)
@@ -733,6 +733,17 @@ impl Sandbox {
                     )));
                 }
                 Err(_) => {
+                    // WHY: 此分支与降级路径(路径 B)的超时清理语义不同,系刻意差异非遗漏:
+                    // - 降级路径超时后显式调 kill_process_tree(见本文件该函数注释:
+                    //   Windows 上 cmd /C 的孙进程不随 kill_on_drop 退出,须遍历进程树);
+                    // - gVisor 路径不做显式清理,依赖 GvisorRuntime::spawn 内
+                    //   kill_on_drop(true)(gvisor.rs):超时 drop 本 future 时 runsc
+                    //   子进程随 Child drop 被 kill。runsc 以前台模式运行(runsc run,
+                    //   非 detach),主进程即沙箱宿主,被 kill 时 sentry 随之终止、
+                    //   沙箱内全部进程(含任意嵌套)一并回收,故无需遍历进程树。
+                    // SandboxTimeout「已强制终止」承诺(error.rs)由此隐式路径兑现;
+                    // 若线上观测到 runsc 残留进程,再升级为显式清理(l0l10-r1 L11 处置:
+                    // 否决修复、仅注差异,残留观测驱动升级)。
                     return Err(SecCoreError::SandboxTimeout {
                         timeout: self.timeout,
                         program: spec.program.clone(),

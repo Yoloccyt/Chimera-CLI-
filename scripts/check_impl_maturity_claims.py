@@ -109,6 +109,20 @@ NEGATION = (
     # NOT-IMPL-CN rows was pure narration of an abandoned symbol, and the ledger
     # charged it as WIP debt for rounds.
     u"\u4ece\u672a\u5b9e\u73b0",                     # "was never implemented"
+    # M38 / R1 plan C-45: two more refutation families the corpus actually uses,
+    # each with measured false-positive sites in crates/*/src:
+    #   * "已废止" -- an author RETIRING an old narrative that contained a label
+    #     (scc-cache/src/wal.rs:9/:11 quote the retired "占位实现/Week 8 接入"
+    #     story precisely in order to say it no longer holds; SqliteWal shipped).
+    #     Scoring those charged a dead narrative as live WIP debt.
+    #   * "刻意不实现" -- a deliberate design NON-choice with a WHY (repo-wiki
+    #     iscm.rs/relation.rs return Option instead of implementing FromStr).
+    #     The third-person shape ("Rust 未实现 From<u32> for f32") stays OUT of
+    #     the vocabulary on purpose: recognising who fails to implement whom
+    #     needs syntax, and a heuristic there would carve silent exemptions
+    #     into the ratchet -- those lines are reworded at the source instead.
+    u"\u5df2\u5e9f\u6b62",                           # "narrative has been retired"
+    u"\u523b\u610f\u4e0d\u5b9e\u73b0",               # "deliberately not implemented"
 )
 
 
@@ -353,6 +367,11 @@ def selftest():
         "// MOCK-ONLY \u5df2\u79fb\u9664\uff0c\u73b0\u5728\u662f\u771f\u5b9e\u73b0": None,
         "// \u65e7\u540d PlaceholderEmbedding \u5df2\u5220\u9664": None,
         "// \u5168\u5e93\u96f6\u547d\u4e2d\uff0c\u4e0d\u5b58\u5728\u8be5\u7c7b\u578b": None,
+        # M38 / C-45 regression pair: retired narrative + deliberate non-choice.
+        # Both are verbatim shapes from the measured false-positive sites
+        # (scc-cache/src/wal.rs:9, repo-wiki/src/iscm.rs:78).
+        "// \u65e7\u300c\u5360\u4f4d\u5b9e\u73b0/Week 8 \u63a5\u5165\u300d\u53d9\u4e8b\u5df2\u5e9f\u6b62(\u65f6\u70b9\u4e3a\u5386\u53f2\u8ba1\u5212\u53d9\u4e8b)": None,
+        "// WHY \u523b\u610f\u4e0d\u5b9e\u73b0 std::str::FromStr \u2014 \u8fd4\u56de Option \u66f4\u9002\u5408\u975e\u9519\u8bef\u5373\u7f3a\u5931\u8bed\u4e49": None,
         # real false positive found on 2026-09-23 in mcp-mesh/src/lib.rs:7 -- a
         # completion claim that happens to contain the words "placeholder
         # implementation". Kept as a permanent regression case.

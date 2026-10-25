@@ -376,7 +376,7 @@ impl ColdTier {
     /// 返回是否删除成功(若条目不存在返回 false)
     ///
     /// WHY 接受 `impl Into<CapabilityId>`:类型安全,调用方可传 `CapabilityId`/`String`/`&str`,
-    /// 内部统一转为 `CapabilityId` 后用 `as_str()` 传给 SQL(避免 `ToSql` 未实现问题)
+    /// 内部统一转为 `CapabilityId` 后用 `as_str()` 传给 SQL(避免 `ToSql` 约束问题)
     pub async fn delete(&self, id: impl Into<CapabilityId>) -> Result<bool, CmtError> {
         let id = id.into();
         self.pool

@@ -321,8 +321,8 @@ impl AsaAuditor {
         // P1-W4.1: 填充 instrument span 的延迟字段(safety_score / intervention / risk_level
         // 在函数内计算后才能确定)。这些字段供 efficiency-monitor 关联同一审计的
         // 评分与最终干预决策,支持事后回放分析。
-        // WHY tracing::field::debug:intervention / risk_level 是自定义 enum,未实现
-        // tracing::Value,用 debug() 包装为 Debug Value(?value 是宏语法,record 不接受)
+        // WHY tracing::field::debug:intervention / risk_level 是自定义 enum,不满足
+        // tracing::Value 约束,用 debug() 包装为 Debug Value(?value 是宏语法,record 不接受)
         tracing::Span::current()
             .record("safety_score", fused_score)
             .record("intervention", tracing::field::debug(&intervention))

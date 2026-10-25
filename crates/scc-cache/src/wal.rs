@@ -12,17 +12,17 @@
 //! - Week 7 关键路径在 4 crate 联调与性能基准,WAL 持久化非阻塞验收项
 //! - 真实 SQLite WAL 需引入 rusqlite 依赖 + 文件 I/O + 崩溃恢复测试,
 //!   工作量与 Week 7 剩余预算不匹配(参见 spec.md §3.2 明确"本周不做")
-//! - 占位实现保持接口契约稳定,Week 8 替换为 `SqliteWal` 时上层 SCC 代码零改动
-//! - `#![forbid(unsafe_code)]` 兼容:占位实现仅用 `Mutex<Vec<WalEntry>>`,
-//!   无 unsafe 块;Week 8 的 SQLite 绑定须验证 unsafe 传播后再接入
+//! - `InMemoryWal` 保持接口契约稳定;真实持久化已由 `SqliteWal` 交付,上层 SCC 代码零改动
+//! - `#![forbid(unsafe_code)]` 兼容:`InMemoryWal` 仅用 `Mutex<Vec<WalEntry>>`,
+//!   无 unsafe 块;`SqliteWal` 经 rusqlite 绑定接入(全仓 forbid(unsafe_code) 纪律维持)
 //!
 //! # WAL 语义
 //! 1. `write_ahead_log(entry)`:在修改缓存前先写日志(预写),保证崩溃可恢复
 //! 2. `commit_log(entry_id)`:缓存修改成功后标记日志为已提交
 //! 3. `rollback_log(entry_id)`:缓存修改失败时回滚日志,撤销预写
 //!
-//! 占位实现中,`entries` 是已写入但未提交的日志,`committed` 是已提交的 entry_id 集合。
-//! 真实实现将日志写入 SQLite 表,commit 对应事务提交,rollback 对应事务回滚。
+//! `InMemoryWal` 中,`entries` 是已写入但未提交的日志,`committed` 是已提交的 entry_id 集合。
+//! `SqliteWal` 将日志写入 SQLite 表,commit 对应事务提交,rollback 对应事务回滚。
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -80,7 +80,7 @@ pub struct WalEntry {
     pub operation: WalOperation,
     /// 受影响的上下文 ID
     pub context_id: ContextId,
-    /// 操作负载(序列化后的字节流,占位实现不解析)
+    /// 操作负载(序列化后的字节流,`InMemoryWal` 不解析)
     pub payload: Vec<u8>,
     /// 写入时刻(UTC 时间戳,真实实现用于崩溃恢复时排序)
     pub timestamp: chrono::DateTime<Utc>,
@@ -122,7 +122,7 @@ pub trait WalTrait: Send + Sync {
     fn rollback_log(&self, entry_id: &str) -> Result<(), SccError>;
 }
 
-/// WAL 占位实现 — 内存缓冲,无真实持久化
+/// WAL 内存实现 — 内存缓冲,无持久化(契约验证与同步测试用;真实持久化见 `SqliteWal`)
 ///
 /// # 适用场景
 /// - Week 7 接口契约验证 + 单元测试
@@ -154,7 +154,7 @@ impl InMemoryWal {
 
     /// 返回已写入的日志条目数(含已提交,不含已回滚)
     ///
-    /// WHY 提供此方法:占位实现的测试需要断言日志条目数,
+    /// WHY 提供此方法:`InMemoryWal` 的测试需要断言日志条目数,
     /// 真实 SQLite 实现不需要此方法(直接查表)。
     pub fn entry_count(&self) -> usize {
         self.entries

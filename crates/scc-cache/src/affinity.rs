@@ -105,7 +105,7 @@ impl std::fmt::Debug for SessionAffinityTracker {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SessionAffinityTracker")
             .field("sticky", &self.sticky)
-            // event_bus:EventBus 未实现 Debug,不输出
+            // event_bus:EventBus 无 Debug 实现,不输出
             .finish()
     }
 }

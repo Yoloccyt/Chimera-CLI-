@@ -4,7 +4,7 @@
 //! BACKEND:  memory
 //! PRODUCERS: 1 RewardSignalReported
 //! CONSUMERS: 0 -
-//! MATURITY: NOT-IMPL-CN
+//! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! NEXUS-OMEGA L6 学习层 — omega-learner Bandit 六接缝
 //!

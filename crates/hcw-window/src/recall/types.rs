@@ -325,7 +325,7 @@ impl CoChangeMatrix {
             }
         }
         // 归一化到 [0.0, 1.0]，max_count 已保证 > 0
-        // WHY `as f32`:Rust 未实现 `From<u32> for f32`(精度损失),
+        // WHY `as f32`:std 未提供 `From<u32> for f32`(精度损失),
         // u32 → f32 在 [0, 2^24] 范围内精确,共变更次数远低于此上限
         best as f32 / self.max_count as f32
     }

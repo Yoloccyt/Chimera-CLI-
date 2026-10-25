@@ -9,20 +9,20 @@ L0  nexus-contracts-sparse BACKEND=memory   PROD=0   CONS=1   MATURITY=TRUE  :: 
 L1  event-bus              BACKEND=fs       PROD=3   CONS=34  MATURITY=TRUE  :: 事件总线 — 基于 tokio::broadcast + MessagePack 的跨层通信通道
 L1  nexus-core             BACKEND=fs       PROD=2   CONS=23  MATURITY=TRUE  :: 核心状态与领域类型 — 维护 NexusState、UserIntent、CLV 等全局领域模型
 L1  nexus-telemetry        BACKEND=memory   PROD=2   CONS=1   MATURITY=TRUE  :: NEXUS-OMEGA L0-B 核心基础面 — 计算面遥测契约与上报编排（ADR-222 D3）
-L2  hcw-window             BACKEND=memory   PROD=5   CONS=3   MATURITY=NOT-IMPL-CN :: 分层上下文窗口 - 4K/32K/128K/1M 四级上下文窗口管理
+L2  hcw-window             BACKEND=memory   PROD=5   CONS=3   MATURITY=TRUE  :: 分层上下文窗口 - 4K/32K/128K/1M 四级上下文窗口管理
 L2  mlc-engine             BACKEND=sqlite   PROD=4   CONS=1   MATURITY=PLACEHOLDER-CN :: 四级潜在记忆引擎  L0-L3 神经形态记忆分级存储与检索
 L2  nmc-encoder            BACKEND=fs       PROD=1   CONS=3   MATURITY=DEFERRED|PLACEHOLDER-CN :: 神经多模态上下文编码器 — 将多模态输入编码为统一的潜在表示
-L3  cmt-tiering            BACKEND=sqlite   PROD=3   CONS=1   MATURITY=NOT-IMPL-CN :: 能力内存四级分层 — 热/温/冷/冰四级能力存储与自动迁移
-L3  scc-cache              BACKEND=sqlite   PROD=5   CONS=2   MATURITY=NOT-IMPL-CN|PLACEHOLDER-CN :: 推测上下文缓存 — 基于访问模式推测性预取的上下文缓存
+L3  cmt-tiering            BACKEND=sqlite   PROD=3   CONS=1   MATURITY=TRUE  :: 能力内存四级分层 — 热/温/冷/冰四级能力存储与自动迁移
+L3  scc-cache              BACKEND=sqlite   PROD=5   CONS=2   MATURITY=TRUE  :: 推测上下文缓存 — 基于访问模式推测性预取的上下文缓存
 L3  session-store          BACKEND=sqlite   PROD=0   CONS=1   MATURITY=TRUE  :: session-store — 会话事件流存储（append-only 段 + CBMR 微批写）
 L4  decay-engine           BACKEND=memory   PROD=2   CONS=2   MATURITY=TRUE  :: 能力衰减引擎 — 连续 [0.0, 1.0] 权限流体衰减模型
 L4  qeep-protocol          BACKEND=memory   PROD=0   CONS=1   MATURITY=TRUE  :: 量子纠缠执行协议 — 跨执行单元的零孤儿结果汇聚协议
-L4  seccore                BACKEND=fs       PROD=5   CONS=4   MATURITY=DEFERRED|NOT-IMPL-CN|PLACEHOLDER-CN :: 零信任执行核心 — SecCore
+L4  seccore                BACKEND=fs       PROD=5   CONS=4   MATURITY=DEFERRED|PLACEHOLDER-CN :: 零信任执行核心 — SecCore
 L5  gsoe-evolution         BACKEND=fs       PROD=5   CONS=3   MATURITY=PLACEHOLDER-CN :: 在线进化引擎 — GRPO 风格的引导式自组织在线进化
-L5  repo-wiki              BACKEND=sqlite   PROD=2   CONS=2   MATURITY=DEFERRED|NOT-IMPL-CN :: 仓库知识沉淀 — 跨层共享索引的代码 Wiki 与知识图谱
+L5  repo-wiki              BACKEND=sqlite   PROD=2   CONS=2   MATURITY=TRUE  :: 仓库知识沉淀 — 跨层共享索引的代码 Wiki 与知识图谱
 L6  faae-router            BACKEND=memory   PROD=4   CONS=1   MATURITY=TRUE  :: Function-as-Expert 语义路由 — 工具即专家的语义化路由调度
 L6  kvbsr-router           BACKEND=memory   PROD=2   CONS=1   MATURITY=TRUE  :: KV 块语义路由器 — 两级块路由的键值缓存语义检索
-L6  omega-learner          BACKEND=memory   PROD=1   CONS=0   MATURITY=NOT-IMPL-CN :: NEXUS-OMEGA L6 学习层 — omega-learner Bandit 六接缝
+L6  omega-learner          BACKEND=memory   PROD=1   CONS=0   MATURITY=TRUE  :: NEXUS-OMEGA L6 学习层 — omega-learner Bandit 六接缝
 L6  osa-coordinator        BACKEND=memory   PROD=1   CONS=2   MATURITY=TRUE  :: 全维稀疏协调器 — 工具/上下文/记忆/审计/预算五维度稀疏化调度
 L6  sesa-router            BACKEND=memory   PROD=1   CONS=0   MATURITY=TRUE  :: SESA 子专家稀疏激活 — 对专家子集进行稀疏化激活以降低计算开销
 L7  gqep-executor          BACKEND=memory   PROD=4   CONS=1   MATURITY=SIMPLIFIED-CN :: 聚集查询执行协议 — 并发异步操作的聚集汇聚与超时治理
