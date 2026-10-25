@@ -20,7 +20,7 @@
   --criterion-dir PATH  criterion 根 (默认 target/criterion)
   --legacy-out PATH     compare 模式读入的 heredoc stdout 文件
   --json                thresholds 模式输出机器可读结果 (供双跑比对使用)
-  --strict              thresholds 模式把关键词匹配歧义也算作失败
+  --strict              thresholds 模式把关键词匹配歧义与零匹配幽灵键也算作失败
 
 WHY 存在这个文件:
   2026-08-31 第四轮冗余审计 F-R4-01 发现: 本门禁原有 .ps1(429 行) + .sh(246 行)
@@ -33,6 +33,8 @@ WHY 存在这个文件:
   - [STALE]  登记表里有、盘上没有 -> FAIL (清单自身要防腐)
   - [UNKNOWN] 盘上有、登记格里没有 -> FAIL (新增/忘登记的 bench 必被捕获)
   - [RATCHET] 兜底债 (calibration_pending) 只减不增
+  - [SKIP-GHOST] thresholds 键在 criterion 树中零匹配 -> 默认 advisory (可见不致命),
+                --strict 下计入 FAIL (C-07/D6: 门禁噪声不作默认阻塞, 可见性不打折)
 
 退出码: 0=通过 / 1=至少一条违反 / 2=用法或环境错误(判据未真正运行)
   ★ F18: rc 是**状态**, 不是计数器。违规条数只出现在 stdout 载荷里
@@ -671,7 +673,8 @@ def mode_thresholds(thresholds_doc, criterion_dir, as_json, strict):
     """解析 criterion estimates.json 并断言阈值 (bench_check.yml heredoc 的等价移植)。
 
     迁移期纪律: 默认保持与 heredoc **逐键等价**的 first-match-wins 语义, 以便
-    R1-T6 的"双跑比对"能证明零行为变更; 匹配歧义只在 strict 模式下才致命。
+    R1-T6 的"双跑比对"能证明零行为变更; 匹配歧义与零匹配幽灵键([SKIP-GHOST],
+    C-07/D6)只在 strict 模式下才致命。
     """
     thr = thresholds_doc.get("thresholds_ns", {})
     if not os.path.isdir(criterion_dir):
@@ -684,11 +687,17 @@ def mode_thresholds(thresholds_doc, criterion_dir, as_json, strict):
 
     payload, unmatched, ambiguous = collect_threshold_results(thresholds_doc, criterion_dir)
     fails = 0
+    ghost_keys = []
     print("=== Benchmark threshold assertions ===")
     for name, limit in thr.items():
         row = payload[name]
         if row["passed"] is None:
-            print(f"  [SKIP] {name}: no estimates found")
+            # C-07/D6: 零匹配键 = 幽灵键(登记在 perf_thresholds.toml, 但 criterion 树
+            # 无任何产物命中其关键词 —— bench 未跑或已改名)。默认 advisory 不致命:
+            # 实测 47 键中 30 键 SKIP(部分 bench 组合不在当次 criterion 树), 无条件判红
+            # 会重蹈"门禁噪声 -> 被迫放宽整体门禁"覆辙(AGENTS §7.2 前车)。
+            ghost_keys.append(name)
+            print(f"  [SKIP-GHOST] {name}: no estimates found")
             continue
         worst_ns, worst_path = row["max_median_ns"], row["worst"]
         passed = row["passed"]
@@ -697,6 +706,16 @@ def mode_thresholds(thresholds_doc, criterion_dir, as_json, strict):
         print(f"         worst group: {worst_path}")
         if not passed:
             fails += 1
+
+    if ghost_keys:
+        print(f"\n  [SKIP-GHOST] {len(ghost_keys)} threshold key(s) matched zero "
+              f"criterion groups")
+        if strict:
+            fails += len(ghost_keys)
+            print("  strict mode: ghost keys are fatal")
+        else:
+            print("  advisory (bench not run or renamed); "
+                  "pass --strict to make it fatal")
 
     if unmatched:
         print(f"\n  {len(unmatched)} estimates path(s) matched no keyword (diagnostics):")
@@ -1210,6 +1229,21 @@ def mode_selftest():
                                      os.path.join(tmp, "legacy_absent.log"))
         expect("selftest-19d compare undecidable when legacy log is absent",
                (rc19d, "UNDECIDABLE" in out19d), (2, True))
+
+        # 断言 21：C-07/D6 —— thresholds 模式零匹配幽灵键: 默认 advisory 可见不致命,
+        #   --strict 计入 fails; 无幽灵键时一声不吭(防空转式常报)。复用断言 19 的
+        #   合成 criterion 树(zz_ns 有产物)+ 一个零匹配键, 不读真仓 target/。
+        thr_td = {"thresholds_ns": {"zz_ns": 1000, "zz_ghost": 1000},
+                  "path_keywords": {"zz_ns": ["zz_fn/"], "zz_ghost": ["zz_absent/"]}}
+        rc21a, out21a = _capture_out(mode_thresholds, thr_td, cmp_dir, False, False)
+        expect("selftest-21a ghost key: advisory visible, rc untouched",
+               ("[SKIP-GHOST]" in out21a, rc21a), (True, 0))
+        rc21b, out21b = _capture_out(mode_thresholds, thr_td, cmp_dir, False, True)
+        expect("selftest-21b ghost key fatal under --strict",
+               (rc21b, "ghost keys are fatal" in out21b), (1, True))
+        rc21c, out21c = _capture_out(mode_thresholds, cmp_td, cmp_dir, False, False)
+        expect("selftest-21c control: zero ghost keys announce nothing",
+               ("[SKIP-GHOST]" in out21c, rc21c), (False, 0))
 
         # 断言 10：I7 的五种形态（干净/CI 多出/表多出/alias 漂/文件缺失）
         # 前四种用临时 workflow 文件, 不碰真仓的 bench_check.yml。
