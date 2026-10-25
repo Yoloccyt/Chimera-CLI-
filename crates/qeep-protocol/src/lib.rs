@@ -22,7 +22,11 @@
 //! - 异步操作 spawn 后,JoinHandle 未被 await
 //! - future 被 drop 但无运行时检测
 //!
-//! QEEP 通过 `OrphanGuard` + `Drop` trait 从机制上杜绝此类问题。
+//! QEEP 通过 `OrphanGuard` + `Drop` trait 提供孤儿防护,保证强度按入口分两条路径:
+//! - `entangle()`:机制性保证 — pending 调用被 drop 时 `OrphanGuard` 报孤儿;
+//! - `entangle_spawn()`:依赖调用者 await 返回的 `JoinHandle` — 丢弃 handle 时任务
+//!   仍正常完成、`OrphanGuard` 不报告,业务上等同孤儿调用(调用者责任见
+//!   protocol.rs `entangle_spawn` 文档,2026-10-25 L12 审计收敛此表述)。
 //!
 //! # 快速示例
 //! WHY 选此示例:展示最常用路径 —— `entangle()` 包裹 future,完成即计数 +1。
