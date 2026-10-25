@@ -155,7 +155,10 @@ impl ExperienceCardBus {
             });
             let dropped = self.critical_dropped_count.load(Ordering::Relaxed) - dropped_before;
             if dropped > 0 {
-                tracing::warn!(dropped_count = dropped, "高分经验卡片被丢弃(Critical 订阅者通道满)");
+                tracing::warn!(
+                    dropped_count = dropped,
+                    "高分经验卡片被丢弃(Critical 订阅者通道满)"
+                );
             }
         } else if card.score > 0.5 {
             // 中分走 broadcast（尽力投递，慢消费者可 Lagged）
@@ -508,7 +511,10 @@ mod tests {
             bus.get_cards_by_task("t-sat").len(),
             CRITICAL_CHANNEL_CAPACITY + 64
         );
-        assert_eq!(bus.get_global_stats().total_cards, CRITICAL_CHANNEL_CAPACITY as u64 + 64);
+        assert_eq!(
+            bus.get_global_stats().total_cards,
+            CRITICAL_CHANNEL_CAPACITY as u64 + 64
+        );
     }
 
     #[test]

@@ -532,9 +532,8 @@ fn any_nexus_error() -> impl Strategy<Value = NexusError> {
         Just(NexusError::NestedSubAgentForbidden),
         any_text().prop_map(|server_name| NexusError::McpDisconnected { server_name }),
         // C-23:满载变体入代表集（与嵌套变体在 wire 面可区分）
-        (any::<usize>(), any::<usize>()).prop_map(|(active, limit)| {
-            NexusError::SwarmCapacityExceeded { active, limit }
-        }),
+        (any::<usize>(), any::<usize>())
+            .prop_map(|(active, limit)| { NexusError::SwarmCapacityExceeded { active, limit } }),
     ]
 }
 

@@ -466,7 +466,10 @@ mod tests {
                 current: 1,
                 max: 10,
             },
-            NexusError::SwarmCapacityExceeded { active: 8, limit: 8 },
+            NexusError::SwarmCapacityExceeded {
+                active: 8,
+                limit: 8,
+            },
         ];
         assert_eq!(
             all.len(),
