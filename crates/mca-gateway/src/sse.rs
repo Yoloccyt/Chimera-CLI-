@@ -6,6 +6,7 @@
 //!   仅拷贝一次残留;`feed()` 每次消费一个网络 chunk,产出零或多个完整帧
 //! - **数据面不进 event-bus**(ADR-065 决策 4): 归一后的 `StreamEvent` 由
 //!   适配器经 bounded mpsc(STREAM_CHANNEL_CAPACITY=256)直连调用方,per-token delta 不走 broadcast
+//!   (M1 未交付,规划态:channel 创建代码随 M1 stream() 交付,当前仅常量事实源先行)
 //! - **P3 双向容错**: 不认识的事件类型/JSON 结构归入 `StreamEvent::Unknown`
 //!   (原文留存),绝不报错中断流——留痕驱动 spec 更新
 //!

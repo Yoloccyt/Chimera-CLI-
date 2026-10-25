@@ -51,7 +51,8 @@ members = [
     "crates/omega-learner",
     # L10 Interface: mca-gateway 多通道亲和网关(ADR-065,workspace 加入时第 38 个 crate)
     # WHY 排在末位: MCA 体系新增,仅依赖 L0(nexus-contracts)/L1(event-bus),
-    # 与 chtc-bridge 同构;流式数据面走 bounded mpsc 不进 event-bus(ADR-065 决策 4)
+    # 与 chtc-bridge 同构;流式数据面走 bounded mpsc 不进 event-bus(ADR-065 决策 4;
+    # M1 未交付,规划态——stream() 流式面未实装,此句为设计契约而非已实现行为)
     "crates/mca-gateway",
     # L10 Interface: nexus-app-server 核心-表面分离(WI-01,workspace 加入时第 39 个 crate)
     # WHY 排在末位: 宿主层协议门面,仅依赖 L0(nexus-contracts)/L1(event-bus/nexus-core);
