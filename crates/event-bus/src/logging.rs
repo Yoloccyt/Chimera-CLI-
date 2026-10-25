@@ -216,7 +216,7 @@ impl BusLogger {
 
     /// 采集 Prometheus 指标(内部辅助方法)
     ///
-    /// 在 `log_publish` / `log_publish_with_size` 内部调用,记录:
+    /// 在 `log_publish` 内部调用,记录:
     /// - `nexus_event_total`:按 EventTopic 分区递增(Family 按需创建标签集)
     /// - `nexus_critical_event_total`:仅 Critical 级事件递增
     /// - `nexus_event_publish_duration_seconds`:观察发布耗时(秒)
@@ -367,48 +367,6 @@ impl BusLogger {
                 total = total,
             );
         }
-    }
-
-    /// 记录事件发布(带序列化大小估算)
-    ///
-    /// 与 `log_publish` 功能相同,额外计算 payload 的 MessagePack 序列化大小,
-    /// 用于传输流量统计。仅在非热路径上调用。
-    ///
-    /// `publish_duration`:同 `log_publish`,本次发布操作的耗时。
-    pub fn log_publish_with_size(
-        &self,
-        event: &NexusEvent,
-        subscriber_count: usize,
-        publish_duration: Duration,
-    ) {
-        let event_id = event.metadata().event_id.to_string();
-        let event_type = event.type_name();
-        let severity = format!("{:?}", event.severity());
-        let total = self.total_published.fetch_add(1, Ordering::Relaxed) + 1;
-
-        // 估算序列化后大小(用于流量统计,失败时回退到 0)
-        let payload_size = rmp_serde::to_vec_named(event).map(|v| v.len()).unwrap_or(0);
-
-        info!(
-            module = %self.module_id,
-            level = "INFO",
-            context_id = %event_id,
-            operation = "event_published",
-            event_type = %event_type,
-            event_severity = %severity,
-            subscriber_count = subscriber_count,
-            total_published = total,
-            payload_size_bytes = payload_size,
-            "事件已发布: type={event_type} severity={severity} context_id={event_id} subscribers={subscriber_count} size={payload_size}B total_published={total}",
-            event_type = event_type,
-            severity = severity,
-            event_id = event_id,
-            subscriber_count = subscriber_count,
-            payload_size = payload_size,
-            total = total,
-        );
-
-        self.record_publish_metrics(event, publish_duration);
     }
 
     // ============================================================
