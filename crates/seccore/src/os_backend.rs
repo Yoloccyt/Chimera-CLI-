@@ -219,7 +219,8 @@ impl ProcessFence {
     /// # 返回
     /// - `Ok(())`：合法操作放行（零误伤由白名单保证）
     /// - `Err(SecCoreError::CommandBlocked)`：越界操作拒绝（写 /etc、
-    ///   系统目录、越界网络）或策略命中
+    ///   系统目录、越界网络）或策略命中——策略命中时 attack_type/detail
+    ///   原样透传（C-22：拦截模式的攻击分类/白名单 Abuse 不降格为 DataLeak）
     pub fn check(&mut self, program: &str, args: &[String]) -> Result<(), SecCoreError> {
         // 逃逸路径静态拒绝（任何模式都不允许：写系统目录/越界网络）
         if is_escape_attempt(program, args) {
@@ -237,12 +238,13 @@ impl ProcessFence {
                 self.allowed_ops += 1;
                 Ok(())
             }
-            Err(SecCoreError::CommandBlocked { .. }) => {
+            // C-22：策略拒绝原样透传——validate_command 的 CommandBlocked 携带
+            // 真实攻击分类（拦截模式 Injection→…→Tamper / 白名单 Abuse）；
+            // 旧实现解构后统一重包为 DataLeak/"policy blocked"，抹掉攻击分类，
+            // 违反 error.rs「拦截类错误携带攻击类型与详情便于审计」契约
+            Err(e @ SecCoreError::CommandBlocked { .. }) => {
                 self.denied_ops += 1;
-                Err(SecCoreError::CommandBlocked {
-                    attack_type: nexus_contracts::command_validation::AttackType::DataLeak,
-                    detail: "policy blocked".into(),
-                })
+                Err(e)
             }
             Err(e) => Err(e),
         }
@@ -584,5 +586,53 @@ mod tests {
             f_blk.snapshot().expect("增拦截快照").policy_fingerprint,
             "阻断模式不同必须指纹不同"
         );
+    }
+
+    #[test]
+    fn policy_block_error_passthrough_preserves_attack_type() {
+        // C-22：策略拦截错误必须原样透传——拦截模式命中的攻击分类（Injection）
+        // 不得被二次包装降格为 DataLeak（旧实现统一重包 DataLeak/"policy blocked"，
+        // 抹掉 attack_type 分类，违反 error.rs 审计契约）
+        let policy = CommandPolicy::new().allow_command("cat").block_pattern(
+            "c22-injection-marker",
+            nexus_contracts::command_validation::AttackType::Injection,
+            "C-22 测试: 命中 Injection 拦截模式",
+        );
+        let mut f = ProcessFence::new(Arc::new(policy), SandboxMode::Standard);
+        // 命令不含逃逸特征（系统路径/外发网络），确保走策略校验路径
+        let args = vec!["c22-injection-marker".to_string()];
+        match f.check("cat", &args) {
+            Err(SecCoreError::CommandBlocked {
+                attack_type,
+                detail,
+            }) => {
+                assert_eq!(
+                    attack_type,
+                    nexus_contracts::command_validation::AttackType::Injection,
+                    "拦截模式 attack_type 必须透传（不得降格为 DataLeak）"
+                );
+                assert_eq!(detail, "C-22 测试: 命中 Injection 拦截模式");
+            }
+            other => panic!("命中拦截模式必须拒绝, 实得: {other:?}"),
+        }
+        let (_, denied) = f.stats();
+        assert!(denied >= 1, "策略拒绝必须计数");
+    }
+
+    #[test]
+    fn whitelist_rejection_passthrough_preserves_abuse() {
+        // C-22：白名单外命令被 policy.rs 判为 Abuse——透传后不得降格为 DataLeak
+        let mut f = fence(SandboxMode::Standard);
+        let args = vec!["--help".to_string()];
+        match f.check("unknown-cmd-c22", &args) {
+            Err(SecCoreError::CommandBlocked { attack_type, .. }) => {
+                assert_eq!(
+                    attack_type,
+                    nexus_contracts::command_validation::AttackType::Abuse,
+                    "白名单外必须透传 Abuse 分类（不得降格为 DataLeak）"
+                );
+            }
+            other => panic!("白名单外命令必须拒绝, 实得: {other:?}"),
+        }
     }
 }
