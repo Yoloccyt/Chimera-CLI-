@@ -28,9 +28,14 @@
 # Re-keyed 2026-09-15 after merging main: the 2026-09-13 baseline moved the
 # nexus-app-server code (generic transport split + new send_decode_error
 # writer path). Entry semantics re-verified against the moved code, unchanged.
-crates/nexus-app-server/src/transport.rs:169   # DESIGN stdio reader: read_line must complete the line frame
-crates/nexus-app-server/src/transport.rs:186   # DESIGN stdio writer: NDJSON frame written as one atomic unit
-crates/nexus-app-server/src/transport.rs:206   # DESIGN stdio writer: NDJSON error frame as one atomic unit (send_decode_error)
+# Re-keyed again 2026-10-25 (C-02): the transport moved once more - the four
+# acquisition sites are now recv_op:221 (reader), send_event:238,
+# send_events:265 (own lock since the batch-pre-encode refactor; 3 keys -> 4)
+# and send_decode_error:284. Stale keys 169/186/206 deleted both tables.
+crates/nexus-app-server/src/transport.rs:221   # DESIGN stdio reader: read_line must complete the line frame
+crates/nexus-app-server/src/transport.rs:238   # DESIGN stdio writer: NDJSON frame written as one atomic unit (send_event)
+crates/nexus-app-server/src/transport.rs:265   # DESIGN stdio writer: batch NDJSON frames written as one atomic unit (send_events)
+crates/nexus-app-server/src/transport.rs:284   # DESIGN stdio writer: NDJSON error frame as one atomic unit (send_decode_error)
 crates/nexus-app-server/src/sse.rs:121         # DESIGN SSE writer: single-connection frame atomicity
 
 # --- (A) Per-key migration serialisation --------------------------------------
