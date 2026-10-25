@@ -557,7 +557,7 @@ cmd = "bash scripts/test_fnlen_smoke.sh"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "「单函数 ≤200 行」红线**由本门同时承载工具防退化 + 判定**（2026-09-24 起）：① fixture 造一个 >200 行函数 + 一个干净函数, 断言 audit_fnlen.py 与 fn_scan.py 只检出前者；② `audit_fnlen.py --check` 对 scripts/fnlen_baseline.txt（only-decrease 登记册, 键 = path::fn + cap, 抗行号漂移）判 NEW/GROWTH/SHRINK/STALE, 实测 10 项全登记 ⇒ rc=0；③ 本门自带牙口检查（植入幽灵行必判 [STALE] 红、无理由行必判 rc=2），脚本级三条退出路径 0/1/2 均已实测走通。判定挂在此处而非新开门 ID：本脚本已在 ci.yml ⇒ 判定**零新增未接线债**。F39b 已把「解释器缺失」从退 1 改判退 2（本机无 python3 时属不可判定, 不得读成红线破了）。⚠ 入库前置：scripts/fnlen_baseline.txt 必须与 audit_fnlen.py 的 --check 代码路径同批提交, 缺登记册会主动退 2（宁可判不可判定, 不静默跳过红线）"
+note = "「单函数 ≤200 行」红线**由本门同时承载工具防退化 + 判定**（2026-09-24 起）：① fixture 造一个 >200 行函数 + 一个干净函数, 断言 audit_fnlen.py 与 fn_scan.py 只检出前者；② `audit_fnlen.py --check` 对 scripts/fnlen_baseline.txt（only-decrease 登记册, 键 = path::fn + cap, 抗行号漂移）判 NEW/GROWTH/SHRINK/STALE, 实测 4 项全登记（scripts/fnlen_baseline.txt 现取）⇒ rc=0；③ 本门自带牙口检查（植入幽灵行必判 [STALE] 红、无理由行必判 rc=2），脚本级三条退出路径 0/1/2 均已实测走通。判定挂在此处而非新开门 ID：本脚本已在 ci.yml ⇒ 判定**零新增未接线债**。F39b 已把「解释器缺失」从退 1 改判退 2（本机无 python3 时属不可判定, 不得读成红线破了）。⚠ 入库前置：scripts/fnlen_baseline.txt 必须与 audit_fnlen.py 的 --check 代码路径同批提交, 缺登记册会主动退 2（宁可判不可判定, 不静默跳过红线）"
 
 [[gate]]
 id = "G-49"
