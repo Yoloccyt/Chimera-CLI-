@@ -18,6 +18,7 @@ name: Fuzz
 #   5. checkpoint_deserialize — Checkpoint 反序列化
 #   6. config_section_parse  — 配置段解析
 #   7. harness_spec_parse    — HarnessSpec TOML 解析与不可进化面守护 (P4-W15.3)
+#   8. sse_parse             — SSE 归一器模糊防线 (MCA M0 PR-6, ADR-065)
 # ============================================================
 
 on:
