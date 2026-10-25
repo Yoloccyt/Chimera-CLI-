@@ -6,7 +6,9 @@ license.workspace = true
 
 # MCA 多通道亲和网关(ADR-065,PANTHEON 计划)
 # 架构层: L10 Interface,与 chtc-bridge/mcp-mesh 同级同构
-# 依赖面: 仅 L0(nexus-contracts)+ L1(event-bus),跨层信息全部走 event-bus
+# 依赖面: L0(nexus-contracts)+ L1(event-bus) + 三条纯函数跨层边
+# (L2 hcw-window / L3 scc-cache / L6 osa-coordinator,均 G-08 合法,冻结于 dep_edge_freeze)
+# 跨层事件全部走 event-bus;三条跨层边仅消费纯函数,不触及对应 crate 运行时状态(详见各依赖行 WHY 注)
 
 [dependencies]
 tokio = { workspace = true }
