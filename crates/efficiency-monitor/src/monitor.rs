@@ -244,6 +244,11 @@ impl EfficiencyMonitor {
     ///
     /// 该方法是同步的，适合在不便 await 的场景调用。
     ///
+    /// 注意:本方法不是后台订阅消费入口——`start_event_subscriber` 拉起的
+    /// 订阅循环走 `handle_broadcast_event`(直调 collectors 的同名
+    /// `record_event`,不走告警/落盘路径),不经过本方法;本方法仅供调用方
+    /// 同步直喂事件,勿与 collectors 的同名方法混同。
+    ///
     /// MCA 亲和事件(StreamSessionCompleted/AffinityCapabilityNegotiated/
     /// ProviderDegraded)同时喂入 affinity_metrics 采集器,更新每通道体验度量。
     pub fn record_event(&self, event: &NexusEvent) {
@@ -266,7 +271,9 @@ impl EfficiencyMonitor {
 
         // P2-1 后续增强:推理悖论风险告警
         // WHY 在 record_event 中处理:CoordinationRatioReported 由 quest-engine
-        // 通过 publish_blocking 发布,efficiency-monitor 作为订阅者在此入口消费。
+        // 通过 publish_blocking 发布;本方法非订阅消费入口(订阅循环走
+        // handle_broadcast_event,不经过此处),悖论告警与 JSONL 落盘仅当
+        // 事件经本方法直喂时才触发。
         // 当 ratio > threshold(is_paradox_risk=true) 时触发 Warning 级告警,
         // 供 TUI 事件流面板展示(三重悖论推理悖论红线度量闭环)。
         if let NexusEvent::CoordinationRatioReported {
