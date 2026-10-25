@@ -27,8 +27,8 @@
 //!   注册表逐变体生成取元数据臂,与手写表逐字等价。
 //!
 //! # 双清单同步红线(刻意保留的人工清单)
-//! bus.rs `is_critical_mpsc_event`(16 个 mpsc 旁路变体)与
-//! `LANE_FORBIDDEN_SHARD`(20 个 Critical 变体名)**不**由本注册表生成,
+//! bus.rs `is_critical_mpsc_event`(17 个 mpsc 旁路变体)与
+//! `LANE_FORBIDDEN_SHARD`(21 个 Critical 变体名)**不**由本注册表生成,
 //! 维持独立手写清单 —— 这是设计特性而非疏漏:两张独立清单 + 守护测试
 //! 互锁(bus.rs `test_mpsc_required_events_hit_both_lists` 等)使
 //! "severity 定级"与"mpsc 旁路判定"的漂移可被双向捕获;若二者同源于
@@ -139,7 +139,12 @@ define_event_registry! {
     VoteCast => Normal, Parliament;
     // L4 Security → L8 Parliament:能力冻结
     CapabilityFrozen => Normal, Security;
-    ShadowBreakerTripped => Normal, Security;
+    // [Critical·mpsc] 影子模式熔断器永久跳闸(C-13/M09,2026-10-25 升级):
+    // 不可逆 fail-closed 状态变更必须确保投递——丢失则 TUI/治理面无从感知
+    // 熔断已生效(与 FormalVerificationFailed 同语义,双清单同步见 bus.rs;
+    // 两生产方调用点不动:gsoe publish_critical 本就无条件入旁路,decay
+    // publish_blocking 经 is_critical_mpsc_event 新臂自动入旁路)
+    ShadowBreakerTripped => Critical, Security;
     // [Critical·mpsc] L4 深度优化 P1-1:形式化验证失败必须确保投递——
     // 丢失则被否决的违规候选继续进入后续阶段(与 FormalViolation 同语义,
     // 对齐九层防御 L0 + 进化悖论 L3→L4 跃迁红线;双清单同步见 bus.rs)

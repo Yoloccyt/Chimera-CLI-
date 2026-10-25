@@ -683,7 +683,7 @@ impl SpecRegistry {
     ///
     /// WHY 提供: 调用方（如 GsoeEvolutionEngine）可能需要枚举不可进化面
     /// 做安全审计。此方法透传 `HarnessSpec::immutable_surfaces()`
-    pub fn immutable_surfaces() -> &'static [ImmutableSurface; 31] {
+    pub fn immutable_surfaces() -> &'static [ImmutableSurface; 32] {
         HarnessSpec::immutable_surfaces()
     }
 
@@ -1295,9 +1295,12 @@ mod tests {
     // ============================================================
 
     #[test]
-    fn test_immutable_surfaces_returns_20_variants() {
+    fn test_immutable_surfaces_returns_32_variants() {
+        // 与 nexus-contracts `ImmutableSurface::all()` 同源：32 = 8 红线 + 18 Critical
+        // + 3 不变量 + 2 沙箱/QEEP + 1 验证器（ADR-212 B-P1-5 20→31；C-13/M09
+        // 2026-10-25 ShadowBreakerTripped 升入 mpsc 旁路后 31→32）。
         let surfaces = SpecRegistry::immutable_surfaces();
-        assert_eq!(surfaces.len(), 20);
+        assert_eq!(surfaces.len(), 32);
     }
 
     // ============================================================

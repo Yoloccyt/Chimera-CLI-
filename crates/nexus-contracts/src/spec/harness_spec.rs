@@ -25,7 +25,7 @@
 //!   配合 `gsoe-evolution` 的 `SpecRegistry` 实现谱系追踪（lineage）
 //!
 //! - **不可进化面硬编码（P4-W15.1.1）**: `ImmutableSurface` 枚举穷尽列出所有
-//!   不可进化面（8 条红线 + 17 Critical 事件 + INV-7/8/9 + 沙箱/QEEP + 验证器本身），
+//!   不可进化面（8 条红线 + 18 Critical 事件 + INV-7/8/9 + 沙箱/QEEP + 验证器本身），
 //!   `validate()` 方法拒绝任何试图修改不可进化面的 spec
 //!
 //! - **Merkle 输入规范化（P4-W15.1.1）**: `canonical_merkle_input()` 返回规范化字符串，
@@ -55,7 +55,7 @@ use serde::{Deserialize, Serialize};
 //
 // 来源（设计文档 §7.2 + spec.md L346）:
 // - 14 条架构红线（nuxus规则.md §5；完整版见 AGENTS.md §6.2；本枚经编码合并其中 8 条）
-// - Critical 事件清单（17 = 16 mpsc 旁路全覆盖 + CheckpointSaved broadcast-only）
+// - Critical 事件清单（18 = 17 mpsc 旁路全覆盖 + CheckpointSaved broadcast-only）
 // - INV-7/INV-8/INV-9 不变量
 // - 沙箱/QEEP（seccore 沙箱策略 + QEEP 零孤儿协议）
 // - 验证器本身（验证器层级金字塔，含 FormalVerifier）
@@ -70,7 +70,7 @@ use serde::{Deserialize, Serialize};
 /// | 类别 | 变体数 | 来源 |
 /// |------|--------|------|
 /// | 14 条红线（nuxus规则.md §5）| 8（本枚编码合并其中 8）| nuxus规则.md §5 / AGENTS.md §6.2 |
-/// | Critical 事件清单 | 17 | bus.rs CRITICAL_MPSC_VARIANTS(16) + CheckpointSaved |
+/// | Critical 事件清单 | 18 | bus.rs CRITICAL_MPSC_VARIANTS(17) + CheckpointSaved |
 /// | 不变量 | 3 | INV-7/8/9 |
 /// | 沙箱/QEEP | 2 | seccore/qeep-protocol |
 /// | 验证器 | 1 | 验证器层级金字塔 |
@@ -95,11 +95,14 @@ pub enum ImmutableSurface {
     /// R8: Top-K 必须用 select_nth_unstable（O(n) 替代 O(n log n) sort_by）
     RedlineTopKSelectNthUnstable,
 
-    // === Critical 事件清单（17 = 16 mpsc 旁路全覆盖 + CheckpointSaved broadcast-only）===
+    // === Critical 事件清单（18 = 17 mpsc 旁路全覆盖 + CheckpointSaved broadcast-only）===
     // v3.5 深度复审 B-P1-5：补齐红线 #6「mpsc 旁路 = 16」（真值源 = event-bus
     // `bus.rs::CRITICAL_MPSC_VARIANTS`=16 / `is_critical_mpsc_event` matches 臂）。
     // 此前仅冻结 6 个（含 1 个 broadcast-only CheckpointSaved）→ 其余 11 个真
     // mpsc Critical 事件的通道保障可被 spec 静默降级，护栏成洞。纯增量，不移除既有。
+    // （B-P1-5 为历史时点记载：彼时 mpsc=16。C-13/M09 2026-10-25 将
+    // ShadowBreakerTripped 升入 mpsc 旁路（16 → 17），本枚随 G-117/118 parity
+    // 双向对拍同批 +1 变体；现值真值源仍是 bus.rs 常量，勿从此注读数。）
     /// C1: CheckpointSaved（任务检查点保存完成；severity=Critical，历史仅走 broadcast）
     CriticalCheckpointSaved,
     /// C2: SkepticVeto（Parliament 怀疑者否决）
@@ -134,6 +137,10 @@ pub enum ImmutableSurface {
     CriticalCertifyIssued,
     /// C17: FailureRegistered（失败登记，mpsc 旁路）
     CriticalFailureRegistered,
+    /// C18: ShadowBreakerTripped（影子模式熔断器跳闸，mpsc 旁路；C-13/M09
+    /// 2026-10-25 随定级 Normal→Critical 升入不可进化面——不可逆 fail-closed
+    /// 状态变更的通道保障必须与 spec 冻结同步，G-117/118 parity 双向对拍）
+    CriticalShadowBreakerTripped,
 
     // === INV-7/8/9 不变量 ===
     /// INV-7: chimera-mas MemoryBudgetModel 117MB 预算（130MB×0.9）
@@ -156,7 +163,7 @@ pub enum ImmutableSurface {
 
 impl ImmutableSurface {
     /// 返回所有不可进化面（用于 validate() 全集检查）
-    pub const fn all() -> [ImmutableSurface; 31] {
+    pub const fn all() -> [ImmutableSurface; 32] {
         [
             // 8 条红线
             Self::RedlineLockAcrossAwait,
@@ -167,7 +174,7 @@ impl ImmutableSurface {
             Self::RedlineCargoLockDrift,
             Self::RedlineSqliteVecForbidden,
             Self::RedlineTopKSelectNthUnstable,
-            // 17 个 Critical 事件（16 mpsc 旁路全覆盖 + CheckpointSaved）
+            // 18 个 Critical 事件（17 mpsc 旁路全覆盖 + CheckpointSaved）
             Self::CriticalCheckpointSaved,
             Self::CriticalSkepticVeto,
             Self::CriticalRedTeamAudit,
@@ -185,6 +192,7 @@ impl ImmutableSurface {
             Self::CriticalFormalVerificationFailed,
             Self::CriticalCertifyIssued,
             Self::CriticalFailureRegistered,
+            Self::CriticalShadowBreakerTripped,
             // 3 个不变量
             Self::Invariant7MemoryBudget,
             Self::Invariant8ArchiveMonotonic,
@@ -214,7 +222,7 @@ impl ImmutableSurface {
             Self::RedlineCargoLockDrift => "redline-cargo-lock-drift",
             Self::RedlineSqliteVecForbidden => "redline-sqlite-vec-forbidden",
             Self::RedlineTopKSelectNthUnstable => "redline-top-k-select-nth-unstable",
-            // 17 个 Critical 事件
+            // 18 个 Critical 事件
             Self::CriticalCheckpointSaved => "critical-checkpoint-saved",
             Self::CriticalSkepticVeto => "critical-skeptic-veto",
             Self::CriticalRedTeamAudit => "critical-red-team-audit",
@@ -232,6 +240,7 @@ impl ImmutableSurface {
             Self::CriticalFormalVerificationFailed => "critical-formal-verification-failed",
             Self::CriticalCertifyIssued => "critical-certify-issued",
             Self::CriticalFailureRegistered => "critical-failure-registered",
+            Self::CriticalShadowBreakerTripped => "critical-shadow-breaker-tripped",
             // 3 个不变量
             Self::Invariant7MemoryBudget => "inv-7-memory-budget",
             Self::Invariant8ArchiveMonotonic => "inv-8-archive-monotonic",
@@ -272,7 +281,8 @@ impl ImmutableSurface {
             | Self::CriticalErrorSignatureMatched
             | Self::CriticalFormalVerificationFailed
             | Self::CriticalCertifyIssued
-            | Self::CriticalFailureRegistered => "critical-event",
+            | Self::CriticalFailureRegistered
+            | Self::CriticalShadowBreakerTripped => "critical-event",
 
             Self::Invariant7MemoryBudget
             | Self::Invariant8ArchiveMonotonic
@@ -294,7 +304,7 @@ impl ImmutableSurface {
     /// - L0 不实现 `FromStr` trait：其 Err 关联类型需单独定义 Display 实现，
     ///   而本项目 Option 语义更简洁（None 表示"不是不可进化面"，非错误）
     pub fn parse_surface(s: &str) -> Option<Self> {
-        // WHY 静态匹配而非 HashMap: 31 个变体的线性扫描性能足够（O(31)），
+        // WHY 静态匹配而非 HashMap: 32 个变体的线性扫描性能足够（O(32)），
         // 避免在 L0 引入 std::collections::HashMap 运行时开销
         for surface in Self::all().iter() {
             if surface.as_str() == s {
@@ -982,7 +992,7 @@ impl HarnessSpec {
     /// WHY 提供: gsoe-evolution SpecRegistry（P4-W15.2）调用此方法
     /// 验证 spec 是否试图突破不可进化面。返回不可进化面全集，
     /// SpecRegistry 据此与 spec 字段引用对比
-    pub fn immutable_surfaces() -> &'static [ImmutableSurface; 31] {
+    pub fn immutable_surfaces() -> &'static [ImmutableSurface; 32] {
         &ImmutableSurface::ALL_CONST
     }
 }
@@ -998,7 +1008,7 @@ impl ImmutableSurface {
     /// - all() 是 const fn，可在 const 上下文调用
     /// - ALL_CONST 是 const 静态关联常量，可返回 &'static 引用
     /// - immutable_surfaces() 需返回 &'static 引用，必须用 const 变量
-    pub const ALL_CONST: [ImmutableSurface; 31] = [
+    pub const ALL_CONST: [ImmutableSurface; 32] = [
         // 8 条红线
         ImmutableSurface::RedlineLockAcrossAwait,
         ImmutableSurface::RedlineRusqliteBlocking,
@@ -1008,7 +1018,7 @@ impl ImmutableSurface {
         ImmutableSurface::RedlineCargoLockDrift,
         ImmutableSurface::RedlineSqliteVecForbidden,
         ImmutableSurface::RedlineTopKSelectNthUnstable,
-        // 17 个 Critical 事件（16 mpsc 旁路全覆盖 + CheckpointSaved）
+        // 18 个 Critical 事件（17 mpsc 旁路全覆盖 + CheckpointSaved）
         ImmutableSurface::CriticalCheckpointSaved,
         ImmutableSurface::CriticalSkepticVeto,
         ImmutableSurface::CriticalRedTeamAudit,
@@ -1026,6 +1036,7 @@ impl ImmutableSurface {
         ImmutableSurface::CriticalFormalVerificationFailed,
         ImmutableSurface::CriticalCertifyIssued,
         ImmutableSurface::CriticalFailureRegistered,
+        ImmutableSurface::CriticalShadowBreakerTripped,
         // 3 个不变量
         ImmutableSurface::Invariant7MemoryBudget,
         ImmutableSurface::Invariant8ArchiveMonotonic,
@@ -1141,10 +1152,11 @@ mod tests {
     // ============================================================
 
     #[test]
-    fn test_immutable_surface_all_returns_31() {
-        // 验证不可进化面总数 = 31（8 红线 + 17 Critical + 3 INV + 2 沙箱/QEEP + 1 验证器）
+    fn test_immutable_surface_all_returns_32() {
+        // 验证不可进化面总数 = 32（8 红线 + 18 Critical + 3 INV + 2 沙箱/QEEP + 1 验证器；
+        // C-13/M09 后 17+1=18，C18=ShadowBreakerTripped）
         let all = ImmutableSurface::all();
-        assert_eq!(all.len(), 31);
+        assert_eq!(all.len(), 32);
     }
 
     #[test]
@@ -1680,9 +1692,9 @@ mod tests {
     #[test]
     fn test_immutable_surfaces_returns_static_ref() {
         let surfaces = HarnessSpec::immutable_surfaces();
-        assert_eq!(surfaces.len(), 31);
+        assert_eq!(surfaces.len(), 32);
         // 验证返回值与 ALL_CONST 内容一致
-        // WHY 不用 std::ptr::eq: immutable_surfaces() 返回 &[T; 31] 切片引用，
+        // WHY 不用 std::ptr::eq: immutable_surfaces() 返回 &[T; 32] 切片引用，
         // 在调用点可能产生临时切片，指针比较不稳定。值相等是更可靠的检查
         assert_eq!(surfaces, &ImmutableSurface::ALL_CONST);
         // 验证包含所有不可进化面类别
