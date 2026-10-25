@@ -666,7 +666,7 @@ git push origin v<x.y.z>-omega
 | `docs/architecture/DEEP_RESEARCH_*.md` | 优化算法 / LLM 架构映射深研报告(基于 Week 2 快照,部分已演进) | ✅ 存在 | ⭐ |
 | `docs/CONVENTIONS.md` | 根目录白名单规范 | ✅ 存在 | ⭐ |
 | `docs/audit/dimension_f_security.md` | 安全审计维度文档 | ✅ 存在 | ⭐ |
-| `Cargo.toml` | Workspace 根配置(**crate 数以 `workspace.members` 实测为准**，含 L0 `nexus-contracts`、L6 `omega-learner`、L10 `mca-gateway`/`nexus-app-server`、L3 `session-store`、L9 `mas-sched`/`nexus-hook`、L7 `nexus-subagent`;根 package `chimera-e2e-tests` 承载 37 个 E2E/安全/压测/控制闭环 test target(2026-09-22 实测 `grep -c '^\[\[test\]\]' Cargo.toml` = 37;target 名清单与计数以该文件 `[[test]]` 为唯一权威) | ✅ v2.28.2-omega | ⭐⭐⭐ |
+| `Cargo.toml` | Workspace 根配置(**crate 数以 `workspace.members` 实测为准**，含 L0 `nexus-contracts`、L6 `omega-learner`、L10 `mca-gateway`/`nexus-app-server`、L3 `session-store`、L9 `mas-sched`/`nexus-hook`、L7 `nexus-subagent`;根 package `chimera-e2e-tests` 承载 35 个 E2E/安全/压测/控制闭环 test target(2026-10-26 实测 `grep -c '^\[\[test\]\]' Cargo.toml` = 35;target 名清单与计数以该文件 `[[test]]` 为唯一权威) | ✅ v2.28.2-omega | ⭐⭐⭐ |
 | `README.md` | 项目入口 | ✅ 存在 | ⭐⭐ |
 | `CONTRIBUTING.md` | **协作流程唯一权威源**(分支/提交/PR/标签发布;2026-10-11 立) | ✅ 存在 | ⭐⭐⭐ |
 | `.trae/rules/nuxus规则.md` | 速查规则(硬约束/红线/基线子集,与根 `agents.md` 构成快速/详细两层) | ✅ 2026-10-11 同步 | ⭐⭐⭐ |
