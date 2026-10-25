@@ -9,10 +9,12 @@
 //!    变体即编译错误。即使未来 severity() 被误加回通配符(本 M1 修复的回归),
 //!    这道锁依然拦住未登记的变体。
 //! 2. **计数锁** `test_variant_count_lock` — 样本清单实际构造的变体数必须
-//!    等于 `VARIANT_COUNT_LOCK`(152);样本与序数表交叉断言一一对应
+//!    等于 `VARIANT_COUNT_LOCK`(常量定义即权威数值,散文不重复登记;
+//!    G-37 DECLS 亦对该常量行做机器对拍);样本与序数表交叉断言一一对应
 //!    (清单漏登/重登即失败)。
 //! 3. **分级分布锁** `test_severity_distribution_lock` — severity() 的
-//!    Critical/Info/Normal 分布必须等于 20/11/121;并与 bus.rs
+//!    Critical/Info/Normal 分布必须等于 `CRITICAL_LOCK`/`INFO_LOCK`/
+//!    `NORMAL_LOCK` 常量(数值以常量定义为权威);并与 bus.rs
 //!    `LANE_FORBIDDEN_SHARD` 的 20 个 Critical 名单双向互锁。
 //!
 //! # 维护规约(新增变体时必须同步修改)
@@ -1299,7 +1301,7 @@ fn test_variant_count_lock() {
         VARIANT_COUNT_LOCK,
         "NexusEvent 变体实际数量与锁定值不符: 清单需同步登记 enum 新变体"
     );
-    // 序数表与样本清单交叉锁: 152 个样本必须映射到 152 个不同序数
+    // 序数表与样本清单交叉锁: 全部样本必须映射到互不相同的一组序数
     // (清单漏登变体 → 样本数不足;序数表漏登 → 编译错误;双重登记 → 序数重复)
     let ordinals: HashSet<u32> = all.iter().map(variant_ordinals).collect();
     assert_eq!(

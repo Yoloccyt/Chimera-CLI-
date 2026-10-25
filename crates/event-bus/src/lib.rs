@@ -13,9 +13,13 @@
 //!
 //! # 核心职责
 //! - 提供类型安全的发布订阅(typed broadcast bus)
-//! - 定义 152 个 NexusEvent 跨层事件变体(2026-09-12 实测枚举时点为 145,
-//!   2026-10-07 现测 152; v2.27.1 后新增 TuiChatHistoryReplaced),
-//!   修正 4 处依赖方向违规(Part A 分析)
+//! - 定义全部 154 类 NexusEvent 跨层事件变体(本行保留计数:它是
+//!   `scripts/check_doc_drift.sh` DECLS「全部 N 类」锚点,数值由 G-37 门
+//!   与代码实测逐次对拍;改本行必须与 `tests/variant_count_test.rs` 的
+//!   `VARIANT_COUNT_LOCK` 和 `scripts/doc_count_freeze.txt` 同批,否则
+//!   drift 门判红。历史实测轨迹属 CHANGELOG 事务,不再于本散文逐版本
+//!   登记——ADR-223 D2 后散文残留旧值 152 即此教训),修正 4 处依赖
+//!   方向违规(Part A 分析)
 //! - 背压处理与慢消费者隔离,避免孤儿调用(架构红线)
 //! - MessagePack 序列化(ADR-004),支持跨进程投递
 //!

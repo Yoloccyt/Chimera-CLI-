@@ -90,7 +90,9 @@ impl EventTopic {
 /// 不匹配的事件从接收缓冲区移除（消费但不返回），与 `recv_matching` 语义一致。
 ///
 /// # 使用场景
-/// - TTG 仲裁层只需 Parliament + Budget 事件，无需接收全部 152 类
+/// - TTG 仲裁层只需 Parliament + Budget 事件，无需接收全部事件变体
+///   （变体计数以 `tests/variant_count_test.rs` 的 `VARIANT_COUNT_LOCK`
+///   为权威，散文不登记数值）
 /// - N9 PrerequisiteChecker 只需 Routing 事件
 /// - 减少无关事件对消费者缓冲区的占用
 ///

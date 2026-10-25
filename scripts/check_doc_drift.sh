@@ -154,6 +154,16 @@ load_freeze() {
 # on every version bump). The two agents.md anchors therefore rusted away, so
 # they were repointed at docs/reports/DOC-AUDIT-FACTS_*.md §11, which is the
 # designated document-side declaration spot. EREs must not contain '|'.
+#
+# C-04 (2026-10-25) scan-surface extension: the event-bus crate prose was
+# de-numerified (stale 152/20/11/121 survived the ADR-223 D2 relock; G-124
+# lesson: prose numbers drift, constants do not). The surviving digit-bearing
+# spots are now the designated declaration anchors: the lib.rs crate-header
+# declaration line ("全部 N 类" - the phrasing that once escaped the topic.rs
+# anchors), the registry topic-count doc lines, and the lock constants
+# themselves in variant_count_test.rs (the gate now cross-checks
+# VARIANT_COUNT_LOCK against the code-measured count on every run).
+# De-numerified prose points to these anchors; they must stay machine-checked.
 # ---------------------------------------------------------------------------
 DECLS=(
     'docs/reports/DOC-AUDIT-FACTS_2026-09-20.md|nexus_event_variants|定义 [0-9]+ 个 `NexusEvent` 变体'
@@ -162,6 +172,11 @@ DECLS=(
     'crates/event-bus/src/topic.rs|event_topic_variants|全部 [0-9]+ 个 topic'
     'crates/event-bus/src/pattern_index.rs|event_topic_variants|[0-9]+ 类 EventTopic'
     'docs/reports/DOC-AUDIT-FACTS_2026-09-20.md|workspace_crates|Workspace × \*\*[0-9]+ crates\*\*'
+    'crates/event-bus/src/lib.rs|nexus_event_variants|全部 [0-9]+ 类'
+    'crates/event-bus/src/registry.rs|event_topic_variants|[0-9]+ 类 EventTopic'
+    'crates/event-bus/src/registry.rs|event_topic_variants|[0-9]+ 类 topic'
+    'crates/event-bus/tests/variant_count_test.rs|nexus_event_variants|全部 [0-9]+ 个 NexusEvent 变体'
+    'crates/event-bus/tests/variant_count_test.rs|nexus_event_variants|VARIANT_COUNT_LOCK: usize = [0-9]+'
 )
 
 # ---------------------------------------------------------------------------
@@ -309,7 +324,8 @@ update_baseline() {
 selftest() {
     local fx
     fx="$(mktemp -d)"
-    mkdir -p "$fx/crates/event-bus/src" "$fx/scripts" "$fx/docs/reports"
+    mkdir -p "$fx/crates/event-bus/src" "$fx/crates/event-bus/tests" \
+        "$fx/scripts" "$fx/docs/reports"
 
     cat > "$fx/crates/event-bus/src/types.rs" <<'RS'
 //! fixture types
@@ -337,6 +353,20 @@ impl EventTopic {
 RS
     cat > "$fx/crates/event-bus/src/pattern_index.rs" <<'RS'
 //! - 与既有 `topic.rs`（2 类 EventTopic 订阅侧过滤）互补：PatternIndex
+RS
+    # C-04 anchors: lib.rs declaration line, registry topic-count doc lines,
+    # and the lock constants in variant_count_test.rs (must exist in the
+    # fixture or run_check exits 2 on "declaration target missing").
+    cat > "$fx/crates/event-bus/src/lib.rs" <<'RS'
+//! - 定义全部 3 类 NexusEvent 跨层事件变体(fixture declaration anchor)
+RS
+    cat > "$fx/crates/event-bus/src/registry.rs" <<'RS'
+/// 获取事件所属主题(2 类 EventTopic)(fixture)
+/// 映射到 2 类 topic(fixture)
+RS
+    cat > "$fx/crates/event-bus/tests/variant_count_test.rs" <<'RS'
+/// 构造全部 3 个 NexusEvent 变体的最小实例清单(fixture)
+const VARIANT_COUNT_LOCK: usize = 3;
 RS
     cat > "$fx/Cargo.toml" <<'TOML'
 [workspace]
