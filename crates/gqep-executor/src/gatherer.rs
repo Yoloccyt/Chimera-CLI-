@@ -125,7 +125,8 @@ impl GqepExecutor {
     /// 2. 每个 future 经 `entangle` 包裹(实现孤儿检测 + 单操作超时)
     /// 3. 按上界分批入流，`collect_bounded` 流式处理 + 单一绝对 deadline 包裹
     /// 4. 四段守恒记账（`succeeded + failed + abandoned + not_started == total`）
-    /// 5. 检查 `orphan_reports`,发布 `OrphanCallDetected` 事件(Critical)
+    /// 5. 取走(`take_orphan_reports`)孤儿报告,发布 `OrphanCallDetected`
+    ///    事件(Critical,发布即清空,不重发历史孤儿)
     /// 6. 发布 `GatherCompleted` 事件
     ///
     /// # 参数
@@ -173,7 +174,8 @@ impl GqepExecutor {
     /// 流程与原子性保证与原 `gather` 逐行等价(仅 `String` 特化提升为 `<T>`):
     /// 1. 每个 future 经 `entangle` 包裹(孤儿检测 + 单操作超时)
     /// 2. `collect_with_deadline` 流式处理 + 全局 deadline 包裹
-    /// 3. 检查 `orphan_reports`,发布 `OrphanCallDetected` 事件(Critical)
+    /// 3. 取走(`take_orphan_reports`)孤儿报告,发布 `OrphanCallDetected`
+    ///    事件(Critical,发布即清空,不重发历史孤儿)
     /// 4. 发布 `GatherCompleted` 事件
     async fn gather_generic<T: Send + 'static>(
         &self,
@@ -416,13 +418,19 @@ impl GqepExecutor {
         }
     }
 
-    /// 发布所有已检测到的孤儿调用事件
+    /// 发布所有已检测到的孤儿调用事件(发布即清空)
     ///
-    /// 从 QEEP `OrphanDetector` 获取孤儿报告,逐个发布 `OrphanCallDetected` 事件。
+    /// 从 QEEP `OrphanDetector` **取走**(drain)孤儿报告,逐个发布
+    /// `OrphanCallDetected` 事件,队列随之清空——后续 gather/batch 不会
+    /// 重发已发布过的历史孤儿(修复 M11:孤儿队列只增不清 + 每轮全量
+    /// 重发的 Critical 事件重复风暴)。
     /// 事件为 Critical 级别(对应 Claude Code 尸检 5.4% 孤儿调用教训),
-    /// 发布失败仅记录 warn 日志,不阻塞聚集流程。
+    /// 发布失败仅记录 warn 日志,不阻塞聚集流程(该报告随取走而消费,
+    /// 与旧行为「下轮全量重发」相比不再隐式重试)。
     pub(crate) async fn publish_orphan_events(&self) {
-        let orphan_reports = self.qeep.orphan_reports();
+        // WHY take 而非只读快照:发布即消费,防止下一轮全量重发已发布过的
+        // 孤儿报告(OrphanCallDetected 为 Critical 级,重复风暴代价高)。
+        let orphan_reports = self.qeep.take_orphan_reports();
         for report in &orphan_reports {
             let event = NexusEvent::OrphanCallDetected {
                 metadata: EventMetadata::new("gqep-executor"),
@@ -450,6 +458,8 @@ impl GqepExecutor {
     /// 获取孤儿调用数量
     ///
     /// 对应 Claude Code 尸检 5.4% 孤儿调用指标,用于监控告警。
+    /// 语义收敛为「待发布数」:`publish_orphan_events` 发布即清空
+    /// (`take_orphan_reports` drain),已被发布过的孤儿不再计入。
     pub fn orphan_count(&self) -> usize {
         self.qeep.orphan_count()
     }
@@ -738,6 +748,80 @@ mod tests {
             }
         }
         assert!(found_orphan, "应发布 OrphanCallDetected 事件(Critical)");
+    }
+
+    /// C-19 / M11: 双轮发布不重复——孤儿事件「发布即清空」
+    ///
+    /// 旧行为缺陷:`publish_orphan_events` 只读快照 + 全量重发,孤儿队列
+    /// 只增不清,第二轮 gather 会把第一轮已发布的孤儿再发一遍(Critical
+    /// 事件重复风暴)。take 语义修复后:
+    /// ① 第一轮 gather 发布孤儿事件且队列清空(orphan_count 归零);
+    /// ② 第二轮 gather 不再重发历史孤儿。
+    #[tokio::test]
+    async fn test_orphan_events_not_republished_across_gathers() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let executor = GqepExecutor::new(GqepConfig::default(), bus.clone());
+
+        // Arrange: 制造孤儿(entangle_spawn + abort)
+        let handle = executor.qeep.entangle_spawn(async {
+            tokio::time::sleep(Duration::from_secs(10)).await;
+            Ok("done".to_string())
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        handle.abort();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(executor.orphan_count() > 0, "应已检测到孤儿");
+
+        // Act 1: 第一轮 gather,触发孤儿事件发布
+        let _ = executor
+            .gather(vec![Box::pin(async { Ok("round-1".to_string()) })])
+            .await;
+
+        // Assert 1: 发布即清空——待发布数归零
+        assert_eq!(
+            executor.orphan_count(),
+            0,
+            "第一轮发布后孤儿队列应清空(待发布数=0)"
+        );
+
+        // Assert 2: 第一轮确实发布了 OrphanCallDetected
+        // (注意事件序:publish_orphan_events 先于 GatherCompleted)
+        let mut first_round_found = false;
+        for _ in 0..5 {
+            match rx.recv_timeout(Duration::from_millis(100)).await {
+                Ok(NexusEvent::OrphanCallDetected { .. }) => {
+                    first_round_found = true;
+                    break;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        assert!(first_round_found, "第一轮 gather 应发布 OrphanCallDetected");
+
+        // Act 2: 第二轮 gather(无新孤儿)
+        let _ = executor
+            .gather(vec![Box::pin(async { Ok("round-2".to_string()) })])
+            .await;
+
+        // Assert 3: drain 第二轮事件流,不允许出现 OrphanCallDetected
+        // (第一轮 break 时可能残留未消费的 GatherCompleted,一并排空)
+        let mut republished = 0;
+        for _ in 0..10 {
+            match rx.recv_timeout(Duration::from_millis(100)).await {
+                Ok(NexusEvent::OrphanCallDetected { .. }) => {
+                    republished += 1;
+                }
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
+        assert_eq!(
+            republished, 0,
+            "第二轮 gather 不应重发历史孤儿事件(发布即清空)"
+        );
+        assert_eq!(executor.orphan_count(), 0, "全程待发布数应保持 0");
     }
 
     #[tokio::test]

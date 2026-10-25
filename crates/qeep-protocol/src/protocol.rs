@@ -235,6 +235,24 @@ impl QeepProtocol {
         detector.orphan_count()
     }
 
+    /// 取走全部孤儿调用报告并清空队列(drain 语义)
+    ///
+    /// 与 [`Self::orphan_reports`] 的只读克隆不同,本方法**消费**报告:
+    /// 返回积累的全部孤儿报告并把内部队列清空。发布方应在本方法返回后
+    /// 逐条发布,实现「发布即清空」——否则孤儿队列只增不清,每轮发布都会
+    /// 全量重发历史报告,形成 Critical 事件重复风暴(M11)。
+    /// 只读 API(`orphan_reports`/`orphan_count`)保留,语义收敛为
+    /// 「待发布数」的查询面。
+    pub fn take_orphan_reports(&self) -> Vec<OrphanReport> {
+        let mut detector = self
+            .inner
+            .orphan_detector
+            .lock()
+            // WHY unwrap_or_else: Mutex poisoned 后的安全恢复,与 `orphan_reports` 一致。
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        detector.take()
+    }
+
     /// 获取当前所有待处理调用的 ID 列表
     ///
     /// 用于调用者按 id 查询具体状态(见 `call_state`/`call_ack`)。

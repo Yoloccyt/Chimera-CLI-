@@ -1325,3 +1325,74 @@ async fn test_protocol_clone_state_isolation() {
     assert_eq!(protocol.pending_count(), 0, "pending 应为 0");
     assert_eq!(cloned.pending_count(), 0, "克隆 pending 也应为 0");
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// C-19 / M11: take_orphan_reports drain 语义
+// 孤儿队列「发布即清空」的协议侧保证:取走后队列清空、只读 API 同步
+// 收敛、清空后新孤儿仍可正常收集。
+// ═══════════════════════════════════════════════════════════════════
+
+/// 测试 take_orphan_reports 取走报告并清空队列
+///
+/// 验证:① 首次 take 返回全部孤儿报告;② take 后 orphan_count/orphan_reports
+/// (只读 API)同步归零——语义收敛为「待发布数」;③ 再次 take 返回空;
+/// ④ 清空后产生的新孤儿仍能正常检测与 take(不因清空丢失检测能力)。
+#[tokio::test]
+async fn test_take_orphan_reports_drains_queue() {
+    // P9-T3: 协议超时参数缩放;缺省 scale=1.0 与原行为等价,CI fast 档 scale=0.1
+    let protocol = QeepProtocol::new(scaled_timeout!(30));
+
+    // Arrange: 制造一个孤儿(spawn entangle 内部长睡眠 → abort 触发 OrphanGuard)
+    let p = protocol.clone();
+    let handle = tokio::spawn(async move {
+        p.entangle(async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            Ok(())
+        })
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    handle.abort();
+    let _ = handle.await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    assert_eq!(protocol.orphan_count(), 1, "应检测到 1 个孤儿");
+
+    // Act 1 + Assert 1: 首次 take 返回该孤儿
+    let taken = protocol.take_orphan_reports();
+    assert_eq!(taken.len(), 1, "首次 take 应取走全部孤儿");
+    assert!(!taken[0].reason.is_empty(), "报告应携带原因");
+
+    // Assert 2: 只读 API 同步归零(语义收敛为「待发布数」)
+    assert_eq!(protocol.orphan_count(), 0, "take 后待发布数应为 0");
+    assert!(
+        protocol.orphan_reports().is_empty(),
+        "take 后只读视图应为空"
+    );
+
+    // Assert 3: 再次 take 返回空(幂等,不会重复交付)
+    let taken_again = protocol.take_orphan_reports();
+    assert!(taken_again.is_empty(), "二次 take 不应重复交付旧报告");
+
+    // Act 2 + Assert 4: 清空后新孤儿仍可正常收集与 take
+    let p2 = protocol.clone();
+    let handle2 = tokio::spawn(async move {
+        p2.entangle(async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            Ok(())
+        })
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    handle2.abort();
+    let _ = handle2.await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let new_taken = protocol.take_orphan_reports();
+    assert_eq!(new_taken.len(), 1, "清空后新孤儿应可被正常 take");
+    assert_ne!(
+        new_taken[0].call_id.0, taken[0].call_id.0,
+        "新报告的 call_id 应与已取走的旧报告不同"
+    );
+    assert_eq!(protocol.orphan_count(), 0, "新报告取走后队列再次清空");
+}
