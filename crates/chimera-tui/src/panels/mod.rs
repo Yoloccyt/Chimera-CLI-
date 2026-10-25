@@ -72,7 +72,7 @@ pub mod osa_sparse;
 /// P1(ADR-073):超窗兜底面板 — 展示 OverWindowFallbackTriggered 触发记录
 pub mod overwindow;
 pub mod parliament;
-/// Task 3.7:PVL 过程评分面板 — 九维度过程评分（L10 → L7 向下依赖）
+/// Task 3.7:PVL 过程评分面板 — 九维度过程评分（事件驱动待接线,PS-2 批次3 已移除越层直调）
 pub mod pvl_score;
 pub mod quest;
 pub mod resource_monitor;

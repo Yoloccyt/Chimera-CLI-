@@ -1,4 +1,4 @@
-//! TUI PVL 过程评分面板 — 九维度过程评分可视化（Task 3.7:L10 → L7 向下依赖）
+//! TUI PVL 过程评分面板 — 九维度过程评分可视化（Task 3.7:事件驱动待接线）
 //!
 //! 对应架构层:L10 Interface
 //! 对应 PanelId:PvlScore
