@@ -8,7 +8,7 @@
 //! | 组 | 类型 |
 //! |---|---|
 //! | app | ThreadId/TurnId/ItemId/ReqId/UserInput/Thread/Item/ItemStatus/AppTokenUsage/ApprovalRequest/ApprovalDecision/PermissionMode/ThreadStartParams/AppOp(5 变体)/AppEvent(2 变体) |
-//! | errors | ErrorLayer（7 plane × 10 kind 全覆盖）/EventFailure/ToolFailure/NexusError(7 变体) |
+//! | errors | ErrorLayer（7 plane × 10 kind 全覆盖）/EventFailure/ToolFailure/NexusError(8 变体) |
 //! | event_v2 | EventNamespace/EventTypeId/ImportanceScore/Compressibility/EventPattern/EventMetadataV2/NamespaceQuotaV2 |
 //! | experience_card | AtomicOperator/ThreeFactorScore/NormalizedThreeFactor/ErrorSignature/ExecutionStatus/EnvironmentInfo/CardMetadata/ExperienceCard |
 //! | token_evidence | ToolCallRecord/TokenLedgerEntry/SegmentCreationReason/SegmentMetadata |
@@ -531,6 +531,10 @@ fn any_nexus_error() -> impl Strategy<Value = NexusError> {
         any_text().prop_map(|details| NexusError::SandboxViolation { details }),
         Just(NexusError::NestedSubAgentForbidden),
         any_text().prop_map(|server_name| NexusError::McpDisconnected { server_name }),
+        // C-23:满载变体入代表集（与嵌套变体在 wire 面可区分）
+        (any::<usize>(), any::<usize>()).prop_map(|(active, limit)| {
+            NexusError::SwarmCapacityExceeded { active, limit }
+        }),
     ]
 }
 

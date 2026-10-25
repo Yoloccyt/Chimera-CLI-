@@ -25,15 +25,19 @@
 #   NEW public types with no row are red, and a row whose type moved/disappeared is STALE
 #   red -- so a W3-style physical move must re-key rows in the same commit.
 #
-# CLAIM types=227 listed=227 open=56 closed=171
+# CLAIM types=227 listed=227 open=57 closed=170
 #
 # CURRENT STATE (machine-verified: G-115 recomputes the CLAIM line above from the live tree
 # plus these rows on every run, so this paragraph can no longer rot in silence -- ADR-218):
-# 56 of the 227 rows are open, i.e. carry #[non_exhaustive]; 171 are closed. The baseline
+# 57 of the 227 rows are open, i.e. carry #[non_exhaustive]; 170 are closed. The baseline
 # emitted 2026-10-14 genuinely had ZERO open rows, which is why encoding it then "encoded no
-# new decision"; the 56 were opened afterwards, one type at a time, off ADR-215's B0
+# new decision"; the first 56 were opened afterwards, one type at a time, off ADR-215's B0
 # shortlist (21 zero-mention enums + the measured no-literal structs), compile-proven by the
 # 11 E0639s it bit inside L0's own tests/wire_roundtrip.rs before any consumer was touched.
+# Row 57 (safety/errors::NexusError) was reclassified closed->open by ADR-224 (C-23/D7):
+# a cross-layer error contract is an evolving boundary carrier (ADR-215 R-S1), and its
+# variants had already grown with WI delivery (WI-21 EventQuotaExceeded, C-23
+# SwarmCapacityExceeded) -- it is NOT off the B0 zero-mention shortlist (it has consumers).
 # WHY the header is now a judgement target: until this line existed, this paragraph still
 # read "all 227 rows are closed, because L0 measures ZERO #[non_exhaustive] today" while 16
 # src files carried the attribute and 56 rows said open. Prose outlives the act that made it
@@ -105,7 +109,7 @@ ENUM | type=safety/calibration::JudgeTier | class=closed
 ENUM | type=safety/command_validation::AttackType | class=closed
 ENUM | type=safety/errors::ErrorLayer | class=closed
 ENUM | type=safety/errors::EventFailure | class=closed
-ENUM | type=safety/errors::NexusError | class=closed
+ENUM | type=safety/errors::NexusError | class=open | reason=ADR-224 closed->open reclass (C-23/D7): cross-layer error contract is an evolving boundary carrier (ADR-215 R-S1), not a finalized value type (R-S2); variants already grew with WI delivery (WI-21 EventQuotaExceeded, C-23 SwarmCapacityExceeded)
 ENUM | type=safety/errors::RecoveryStrategy | class=closed
 ENUM | type=safety/errors::ToolFailure | class=closed
 ENUM | type=safety/sensitive::SensitiveDisposition | class=closed

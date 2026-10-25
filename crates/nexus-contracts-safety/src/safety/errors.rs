@@ -32,7 +32,7 @@
 //! - 方案 :237（WI-A2 行）：『| WI-A2 | `nexus-contracts::errors.rs` | `enum ErrorLayer` + `fn to_nexus_error(self)->NexusError`（纯类型） | W3 | 否 |』
 //! - 方案 :150（L0-4 行）：『| L0-4 | `NexusError` 层级映射表 | 当前 `errors.rs` 仅顶层枚举；建各层 thiserror→NexusError 显式映射枚举（纯类型，不引入 trait object） | `errors.rs` + 各 crate `error.rs` | `source()` 约束（`ADR-184`） | A \[推断\] |』
 //!
-//! **双 NexusError 陷阱**：映射目标是 L0 contracts 版 [`NexusError`]（本文件 10 变体
+//! **双 NexusError 陷阱**：映射目标是 L0 contracts 版 [`NexusError`]（本文件 11 变体
 //! wire 枚举），**非** L1 `crates/nexus-core/src/error.rs` 的独立同名枚举
 //! （`InvalidClvDimension` 等，两者不互通，勿接错）。
 //!
@@ -54,7 +54,12 @@ use thiserror::Error;
 /// - **应用层（CLI/TUI）**: anyhow 包装本类型输出人类可读消息
 /// - **协议面**: `AppEvent::Error { code, message }` 的 `code` 取本枚举
 ///   变体名（app.rs 契约），`message` 取 `#[error]` 文本
+// #[non_exhaustive] 随 ADR-224 closed→open 重分类引入（C-23/D7）：跨层统一错误契约
+// 属 ADR-215 R-S1「演化型边界载体」，变体随 WI 演进追加（EventQuotaExceeded/WI-21、
+// SwarmCapacityExceeded/C-23），closed（R-S2 定型 value 类型）对本枚举属错位分类；
+// 台账登记 scripts/l0_extensibility_class_freeze.txt（G-115 双向锁定：属性与行同提交）。
 #[derive(Debug, Clone, PartialEq, Error, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum NexusError {
     /// 事件序列化失败
     #[error("event serialization failed: {0}")]
@@ -117,6 +122,18 @@ pub enum NexusError {
         /// 配额上限
         max: usize,
     },
+    /// Swarm 容量满载（ADR-148 活跃上限；嵌套违规另见 [`NestedSubAgentForbidden`]）
+    ///
+    /// 与 [`NestedSubAgentForbidden`] 可区分：本变体仅表达「活跃数已达上限」，
+    /// 不携带嵌套语义（C-23 引入；此前 nexus-subagent 满载路径复用嵌套变体，
+    /// 二者不可诊断区分）。
+    #[error("swarm capacity exceeded: {active}/{limit} active subagents")]
+    SwarmCapacityExceeded {
+        /// 当前活跃 SubAgent 数
+        active: usize,
+        /// 容量上限（SWARM_LIMIT）
+        limit: usize,
+    },
 }
 
 // ============================================================
@@ -163,6 +180,9 @@ impl Recoverable for NexusError {
             Self::SandboxViolation { .. } => RecoveryStrategy::FailFast,
             // 嵌套禁止: 快速失败（硬约束）
             Self::NestedSubAgentForbidden => RecoveryStrategy::FailFast,
+            // Swarm 满载: 快速失败（容量是硬边界,与嵌套禁止同策略;
+            // 是否待槽位释放后重派由调用方治理决策,不在策略层自动重试）
+            Self::SwarmCapacityExceeded { .. } => RecoveryStrategy::FailFast,
             // MCP 断连: 降级内置（WI-22 降级链）
             Self::McpDisconnected { .. } => RecoveryStrategy::FallbackToBuiltin,
             // 审批拒绝: 快速失败（等待用户新决策，不自动重试）
@@ -182,7 +202,7 @@ impl Recoverable for NexusError {
 /// 错误分层分类 — 各层错误按产生平面（plane）归类后映射到 [`NexusError`]
 ///
 /// # 双 NexusError 陷阱
-/// 映射目标是 **L0 contracts 版** [`NexusError`]（本文件 10 变体 wire 枚举），**非**
+/// 映射目标是 **L0 contracts 版** [`NexusError`]（本文件 11 变体 wire 枚举），**非**
 /// L1 `crates/nexus-core/src/error.rs` 的独立同名枚举（两者不互通，勿接错）。
 ///
 /// # 形态（两级混合）
@@ -418,7 +438,7 @@ mod tests {
     /// (一错一策:每个错误声明恢复策略,同错误多次声明恒同,可被 AERA 按 effort 可重放调度)
     #[test]
     fn recovery_strategy_total_and_deterministic() {
-        // 构造全部 10 个变体的代表值(总数随变体新增而同增 —— 穷尽覆盖)
+        // 构造全部 11 个变体的代表值(总数随变体新增而同增 —— 穷尽覆盖)
         let all: Vec<NexusError> = vec![
             NexusError::SerializationError("s".into()),
             NexusError::InvalidEventType("t".into()),
@@ -446,10 +466,11 @@ mod tests {
                 current: 1,
                 max: 10,
             },
+            NexusError::SwarmCapacityExceeded { active: 8, limit: 8 },
         ];
         assert_eq!(
             all.len(),
-            10,
+            11,
             "新增 NexusError 变体必须在此登记并声明恢复策略(穷尽覆盖顺势增长)"
         );
         for err in &all {
@@ -476,7 +497,7 @@ mod tests {
     // ErrorLayer 分层分类测试(WI-A2 / v3.0 方案 :237 + L0-4 :150)
     // ============================================================
 
-    /// 全 10 kind 代表值(总数随 kind 新增而同增 —— 穷尽覆盖纪律,镜像上方 10 变体 vec 守卫)
+    /// 全 10 kind 代表值(总数随 kind 新增而同增 —— 穷尽覆盖纪律,镜像上方 11 变体 vec 守卫)
     fn all_error_layer_kinds() -> Vec<ErrorLayer> {
         vec![
             ErrorLayer::Event(EventFailure::SerializationError("s".into())),
