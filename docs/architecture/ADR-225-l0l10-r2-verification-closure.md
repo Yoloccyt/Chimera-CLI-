@@ -87,11 +87,23 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 
 ## 4. 实施结果总账（2026-10-26 收口时点）
 
-- **已落地 4 单**：C-57 `c8fcd1c`、C-58 `5af76c9`、C-59 `b043674`、C-60 `8432504`。全部逐文件 `git add`，未用 `-A`/`.`；提交消息经字节级校验为合法 UTF-8。
-- **在途改动纪律**：`git status` 实测 16 个已跟踪文件 modified（622+/112-）+ 3 untracked，其中**仅 2 个落在 R2 单域内**（已随 C-58/C-59 收口），其余 **14 个属在途批次，R2 全程未代提交、未触碰**；`git stash`/`reset --hard`/`checkout --` 按 ADR-222 D6 明令禁用。
-- **待执行 14 单**：C-61..C-74（清单与影响面见交付物 03 §3）。
-- **对 R1 总账的事实订正（只加注不改写）**：C-08/C-09/C-25/C-31/C-36 已提交；C-27 内容已在 HEAD 由 `7b7e571`(C-45) 承载；C-42/C-44/C-47/C-48/C-54/C-55 目标态已达成；⇒ **R1 未完面 = 仅 C-29**。
-- **基线**：`cargo check` rc=0 / `cargo clippy` rc=0 / 真全量 `cargo test --no-fail-fast` = **447 target / 11375 passed / 4 failed**（4 条逐 target 隔离复测 0 failed ⇒ 判为并行负载敏感型 flaky，登记 M57 不作回归）；全门集修复前 `ok=126 mismatch=1 skip=7/134`，G-85 解除后待整体复跑。
+> 本总账是 `git log` 的函数。下列哈希均为 `git log --oneline` 实测在册项；后续批次引用时须现场重跑，不得引用本行计数。
+
+- **已落地 7 单**（逆序 revert 即回滚路径）：
+  | 单 | 提交 | 内容 | 件数 |
+  |---|---|---|---|
+  | C-57 | `c8fcd1c` | `scripts/measure_startup.ps1` 字节级前置 UTF-8 BOM，解 G-85 这条 `ci.yml` check job 阻断红（M39） | 1 |
+  | C-58 | `5af76c9` | 承 R1 C-24：`decb-governor` `validate()` 两组 `is_finite()` fail-closed + 2 测试 | 1 |
+  | C-59 | `b043674` | 承 R1 C-53：`nexus-contracts-seams` 去 `VectorStore` 类比失实（纯注释） | 1 |
+  | C-60 | `8432504` | 承 R1 C-41：ADR-224 纳入版本控制 | 1 |
+  | C-66 | `351b589` | **新门 G-135/G-136 四件同批**：`check_pub_api_leak.py` + `l0b_pub_signature_freeze.txt` + `gate_manifest.toml` 两条 + `ci.yml` 一步（D6） | 4 |
+  | C-75 | `f1e960b` | 本 ADR-225 落档 | 1 |
+  | C-76 | `66733e7` | ADR-224 追加 §10 R2 状态订正注（只加注不改写；M40/M41/M42） | 1 |
+- **新门实测读数**【亲验】：`check_pub_api_leak.py --selftest` rc=0（**14 assertions PASSED**）；live rc=0（`sites=13 rows=13 scanned_pub_fn=408`）；`check_gates_provenance.py` 与其 `--selftest` 均 rc=0（方向 A/B 通过，新脚本已登记非孤儿）。立门前两处自揭的检测缺陷已**当场修判据而非放宽**：只匹配 `ident ::` 路径头会漏过经 `use` 引入的裸名（三处真实返回位被报成干净），以及函数名上的泛型参数列被丢弃——两者均已固定为 selftest 夹具。零生产码改动 ⇒ 无行为变更、无公共 API 扩大。
+- **在途改动纪律**：`git status` 现取 14 个已跟踪文件 modified + 2 untracked，全部属**在途批次，R2 全程未代提交、未触碰**；本轮 7 单均为**逐文件 `git add`**，未用 `-A`/`.`；`git stash`/`reset --hard`/`checkout --` 按 ADR-222 D6 明令禁用；提交消息经字节级校验为合法 UTF-8。
+- **待执行 13 单**：C-61、C-62、C-63、C-64a、C-64b、C-65、C-67、C-68、C-69、C-70、C-71、C-72、C-73、C-74（清单与影响面见交付物 03 §3；编号 C-75/C-76 已被文档单占用，后续单从 **C-77** 起）。
+- **对 R1 总账的事实订正（已以 C-76 入库）**：C-08/09/25/31/36 已提交；C-27 内容已在 HEAD 由 `7b7e571`(C-45) 承载；C-42/44/47/48/54/55 目标态已达成 ⇒ **R1 未完面 = 仅 C-29**。
+- **基线**：`cargo check` rc=0 / `cargo clippy` rc=0 / 真全量 `cargo test --no-fail-fast` = **447 target / 11375 passed / 4 failed**（4 条逐 target 隔离复测 0 failed ⇒ 并行负载敏感型 flaky，登记 M57 不作回归）；全门集修复前 `ok=126 mismatch=1 skip=7/134`，G-85 解除后与 G-135/G-136 入册后的复跑读数见 `docs/reports/l0l10-r2-baseline-2026-10-26.md`；release `--ignored` 档在采「构建与运行解耦 + `--jobs 1`」执行中，尚未出数。
 
 ## 5. 待裁议程（R2 移交）
 
