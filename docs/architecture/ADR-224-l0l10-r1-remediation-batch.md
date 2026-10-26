@@ -144,3 +144,51 @@
 - **本 ADR 落档验证**：adr_index 链接核对——索引行文件名与磁盘实体 `ADR-224-l0l10-r1-remediation-batch.md` 一致；adr_index 三源对账脚本现取通过。各单验证命令见施工图 §8 与各单提交记录。
 - **回滚**：本文档面回滚 = 删除本文件 + 删除 adr_index 对应行（两文件同批）；代码面回滚按施工图 §9.2 耦合组**整提交 revert**（C-13 事件全套 / C-08 派生器+冻结表 / C-03/C-45 派生链 / C-23 错误契约 / C-12 通道形态等耦合组禁止半 revert），任何 revert 后重跑施工图 §8.2 十二道门 + §8.3 受影响门全集 + `cargo check --workspace --all-targets`。
 - **波次门（W5）**：G-53/G-51/G-37 + G-70 验收随 W5 其余单（C-42..C-55）收口时统一执行，本单不代跑、不预写结果。
+
+---
+
+## 10. R2 状态订正注（2026-10-26，承 ADR-225；历史正文只加注不改写）
+
+> 本节是**追加**，不是对 §6/§7 的改写。§6 总账与 §7.2 表的登记时点是 2026-10-25 收口刻，
+> 其自定判据就是「实施结果以 git log 各单提交与工作树现取为准」—— 既然 git log 已变，
+> 该表必须可被后续现取推翻。下列逐条均附 2026-10-26 亲验命令读数；引用本 ADR 时以本节为准。
+
+### 10.1 §7.2「本轮阻塞/跳过 8 单」的现势状态
+
+| 单 | §7.2 登记 | 2026-10-26 现势【亲验】 |
+|---|---|---|
+| C-08 | 未提交落地 | **已落地** `a4438ca`（提交正文自陈「补救轮：主批该单 blocked 未提交，本轮补提交」） |
+| C-09 | 未提交落地 | **已落地** `c67137d` |
+| C-24 | 未提交落地 | **已落地** `5af76c9`（R2 侧编号 C-58；施工内容即 §7.2 所述工作树备货，复验后提交，未重写） |
+| C-25 | 未提交落地 | **已落地** `7c659ef` |
+| C-27 | 未提交落地（施工内容已备工作树） | **判定订正：内容已在 HEAD**。`crates/seccore/src/sandbox.rs:736-746` 已含本单要求的全部超时清理语义差异注释，并逐字自陈「(l0l10-r1 L11 处置:否决修复、仅注差异…)」；`git diff --quiet -- crates/seccore/src/sandbox.rs` rc=0；`git log -S "L11 处置" -- crates/seccore/src/sandbox.rs` → **`7b7e571` = C-45**，即由 C-45 批同批落地、无独立 C-27 提交。§7.2 的「未提交」与进度报告 §5.3 的「需重派 14 单」在此单上均与实况不符 |
+| C-29 | 未实施（工作树无施工痕迹） | **仍未实施，且裁决面已变**：见 §10.3 |
+| C-31 | 未提交落地 | **已落地** `bd68767` |
+| C-36 | 未提交落地 | **已落地** `e3e0046` |
+
+### 10.2 §6「W5 在途 C-42..C-55」与 §7.1 继承待裁项的达成情况
+
+- **已达成（目标态经内容级复测确认，无需再出单）**：**C-42**（M06 三处落点 —— `gate_manifest.toml` G-09 note 现为「可达性棘轮（权威值当场由脚本自报，勿写死）」、`agents.md` 已指针化、`CODE_WIKI.md` 三方一致性行已带 ADR-222 取代订正注）、**C-44**（十六源手册头注已有 2026-10-26「编号空间批注」）、**C-47**（`adr_index.md` 已自述 ADR-075~083 九行补录）、**C-48**（`adr_index.md` ADR-015 行已含 `model-router → mca-gateway / CODE_WIKI §3.12`）、**C-54**（`docs/tui/README.md` 已订正 v3-engine 现状描述并链接 `[ADR-224 D5]`；该链接在本节 §10.4 的 C-41 结案前是悬空的，现已闭合）、**C-55**（十六源手册已有 2026-10-26「forbid 计数批注」）。另 **C-41/C-53/C-50 已以提交形式落地**。
+- **仍可成立但不宜再称「blocked」**：C-43/C-45/C-46/C-49/C-51/C-52 均已在 §6 的 done 名单，与其一致。
+- **因此本 ADR §7.2 的真实未完面 = 仅 C-29 一项**（其余全部或已提交、或目标态已达成、或已由他单承载）。R2 据此不再为上述单据重开变更单。
+
+### 10.3 D1（M22 / C-29）的执行前置已变 —— 决策维持，路径补前置
+
+业主 2026-10-26 裁为**先加固再接线**。R2 实测两条新前置（登 ADR-225 D4 / 登记册 M50、M51）：
+
+1. `crates/session-store/src/**` 内 `CancellationToken` / `impl Drop` / `JoinHandle` / `shutdown` / `.abort(` **五个关键词全零命中**，而 `writer.rs:137-139` 无条件 `spawn_flush_loop(inner.clone())` 且 `:485` 不返回句柄、`types.rs:249 spawn_flush_loop: true` 为默认，同时 `writer.rs:150-152` 自陈「Ok 表示入队成功（非 fsync 确认）」⇒ 直接按 D1 接线会把**不可取消的永生刷写循环与丢 pending 数据**一起搬进生产，与 `segment.rs:288` 红线相背。
+2. `writer.rs:123 new()` 的 `create_dir_all` + rusqlite `open`/`pragma_update`/`execute_batch` 不进 `spawn_blocking`（同层合规先例：`cmt-tiering/src/experience_card_storage.rs:92-106`）。
+
+故 D1 的执行序改为 **C-61（取消令牌 + shutdown/Drop 刷写）→ C-62（open/DDL 入 spawn_blocking）→ C-63（本 ADR 原定的组合根注入）**。
+
+另对 D1 原文的两处事实订正（不改写只加注）：① 本 ADR 与 R1 施工图所引的 `AppServer::with_session_store` **确实存在**（`crates/nexus-app-server/src/server.rs:293`，签名为 `(config: AppServerConfig, backend: Box<dyn CoreBackend>, store: CbmrWriter) -> Self`），且 `SessionStore` 类型**确实不存在**于 session-store crate（真构造 = `writer.rs:123 CbmrWriter::new(config: StoreConfig)`，dir 入口在 `types.rs:258 StoreConfig::with_dir`）；② 「无新增依赖边」（施工图 Δ1）**不成立** —— `dep_edge_freeze.txt` 现无 `chimera-cli|session-store` 行，且 `nexus-app-server` **不** re-export `CbmrWriter` ⇒ 任何组合根注入路径必新增一条 L10→L3 向下生产边，已由 ADR-225 D4 明文修订（定性为**计划缺陷而非决策缺陷**，因该承诺建立在已失效的假想 API 上）。
+
+### 10.4 §6 总账自身的可追溯性已补齐，且本 ADR 已入库
+
+本文件此前长期为 untracked（R1 的 C-41 未落地），即 §6/§7 的全部断言无法被 `git log`/`git blame` 复核。现由 **C-60 `8432504`** 纳入版本控制，验收读数 `py -3 scripts/adr_index_sync.py` rc=0（BROKEN LINK 无 / UNINDEXED 无）。
+
+### 10.5 §8 验证面的两处订正
+
+1. **§8.1 的 `cargo check/test/clippy` 五项 rc101 不是机型上限**：根因是 `.cargo/config.toml` 固化 `jobs = 4`。R2 全程显式 `--jobs 2`，实测 `cargo check --workspace --all-targets --jobs 2` **rc=0**（0 warning / 5m26s）、`cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` **rc=0**（5m27s），故本 ADR §6「收口验证不完整」的**前提已可解除**（读数见 `docs/reports/l0l10-r2-baseline-2026-10-26.md`）。
+2. **§8.3「受影响门」不构成门禁全绿判据**：R1 只跑约 24/134 即判「全绿 26 项 PASS」，而全 134 门整体跑发现唯一真红 **G-85**，且该门步骤位于 `ci.yml` 的 **check job** L143-146 ⇒ 是一条 **PR 阻断红**（责任链：`0d39b50` 携带提交把无 BOM 的 `scripts/measure_startup.ps1` 带入仓；`e3e0046`=C-36 不是丢 BOM 的责任方，`e3e0046^` blob 已无 BOM）。由 R2 **C-57 `c8fcd1c`** 以字节级前置 BOM 解除，G-85 现 `RESULT: OK (26/26)` rc=0。制度性修订见 ADR-225 D2（收口唯一判据 = 全门集 `[SUM]`）。
+3. **§8.1 的 `cargo test --workspace` 口径不充分**：该命令默认 fail-fast，R2 首跑仅出 67 个 target / 2327 passed 即中止；带 `--no-fail-fast` 才是真全量（447 target / **11375 passed** / 4 failed，而 4 条逐 target 隔离复测均 rc=0 ⇒ 并行负载敏感型 flaky，非回归）。
