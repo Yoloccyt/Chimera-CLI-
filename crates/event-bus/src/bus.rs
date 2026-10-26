@@ -517,8 +517,13 @@ macro_rules! dispatch_one_impl {
         }
 
         // §6.2 红线双通道:Critical 安全/治理告警事件(is_critical_mpsc_event 清单)额外走 mpsc 旁路
-        // WHY 先 mpsc 后 broadcast:mpsc UnboundedSender::send 不会阻塞,
-        // 先投递 mpsc 确保 Critical 订阅者必收;broadcast 仍走以保证向后兼容
+        // WHY 先 mpsc 后 broadcast:旁路走的是**有界**通道(CRITICAL_CHANNEL_CAPACITY)且用
+        // try_send,故本步「不可能阻塞」——这是把它放前面的真正理由:不因 Critical 旁路
+        // 的背压拖住主发布路径。语义边界(勿读成「无条件必达」):
+        //   - 有空位 ⇒ 必达;满载(Full)⇒ 丢弃本条并递增 critical_dropped_count 使丢弃可见,
+        //     Sender 保留(临时满载,下次可能成功);receiver 已 drop(Closed)⇒ 移除该 Sender
+        //   - 无任何活跃订阅者 ⇒ 不走「warn + 放弃」,而落 fallback sink 保底(见 B-a 分支)
+        // broadcast 仍照发以保证向后兼容(旁路不减 broadcast,两通道是并集不是二选一)。
         if is_critical_mpsc_event(&event) {
             $self.send_critical_mpsc(&event);
         }
