@@ -2,10 +2,11 @@
 # scripts/measure_startup.ps1 — 工具链启动/装配分段测量（性能重构 Task 0）
 # =============================================================================
 # Purpose: 为 toolchain 性能重构提供**可复现**的启动税证据。用 RUST_LOG=info 抓
-#          `startup phase: parse+init|config|runtime|assemble` 四段，并对一组代表
+#          `startup phase: parse+init|config|runtime|shard|assemble` 五段（shard 桩在
+#          composition.rs），并对一组代表
 #          命令各跑 N 次，报告 median/p95 墙钟（PowerShell Measure-Command）。
 # 非门禁：本脚本产出的数字是观测/趋势，不写死阈值（release 门禁仍由
-#          scripts/check_cli_startup.ps1 的 median<40ms 负责）。
+#          scripts/check_cli_startup.ps1 的 median<100ms 负责，.sh/CI 同阈值）。
 # 用法：
 #   pwsh -File scripts/measure_startup.ps1                 # 用 debug 二进制
 #   pwsh -File scripts/measure_startup.ps1 -Release        # 先 cargo build --release 再测
