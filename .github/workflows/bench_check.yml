@@ -27,6 +27,17 @@ name: Benchmark Check
 # ============================================================
 
 on:
+  # R2 C-68（登记册 M45，P1）：补 schedule 触发。
+  # WHY：原先 pull_request 的 paths 过滤只含 benches/**、*/Cargo.toml、
+  # 根 Cargo.toml、本 workflow 自身、chimera-cli/src/** 与 check_cli_startup.*，
+  # 且无 schedule/push-branch 触发 —— ⇒ **对其余 45 个 crate 的纯 src 改动，
+  # 本 workflow 根本不跑**，性能回退只在「碰了 benches 或 manifest」时才被发现；
+  # 而把 'crates/**/src/**' 加进 paths 会让几乎每个 PR 都跑全量 bench（本 job
+  # timeout 已给到 30min），成本与噪声都不可接受。日跑一次是覆盖「两次
+  # 运行之间已合入的全部 src 变更」的最低成本形状：不阻塞单个 PR，但回退
+  # 最长存活不超一天。仍保留原 paths 触发以便改 bench 时立即反馈。
+  schedule:
+    - cron: '0 3 * * *'   # 每日 03:00 UTC（避开 slo.yml nightly 与 coverage 窗口）
   pull_request:
     branches: [main, master]
     paths:
@@ -53,7 +64,13 @@ jobs:
   bench-check:
     name: Benchmark Threshold Check
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # WHY: 5 benchmark 编译+运行典型 3-8min,30min 兜底防卡死
+    timeout-minutes: 30
+    # WHY: 兜底防卡死。**不在此登记 bench 数与典型耗时**：原注写「5 benchmark
+    # 编译+运行典型 3-8min」已严重失真 —— 本 workflow 实有 47 个 run_bench 别名
+    # （R2 登记册 M66，可用 `grep -c '^[[:space:]]*run_bench ' 本文件` 现取）。
+    # 真实耗时只能在 CI 侧量（本地无 Linux runner 且全量 cargo 已被占），故本行
+    # 只声明它是 guard；若超时被 kill，本 job 是红不是静默通过 —— 但预算是否
+    # 够需首次 schedule 跑后用时长读数再定档（已列入待裁）。
     steps:
       - name: Checkout
         uses: actions/checkout@v4
