@@ -1501,3 +1501,21 @@ kind = "light"
 test_kind = "cross_crate"
 note = "并行红线静态门（PowerShell 权威执行体，P1-T13 原始载体）；与 G-133 逐条等价"
 ci_exempt = "CI 经 check_parallel_redlines.sh(G-133)执行;.ps1 是 Windows 权威执行体,CI(Linux)无 pwsh,故本机/收口跑"
+
+[[gate]]
+id = "G-135"
+spec_ref = "ADR-225 D6（L0-B 公共签名泄露面零治理的收口；承 R1 登记册 M37 + R2 M46/M47）"
+cmd = "{python} scripts/check_pub_api_leak.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "L0-B 公共 API 签名第三方后端类型泄露门。补的缺口：G-131 只锁外部**依赖行**并在 note 自陈「L0-B public fn 面不在本门辖区」，G-99 属 L0-A，G-125 只判方向——所以上层可经 `pub fn` 签名拿到 tokio 类型而**无任何门统计**。R1 M37 仅登记不改码且只统计**返回位**；R2 M47 实测参数位才是耦合最强面（event-bus shard.rs 的 spawn_workers 将 broadcast::Sender 与 runtime::Handle 直接交给调用方），M46 证明若拿 G-125 note 的三值集当上界会与实测 27 行依赖面冲突而产批伪红。判据：键 = <crate>::<模块路径>::<函数名>::<外部件>::<位置>，位置 = ret|arg|bound 三类（仅匹配 `ident ::` 路径头会漏过经 `use` 引入的裸名，故本门同时解析文件级 use 绑定）；only-decrease 键集：NEW（新泄露未登记）⇒红并须先封装或附 ADR、STALE（已修而行未删）⇒红（豁免不得比代码活得久）；行畸形/未知位置/台账缺 L0-B crate ⇒退 2；扫到 pub fn 数低于 SIGN_FLOOR ⇒退 2（解析致盲与“干净”读数同形）。依赖词表只取 scripts/l0b_dep_freeze.txt 的实测集，**权威值当场由门自报，勿在本行抄数**。"
+
+[[gate]]
+id = "G-136"
+spec_ref = "G-135 配套（门自身有牙）"
+cmd = "{python} scripts/check_pub_api_leak.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "G-135 夹具（tempdir 真实路径，走与生产同一个 scan_all/evaluate）：CLEAN 夹具须恰好舍去 doc 注释/字符串/行注释/`pub(crate)`/私有 fn/cfg(test) 尾并保留 ret|arg|bound 三类植入各一行；特别须证 `use tokio::{sync::mpsc, task::JoinHandle};` 这种嵌套 brace 绑定能被解析（早期版本仅认裸名，因此漏判三处真实返回位泄露——该回归已固定为夹具）；同名重复增长必报 NEW；修泄露不删行必报 STALE；同批删除转绿；畸形行与未知位置退 2；台账注释行不当行。任一断言未成立⇒退 1"

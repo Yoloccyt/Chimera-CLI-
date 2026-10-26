@@ -132,6 +132,21 @@ jobs:
           python3 scripts/check_l0_sublayer.py --selftest
           python3 scripts/check_l0_sublayer.py
 
+      # WHY: L0-B 公共 API 签名第三方后端类型泄露门(ADR-225 D6 / R2 M37+M46+M47)——
+      # G-131 只锁 L0-B 的外部*依赖行*,并在自己 note 里自陈“L0-B public fn 面不在本门
+      # 辖区”;G-99 属 L0-A,G-125 只判方向。结果是上层可以经 `pub fn` 签名拿到 tokio
+      # 类型而全仓无任何门统计。R1 M37 只登记未改码且只数返回位,R2 实测参数位才是
+      # 耦合最强面(event-bus shard.rs::spawn_workers 直接交出 broadcast::Sender 与
+      # tokio::runtime::Handle,等价于要求调用方自备 runtime)。本门 only-decrease 锁
+      # ret|arg|bound 三类位置,依赖词表取 l0b_dep_freeze.txt 实测集而非任何散文
+      # 白名单(G-125 note 的三值集与实测 27 行仅 16 行相符,据它立门首跑即产 11 条
+      # 伪红)。零编译毫秒级 light 门,沿 check_l0_sublayer / check_l0b_dep_surface 的
+      # --selftest 双向夹具先例:先证门有牙,再跑真实裁决。
+      - name: L0-B public signature leak gate (G-135/G-136)
+        run: |
+          python3 scripts/check_pub_api_leak.py --selftest
+          python3 scripts/check_pub_api_leak.py
+
       # WHY: PowerShell 5.1 parity 守门(ADR-198 G-85)——本仓将 .ps1 定位为
       # “Windows 权威执行体”，但 CI 与 gate_manifest 均以 pwsh（默认 UTF-8）调用，
       # 而无 BOM 且含非 ASCII 的文件在 5.1 下会按 ANSI 解码。2026-10-02 实测：
