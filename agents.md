@@ -554,7 +554,7 @@ cargo check -p <crate-name>
 cargo build --workspace
 
 # 运行所有测试
-cargo test --workspace
+cargo test --workspace --no-fail-fast
 
 # 单 crate 测试
 cargo test -p <crate-name>
@@ -585,13 +585,27 @@ cargo fmt --all -- --check
 #      任一非 0 即未通过。不可因跑不动而跳过本项(HEAD 实测曾漂到 14/44 包不干净)。
 
 # 2. 全量测试
-cargo test --workspace --jobs 4
+cargo test --workspace --no-fail-fast --jobs 2
+#    ⚠ 必须带 `--no-fail-fast`(2026-10-26 R2 实测新增要求,登记册 M56/P1类):
+#      `cargo test --workspace` **默认 fail-fast** —— 第一个失败的 test binary 会
+#      中止后续 target 的执行。R2 首跑仅产出 67 条 `test result:` 行/聚合 2327 passed
+#      就中止,而同口径真全量(带 --no-fail-fast)是 **447 target / 11375 passed** ——
+#      即 **376 个 target 的信号被一个红静默吞掉**。不带该旗标的"全量绿"实为部分覆盖,
+#      足以伪造出「无功能退化」的结论。CI 侧走 nextest(不截断)与带 --no-fail-fast 的
+#      doctest job ⇒ 本地不加就是在让本地口径与 CI 口径不等价。
 #    ⚠ 16 核宿主上默认并行度会 OOM(实测 `memory allocation ... failed` + 派生的
 #      E0786 invalid metadata,2026-08-31),看起来像代码回归实为编译面爆内存在;
-#      故必须限流 `--jobs 4`(仍 OOM 递减至 2),并把 OOM 与回归分开判定。
+#      故必须限流。**2026-10-26 R2 据实修订为 `--jobs 2`(登记 ADR-225 D1)**:实测
+#      `--jobs 2` 下 check/clippy 均 rc=0、rustc 工集仅 86-197MB/进程、free 稳定>3.1GB;
+#      真正的 OOM 根因是 `.cargo/config.toml` 的 `jobs = 4`(该值仍被 CI runner 依赖,
+#      故不改配置文件而是在命令面显式覆盖)。仍 OOM 则递减至 1,并把 OOM 与回归分开判定。
 #    ⚠ D 盘空间为硬前置(2026-09-06 实测 98% 满):`target/` 约 24GB,磁盘不足时
 #      G-14 全量回归无法本地执行(2026-09-04 phaseR 报告实录),先清理再跑。
-cargo test --workspace --release -- --ignored --test-threads=1 --nocapture   # 压测/性能红线(SLO 阈值在 debug 下会假失败)
+#      注(2026-10-26 R2):target/ 现取 39GB/54,816 文件,D: 空闲 73.2GB —— 当前不是瓶颈。
+cargo test --workspace --release --no-fail-fast -- --ignored --test-threads=1 --nocapture   # 压测/性能红线(SLO 阈值在 debug 下会假失败)
+#    ⚠ release 档的构建与运行解耦(ADR-225 D-2-2 处方):先 `cargo build --workspace --release --tests --jobs 2`
+#      产工件再跑测试,避免构建阶段爆内存导致**零测试执行**(R1 实例:五项全 rc101、压测档 0 条执行);
+#      **禁止**为降内存改 release profile(lto/codegen-units/opt-level 会污染 SLO 阈值测量、制造假失败)。
 
 # 3. 安全审计(audit.yml 每日跑,发布前手动确认)
 #    ignore 条数不在此登记(旧记"5 个"已过期;2026-09-22 实测含 **6** 条),以

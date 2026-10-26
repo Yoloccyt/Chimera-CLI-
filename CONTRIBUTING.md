@@ -114,8 +114,8 @@ cargo clippy --workspace --all-targets --jobs 2 -- -D warnings
 cargo fmt --all -- --check      # 长路径报 os error 206 时逐包 -p 聚合，不可跳过
 
 # 测试（16 核宿主必须限流防编译 OOM；D 盘空间为硬前置）
-cargo test --workspace --jobs 4
-cargo test --workspace --release -- --ignored --test-threads=1 --nocapture   # 压测/性能红线
+cargo test --workspace --no-fail-fast --jobs 2
+cargo test --workspace --release --no-fail-fast -- --ignored --test-threads=1 --nocapture   # 压测/性能红线
 
 # 治理门（PR 模板 §4 要求）
 py -3 scripts/run_gate_manifest.py            # G-01~G-98 清单执行器，默认 light 档，rc=0
