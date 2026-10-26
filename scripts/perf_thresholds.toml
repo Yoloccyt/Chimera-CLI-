@@ -1,8 +1,17 @@
 # Chimera CLI bench 阈值与 CI 清单单一真值源
 #
 # 权威消费者：scripts/check_perf_redlines.py；
-# 同时被 .github/workflows/bench_check.yml 的 thresholds 步骤调用（消灭 heredoc 内嵌表）。
 # 迁移来源：bench_check.yml THRESHOLDS_NS / PATH_KEYWORDS / run_bench 行（2026-08-31 机械抽取）。
+#
+# 【2026-10-26 R2 订正（登记册 L51 / M65）】上行原写「同时被
+# .github/workflows/bench_check.yml 的 thresholds 步骤调用（消灭 heredoc 内嵌表）」
+# ——不成立。实测：bench_check.yml 仍自带 52 键 THRESHOLDS_NS heredoc（L182 的
+# python3 <<'PYEOF' 体内），且它是 CI「Assert thresholds」步的唯一实际数值腿；
+# check_perf_redlines.py 的 thresholds 模式从未被任何 workflow 调用（ci.yml 只跑
+# --selftest 与 --static-only）。⇒ 本文件当前是「第二份表」而非唯一真值源，
+# R1-T6 的切流尚未发生。已登记不变式补齐计划见 ADR-225 §5（heredoc 键集
+# == 本表 [thresholds_ns] 键集的机器对拍）；在那之前，两表差集会静默存在
+# （R2 M44 实例：本表有 hnsw_tiered 而 heredoc 无 ⇒ 该阈值在 CI 永不被断言）。
 #
 # 不变式（由 py 核 --selftest 与常规模式共同断言）：
 #   I1 set(thresholds_ns) == set(path_keywords)
@@ -132,6 +141,11 @@ debate = ["deliberate"]
 # ADR-192 附带：本键必须排在 `cache_hit` 之前（匹配循环 first-match-wins，文档序 = 判定序，
 # 与 bench_check.yml heredoc 的 dict 插入序逐字对齐）；`hit_vs_recompute` 与 `cache_hit`
 # 互不为子串（I2 双向已核），故不会反过来遮蔽真 cache_hit 组。
+# 【2026-10-26 R2 订正（M65）】同段上句的「与 heredoc 插入序逐字对齐」不成立：
+# 实测两表共有键的相对次序已在第 35 位分叉（heredoc=hot_lru vs 本表=bus_bench）。
+# 对 probe_select/cache_hit 这一对有子串关系的对键，两边序仍一致（已核），
+# 故暂无实际遮蔽事故；但该声明作为不变式是假的 —— 它也是「不能直接删 heredoc
+# 改读本表」的原因：插入序 = first-match-wins 判定序，静默换源会改变归类。
 probe_select = ["probe_window_select/", "probe_score_throughput/", "hit_vs_recompute"]
 l2_recall = ["l2_recall"]
 compress = ["100k_to_32k"]
