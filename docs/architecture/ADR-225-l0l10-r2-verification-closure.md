@@ -100,8 +100,20 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
   | C-75 | `f1e960b` | 本 ADR-225 落档 | 1 |
   | C-76 | `66733e7` | ADR-224 追加 §10 R2 状态订正注（只加注不改写；M40/M41/M42） | 1 |
 - **新门实测读数**【亲验】：`check_pub_api_leak.py --selftest` rc=0（**14 assertions PASSED**）；live rc=0（`sites=13 rows=13 scanned_pub_fn=408`）；`check_gates_provenance.py` 与其 `--selftest` 均 rc=0（方向 A/B 通过，新脚本已登记非孤儿）。立门前两处自揭的检测缺陷已**当场修判据而非放宽**：只匹配 `ident ::` 路径头会漏过经 `use` 引入的裸名（三处真实返回位被报成干净），以及函数名上的泛型参数列被丢弃——两者均已固定为 selftest 夹具。零生产码改动 ⇒ 无行为变更、无公共 API 扩大。
-- **在途改动纪律**：`git status` 现取 14 个已跟踪文件 modified + 2 untracked，全部属**在途批次，R2 全程未代提交、未触碰**；本轮 7 单均为**逐文件 `git add`**，未用 `-A`/`.`；`git stash`/`reset --hard`/`checkout --` 按 ADR-222 D6 明令禁用；提交消息经字节级校验为合法 UTF-8。
-- **待执行 13 单**：C-61、C-62、C-63、C-64a、C-64b、C-65、C-67、C-68、C-69、C-70、C-71、C-72、C-73、C-74（清单与影响面见交付物 03 §3；编号 C-75/C-76 已被文档单占用，后续单从 **C-77** 起）。
+- **在途改动纪律**：`git status` 现取 14 个已跟踪文件 modified + 2 untracked，全部属**在途批次，R2 全程未代提交、未触碰**；R2 各单均为**逐文件 `git add`**，未用 `-A`/`.`；`git stash`/`reset --hard`/`checkout --` 按 ADR-222 D6 明令禁用；各单提交消息经字节级校验为合法 UTF-8。**本行不登记总单数**（总单数是 `git log` 的函数，写在此处必腐；完整承载清单见下方两段与交付物 02 §4）。
+- **待执行 13 单**：C-61、C-62、C-63、C-64a、C-64b、C-65、C-69、C-74、C-78、C-79、C-80、C-81、C-82、C-83（清单与影响面见交付物 03 §3）。
+- **第 2 轮追加落地（接上表，共 +8 单）**：
+  | 单 | 提交 | 内容 | 承载 ID |
+  |---|---|---|---|
+  | C-70 | `89ca573` | `bus.rs` 旁路注释去 `UnboundedSender` 失实并界定真实投递语义（有空位必达 / 满载丢弃且计数可见 / 两通道是并集） | M52 |
+  | C-71 | `f27ed5d` | `pattern_index.rs` 事件量级散文去数值化，改指 `VARIANT_COUNT_LOCK` | M53 |
+  | C-72 | `09a0524` | `session-store/lib.rs` 组合根指针 `:251`→`:296/:298`，改函数名锁定 | L50 |
+  | C-84 | `9cd0eaf` | `crate_reachability_freeze.txt` 拆清 mas-sched（非 optional 生产边）与 nexus-hook（feature 门控）的归因 | L53 |
+  | C-85 | `a90b30d` | **修本批自引入的门红**：新门缺 `gate_rc` 崩溃守卫→G-44 红；按该门自陈「改脚本而非往基线加一行」修正 | M39 后续 |
+  | C-67 | `abc4019` | 补 `hnsw_tiered` 阈值键（两表实测 53==53）+ 订正三处假不变式声明 | M44/M65/L51 |
+  | C-68 | `a7aacc9` | `bench_check.yml` 补 `schedule: 0 3 * * *` + 订正 timeout 注释（10 项语义断言 PASS） | M45/M66 |
+  | C-86 | `49b9b41` | **I9 不变式**：heredoc 与 `[[thresholds_ns]]` 键集机器对拍；selftest 44→50 全绿；变异反证（删真文 hnsw_tiered 行→I9 精确报出）证明其可拦截 M44 | M44 根修/M65 |
+- **C-73（M56 口径传导）已执行但无法入库**：`--no-fail-fast` + `--jobs 2` 已写入 `agents.md §7.2`、`CONTRIBUTING.md §6`、`.claude/CLAUDE.md`、`.qoder/rules/chimera.md`、`.qoder/rules/chimera2.md`、`.trae/rules/nuxus规则.md` 六份共 15 行（脚本化两趟替换，残差复核为 0；行数逐文件一致、字节只增）。**但这些 md 全部被 `.gitignore:57` 排除** ⇒ 无提交可证，只能靠本 ADR 作证据副本 —— 这正是 D5 所治的结构性缺口本身，本单是它的首个自我实例。
 - **对 R1 总账的事实订正（已以 C-76 入库）**：C-08/09/25/31/36 已提交；C-27 内容已在 HEAD 由 `7b7e571`(C-45) 承载；C-42/44/47/48/54/55 目标态已达成 ⇒ **R1 未完面 = 仅 C-29**。
 - **基线**：`cargo check` rc=0 / `cargo clippy` rc=0 / 真全量 `cargo test --no-fail-fast` = **447 target / 11375 passed / 4 failed**（4 条逐 target 隔离复测 0 failed ⇒ 并行负载敏感型 flaky，登记 M57 不作回归）；全门集修复前 `ok=126 mismatch=1 skip=7/134`，G-85 解除后与 G-135/G-136 入册后的复跑读数见 `docs/reports/l0l10-r2-baseline-2026-10-26.md`；release `--ignored` 档在采「构建与运行解耦 + `--jobs 1`」执行中，尚未出数。
 
