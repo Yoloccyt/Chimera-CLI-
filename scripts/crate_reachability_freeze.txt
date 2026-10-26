@@ -22,6 +22,22 @@
 # reachable via the r2_island_repayment feature wiring (debt repaid); lines
 # deleted per ADR-160 shrink-only rule. mca-gateway stays GATED (feature-gated,
 # not listed here).
+#
+# Attribution corrected 2026-10-26 (R2 L53): the two crates above are NOT
+# reachable by the same mechanism, and the shared wording over-credited a
+# feature to a plain production edge.
+#   mas-sched   : NON-optional production edge -- chimera-cli/Cargo.toml:99
+#                 `mas-sched = { workspace = true }` with no `optional`, and
+#                 :96 records the optional -> production flip; wired at
+#                 composition.rs:107 / :215 and called at commands/agent.rs:223;
+#                 dep_edge_freeze.txt:185 says WIRED per ADR-211.
+#   nexus-hook  : still feature-gated -- chimera-cli/Cargo.toml:100 optional,
+#                 :203-205 machete exemption, zero `nexus_hook` uses in
+#                 chimera-cli/src, and gated_wiring_baseline.txt:14 says
+#                 DECORATIVE. So only THIS crate's rotation reason is the
+#                 r2_island_repayment feature wiring.
+# Judgment rows are unchanged (neither crate is listed); this is a comment-only
+# provenance fix, so the shrink-only ADR-160 rule is not touched.
 
 # --- compiled only under a cargo feature, absent from the default binary ---
 # mca-gateway Frozen entry REMOVED 2026-09-03 (T2): chimera-cli now declares it
