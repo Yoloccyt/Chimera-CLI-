@@ -18,8 +18,10 @@
 //! > 「已接入」仅指**代码层 + 测试层**（`replay_since` 是 `server.rs:334` 的 pub API，集成测试在
 //! > `server.rs:806` 走它）。**生产装配未启用双写**：`server.rs:634` 是 `#[cfg(test)]` 区起点，
 //! > 而 `AppServer::with_session_store` 的两个调用点均在 `:920` / `:977`（测试区内）；组合根
-//! > `chimera-cli/src/composition.rs:251` 走 `AppServer::with_backend(ctx.server_config, backend)`
-//! > （该文件内无 `with_session_store` 调用），⇒ `store` 字段为 `None`（`server.rs:283`），
+//! > `chimera-cli/src/composition.rs` 的 `build_app_server(ctx)` 走
+//! > `AppServer::with_backend(ctx.server_config, backend)`
+//! > （2026-10-26 R2 现取：函数定义在 `:296`、该调用在 `:298`；原注 `:251` 已漂，改以
+//! > 函数名锁定以免再腐；该文件内无 `with_session_store` 调用），⇒ `store` 字段为 `None`（`server.rs:283`），
 //! > `replay_since` 在仓内**无生产调用方**。
 //! > 因此本 crate 在现行生产链上仍处于 **DORMANT**（声明装配但生产关闭），段文件与树索引
 //! > 在生产路径上不产生数据；收口径选项与需 ADR 的部分见文末「装配态订正」段（不在此重复）。
