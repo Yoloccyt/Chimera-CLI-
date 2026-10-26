@@ -34,13 +34,16 @@
 #                              criterion baseline + a real shared-state container
 #                              (see ADR-187).
 #   B. Upward dependency     - L(N) -> L(N+1) is forbidden for every layered
-#                              crate (see expected_crates); the 1-item ADR
-#                              exception table is exempted
-#                              (pvl-layer->seccore dynamic-blacklist feature).
-#                              The former gqep-executor->qeep-protocol ADR-048
-#                              entry was retired in wave 3c (M12, ADR-185 D4):
-#                              L7->L4 is a legal DOWNWARD edge that Check B
-#                              never flags, so the exemption was a no-op pad.
+#                              crate (see expected_crates); the ADR exception
+#                              table is currently EMPTY. Both historical
+#                              entries were no-op pads retired the same way:
+#                              gqep-executor->qeep-protocol (wave 3c, M12,
+#                              ADR-185 D4) and pvl-layer->seccore (C-09/M32,
+#                              2026-10-25, same precedent) -- each is a legal
+#                              DOWNWARD L7->L4 edge that Check B never flags
+#                              (seccore has been a regular production dep of
+#                              pvl-layer since d710699, 2026-08-18; the old
+#                              "dynamic-blacklist feature" note was stale).
 #   C. Graph completeness    - every referenced workspace dependency must exist
 #                              in the layer map; layer map must cover the whole
 #                              workspace (static count + disk scan).
@@ -151,13 +154,16 @@ expected_crates=46
 # / $innerBase removed there in the same commit).
 
 # ADR exception table: exempted from check B.
-# WHY 只剩 1 条:gqep-executor(L7)->qeep-protocol(L4) 条目已于 wave 3c 收编移除
-# (M12/ADR-185 D4)——Check B 只 flag 向上依赖(dep_layer > layer),该向下边无豁免
-# 也天然合法,例外名义只剩 no-op 安全垫,挂着反而误导后人以为该边仍异常。
+# WHY 现为 0 条(两条历史条目均为 no-op 安全垫,先后按同一先例收编移除):
+#   gqep-executor(L7)->qeep-protocol(L4) —— wave 3c 收编(M12/ADR-185 D4);
+#   pvl-layer(L7)->seccore(L4) —— C-09/M32(2026-10-25)按 ADR-185 D4 先例收编:
+#     seccore 自 d710699(2026-08-18)起已是 pvl-layer 正式生产依赖,旧注记
+#     "feature 门控"失真 2 月+;Check B 只 flag 向上依赖(dep_layer > layer),
+#     该向下边无豁免也天然合法,例外挂着反而误导后人以为该边仍异常。
 # 移除后双门仍绿 = 收编的可执行证据(先例:P9-T6 复审"外环内部 L7->L4 合法")。
+# 表机制保留:未来真需豁免的向上边须有 ADR 记录特批(AGENTS 2.2)再入表。
 is_adr_exception() {
     case "$1,$2" in
-        pvl-layer,seccore) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -228,7 +234,7 @@ mock_deps_of() {
         # （删条目即打断负控），故改用同样 L1 的 event-bus。
         event-bus) echo "nexus-core hcw-window" ;;                  # GAP-B (L1 -> L2)
         gqep-executor) echo "nexus-core event-bus qeep-protocol" ;; # legal downward L7->L4 (no exemption needed since ADR-048 wave-3c retirement, ADR-185 D4)
-        pvl-layer) echo "nexus-core event-bus seccore" ;;           # legal (feature-gated)
+        pvl-layer) echo "nexus-core event-bus seccore" ;;           # legal downward L7->L4 (exemption retired by C-09/M32, ADR-185 D4 precedent)
         nexus-contracts) echo "" ;;
         chimera-tui) echo "nexus-contracts event-bus pvl-layer" ;;  # GAP-E (L10 -> L7)
         *) echo "" ;;
@@ -408,12 +414,13 @@ if [ "$SELFTEST" = "1" ]; then
     printf '%s\n' "${report[@]}" | grep -q '\[GAP-B\] event-bus (L1) -> hcw-window' || { ok=0; report+=('[SELFTEST] missing GAP-B for event-bus -> hcw-window'); }
     printf '%s\n' "${report[@]}" | grep -q 'undefined dependency <ghost-crate>' || { ok=0; report+=('[SELFTEST] missing GAP-C for undefined dep ghost-crate'); }
     printf '%s\n' "${report[@]}" | grep -q '\[GAP-E\] chimera-tui (L10) -> pvl-layer' || { ok=0; report+=('[SELFTEST] missing GAP-E for chimera-tui -> pvl-layer'); }
-    # 合法/例外边不得报 gap:gqep-executor->qeep-protocol 为向下边(ADR-048 已于
-    # wave 3c 收编,无豁免天然合法,ADR-185 D4);pvl-layer->seccore 为 ADR 例外
-    # (feature-gated)。两条边在 mock 图中均存在,任何一条冒出 GAP 都是回归。
+    # 合法边不得报 gap:gqep-executor->qeep-protocol 与 pvl-layer->seccore 均为
+    # L7->L4 向下边,无豁免天然合法(前者 wave 3c 收编,后者 C-09/M32 按 ADR-185
+    # D4 先例收编)。两条边在 mock 图中均存在,任何一条冒出 GAP 都是回归——
+    # 这也是"删例外条目不松弛判据"的机证。
     if printf '%s\n' "${report[@]}" | grep -Eq '^\[GAP-[ABC]\] (gqep-executor|pvl-layer)'; then
         ok=0
-        report+=('[SELFTEST] legal/ADR-exempted edge (gqep-executor->qeep-protocol downward / pvl-layer->seccore) wrongly reported')
+        report+=('[SELFTEST] legal downward edge (gqep-executor->qeep-protocol / pvl-layer->seccore, L7->L4) wrongly reported')
     fi
 
     if [ "$ok" -eq 1 ]; then
