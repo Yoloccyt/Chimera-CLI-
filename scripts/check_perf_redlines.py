@@ -340,6 +340,18 @@ def mode_invariants(redlines, thresholds_doc, freeze):
         for p in ci_problems:
             print(f"         {p}")
 
+    # I9 heredoc THRESHOLDS_NS 键集 == [[thresholds_ns]] 键集 (R2 M44 的根修)
+    # WHY 与 I7 同一个形式: 两者都是「CI 自己那份表 vs 登记处」的双源对拍。
+    # 先证提取本身有东西可提取, 否则「没找到 dict」会被当成「无分歧」而静默放行。
+    thr_keys = set(thr)
+    th_problems = ci_threshold_key_sync(BENCH_WORKFLOW_PATH, thr_keys)
+    if not _check(f"I9 bench_check.yml heredoc keys == [[thresholds_ns]] keys "
+                  f"({len(thr_keys)} keys; dict found={ci_threshold_dict_present(BENCH_WORKFLOW_PATH)})",
+                  not th_problems):
+        fails += 1
+        for p in th_problems:
+            print(f"         {p}")
+
     # I4 兜底债棘轮: 列表只减不增, 且列表内每项当前值必须仍是 100ms 兜底
     pending = set(ratchet.get("calibration_pending", []))
     cap = int(ratchet.get("max_calibration_pending", len(pending)))
@@ -511,6 +523,13 @@ def mode_invariants(redlines, thresholds_doc, freeze):
 # (CI 多出必红) 当场判红 got=0, 没让这条不变式静默变成假绿。
 CI_RUNBENCH_RE = re.compile(r"^\s*run_bench\s+(\S+)\s+cargo bench -p (\S+) --bench (\S+)", re.M)
 
+# I9 的比对对象：workflow 里 heredoc 自带的 THRESHOLDS_NS dict。
+# dict 体以「单独一行的 }」收尾（值均为带 # 注的整数字面量，无嵌套花括号），
+# 故 .*? 配 \n\s*} 不会越界到 heredoc 之外的下一个花括号。
+CI_THRESHOLDS_DICT_RE = re.compile(r"THRESHOLDS_NS\s*=\s*\{(.*?)\n\s*\}", re.S)
+# 只认「行首可选空白 + 引号键 + :」；注行因前导 # 不会落入此形。
+CI_THRESHOLD_KEY_RE = re.compile(r'^\s*"([a-z0-9_]+)":', re.M)
+
 
 def ci_runbench_sync(workflow_path, run_bench_entries):
     """返回 I7 的分歧列表(空 = 对等)。
@@ -531,6 +550,46 @@ def ci_runbench_sync(workflow_path, run_bench_entries):
     problems += [f"alias drift: {k} ci={ci[k]} table={table[k]}"
                  for k in sorted(set(ci) & set(table)) if ci[k] != table[k]]
     return problems
+
+
+def ci_threshold_key_sync(workflow_path, thresholds_ns_keys):
+    """返回 I9 的分歧列表（空 = 对等或本文件无 dict 可查）。
+
+    WHY 需要它: bench_check.yml 的 "Assert thresholds" 步实际用的是它自己那份
+    heredoc THRESHOLDS_NS dict, 而 workflow 里一行注释声称「与
+    perf_thresholds.toml 的 [thresholds_ns] 逐键一致（I1）」—— 那行是假的:
+    I1 只断言本文件内 thresholds_ns 与 path_keywords 两表相等, 从不拿 heredoc
+    相比。实测后果（R2 M44）: perf_thresholds.toml 有 hnsw_tiered = 2_000_000
+    而 heredoc 无此键, 且该 bench 每轮都跑 —— 阈值在册却永不被断言, 而
+    I1/I7/compare 三步全照绿。本断言把「两表键集对拍」从注释变成机器判据。
+
+    返回 [] 的两种情况必须区分清楚, 否则又是一个假绿: 文件里根本没有
+    THRESHOLDS_NS dict 时(合成夹具、或将来真删了 heredoc)不去猜, 直接当作
+    「无可查」; 真实 workflow 有 dict 时才比。由调用方另用一条断言保证
+    真文件确实有 dict 可查（否则本判据会因提取失败而静默失效）。
+    """
+    if not os.path.exists(workflow_path):
+        return [f"workflow not found: {os.path.relpath(workflow_path, ROOT)}"]
+    with open(workflow_path, encoding="utf-8-sig") as fh:
+        text = fh.read()
+    m = CI_THRESHOLDS_DICT_RE.search(text)
+    if not m:
+        return []
+    ci = set(CI_THRESHOLD_KEY_RE.findall(m.group(1)))
+    table = set(thresholds_ns_keys)
+    problems = [f"threshold key in [[thresholds_ns]] but never asserted by CI: {k}"
+                for k in sorted(table - ci)]
+    problems += [f"threshold asserted by CI heredoc but absent from [[thresholds_ns]]: {k}"
+                 for k in sorted(ci - table)]
+    return problems
+
+
+def ci_threshold_dict_present(workflow_path):
+    """I9 的防伪绿前提：真实 workflow 里确实有 THRESHOLDS_NS dict 可查。"""
+    if not os.path.exists(workflow_path):
+        return False
+    with open(workflow_path, encoding="utf-8-sig") as fh:
+        return bool(CI_THRESHOLDS_DICT_RE.search(fh.read()))
 
 
 def keyword_overlaps(kw):
@@ -1265,6 +1324,43 @@ def mode_selftest():
         # 断言 11：真实 bench_check.yml 与真表对等（I7 在产环境必绿，与自测红路径互补）
         expect("selftest-11 real bench_check.yml is in sync with [[run_bench]]",
                ci_runbench_sync(BENCH_WORKFLOW_PATH, load_toml(THRESHOLDS_PATH)["run_bench"]), [])
+
+        # 断言 11b-11g：I9（R2 M44 的根修）—— 同样必须「有牙」，否则 I9 本身
+        # 就是又一条「写在注释里的同步」：真仓对账与红路径缺一不成立。
+        def wf_dict_text(keys, tag):
+            """生成一份含 THRESHOLDS_NS dict 的 workflow 夹具（与真文同形）。"""
+            p = os.path.join(tmp, f"wf_dict_{tag}.yml")
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("          THRESHOLDS_NS = {\n")
+                for k in keys:
+                    fh.write(f'              "{k}": 1_000,\n')
+                fh.write("          }\n")
+            return p
+
+        rt9 = {"alpha": 1000, "beta": 2000}
+        expect("selftest-11b I9 clean when heredoc key set equals the table",
+               ci_threshold_key_sync(wf_dict_text(["alpha", "beta"], "clean"), rt9), [])
+        p9_missing = ci_threshold_key_sync(wf_dict_text(["alpha"], "missing"), rt9)
+        expect("selftest-11c I9 fatal when a table key is never asserted by CI",
+               p9_missing, ["threshold key in [[thresholds_ns]] but never asserted by CI: beta"])
+        # 11d：夹具必须**只多不少**——用 ["alpha","ghost"] 会同时构成
+        # 「beta 未被断言」+「ghost 未登记」两条分歧，拿 want=1 去期就
+        # 是把测例自bug 误读成判据失效（本条首版就这么错了）。
+        expect("selftest-11d I9 fatal when heredoc asserts an unregistered key",
+               ci_threshold_key_sync(wf_dict_text(["alpha", "beta", "ghost"], "extra"), rt9),
+               ["threshold asserted by CI heredoc but absent from [[thresholds_ns]]: ghost"])
+        expect("selftest-11e I9 fatal when the workflow file is missing",
+               len(ci_threshold_key_sync(os.path.join(tmp, "nope9.yml"), rt9)), 1)
+        # 11f：无 dict 时不猜（[]），但 present 探针必须报 False —— 两者合起来
+        # 才封住「提取失败被当成无分歧」这个假绿口子。
+        no_dict = wf_text([("c1", "b1", "a1")], "nodict")
+        expect("selftest-11f I9 neutral without a dict, and the presence probe says so",
+               (ci_threshold_key_sync(no_dict, rt9), ci_threshold_dict_present(no_dict)),
+               ([], False))
+        # 11g：产环境对账 —— 这一条就是本可当场抓住 M44 的断言。
+        expect("selftest-11g real bench_check.yml heredoc is in sync with [[thresholds_ns]]",
+               ci_threshold_key_sync(BENCH_WORKFLOW_PATH,
+                                     load_toml(THRESHOLDS_PATH)["thresholds_ns"]), [])
 
         # 断言 12/13：入口契约（F18 + F29）—— 过了 main() 的码才算数，
         # 只在注释里写"0=通过/1=违反/2=不可判定"不算（那是另一道"写了不跑"）。
