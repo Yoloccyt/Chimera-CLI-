@@ -52,8 +52,10 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 
 ### D5（M43）治理文档入库政策：采「方案乙」，不改 `.gitignore`
 
+- **适用边界（经 C-73b 实测订正后收窄）**：方案乙只针对**真的不入库**的那批文档（`docs/reports/*`、`adr_index.md`、`CODE_WIKI.md`、两份设计文档、`.claude`/`.qoder` 下的规则副本）；**tracked 的权威 md（`agents.md`、`CONTRIBUTING.md` 等）仍必须直接入库**，不得拿「反正 ADR 里有副本」当借口不提交。
+
 - **决策**：本轮**不**改 `.gitignore`。改为硬规定：**凡订正不入库的权威 md（`agents.md`、`docs/architecture/CODE_WIKI.md`、`adr_index.md`、`docs/tui/README.md`、两份权威设计文档），必须同批把订正后的关键句原文引用进可入库的 ADR**，使 ADR 成为证据副本。本 ADR 的 D1~D4 与本批四条提交消息即按此执行。
-- **依据**：`.gitignore:57` 为 `*.md`，反白仅三条（`:60 !docs/architecture/ADR-*.md`、`:64`、`:65`）⇒ R2 复测确认「已达成」的六单（C-42/44/47/48/54/55）其载体文件**全部是 git-ignored 本地文件**，无 blob、无提交、无 diff，`git status` 也不报 ⇒ 「文档已订正」这一事实无法被第二人复核，也无法被任何门验证。
+- **依据**：`.gitignore:57` 为 `*.md`，反白仅三条（`:60 !docs/architecture/ADR-*.md`、`:64`、`:65`）。**但注意：忽略规则不影响已跟踪文件**（实测 `agents.md`/`CONTRIBUTING.md`/`.trae/rules/nuxus规则.md`/`README.md` 仍 tracked），故不可一概而论。就 R2 复测「已达成」的六单（C-42/44/47/48/54/55）而言：`gate_manifest.toml`（G-09 note）与 `agents.md` **可入库可审**；而 `CODE_WIKI.md`、`adr_index.md`、`docs/tui/README.md`、十六源手册**确为 git-ignored 本地文件**，无 blob、无提交、无 diff、`git status` 也不报 ⇒ 那部分的「文档已订正」无法被第二人复核，也无法被任何门验证 —— 这才是要采方案乙填补的那一块。
 - **被否反方案**：全量 md 入库 —— 会把数百个本地草稿/报告一次性推入仓库，与既有「配置收口/不入库」治理意图正面冲突。窄口径反白三份 —— 会直接改变 `check_doc_consistency.sh`/`adr_index_sync.py`/G-37 现明文「0 skipped by gitignore *.md policy」的断言语义，属独立政策授权，不在本 ADR 范围。
 - **落地状态**：✅ 规定生效（登记册 M43）；方案甲转 §5 待裁 T-4。
 
@@ -113,7 +115,15 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
   | C-67 | `abc4019` | 补 `hnsw_tiered` 阈值键（两表实测 53==53）+ 订正三处假不变式声明 | M44/M65/L51 |
   | C-68 | `a7aacc9` | `bench_check.yml` 补 `schedule: 0 3 * * *` + 订正 timeout 注释（10 项语义断言 PASS） | M45/M66 |
   | C-86 | `49b9b41` | **I9 不变式**：heredoc 与 `[[thresholds_ns]]` 键集机器对拍；selftest 44→50 全绿；变异反证（删真文 hnsw_tiered 行→I9 精确报出）证明其可拦截 M44 | M44 根修/M65 |
-- **C-73（M56 口径传导）已执行但无法入库**：`--no-fail-fast` + `--jobs 2` 已写入 `agents.md §7.2`、`CONTRIBUTING.md §6`、`.claude/CLAUDE.md`、`.qoder/rules/chimera.md`、`.qoder/rules/chimera2.md`、`.trae/rules/nuxus规则.md` 六份共 15 行（脚本化两趟替换，残差复核为 0；行数逐文件一致、字节只增）。**但这些 md 全部被 `.gitignore:57` 排除** ⇒ 无提交可证，只能靠本 ADR 作证据副本 —— 这正是 D5 所治的结构性缺口本身，本单是它的首个自我实例。
+- **C-73（M56 口径传导）已执行；入库情况经逐份 `git ls-files --error-unmatch` 实测，并**订正本 ADR 先前的一条错判**：上轮曾记为「六份 md 全被 `.gitignore:57` 排除 ⇒ 无提交可证」，该判断错。现势：
+  | 文件 | tracked? | 处理 |
+  |---|---|---|
+  | `agents.md` | ✅ tracked（且开工前干净） | **已入库 `9a77d47`（C-73b）** |
+  | `CONTRIBUTING.md` | ✅ tracked（且开工前干净） | **已入库 `9a77d47`（C-73b）** |
+  | `.trae/rules/nuxus规则.md` | ✅ tracked，**但开工前即为他批 ` M`** | 文本已改、**故意不提交**（整文件 add 会把他人未提交工作归到 R2 名下）；待其收口后同批入库 |
+  | `.claude/CLAUDE.md` / `.qoder/rules/chimera.md` / `.qoder/rules/chimera2.md` | ❌ ignored | 仅本地权威源，无提交可证 |
+  （`.gitignore` 不会取消已跟踪文件，故规则之前入库的 md 仍 tracked —— 这正是上轮错判的原因：从「有条 `*.md` 忽略规则」直推「所有 md 不可审」。）
+  **推论：M43 的有效范围比初记的窄**——不可审的是「忽略规则之后新增/未入库的文档」（如 `docs/reports/*`、`adr_index.md`、`CODE_WIKI.md`、两份设计文档），而非「所有权威 md」。D5 方案乙仍成立，因为本轮关键订正的确落在 ignored 文件上（M42 的六单）。
 - **对 R1 总账的事实订正（已以 C-76 入库）**：C-08/09/25/31/36 已提交；C-27 内容已在 HEAD 由 `7b7e571`(C-45) 承载；C-42/44/47/48/54/55 目标态已达成 ⇒ **R1 未完面 = 仅 C-29**。
 - **基线**：`cargo check` rc=0 / `cargo clippy` rc=0 / 真全量 `cargo test --no-fail-fast` = **447 target / 11375 passed / 4 failed**（4 条逐 target 隔离复测 0 failed ⇒ 并行负载敏感型 flaky，登记 M57 不作回归）；全门集修复前 `ok=126 mismatch=1 skip=7/134`，G-85 解除后与 G-135/G-136 入册后的复跑读数见 `docs/reports/l0l10-r2-baseline-2026-10-26.md`；release `--ignored` 档在采「构建与运行解耦 + `--jobs 1`」执行中，尚未出数。
 
