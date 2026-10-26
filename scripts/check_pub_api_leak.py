@@ -514,19 +514,24 @@ def run_selftest():
 
 
 def main(argv):
-    mode = argv[1] if len(argv) > 1 else ""
-    if mode == "--selftest":
+    """ argv excludes the program name (same convention as the sibling gates). """
+    if argv == ["--selftest"]:
         return run_selftest()
-    if mode == "--emit":
+    if argv == ["--emit"]:
         return run_emit()
-    if mode in ("-h", "--help"):
+    if argv == ["-h"] or argv == ["--help"]:
         sys.stdout.write(__doc__)
         return 0
-    if mode == "":
-        return run_real()
-    sys.stdout.write("usage: scripts/check_pub_api_leak.py [--selftest|--emit]\n")
-    return 2
+    if argv:
+        sys.stdout.write("usage: scripts/check_pub_api_leak.py [--selftest|--emit]\n")
+        return 2
+    return run_real()
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    # G-44 / F37: a gate executed from a list must map an unexpected crash to
+    # exit 2 (undecidable) instead of a traceback -- otherwise "the parser broke"
+    # is read by CI as the same thing as "the repo is clean". Reuse the shared
+    # runner rather than hand-rolling a try/except, so all gates fail alike.
+    import gate_rc
+    sys.exit(gate_rc.run(lambda: main(sys.argv[1:])))
