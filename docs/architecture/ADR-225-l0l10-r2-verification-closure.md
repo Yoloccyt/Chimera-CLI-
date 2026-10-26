@@ -1,0 +1,117 @@
+# ADR-225: L0-L10 全层重构 R2 收口 —— 验证面实证、环境根因订正、审计守护面补强与 M49 拆单
+
+> **Status**: ✅ Accepted（2026-10-26，业主批准《L0-L10 全层重构 R2 实施方案》并逐条裁决 §2 决策点；本 ADR 为批次收口落档）
+> **决策日期**: 2026-10-26
+> **关联 ADR**: ADR-214~223（L0 专项十轮裁决，**全部继承不重开**）/ ADR-224（L0-L10 全层重构 R1，本批**继承其 D1~D7 不重开**，并对其 §6 总账与 §7.2 状态表做**事实订正**）/ ADR-222（L0-A/L0-B 双亚层，本批沿用其分层口径；附录 §9「L0-B 暂不设冻结门」维持）/ ADR-198（G-85 PS 5.1 parity，本批 D1 解除其红）/ ADR-108（session-store CBMR，D4 前置依据）/ ADR-042+053 rev4+054（R2 冻结期与 RL 闸门，本批继续生效）/ ADR-195（GPU 仍否决）/ ADR-193（架构减法，方向反转已由 ADR-222 登记）/ ADR-215（closed/open 分级，D6 判据来源）
+> **关联交付**: 六件套 `docs/reports/l0l10-r2-full-recon-2026-10-26/`（00 事实基线 / 01 冲突裁决台账 / 02 问题登记册 / 03 技术方案 / 04 测试验收与回滚 / 05 ADR 同步与待裁台账）+ 基线报告 `docs/reports/l0l10-r2-baseline-2026-10-26.md` + 登记册 `tmp/l0l10-r2-issues.md`（M39–M57、L47–L51；tmp 与 docs/reports 多数不入库，故关键句按 D5 引用进本 ADR）
+> **权威源**: 代码实测与命令读数以本 ADR 引用的 file:line 与 `docs/reports/l0l10-r2-*` 现取为准；事件定级/常量以 `crates/event-bus/src/{registry.rs,bus.rs}` 现取为准；门集以 `py -3 scripts/run_gate_manifest.py` 的 `[SUM]` 自报为准
+> **编号合法性**: 落盘前现取 ADR 物理文件 **119** 份、磁盘主编号 max **224**（`ADR-224` 已由 C-60 `8432504` 入库）；`ADR-225` 全库 **0 命中**（`Select-String docs/architecture/*.md,agents.md,CONTRIBUTING.md,CHANGELOG.md -Pattern 'ADR-225'` → 0）。门 max **G-134**、`[[gate]]` 134 条，`G-135` 0 命中（D3 预留）。变更单续编 **C-57..C-74**（R1 用尽 C-01..C-56；`C-57..C-99` 在 R1 施工图/进度报告/git log 三处 0 命中）。事件变体**零新增**（154 不变）
+
+---
+
+## 1. 背景
+
+R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配面脱节」。R2 首轮取证发现 **R1 自身留下了同型病灶，且落在最要命的一环——验证面从未被验证**：
+
+- R1 进度报告 §1.3 原文「全量验证门未过，验收不能就此关闭」；其 §3.2/3.3 记 workspace 级 cargo 五套件**全部 rc101**，release 压测档**零测试执行**。
+- R1 收口只跑 §8.2 十二道门 + §8.3 受影响门（约 **24/134**）即判「门禁面全绿 26 项 PASS」。
+- R2 首次整体跑全 134 门即抖出：**G-85（PS 5.1 UTF-8 BOM 门）当前红，且该步骤位于 `ci.yml` 的 check job L143-146（与依赖铁律门、G-99、G-125 同 job）⇒ 是一条 PR 阻断红**，自 2026-10-25 沉默。逐字节取证：`scripts/measure_startup.ps1` 在其**全部历史上从未带 BOM**（`e3e0046^` blob first3=`23 20 3d`），真正的带入者是 R1 携带提交 **`0d39b50`**（「chore: 携带在途工作树改动」，该文件以 87 行纯新增入库）；门自身 `--selftest` rc=0（4 fixtures）证明是「被检对象坏」非「检测器坏」。
+- R2 首次跑通真全量测试：**447 个 test target / passed=11375 / failed=4**，而该项目此前任何一次「全量测试」都未抵达终点。
+
+同时，ADR-224 §6/§7.2 的总账与 `git log` 已显著漂移：其记 8 单 blocked「未提交落地」，实测其中 5 单已提交（`a4438ca`/`c67137d`/`7c659ef`/`bd68767`/`e3e0046`），另 C-27 内容已在 HEAD（搭 `7b7e571`=C-45 落地）、C-42/44/47/48/54/55 六单目标态经内容级复测确认已达成 ⇒ **R1 所谓「17 blocked」实际只剩 C-29 一单**。
+
+## 2. 决策
+
+### D1（环境根因订正）workspace 级命令一律显式 `--jobs 2`；不改 `.cargo/config.toml`
+
+- **决策**：R1 的「15GB 机型不可建立全量绿基线」判据**作废**。实证：`cargo check --workspace --all-targets --jobs 2` → **rc=0**（0 warning，5m26s）；`cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` → **rc=0**（5m27s）；实测 rustc 工作集 86–197 MB/进程、free 内存稳定 >3.1 GB。根因是 `.cargo/config.toml` 固化 `[build] jobs = 4`。release 压测档采「构建与运行解耦」：先 `cargo build --workspace --release --tests --jobs 1` 产工件，再 `cargo test --workspace --release -- --ignored --test-threads=1`，且**禁止**为降内存改 release profile（`lto`/`codegen-units`/`opt-level` 会污染 SLO 阈值测量）。
+- **被否反方案 ①**：把 `config.toml` 的 jobs 改成 2 —— 该值是 rustc/链接器 `0xC0000409` 的历史修复产物且被 CI runner 依赖；静默降并发会把「构建慢」这一可感知代价无告警地转嫁给所有人，而命令面纪律可逐条审计。**被否反方案 ②**：全量 `cargo clean` 从零重建以根除 60 个 0 字节 `.rmeta` —— 54,816 文件从零重建的峰值内存风险高于定点 `cargo clean -p`，且摧毁 `target/criterion` bench 缓存，把性能取数窗口拖到不可完成。
+- **落地状态**：✅ 已生效（本 ADR 记录 + §3 验收清单引用）。
+
+### D2（收口口径）全门集 `[SUM]` 行是「门禁全绿」的唯一判据
+
+- **决策**：任何批次收口必须跑 `py -3 scripts/run_gate_manifest.py` 并以 `[SUM] ok=N mismatch=0 env-fail=0 unknown=0 skip=M 合计 N+M/总数` 为唯一判据；heavy 门单独申报。**「§8.2 十二道门 + §8.3 受影响门」不再构成「门禁全绿」的充分证据**。同批把「全量测试必须带 `--no-fail-fast`（或直接用 nextest）」写进发布前清单。
+- **依据（本轮实证）**：`cargo test --workspace` **默认 fail-fast** —— R2 首跑仅产 67 个 `test result:` 行 / 2327 passed 即中止，而真全量是 **447 target / 11375 passed** ⇒ **376 个 target 被一个红静默吞掉**；本地口径与 CI 口径（nextest + 带 `--no-fail-fast` 的 doctest job）在此不等价。
+- **被否反方案**：维持「受影响门」口径 —— 正是该口径让 G-85 沉默了一整天；「门在、但没人跑它」与 R1 已治理的「承诺面/投递面失配」是同一种病。
+- **落地状态**：✅ 口径生效（登记册 M39 处置第 2 段 / M56）；文档传导 C-73 待执行。
+
+### D3（M49 拆两单）拦截留痕先落地，事件升档独立成批
+
+- **决策**：业主裁决「审计链留痕 + 升 Critical+mpsc 两者都做」，R2 按工程可实现性拆为：**C-64a**（只改 `crates/seccore/src/sandbox.rs` 拒绝分支，在 `return Err` 之前补审计链 append）先行；**C-64b**（Normal→Critical 全套，MPSC 17→18、TOTAL 21→22、三锁 CRITICAL 21→22 / NORMAL 122→121、`LANE_FORBIDDEN_SHARD` +1、旁路臂 +1、**L0-A `ImmutableSurface` 增变体使 `all() -> [ImmutableSurface; 32]` 变 33**、G-117 note 去手抄计数）作为独立批次，前置 = 在途 fuzz 批次收尾 + G-115 closed/open 裁决。
+- **依据**：`harness_spec.rs:98` 明文「Critical 事件清单（18 = 17 mpsc 旁路全覆盖 + CheckpointSaved broadcast-only）」且每个 mpsc-Critical 事件是一个独立枚举变体；`fuzz/fuzz_targets/harness_spec_parse.rs` 是该枚举的 fuzz 消费者，本轮实测**处于在途批次未提交态**。TUI 侧经复测确认**不需改**（`panels/event_stream.rs:557`、`panels/log.rs:406` 按 topic 分派、`:605/:454` 按硬编 priority 分派、`event_coverage_drift_test.rs:267` 用 `TuiEventClass::Consumed`，均不读 `severity()`）。
+- **被否反方案**：一次做完（八组单一提交）—— 会把最高风险面与他人的未提交工作绑进同一颗提交，违背「整提交可独立 revert」与「禁碰在途改动」两条既定纪律；两单都完成后效果与业主裁决一致。
+- **落地状态**：⏳ C-64a 待执行；C-64b 转 §5 待裁 T-1。
+
+### D4（M22/C-29）session-store 采「先加固、后接线」
+
+- **决策**：ADR-224 D1 的装配决策维持，但执行前置两单 —— **C-61**（M50：`CbmrInner` 加取消标志 + 托管 `JoinHandle` + 新增 `pub async fn shutdown()` + `impl Drop` 置标志/`abort`/pending 非空 warn，**不改 `new()` 签名**）、**C-62**（M51：`create_dir_all` + `Connection::open` + `pragma_update` + `execute_batch` 收进既有 `run_blocking`，红线文本由「SQLite 写入只经 spawn_blocking」扩为「打开/DDL/写入」），再 **C-63** 按路径 A 接线（`composition.rs:296` 构造 `CbmrWriter`（经 `StoreConfig::with_dir`）注入 `AppServer::with_session_store`、登记新生产边 `chimera-cli|session-store` 入 `dep_edge_freeze.txt`、装配态 DORMANT→PRODUCTION-WIRED、契约头与架构视图重派生）。
+- **对 ADR-224 D1 的两处事实订正**：① 原施工图引用的假想 API `SessionStore::new(dir)` **确实不存在**（该 crate 全量仅 `lib.rs:229`/`replay.rs:4` 出现该词），真构造是 `writer.rs:123 pub fn new(config: StoreConfig)` + `types.rs:258 StoreConfig::with_dir`；② `server.rs:293 pub fn with_session_store(config, backend: Box<dyn CoreBackend>, store: CbmrWriter)` **存在**且签名可用（原报告称「两处未闭合设计」之一），但 `nexus-app-server` **不** re-export `CbmrWriter` ⇒ 原「路径 B 最小暴露」并非纯接线而需改 app-server 代码。
+- **Δ1「无新增依赖边」承诺的修订**：亲验 `dep_edge_freeze.txt` 现无 `chimera-cli|session-store` ⇒ 任何直接装配路径必新增一条生产边。判为**计划缺陷而非决策缺陷**（该承诺建立在已失效的假想 API 上），由本 ADR 明文修订：C-63 允许新增 L10→L3 向下一条合法向下边，并登记台账。
+- **被否反方案 ①**：忽略 M50/M51 直接接线 —— 把一个不可取消的永生刷写循环与运行期阻塞 IO 搬进生产，且 `append` 已返回 Ok（`writer.rs:150-152` 自陈「入队成功，非 fsync 确认」）而 pending 可能永不落盘，与 `segment.rs:288` 红线相悖。**被否反方案 ②**：`new()` 改 async 返回 JoinHandle —— 破坏调用面且制造「双构造路径」病理（同 R1 L46 双 `MtpeConfig` 教训）。
+- **落地状态**：⏳ 待执行（本 ADR 记录裁决，不改码）。
+
+### D5（M43）治理文档入库政策：采「方案乙」，不改 `.gitignore`
+
+- **决策**：本轮**不**改 `.gitignore`。改为硬规定：**凡订正不入库的权威 md（`agents.md`、`docs/architecture/CODE_WIKI.md`、`adr_index.md`、`docs/tui/README.md`、两份权威设计文档），必须同批把订正后的关键句原文引用进可入库的 ADR**，使 ADR 成为证据副本。本 ADR 的 D1~D4 与本批四条提交消息即按此执行。
+- **依据**：`.gitignore:57` 为 `*.md`，反白仅三条（`:60 !docs/architecture/ADR-*.md`、`:64`、`:65`）⇒ R2 复测确认「已达成」的六单（C-42/44/47/48/54/55）其载体文件**全部是 git-ignored 本地文件**，无 blob、无提交、无 diff，`git status` 也不报 ⇒ 「文档已订正」这一事实无法被第二人复核，也无法被任何门验证。
+- **被否反方案**：全量 md 入库 —— 会把数百个本地草稿/报告一次性推入仓库，与既有「配置收口/不入库」治理意图正面冲突。窄口径反白三份 —— 会直接改变 `check_doc_consistency.sh`/`adr_index_sync.py`/G-37 现明文「0 skipped by gitignore *.md policy」的断言语义，属独立政策授权，不在本 ADR 范围。
+- **落地状态**：✅ 规定生效（登记册 M43）；方案甲转 §5 待裁 T-4。
+
+### D6（M37→新门 G-135）公共 API 签名泄漏门，判据上界取实测台账
+
+- **决策**：新增 **G-135**（`scripts/check_pub_api_leak.py`，含 `--selftest` 植入例 + 台账 + `gate_manifest.toml` 两条 + `ci.yml` 一步，四件同批）扫描 `pub fn` 签名的 extern-crate 前缀，**先 L0-B 试点**；判据必须覆盖**返回位 / 参数位 / 泛型界**三类；依赖上界**只取 `scripts/l0b_dep_freeze.txt` 实测集**，不得取 `gate_manifest.toml` G-125 note 或 ADR-222 §9 的散文白名单。基线采「先 `--emit` 出台账、再判红」⇒ 零行为变更。
+- **依据（M46/M47 实证）**：`check_l0b_dep_surface.py` 自报 `external_deps=27`，而台账 27 行中命中 `{event-bus, tokio, tracing}` 者仅 16 ⇒ 若以三值集为上界，首跑即产 **11 条伪红**；泄漏面亲验含返回位 9 站点 + **参数位 `shard.rs:261-266`**（`sender: tokio::sync::broadcast::Sender<NexusEvent>` 与 `handle: &tokio::runtime::Handle`，另 `:303`/`:448`），R1 M37 因只统计返回位而**漏记了耦合最强的一处**；`G-131` note 自陈「L0-B public fn 面不在本门辖区」= 轴缺口。
+- **反方案**：沿用 G-125 note 白名单（否，理由同上，且正是本仓反复治理的「承诺在散文、判据为零」）。
+- **落地状态**：⏳ 待执行 C-66；`impl From<第三方> for EventBusError`（`error.rs:55/68/75/82` 四条）是否计入判据，转 §5 待裁。
+
+### D7（M48）审计链补校验侧：启动 + 导出双点，零新增事件变体
+
+- **决策**：`AuditChain::verify()`（`seccore/src/audit.rs:469`）接入两个冷路径点（沙箱初始化 + 审计导出），失败发**既有** `AsaIntervention`（Critical+mpsc）并返回错误；**不进每命令热路径**（链长 O(n) 重算）。R2 目标恒为**零新增事件变体**——为拦截留痕新设专用事件属本仓明令禁止的「零生产者装饰变体」。
+- **依据**：亲验 `crates/*/src/**`（排除 `seccore/src/audit.rs`）内 `.verify()` 命中 = **0**；`audit.rs` 内 8 处命中全在 `mod tests`（起点 `:791`）之后 ⇒ 红线 #2「Merkle 审计链完整性不可篡改」当前**只有写入侧、无校验侧**。
+- **被否反方案**：每次执行后校验 —— 无基准证据下把 O(n) 重算放进热路径，违反「性能可证伪」；且本轮实测 `ExperienceCardBus` 等面已存在零基准同类问题（M54），不宜再造。
+- **落地状态**：⏳ 待执行 C-65；若无稳定导出入口则退化为「启动 + 关账」双点并回写本 ADR。
+
+### D8（反方案登记）R1 的 M49/M48 类问题未被 R1 发现的成因判定
+
+- **决策**：判为**方法论缺陷**而非个人疏漏，并以 D2 的口径变更作为制度性修复。附带结论：R1 §7.1 待裁 28 项与 §7.2 8 项中，凡状态判据依赖「git log 无对应提交」者，本 ADR 一律要求现场重跑，不得继承。
+
+## 3. 破坏性面显式记录
+
+| 来源 | 破坏性面 | 兼容性论证 | 落地状态 |
+|---|---|---|---|
+| C-58（承 R1 C-24） | `DecbConfig::validate()` 新增拒绝态（NaN/±inf 的 `total_budget_limit` 与 8 个因子/成本/溢出键） | 非破坏：靠 NaN 绕过校验的输入本即缺陷，无合法迁移需求；`DecbError::ConfigError` 变体未增，穷尽 match 面不变；置最前是因为 NaN 参与比较恒 false 会穿透下方 `<= 0`/`< 0`/倒挂检查，±inf 同理穿透上限，NaN 的 total_budget_limit 会使 `check_overflow` 恒走 Degraded（服务不可用 + Critical 事件风暴） | ✅ 已落地 `5af76c9`；`cargo test -p decb-governor` rc=0 |
+| C-57（M39） | 无 —— 仅前置 3 字节 BOM | 脚本语义不变；PS 5.1 下由 ANSI 误解码变为正确解码，属修复；正文逐字节不变（len 3737→3740、`git diff --numstat` = 1 1） | ✅ 已落地 `c8fcd1c`；G-85 `RESULT: OK (26/26)` |
+| C-59 / C-60 | 无 | 纯注释 / 纯入库 | ✅ `b043674` / `8432504` |
+| **C-64b（预登记）** | `NexusEvent::SandboxViolation` 定级 Normal→Critical：对穷尽 match severity 的消费方为行为变更；mpsc 旁路集 +1（17→18）、Critical 总数 +1（21→22）；**L0-A 契约类型 `ImmutableSurface` 增变体使 `all()` 数组 arity 32→33** | 投递纯增益（mpsc 保障 + broadcast 不减）；wire 格式零变化；TUI 侧经复测确认按 topic/priority 分派，不受定级影响；**若 `ImmutableSurface` 属 closed 须先记 closed→open 重分类**（ADR-224 §5 先例） | ⏳ 待裁 T-1（前置：在途 fuzz 批收尾） |
+| **C-63（预登记）** | 生产行为新增：会话双写落盘（每 turn 一次段文件追加）+ **新增 1 条生产边 `chimera-cli|session-store`** | 行为级新增非 API 破坏；回滚 = revert，已落盘段文件无 schema 依赖、留存无害；新边为 L10→L3 合法向下单，须同批登记 `dep_edge_freeze.txt` 并复跑 G-32/33 live 与 G-75/76 基线 | ⏳ 待执行（前置 C-61/C-62） |
+
+## 4. 实施结果总账（2026-10-26 收口时点）
+
+- **已落地 4 单**：C-57 `c8fcd1c`、C-58 `5af76c9`、C-59 `b043674`、C-60 `8432504`。全部逐文件 `git add`，未用 `-A`/`.`；提交消息经字节级校验为合法 UTF-8。
+- **在途改动纪律**：`git status` 实测 16 个已跟踪文件 modified（622+/112-）+ 3 untracked，其中**仅 2 个落在 R2 单域内**（已随 C-58/C-59 收口），其余 **14 个属在途批次，R2 全程未代提交、未触碰**；`git stash`/`reset --hard`/`checkout --` 按 ADR-222 D6 明令禁用。
+- **待执行 14 单**：C-61..C-74（清单与影响面见交付物 03 §3）。
+- **对 R1 总账的事实订正（只加注不改写）**：C-08/C-09/C-25/C-31/C-36 已提交；C-27 内容已在 HEAD 由 `7b7e571`(C-45) 承载；C-42/C-44/C-47/C-48/C-54/C-55 目标态已达成；⇒ **R1 未完面 = 仅 C-29**。
+- **基线**：`cargo check` rc=0 / `cargo clippy` rc=0 / 真全量 `cargo test --no-fail-fast` = **447 target / 11375 passed / 4 failed**（4 条逐 target 隔离复测 0 failed ⇒ 判为并行负载敏感型 flaky，登记 M57 不作回归）；全门集修复前 `ok=126 mismatch=1 skip=7/134`，G-85 解除后待整体复跑。
+
+## 5. 待裁议程（R2 移交）
+
+| # | 事项 | 建议方向 | 前置 / 触发条件 |
+|---|---|---|---|
+| T-1 | C-64b `SandboxViolation` 升档八组全套 | 独立批次，单一提交 | 在途 `fuzz/fuzz_targets/harness_spec_parse.rs` 收尾 + G-115 closed/open 裁决 |
+| T-2 | M13 loom 并发正确性三态 | 落 loom（L2 两处持锁-广播首批）or 作废手册愿景行 | 业主对「R2 是否允许新外部依赖」表态 |
+| T-3 | M36/M55 `ExperienceCard` schema 版本化 | 先 L0-A 内部统一范式（`checkpoint.rs` u16 共存式 vs `event_metadata.rs` u32 serde-default 式），再议 card | 实测破面 67 处（src 32 / tests+benches 35，无 `impl Default`）；`blake3` 被 `check_l0_purity.py:72 ALLOW_DEPS={"serde","chrono","uuid","thiserror"}` 硬阻断（`Cargo.lock` 内 blake3 0 命中，sha2 已在） |
+| T-4 | M43 治理文档入库政策（方案甲窄口径反白） | 独立授权批次 | 须同批改 `check_doc_consistency.sh`/`adr_index_sync.py`/G-37 的 gitignore-skip 断言语义 |
+| T-5 | M48 审计导出点定位 | 启动 + 导出双点 | 若无稳定导出入口则退化「启动 + 关账」并回写本 ADR |
+| T-6 | G-135 判据口径：`impl From<第三方> for EventBusError`（`error.rs:55/68/75/82`）是否计入 | 建议计入（trait 实现在 crate 外部可见） | C-66 立门前定；计则基线 +4 站点 |
+| T-7 | L01 sibling facade 单消费者翻案 | 维持观察 | G-129 only-decrease 棘轮翻案需 ADR；触发 = 装配面事故 |
+| T-8 | M16 coverage 46-crate 基线未重测 | CI nightly 出数后抬表 | 本地 llvm-cov E0463 不可代跑 |
+| T-9 | M14/M19/M20 + M44/M45/M46 性能可证伪族 | 补 bench 阈值键 / 给 SLO 找 CI 载体 / 第四表键集对等 / 十六源目标三态 | 需 CI clean-runner 取数；改 release profile 属禁区 |
+| T-10 | M24/M25/M26/M28/M29/M30/M31/M33/M34/L21/L37 零装配族 | 逐条「接线 / GATED / 退役」三选一（R2 已出全量清点表，不再逐单发现） | M27 属 R2 解冻前必清项居首；M33 继承 ADR-224 D4 DEFERRED 不接线；退役需 ADR |
+| T-11 | M57 四条时序断言确定性改造 | 固定 `--test-threads=1` 或抽纯函数夹具（沿 ADR-222 R9 `eco_transition` 先例） | 禁改生产语义（Eco 降频是正确的事件风暴保护） |
+| T-12 | 六条 `[[slo]]` 的 `continue-on-error` 切换 | 维持现状（R2 复测判为已明文登记的计划债，非疏漏） | `slo.yml:24` 已写切换条件；满足后改 `slo.yml:68`/`:170`/`stress.yml:38` 为 `false` |
+| T-13 | M50/M51 之外的 L3 同族（`scc-cache::SqliteWal`、`cmt-tiering::CmtCoordinator`、`hcw-window::spawn_mask_listener` 未接线而文档以现在时声称闭合） | 与 C-63 同批判「接线 or 显式装配态订正注」，并同批重派生契约头 | 各为生产零构造/零装配（R2 复测亲验行号） |
+
+## 6. 验证与回滚
+
+- **本 ADR 落档验证**：`adr_index.md` 行与磁盘实体名一致；`py -3 scripts/adr_index_sync.py` rc=0（BROKEN LINK 无 / UNINDEXED 无）；`bash scripts/check_doc_consistency.sh` rc=0。
+- **回滚**：文档面 = 删本文件 + 删 `adr_index.md` 对应行（两文件同批）。代码面按交付物 04 §3 的耦合组**整提交 revert**，禁半 revert（尤其 C-64b 八组、C-66 四件、C-63 装配链、C-61/C-62 与 C-63 的先后序）；已落地四单逆序：`8432504 → b043674 → 5af76c9 → c8fcd1c`；任何 revert 后重跑全门集 `[SUM]` + `cargo check --workspace --all-targets --jobs 2`。
