@@ -23,7 +23,10 @@
 //! - `osa-coordinator` 在 L6 通过 `Arc<dyn MemoryStrategyProvider>` 调用
 //! - trait 定义在 L0，两端各自依赖 L0，无 L6→L6 直接依赖
 //!
-//! 此模式与 `VectorStore` trait（L0 契约，L6 OSA 通过 `Arc<dyn>` 调用实现者）一致。
+//! 此模式与 `VectorStore` trait（L0 契约）同属「两端各自依赖 L0」的接缝解耦
+//! 思路，但两者消费面不同：`VectorStore` 的实现者与调用方在 hcw-window /
+//! repo-wiki / chimera-mas（向量存取面），L6 OSA 对其零消费——OSA 的 L0
+//! 记忆接缝是本模块的 `MemoryStrategyProvider`，勿将两个接缝混为一谈。
 //!
 //! # 三重悖论"记忆悖论"修复路径
 //!
@@ -144,7 +147,9 @@ impl std::fmt::Display for MemoryTaskPhase {
 /// - trait 定义在 L0（本模块），两端各自依赖 L0
 /// - OSA 持有 `Option<Arc<dyn MemoryStrategyProvider>>`，`None` 时 fallback 到
 ///   `StandardTopK`（k_multiplier=1.0，当前行为，向后兼容）
-/// - 此模式与 `VectorStore` trait（L0 契约）一致
+/// - 此模式与 `VectorStore` trait（L0 契约）同属 L0 接缝解耦思路，但消费面
+///   无关（`VectorStore` 面向 hcw-window / repo-wiki / chimera-mas，OSA 零
+///   消费；接缝区分详见本文件模块头注）
 ///
 /// # C4 合规（能力场灰度，非运行时旗）
 ///
