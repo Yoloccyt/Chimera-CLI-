@@ -184,7 +184,7 @@ fn test_router_panel_renders_title() {
     assert!(
         compact.contains(panel_label),
         "Router panel title should be rendered, got: {}",
-        &content.chars().take(200).collect::<String>()
+        content.chars().take(200).collect::<String>()
     );
 }
 
@@ -212,7 +212,7 @@ fn test_router_panel_default_state_renders_three_routers() {
     assert!(
         content.contains("KVBSR"),
         "default state should display KVBSR router, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         content.contains("SESA"),
@@ -247,7 +247,7 @@ fn test_router_panel_default_state_zero_hit_rate() {
     assert!(
         content.contains("0.0%"),
         "default hit_rate 0.0 should display as 0.0%, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -274,7 +274,7 @@ fn test_router_panel_renders_hit_rates() {
     assert!(
         content.contains("87.0%"),
         "KVBSR hit_rate 0.87 should display as 87.0%, got: {}",
-        &content.chars().take(400).collect::<String>()
+        content.chars().take(400).collect::<String>()
     );
     // SESA 0.72 → 72.0%
     assert!(
@@ -307,7 +307,7 @@ fn test_router_panel_renders_latency_p50_p95_p99() {
     assert!(
         content.contains("120"),
         "KVBSR P50 latency 120 should be rendered, got: {}",
-        &content.chars().take(500).collect::<String>()
+        content.chars().take(500).collect::<String>()
     );
     assert!(
         content.contains("480"),
@@ -364,7 +364,7 @@ fn test_router_panel_renders_utilization_bar() {
     assert!(
         content.contains('[') && content.contains(']'),
         "utilization bar should render [====----] form, got: {}",
-        &content.chars().take(400).collect::<String>()
+        content.chars().take(400).collect::<String>()
     );
     assert!(
         content.contains('='),
@@ -396,7 +396,7 @@ fn test_router_panel_zero_hit_rate_renders_empty_bar() {
     assert!(
         content.contains("0.0%"),
         "zero hit rate should display 0.0%, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -422,7 +422,7 @@ fn test_router_panel_renders_hot_capabilities() {
     assert!(
         content.contains("search"),
         "hot capability 'search' should be rendered, got: {}",
-        &content.chars().take(500).collect::<String>()
+        content.chars().take(500).collect::<String>()
     );
     assert!(
         content.contains("read_file"),
@@ -490,7 +490,7 @@ fn test_router_panel_top_k_truncates_to_ten() {
     assert!(
         content.contains("cap-00"),
         "highest-frequency cap-00 should be in Top-10, got: {}",
-        &content.chars().take(500).collect::<String>()
+        content.chars().take(500).collect::<String>()
     );
     // cap-14 是最低频(10 次),应被截断
     // 注意:由于 content 是字符流,这里只能验证 cap-00 存在,无法精确验证 cap-14 不存在
@@ -550,7 +550,7 @@ fn test_router_panel_low_hit_rate_renders_without_panic() {
     assert!(
         content.contains("45.0%"),
         "low hit_rate 0.45 should display as 45.0%, got: {}",
-        &content.chars().take(400).collect::<String>()
+        content.chars().take(400).collect::<String>()
     );
     // SESA 0.50 → 50.0%
     assert!(
@@ -604,7 +604,7 @@ fn test_router_panel_threshold_boundary_60_percent() {
     assert!(
         content.contains("60.0%"),
         "hit_rate 0.6 should display as 60.0%, got: {}",
-        &content.chars().take(400).collect::<String>()
+        content.chars().take(400).collect::<String>()
     );
     assert!(
         content.contains("59.0%"),
@@ -654,7 +654,7 @@ fn test_router_panel_content_normal_state() {
     assert!(
         content.contains("KVBSR"),
         "content should contain KVBSR, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
     assert!(content.contains("SESA"), "content should contain SESA");
     assert!(content.contains("FaaE"), "content should contain FaaE");
@@ -676,7 +676,7 @@ fn test_router_panel_content_low_hit_rate() {
     assert!(
         content.contains("45.0%"),
         "low hit rate 45.0% should be in content, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         content.contains("30.0%"),
@@ -692,7 +692,7 @@ fn test_router_panel_content_empty_state() {
     assert!(
         content.contains("KVBSR"),
         "empty state should contain KVBSR, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
     assert!(content.contains("SESA"), "empty state should contain SESA");
     assert!(content.contains("FaaE"), "empty state should contain FaaE");

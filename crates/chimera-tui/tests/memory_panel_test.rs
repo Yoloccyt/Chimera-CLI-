@@ -99,7 +99,7 @@ fn test_memory_panel_renders_with_sample_data() {
     assert!(
         content.contains("92.5%"),
         "hit rate should be rendered, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         content.contains("8192 bytes"),
@@ -198,7 +198,7 @@ fn test_memory_panel_displays_tier_distribution() {
     assert!(
         content.contains("Storage: Hot:5"),
         "面板应从事件流派生四层存储分布,实际内容前 300 字符: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
     set_locale(Locale::Zh); // 复位默认中文
 }
@@ -230,7 +230,7 @@ fn test_memory_panel_no_tier_event_shows_na() {
     assert!(
         content.contains("Storage: N/A"),
         "无事件时应诚实显示 N/A,实际内容前 300 字符: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
     set_locale(Locale::Zh);
 }

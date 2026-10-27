@@ -170,7 +170,7 @@ fn test_mcp_nodes_panel_renders_title() {
     assert!(
         content.contains("MCP Nodes"),
         "MCP Nodes panel title should be rendered, got: {}",
-        &content.chars().take(200).collect::<String>()
+        content.chars().take(200).collect::<String>()
     );
 }
 
@@ -196,7 +196,7 @@ fn test_mcp_nodes_panel_renders_node_list_when_non_empty() {
     assert!(
         content.contains("mcp-node-1"),
         "node 'mcp-node-1' should be rendered, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         content.contains("mcp-node-2"),
@@ -222,7 +222,7 @@ fn test_mcp_nodes_panel_renders_throughput_value() {
     assert!(
         content.contains("1250"),
         "throughput value 1250 should be rendered, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         content.contains("450"),
@@ -248,7 +248,7 @@ fn test_mcp_nodes_panel_renders_msg_per_second_unit() {
     assert!(
         content.contains("msg/s"),
         "throughput unit 'msg/s' should be rendered, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -270,7 +270,7 @@ fn test_mcp_nodes_panel_renders_last_seen_relative_time() {
     assert!(
         content.contains("ago"),
         "last_seen should be rendered as relative time with 'ago' suffix, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -296,7 +296,7 @@ fn test_mcp_nodes_panel_offline_alert_banner() {
     assert!(
         content.contains("[ALERT]"),
         "offline alert banner should be rendered, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         content.contains("mcp-node-down"),
@@ -344,7 +344,7 @@ fn test_mcp_nodes_panel_no_alert_when_all_online() {
     assert!(
         !content.contains("[ALERT]"),
         "no alert banner when no Offline nodes, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -371,7 +371,7 @@ fn test_mcp_nodes_panel_alert_shows_first_offline_node() {
     assert!(
         content.contains("down-1"),
         "first Offline node 'down-1' should appear in alert, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -398,7 +398,7 @@ fn test_mcp_nodes_panel_empty_state_shows_placeholder() {
     assert!(
         content.contains("No MCP nodes connected"),
         "empty state should show placeholder, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         !content.contains("[ALERT]"),
@@ -530,7 +530,7 @@ fn test_mcp_nodes_panel_content_with_nodes() {
     assert!(
         content.contains("node-x"),
         "content should contain node id, got: {}",
-        &content.chars().take(200).collect::<String>()
+        content.chars().take(200).collect::<String>()
     );
     assert!(content.contains("999"), "content should contain throughput");
     assert!(content.contains("msg/s"), "content should contain unit");
@@ -543,7 +543,7 @@ fn test_mcp_nodes_panel_content_empty_state() {
     assert!(
         content.contains("No MCP nodes connected"),
         "empty state should show placeholder, got: {}",
-        &content.chars().take(200).collect::<String>()
+        content.chars().take(200).collect::<String>()
     );
 }
 
@@ -564,7 +564,7 @@ fn test_mcp_nodes_panel_content_offline_alert() {
     assert!(
         content.contains("[ALERT] Node dead-node offline"),
         "alert banner should mention node id, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -701,7 +701,7 @@ fn test_mcp_nodes_panel_zh_locale_renders_chinese_copy() {
     assert!(
         content.contains("暂无 MCP 节点接入"),
         "Zh locale 下空状态应显示中文提示,实际: {}",
-        &content.chars().take(200).collect::<String>()
+        content.chars().take(200).collect::<String>()
     );
 }
 

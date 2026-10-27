@@ -138,7 +138,7 @@ fn test_decay_panel_renders_title() {
     assert!(
         compact.contains(panel_label),
         "Decay panel title should be rendered, got: {}",
-        &content.chars().take(200).collect::<String>()
+        content.chars().take(200).collect::<String>()
     );
 }
 
@@ -161,7 +161,7 @@ fn test_decay_panel_renders_coefficient() {
     assert!(
         content.contains("0.85") || content.contains("85.0%"),
         "coefficient 0.85 should be rendered, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
 }
 

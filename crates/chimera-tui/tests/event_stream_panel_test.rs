@@ -284,7 +284,7 @@ fn event_stream_panel_zh_locale_renders_chinese_copy() {
     assert!(
         content.contains("暂无事件"),
         "Zh locale 下空状态应显示中文提示,实际: {}",
-        &content.chars().take(200).collect::<String>()
+        content.chars().take(200).collect::<String>()
     );
 }
 
@@ -299,7 +299,7 @@ fn event_stream_panel_empty_state_shows_no_events() {
     assert!(
         content.contains("No events") || content.contains("no events"),
         "empty state should show 'No events', got: {}",
-        &content.chars().take(200).collect::<String>()
+        content.chars().take(200).collect::<String>()
     );
 }
 
@@ -376,7 +376,7 @@ fn event_stream_panel_shows_new_events_indicator_when_auto_scroll_off() {
     assert!(
         content.contains("新事件") || content.contains("auto-scroll"),
         "should show new events indicator when auto_scroll=false, got: {}",
-        &content.chars().take(300).collect::<String>()
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -539,21 +539,21 @@ fn event_stream_panel_showing_and_footer_visible_at_bottom_with_10000_events() {
     assert!(
         content.contains("CacheHit"),
         "事件行应渲染, got: {}",
-        &content.chars().take(400).collect::<String>()
+        content.chars().take(400).collect::<String>()
     );
     // 修复前复算(R5):窗口 38 事件行 + 标题 2 + 提示 1 + 页脚 1 = 42 行
     // > inner 38 行,提示行(第 41)与页脚(第 42)被 Paragraph 系统性裁剪。
     assert!(
         content.contains("显示"),
         "总数提示行应渲染在视口内(F-22 修复前被系统性裁剪), got: {}",
-        &content.chars().take(400).collect::<String>()
+        content.chars().take(400).collect::<String>()
     );
     // F-17 迁键后页脚走 panel.footer 键:断言与键表同源(本用例 pin Zh,
     // 原字面断言 "Press Tab to switch panels" 依赖迁键前的硬编码英文,已失效)
     assert!(
         content.contains(chimera_tui::t!("panel.footer")),
         "页脚应渲染在视口内(F-22 修复前被系统性裁剪), got: {}",
-        &content.chars().take(400).collect::<String>()
+        content.chars().take(400).collect::<String>()
     );
 }
 
@@ -588,7 +588,7 @@ fn event_stream_panel_showing_and_selected_visible_mid_scroll() {
     assert!(
         content.contains("显示"),
         "滚动中部总数提示行应渲染在视口内, got: {}",
-        &content.chars().take(400).collect::<String>()
+        content.chars().take(400).collect::<String>()
     );
     // 选中行可见(行级锚定,对齐 log_panel_test 范式):EventStream 过滤索引
     // 正序,filtered[60] = latest_events[60] = src-0060;带方括号标记全帧唯一
