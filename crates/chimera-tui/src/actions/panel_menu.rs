@@ -44,50 +44,36 @@ mod tests {
     use super::*;
     use crate::actions::ActionRegistry;
 
-    /// 全部 27 个 PanelId 变体(与 `PanelId::ALL` 对齐;含 FC-05 下线未注册的
-    /// InjectionStrategy —— 其上下文菜单仍须满足"无只读死面板铁律",即恒含
-    /// panel.drill_down)。新增 PanelId 变体时,types.rs 的穷举测试会编译失败,
-    /// 强制同步本清单。
-    const ALL_PANELS: [PanelId; 27] = [
-        PanelId::Quest,
-        PanelId::Parliament,
-        PanelId::Budget,
-        PanelId::Memory,
-        PanelId::Security,
-        PanelId::Health,
-        PanelId::Log,
-        PanelId::Help,
-        PanelId::Decay,
-        PanelId::EventStream,
-        PanelId::Router,
-        PanelId::McpNodes,
-        PanelId::Chtc,
-        // Concord T1.4:Timeline 接线注册(§7.3 未注册双面板接线清单)
-        PanelId::Timeline,
-        PanelId::ClvVector,
-        PanelId::ResourceMonitor,
-        PanelId::MetricsDashboard,
-        PanelId::OsaSparse,
-        PanelId::Sysinfo,
-        PanelId::Chat,
-        PanelId::SelfAssessment,
-        // closure Stage B-10:DAG 可视化面板
-        PanelId::DagViz,
-        // Task 3.7:PVL 过程评分面板
-        PanelId::PvlScore,
-        // Task 3.9:任务管理面板
-        PanelId::TaskManager,
-        // P1(ADR-073):超窗兜底面板
-        PanelId::OverWindow,
-        // Phase 10 §15.2b/§15.3:经验卡片可视化 + 注入策略面板
-        PanelId::ExperienceCardViz,
-        PanelId::InjectionStrategy,
-    ];
+    /// 菜单覆盖的全集 —— **直接派生自 `PanelId::ALL`**（C-80 / M60）。
+    ///
+    /// WHY 不再手抄一份定长清单：本文件原先写死 `const ALL_PANELS: [PanelId; 27]`，
+    /// 而实际枚举是 30，漏了 `Bench`/`ReviewQueue`/`Blackboard` —— 于是四个
+    /// “守卫”测试只遍历 27 个面板（自循环断言），覆盖静默降到 27/30，
+    /// 而注释还声称“新增变体时会编译失败”（假的：定长数组不会因枚举增变体而报错）。
+    /// 改为派生后，新变体只要进 `PanelId::ALL`（它自带 30 的锁）就自动被本套测试覆盖。
+    const ALL_PANELS: &[PanelId] = PanelId::ALL;
+
+    /// 菜单覆盖必须等于枚举全集，且不得有重复项。
+    ///
+    /// WHY 两条都要：`ALL` 是切片而非集合，误加一个重复项会让某个变体
+    /// 静默不被测到（覆盖又降），而长度断言看不出来。
+    #[test]
+    fn menu_coverage_equals_panel_enum() {
+        use std::collections::HashSet;
+        let uniq: HashSet<PanelId> = ALL_PANELS.iter().copied().collect();
+        assert_eq!(
+            uniq.len(),
+            ALL_PANELS.len(),
+            "PanelId::ALL 不应含重复项（重复会让菜单覆盖静默缩水）"
+        );
+        // 与 types.rs 的 30 锁互证：两处一旦分叉，这里先红
+        assert_eq!(uniq.len(), 30, "菜单覆盖应等于 PanelId 枚举全集");
+    }
 
     #[test]
     fn every_panel_has_at_least_drill_down() {
         // 无只读死面板:每个 PanelId 至少含 panel.drill_down
-        for p in ALL_PANELS {
+        for &p in ALL_PANELS {
             let acts = panel_context_actions(p);
             assert!(!acts.is_empty(), "{p:?} 应至少含一个动作");
             assert!(
@@ -114,7 +100,7 @@ mod tests {
     fn all_menu_actions_exist_in_registry() {
         // 菜单动作 id 必须都在 Registry:展示取 i18n 标题、派发经 dispatch 均依赖此
         let reg = ActionRegistry::with_builtin_domains();
-        for p in ALL_PANELS {
+        for &p in ALL_PANELS {
             for id in panel_context_actions(p) {
                 assert!(
                     reg.get(id).is_some(),

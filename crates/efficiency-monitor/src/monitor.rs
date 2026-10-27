@@ -709,7 +709,7 @@ fn handle_critical_event(
     critical_enabled: bool,
     event: &NexusEvent,
 ) {
-    // mpsc 旁路仅投递 4 类 Critical 安全告警事件，无需再判 is_critical_alert_event
+    // mpsc 旁路投递的是 bus.rs 侧 CRITICAL_MPSC_VARIANTS 全集（现取 17 类，不是 4 类）；本处只对其中的 4 类安全告警做即时告警过滤
     // WHY 不调用 record_event：避免与 broadcast 主流 double-count event 指标
     if critical_enabled {
         collectors.record_alert(AlertSeverity::Critical.as_str());
