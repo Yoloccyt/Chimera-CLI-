@@ -162,14 +162,16 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | C-78 | `a2cf55e` | 第 6 维 `budget_discipline` 零消耗取 NEUTRAL（实测写侧 `record_consumption` 生产调用 **0**，`DecbCostCallback` 无生产构造点）+ 两处「非空转生产调用路径」现在时态订正 + 两条测试按新语义改写（先注入真实消耗再断言） | M58（诚实降级路径） |
 | C-82 | `844671d` | `subagent_engine` 装配态订正为 **GATED-UNWIRED**（零生产构造；`chimera-cli` 内 `subagent` 0 命中）+ `dep_edge_freeze.txt` 该边加 2026-10-27 实测注记（沿该文件 mas-sched 行先例，行保留） | M62 |
 | C-69 | `1c98ae2` | `ExperienceCardBus` 四索引上界**明示豁免**：实测「谁兜底 = 没人」（上游 `add_card` 同样无上限），写清三条不淘汰理由 + 两条开工条件；零代码语义 | M54 |
+| C-109 | `83fa7ba` | **修 C-107 自引入的 clippy 红**：65 处 `&content.chars()...collect::<String>()` 去多余 `&`（`cargo test`/`nextest`/`fmt` 全不报，只有 `clippy --all-targets -- -D warnings` 报 16 条 `useless_borrows_in_formatting` ⇒ CI「fmt · check · clippy · test」步会拦）；并把 `sysinfo` 时间断言从**负载量**改钉到**承诺量**：render < 250ms 硬管（面板设计承诺「构造即采集、render 不阻塞」），OS 采集只留实现级回退上界 15s（实测 1.3-1.7s 串行 / 4.24s 51 条并跑 / 6.40s 1765 条并跑，任何常量阈值都会产「负载红牌」） | M77 后续 / T-20 |
   > 本表是收口时点快照；「已落地多少单」的真值源是 `git log --oneline`，不在本表登记总数。
 
 **收口时点验收读数（2026-10-27，均在 C-63/C-83 全链落地之后现取）**：
 
 | 项 | 读数 | 与首轮对比 |
 |---|---|---|
-| 全门集 `run_gate_manifest.py` | **`[SUM] ok=129 mismatch=0 env-fail=0 unknown=0 skip=7 / 136`**（第 9 轮复跑，在 C-80/C-81/C-102 之后） | 与首轮 `ok=126 mismatch=1` 对比；累计 7 次复跑均 `mismatch=0`（含本轮两次自造门红 G-27/G-35、G-70 已修回） |
+| 全门集 `run_gate_manifest.py` | **第 13 轮 `[SUM] ok=129 mismatch=0 env-fail=0 unknown=0 skip=7 / 136`**（第 9 轮复跑，在 C-80/C-81/C-102 之后） | 与首轮 `ok=126 mismatch=1` 对比；累计 7 次复跑均 `mismatch=0`（含本轮两次自造门红 G-27/G-35、G-70 已修回） |
 | 全量测试（`--exclude chimera-e2e-tests --lib --bins --tests --jobs 2`） | **447 target / 11386 passed / 0 failed** | 首轮 447/11375/**4 failed** ⇒ target 全集相同、失败清零、通过数 +11（本轮新增断言），旧 4 条 flaky 本次全绿 |
+| heavy 门 `--with-heavy`（单独申报） | **rc=2 / `[SUM] ok=130 mismatch=0 env-fail=0 unknown=6 skip=0 / 136`**；6 条判**不可判定**（G-12/G-13/G-14/G-15/G-49/G-50），原因逐字自报：`磁盘 6.3 GB < 门槛 20 GB / 25 GB —— 不静默跳过，判不可判定` ⇒ **不得当作通过**，载体交 CI；本机 `target/` 实测 109.9 GB、Free 一度 0.00 GB |
 | CI doctest job 口径（`--doc --no-fail-fast`，无 `--ignored`） | 全 `test result: ok` | — |
 | release `--ignored` 档 | **首次真跑出数**：528 条 `test result:` / 77 passed / 5 failed（全为存量隔离项，M74） | 首轮 `test_result:` = 0（OOM，M73） |
 | 依赖双源 | `.sh` + `.ps1` 均 rc=0 | — |
