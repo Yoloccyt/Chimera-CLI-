@@ -121,7 +121,7 @@ mtpe-executor|nmc-encoder
 nexus-app-server|event-bus
 nexus-app-server|nexus-contracts
 nexus-app-server|nexus-core
-nexus-app-server|nexus-subagent
+nexus-app-server|nexus-subagent  # 2026-10-27 M62/C-82 实测注记：边存在且非 optional（G-09 仅能证明 crate 图可达），但**装配点为零** —— 全仓 `SubAgentQuestEngine` 的构造点只在本文件的 #[cfg(test)] 段与重导出，唯一组合根 `chimera-cli` 内 `subagent`/`SubAgent` 0 命中。语义：GATED-UNWIRED，不是 wired。接线 or 退役见 ADR-225 §5 T-19；行保留（退役权限不在 R2）。
 nexus-app-server|quest-engine
 nexus-app-server|session-store
 nexus-core|event-bus
