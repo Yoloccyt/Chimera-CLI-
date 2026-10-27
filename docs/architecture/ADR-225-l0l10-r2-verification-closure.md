@@ -145,13 +145,15 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
   | C-63 | `b6f79c4` | **组合根接 CBMR 双写**：新增生产边 `chimera-cli\|session-store`、`build_app_server` 转 async 并走 `CbmrWriter::open()`、11 个调用点补 `.await`、N-4 降级姿态定案、DORMANT→PRODUCTION-WIRED | M22/ADR-224 D1 |
   | C-63b | `627e256` | `Cargo.lock` 补登 C-63 的依赖行（只 1 行；不带会被 `--locked` 构建拒） | C-63 同批 |
   | C-99 | `65e30d6` | 架构视图随新边重派生（G-70 修红：5 件视图 `--write` 重派生后 `--verify` rc=0） | C-63 同批 |
+  | C-80 + C-81 | `9ce30bf` | 菜单覆盖由 `[PanelId; 27]` 改为派生自 `PanelId::ALL`（+无重复项/全集 30 双断言，旧写法使 4 个守卫测试变成 27/30 的自循环断言）；旁路类数注释由「仅 4 类」改为「`CRITICAL_MPSC_VARIANTS` 全集 17 类 / 告警过滤 4 类」 | M60/M61 |
+  | C-102 | `ab250b0` | 五处「loom 在 Windows GNU 不可用」断言经 E1-a′ 探针实测推翻后逐处订正为「取舍」并补真实理由 | M70/L56（文档面） |
   > 本表是收口时点快照；「已落地多少单」的真值源是 `git log --oneline`，不在本表登记总数。
 
 **收口时点验收读数（2026-10-27，均在 C-63/C-83 全链落地之后现取）**：
 
 | 项 | 读数 | 与首轮对比 |
 |---|---|---|
-| 全门集 `run_gate_manifest.py` | **`[SUM] ok=129 mismatch=0 env-fail=0 unknown=0 skip=7 / 136`** | 与首轮 `ok=126 mismatch=1`、第三/四/六轮 `mismatch=0` 一致；本轮两次自造门红（G-27/G-35、G-70）均已修回 |
+| 全门集 `run_gate_manifest.py` | **`[SUM] ok=129 mismatch=0 env-fail=0 unknown=0 skip=7 / 136`**（第 9 轮复跑，在 C-80/C-81/C-102 之后） | 与首轮 `ok=126 mismatch=1` 对比；累计 7 次复跑均 `mismatch=0`（含本轮两次自造门红 G-27/G-35、G-70 已修回） |
 | 全量测试（`--exclude chimera-e2e-tests --lib --bins --tests --jobs 2`） | **447 target / 11386 passed / 0 failed** | 首轮 447/11375/**4 failed** ⇒ target 全集相同、失败清零、通过数 +11（本轮新增断言），旧 4 条 flaky 本次全绿 |
 | CI doctest job 口径（`--doc --no-fail-fast`，无 `--ignored`） | 全 `test result: ok` | — |
 | release `--ignored` 档 | **首次真跑出数**：528 条 `test result:` / 77 passed / 5 failed（全为存量隔离项，M74） | 首轮 `test_result:` = 0（OOM，M73） |
