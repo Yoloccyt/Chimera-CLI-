@@ -116,3 +116,24 @@ R1 引的 `docs/reports/phase1-wave0-1-closure.md` 三行现取【亲验；该�
    ⇒ E1-a′ 因此**不阻塞** D1；剩下未决的只有 **E1-a（ubuntu CI 腿）与 E1-c（workflow 真执行步骤）**——它们需要先在 `mlc-engine` 落 dev-dep 与 `cfg(loom)` 别名，属 C-94 的实施面。
 3. `mlc-engine::card_system` 的 permutation 状态空间规模；若交错数超出可承受预算，需做场景裁剪（缩小 `PER_THREAD` 级参数），裁剪后属性覆盖范围须在测试文件头写明。
 4. §1.2 中「nightly-only」措辞的来源与真实版本——已定论（`rust-version: 1.65` ⇒ loom 0.7.2 在 stable 上可用，该措辞失实），但另开文档订正单修正那 5 处注释，不并入本 ADR（避免把裁决与纠偏混在一个提交里）。
+
+## 7. 实施状态（C-94 落地后回填，2026-10-27）
+
+| E1 判据 | 状态 | 证据 |
+|---|---|---|
+| **E1-a′**（windows-gnu 可编可用，不阻塞主路） | ✅ **已过** | 探针 `tmp/loom_probe`：`loom 0.7.2` 编译 59.92s；`loom::model` 抓到丢更新（`#[should_panic]` 反例 passed），原子 `fetch_add` 对照组全过 |
+| **E1-c**（workflow 内**真实执行**步骤） | ✅ **已过** | `ci.yml` 新增 `loom` job（ubuntu / 1.97.1 / timeout 30min），步骤级 `RUSTFLAGS='--cfg loom'`，`run: cargo test -p mlc-engine --test loom_card_system -- --test-threads 1`；非 continue-on-error |
+| **E1-a**（ubuntu runner 上可编可执行） | ⏳ **待 CI 首跑出数** | 本地不可代跑（无 ubuntu）；这是本 ADR 唯一未决项，答案只能来自那条腿的首次运行 |
+| **E1-b**（wall-clock / peak RSS 读数） | ⏳ 随首次 CI 运行回填 | 本地实测：`--cfg loom` 触发全依赖重编约 19min（单 crate 链），模型检验本体 1.05s；job timeout 已按此定 30min |
+
+**D1 落点（已实施）**：`crates/mlc-engine/tests/loom_card_system.rs`（`#![cfg(loom)]` 门控），
+只覆盖 `card_system` 的锁段协议（2 写 + 1 读，断言写者锁内计数 ∈[1,2]、终态恰好 = 写入次数）。
+hcw-window 主状态锁是 `tokio::sync::RwLock`，**不在本 ADR 采纳范围**（§2 ②）。
+
+**实施中发现、必须留在本 ADR 里的一条约束**：`--cfg loom` 是**全局** flag，而
+tokio 自己也有 `cfg(loom)` 分支（`runtime/driver.rs:150` 直接 `assert!(!enabled)`，
+禁止启用 IO driver）。因此：
+- **绝不能**用 `RUSTFLAGS=--cfg loom` 跑 workspace 级命令——本地实测会把 16 个
+  `mlc-engine::l3_procedural::tests` 打成 `assertion failed: !enabled`（看着像代码缺陷，
+  实为 flag 误用）；
+- CI 腿必须限定为**单个 test binary**（已按此实现）。
