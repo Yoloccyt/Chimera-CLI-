@@ -128,12 +128,39 @@ where
 }
 
 impl CbmrWriter {
-    /// 创建微批写器（建数据目录 + 打开 SQLite 树索引 + 启动后台刷写循环）
+    /// 创建微批写器（同步路径）
+    ///
+    /// # 调用约束（M51/C-62）
+    /// 本函数内部是**真阻塞**的：`create_dir_all` + `TreeIndex::open`
+    /// （`Connection::open` / `PRAGMA` / `CREATE TABLE`）都在调用线程上执行。
+    /// 因此 **async 上下文必须用 [`CbmrWriter::open`]**（它把整段构建灌进
+    /// `run_blocking` 的阻塞池），否则会堵住 runtime worker（AGENTS §4.4-2）。
     ///
     /// # 后台循环
     /// `config.spawn_flush_loop` 为 true 且存在 tokio runtime 时启动
     /// 自适应窗口刷写任务;否则仅靠显式 `flush` / 满批触发（测试确定性）。
     pub fn new(config: StoreConfig) -> Result<Self, StoreError> {
+        Self::open_blocking(config)
+    }
+
+    /// 创建微批写器（async 入口）— 把打开/DDL 整段放进阻塞池（M51/C-62）
+    ///
+    /// # WHY 需要它
+    /// `Connection::open`、`PRAGMA journal_mode=WAL`、`CREATE TABLE ...` 与
+    /// `create_dir_all` 都是同步阻塞调用。此前它们直接跑在调用方的 async worker 上，
+    /// 与红线「SQLite 只经 spawn_blocking」不一致（该红线原文只写了「写入」，
+    /// 覆盖缺口就在打开/DDL 这一段）。
+    ///
+    /// # 与 `new` 的关系
+    /// 两者共用**同一个实现**（`open_blocking`），不存在第二套构建逻辑——
+    /// 刻意避开了 L46 双 `MtpeConfig` 那类「双构造面」。区别仅在调用上下文：
+    /// async 用 `open().await`，同步/测试用 `new()`。
+    pub async fn open(config: StoreConfig) -> Result<Self, StoreError> {
+        run_blocking(move || Self::open_blocking(config)).await
+    }
+
+    /// 构建的同步内核 — 建目录 + 开索引库（含 PRAGMA/DDL） + 启动后台循环
+    fn open_blocking(config: StoreConfig) -> Result<Self, StoreError> {
         std::fs::create_dir_all(&config.data_dir).map_err(|e| StoreError::Io {
             context: format!("创建数据目录 {} 失败", config.data_dir.display()),
             source: e,
@@ -706,6 +733,19 @@ mod tests {
             1,
             "重复 shutdown 不得重复写入"
         );
+    }
+
+    /// M51/C-62：async 上下文必须走 `open()`（打开/DDL 在阻塞池里）
+    #[tokio::test]
+    async fn open_runs_construction_in_blocking_pool() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let w = CbmrWriter::open(config(dir.path())).await.expect("open");
+        let sid = SessionId::new("open-async");
+        w.append(&sid, ev(0)).await.expect("append");
+        w.flush().await.expect("flush");
+        assert_eq!(w.read_events(&sid, None).await.expect("read").len(), 1);
+        assert!(index_path(dir.path()).exists(), "打开路径必须完成建库/DDL");
+        w.shutdown().await.expect("shutdown");
     }
 
     #[tokio::test]

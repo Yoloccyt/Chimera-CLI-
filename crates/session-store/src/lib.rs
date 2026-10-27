@@ -82,7 +82,9 @@
 //! # 红线遵守
 //!
 //! - `#![forbid(unsafe_code)]`:rusqlite 内部 FFI unsafe 不传播
-//! - SQLite 写入只经 `tokio::task::spawn_blocking`（无 runtime 降级同步）
+//! - SQLite **打开/DDL/写入**均经 `tokio::task::spawn_blocking`（无 runtime 降级同步）
+//!   — M51/C-62 把红线从「写入」扩到「打开与 DDL」：`CbmrWriter::open()` 是 async 入口，
+//!   `CbmrWriter::new()` 是同步路径（仅供测试/同步上下文，内部同属阻塞调用）
 //! - 禁持锁跨 await（锁段内快照 → 释放 → await）
 //! - `PRAGMA journal_mode=WAL` 经 `pragma_update`（项目红线）
 //! - 库代码禁 unwrap/expect（thiserror 传播）
