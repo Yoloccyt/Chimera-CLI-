@@ -1225,12 +1225,23 @@ mod tests {
         };
 
         // 预热自旋 + 量「worker 空闲」基线速率,作为机器无关的判别标尺
-        for _ in 0..10_000 {
+        //
+        // C-116/T-11 收口：预热点从「固定 10_000 次 yield」改成「轮询至 ticker 真的
+        // 产出，上限 10s 看门狗」。本 runtime 只有 1 个 worker（`worker_threads = 1` 是
+        // 本测试判别力的前提），所以整个 worker 被 OS 抢走时，当前任务可以把
+        // 10_000 次 `yield_now` 全烧完而 ticker 仍拿到 0 个时间片——实测全仓并跑下
+        // 本用例报「ticker 未存活,本测试失去判别力」，单独跑绿。
+        // ⚠ 这不是速率比判据的问题（那两道断言一行未动：基线 vs 批窗口、
+        // 阈值 10%、两侧 >6× 余量）；被推翻的只是「固定迭代次数等于足够预热」这个
+        // 假设——它把「本机这次有没有拿到时间片」当成了前提。
+        let warm_deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while ticks.load(Ordering::Relaxed) == 0 && Instant::now() < warm_deadline {
             tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         assert!(
             ticks.load(Ordering::Relaxed) > 0,
-            "ticker 未存活,本测试失去判别力"
+            "ticker 在 10s 看门狗内仍未存活（真挂死级饥饿），本测试失去判别力"
         );
         let free_t0 = Instant::now();
         let free_start = ticks.load(Ordering::Relaxed);
