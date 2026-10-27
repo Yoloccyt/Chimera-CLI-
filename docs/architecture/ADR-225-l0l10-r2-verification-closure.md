@@ -3,9 +3,9 @@
 > **Status**: ✅ Accepted（2026-10-26，业主批准《L0-L10 全层重构 R2 实施方案》并逐条裁决 §2 决策点；本 ADR 为批次收口落档）
 > **决策日期**: 2026-10-26
 > **关联 ADR**: ADR-214~223（L0 专项十轮裁决，**全部继承不重开**）/ ADR-224（L0-L10 全层重构 R1，本批**继承其 D1~D7 不重开**，并对其 §6 总账与 §7.2 状态表做**事实订正**）/ ADR-222（L0-A/L0-B 双亚层，本批沿用其分层口径；附录 §9「L0-B 暂不设冻结门」维持）/ ADR-198（G-85 PS 5.1 parity，本批 D1 解除其红）/ ADR-108（session-store CBMR，D4 前置依据）/ ADR-042+053 rev4+054（R2 冻结期与 RL 闸门，本批继续生效）/ ADR-195（GPU 仍否决）/ ADR-193（架构减法，方向反转已由 ADR-222 登记）/ ADR-215（closed/open 分级，D6 判据来源）
-> **关联交付**: 六件套 `docs/reports/l0l10-r2-full-recon-2026-10-26/`（00 事实基线 / 01 冲突裁决台账 / 02 问题登记册 / 03 技术方案 / 04 测试验收与回滚 / 05 ADR 同步与待裁台账）+ 基线报告 `docs/reports/l0l10-r2-baseline-2026-10-26.md` + 登记册 `tmp/l0l10-r2-issues.md`（M39–M57、L47–L51；tmp 与 docs/reports 多数不入库，故关键句按 D5 引用进本 ADR）
+> **关联交付**: 六件套 `docs/reports/l0l10-r2-full-recon-2026-10-26/`（00 事实基线 / 01 冲突裁决台账 / 02 问题登记册 / 03 技术方案 / 04 测试验收与回滚 / 05 ADR 同步与待裁台账）+ 基线报告 `docs/reports/l0l10-r2-baseline-2026-10-26.md` + 登记册 `tmp/l0l10-r2-issues.md`（M39– 与 L47– 续编；**本行不登记水位**，已用至哪号以登记册现取为准，否则本 ADR 自己就变成第四份必漂总账；tmp 与 docs/reports 多数不入库，故关键句按 D5 引用进本 ADR）
 > **权威源**: 代码实测与命令读数以本 ADR 引用的 file:line 与 `docs/reports/l0l10-r2-*` 现取为准；事件定级/常量以 `crates/event-bus/src/{registry.rs,bus.rs}` 现取为准；门集以 `py -3 scripts/run_gate_manifest.py` 的 `[SUM]` 自报为准
-> **编号合法性**: 落盘前现取 ADR 物理文件 **119** 份、磁盘主编号 max **224**（`ADR-224` 已由 C-60 `8432504` 入库）；`ADR-225` 全库 **0 命中**（`Select-String docs/architecture/*.md,agents.md,CONTRIBUTING.md,CHANGELOG.md -Pattern 'ADR-225'` → 0）。门 max **G-134**、`[[gate]]` 134 条，`G-135` 0 命中（D3 预留）。变更单续编 **C-57..C-74**（R1 用尽 C-01..C-56；`C-57..C-99` 在 R1 施工图/进度报告/git log 三处 0 命中）。事件变体**零新增**（154 不变）
+> **编号合法性**: 落盘前现取 ADR 物理文件 **119** 份、磁盘主编号 max **224**（`ADR-224` 已由 C-60 `8432504` 入库）；`ADR-225` 全库 **0 命中**（`Select-String docs/architecture/*.md,agents.md,CONTRIBUTING.md,CHANGELOG.md -Pattern 'ADR-225'` → 0）。门 max **G-134**、`[[gate]]` 134 条，`G-135` 0 命中（D3 预留）。变更单**自 C-57 起续编**（R1 用尽 C-01..C-56；落盘时现取 `C-57..C-99` 在 R1 施工图/进度报告/git log 三处 0 命中；本批实际用到哪一号以 §4 与 `git log` 现取为准，不在本行登记区间终点）。事件变体**零新增**（154 不变）
 
 ---
 
@@ -78,6 +78,15 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 
 - **决策**：判为**方法论缺陷**而非个人疏漏，并以 D2 的口径变更作为制度性修复。附带结论：R1 §7.1 待裁 28 项与 §7.2 8 项中，凡状态判据依赖「git log 无对应提交」者，本 ADR 一律要求现场重跑，不得继承。
 
+### D9（T-2/T-3 裁后落文档）两份权威文档的愿景行处理与引文备份
+
+- **决策**：业主裁 T-2（允许 loom，仅限 dev-dependency）与 T-3（不允许新外部依赖）后，R2 不重写两份文档的正文，而是按仓内既有纪律「历史文档只加注不改写」，在十六源手册头部追加两条批注（紧接已有的编号空间批注与 forbid 计数批注）。因该手册被 `.gitignore:57` 排除且从未入库（`git ls-files` 无输出），**按 D5 方案乙必须把订正后的关键句原文引用进本 ADR**，以下即证据副本。
+- **引文①（记忆契约三要素批注，手册 `:14`）核心句**：「本手册第 8/10/14 章（`:66`、`:386`、`:809`、`:1484`、`:1628`）的 Memory Capsule v2.1 `schema_version` / `content_hash` / verification 三要素，采纳状态经 R2 逐要素实测，**不是「全未采纳」也不是「全未做」**：① BLAKE3 内容哈希——不采纳；② `schema_version` 与 `content_hash` 字段名——已在盘上使用 5 处；③ 真正缺的是**跨 crate 的宽度/类型约定**（u16 / u32 / u64 并存；`content_hash` 同时有 u64 与 String 两种）与 `ExperienceCard` 上的该字段。⇒ 本章不得被读作「尚未实现的新字段」，也不得被引用为「已统一的契约」；设计目标只到「先统一 L0-A 内部范式」为止（不依新 crate）。」
+- **引文②（loom 愿景行批注，手册 `:15`）核心句**：「本手册 `:89`「~20,000（含 GPU 双后端基准与 12 个 loom 场景）」、`:1453`、`:1468`「loom 无锁场景 12」在盘上为零实现（`crates/*/Cargo.toml` 内 loom dev-dependency 0 命中）。⇒ 该行**不作废、转为待落地**，首批落 `hcw-window`/`mlc-engine` 两处持锁-广播；前置 = 另立 ADR 并按 ADR-222 附录 §9 补四项最小性论证。落地前，本手册与两份 tracked 手册中所有 loom 行均只应读作**目标/验证方法**而非现状。」
+- **配套实测【亲验】**：（i）两份 tracked 文档（`docs/architecture/Chimera_CLI_九源交叉融合彻底重构工程手册V1.0.md`、`docs/architecture/Chimera_CLI_v4.0_架构重构与算法优化一体化方案（六编重构终版）.md`）共 20 处 loom 逐条复测：均为「怎么验 / W3–W8 门禁 / 目标测试总量」语气，**无现在时态失实句** ⇒ 本批不开文档订正单（只靠上面引文把口径定住）。（ii）`schema_version`/`payload_version`/`content_hash`/`format_version` 的 pub 字段位全仓实测 = **8**（探针 `tmp/r2_schema_versions.py`），否定了 M55 的「两套」口径⇒ 登记 M69。（iii）本仓 tracked md 全表法计数 =135 / 非 ADR =14，同时暴露 `core.ignorecase=true` 下 `git ls-files -- AGENTS.md` 返回空而 `git status` 判 clean 的**判定坑**（登记 L55：入库性判定必须用全表法，不得拿单一大小写拼法的 pathspec 无输出当结论）。
+- **被否反方案**：按 T-3 字面把 `schema_version`/`content_hash` 整项登记为「本仓不采纳」——实测证明字段名已在用，那样做会留下一条与盘上相反的权威声明（恰好是 R2 立论要治的「文档-代码脱节」）。**本 ADR 的做法是窄化而不推翻裁决**：不采纳的只是 BLAKE3 算法与把它升为统一契约字段。
+- **落地状态**：✅ C-92 已执行（手册两条批注 + 本 D9 引文 + T-3 行窄化 + 新增 T-14）。
+
 ## 3. 破坏性面显式记录
 
 | 来源 | 破坏性面 | 兼容性论证 | 落地状态 |
@@ -86,7 +95,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | C-57（M39） | 无 —— 仅前置 3 字节 BOM | 脚本语义不变；PS 5.1 下由 ANSI 误解码变为正确解码，属修复；正文逐字节不变（len 3737→3740、`git diff --numstat` = 1 1） | ✅ 已落地 `c8fcd1c`；G-85 `RESULT: OK (26/26)` |
 | C-59 / C-60 | 无 | 纯注释 / 纯入库 | ✅ `b043674` / `8432504` |
 | **C-64b（预登记）** | `NexusEvent::SandboxViolation` 定级 Normal→Critical：对穷尽 match severity 的消费方为行为变更；mpsc 旁路集 +1（17→18）、Critical 总数 +1（21→22）；**L0-A 契约类型 `ImmutableSurface` 增变体使 `all()` 数组 arity 32→33** | 投递纯增益（mpsc 保障 + broadcast 不减）；wire 格式零变化；TUI 侧经复测确认按 topic/priority 分派，不受定级影响；**若 `ImmutableSurface` 属 closed 须先记 closed→open 重分类**（ADR-224 §5 先例） | ⏳ 待裁 T-1（前置：在途 fuzz 批收尾） |
-| **C-63（预登记）** | 生产行为新增：会话双写落盘（每 turn 一次段文件追加）+ **新增 1 条生产边 `chimera-cli|session-store`** | 行为级新增非 API 破坏；回滚 = revert，已落盘段文件无 schema 依赖、留存无害；新边为 L10→L3 合法向下单，须同批登记 `dep_edge_freeze.txt` 并复跑 G-32/33 live 与 G-75/76 基线 | ⏳ 待执行（前置 C-61/C-62） |
+| **C-63（预登记）** | 生产行为新增：会话双写落盘（每 turn 一次段文件追加）+ **新增 1 条生产边 `chimera-cli\|session-store`** | 行为级新增非 API 破坏；回滚 = revert，已落盘段文件无 schema 依赖、留存无害；新边为 L10→L3 合法向下单，须同批登记 `dep_edge_freeze.txt` 并复跑 G-32/33 live 与 G-75/76 基线 | ⏳ 待执行（前置 C-61/C-62） |
 
 ## 4. 实施结果总账（2026-10-26 收口时点）
 
@@ -124,6 +133,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
   | C-89 | `8407444` | G-135 计入 `impl From<第三方>`（业主 T-6）：四类判据齐备、台账 13→18、selftest 14→16 | M37/T-6 |
   | C-90 | `17f968e` | 本 ADR §5 归档 T-2/T-3/T-6 补裁结果；§6 回滚清单去枚举改指针 | 补裁三项 |
   | C-91 | 本单 | D5 适用面第二次订正：`git ls-files -- <path>` + `git check-ignore -v` 逐份双验推翻「`CODE_WIKI.md`/v3.4.0 二十三篇不可审」；§4 推论行与 T-4 行同步；方案甲反白面收窄至两份 | M43/M68 |
+  | C-92 | 本单 | T-3/T-2 落文档：十六源手册追加两条批注（记忆契约三要素逐要素判定 + loom 愿景行转「待落地」）；T-3 行按 M69 窄化；新增待裁 T-14；L55 登记 `core.ignorecase` 判定坑 | M55/M69/M13/T-2/T-3 |
   > 本表是收口时点快照；「已落地多少单」的真值源是 `git log --oneline`，不在本表登记总数。
 - **C-73（M56 口径传导）已执行；入库情况经逐份 `git ls-files --error-unmatch` 实测，并**订正本 ADR 先前的一条错判**：上轮曾记为「六份 md 全被 `.gitignore:57` 排除 ⇒ 无提交可证」，该判断错。现势：
   | 文件 | tracked? | 处理 |
@@ -143,7 +153,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 |---|---|---|---|
 | T-1 | C-64b `SandboxViolation` 升档八组全套 | 独立批次，单一提交 | 在途 `fuzz/fuzz_targets/harness_spec_parse.rs` 收尾 + G-115 closed/open 裁决 |
 | T-2 | M13 loom 并发正确性三态 | **已裁（2026-10-26）：允许 loom，但仅作 dev-dependency**；在 `hcw-window` / `mlc-engine` 两处持锁-广播先例首批落地 | 前置 = 按 ADR-222 附录 §9 补四项最小性论证并另立 ADR；不优入生产二进制 |
-| T-3 | M36/M55 `ExperienceCard` schema 版本化 | **已裁：不允许新外部依赖** ⇒ 走「作废愿景行」：将十六源手册 Memory Capsule v2.1 的 `schema_version`/`content_hash` 三要素登记为本仓不采纳项，并订正两份权威文档对应章节为「设计目标未采纳」 | L0-A 内部两套范式的统一（`checkpoint.rs` u16 共存式 vs `event_metadata.rs` u32 serde-default 式）不依新 crate，仍可做；升契约破面实测 67 处（src 32 / tests+benches 35，无 `impl Default`） |
+| T-3 | M36/M55 `ExperienceCard` schema 版本化 | **已裁：不允许新外部依赖** ⇒ 走「作废愿景行」。**但本行初版的措辞已被实测推翻一半，按 M69 逐要素窄化**：① BLAKE3 内容哈希 = **不采纳**（`Cargo.lock` 内 `blake3` 0 命中，G-99 白名单未开）——裁决的可执行部分不变；② `schema_version` / `content_hash` 两个字段名 = **已在盘上使用 8 处 pub 字段位**（`checkpoint.rs:58` u16、`token_evidence.rs:122`+`:260` u16、`routing_history.rs:125` **u64**、`event_metadata.rs:61` `payload_version: u32`、`chimera-mas/archive/dedup.rs:131` `content_hash: u64` vs `nmc-encoder/types.rs:129` `content_hash: String`）⇒ 不得登记为「本仓不采纳项」，只能登记「作为 Memory Capsule 统一契约字段 + BLAKE3 算法 = 不采纳」；③ 「先统一 L0-A 内部范式」的实际范围也比 M55 记的大（u16/u32/u64 三宽度 + u64/String 两哈希型），升契约属破坏性变更 ⇒ 不开码改单、转新待裁 T-14 | 手册对应章节已按「只加注不改写」追加两条批注（见 D9 引文）；升 `ExperienceCard` 契约破面实测 67 处（src 32 / tests+benches 35，无 `impl Default`） |
 | T-4 | M43 治理文档入库政策（方案甲窄口径反白） | 独立授权批次 | 须同批改 `check_doc_consistency.sh`/`adr_index_sync.py`/G-37 的 gitignore-skip 断言语义；边界已经两次逐份实测收窄（C-91/M68：反白面仅剩 `adr_index.md` + `docs/tui/README.md` 两份，`CODE_WIKI.md` 本就 tracked）。**新证据：仓内已有先例可不动 `.gitignore`**——`docs/reports/toolchain-analysis-report.md` 与 `v3.5-baseline-measurement-2026-10-10.md` 两份非反白名单报告已在库（`git add -f`）⇒ 本批六件套是否入库可选「逐份点名 add -f」，该权限仍属属主，R2 未自行行使 |
 | T-5 | M48 审计导出点定位 | 启动 + 导出双点 | 若无稳定导出入口则退化「启动 + 关账」并回写本 ADR |
 | T-6 | G-135 判据口径：`impl From<第三方>` 是否计入 | **已裁：计入。✅ 已落地 C-89（`8407444`）**：新增 `implfrom` 位置类（ret/arg/bound/implfrom 四类齐备），台账 13→18 行，selftest 14→16 | 当场多捕出 G1 深审未报的一条泄漏 `nexus-core::error::NexusError::serde_json::implfrom` ⇒ 口径扩张非纸面动作；`rmp_serde` 两条（encode/decode）被多重集正确计为 2 行 |
@@ -154,6 +164,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | T-11 | M57 四条时序断言确定性改造 | 固定 `--test-threads=1` 或抽纯函数夹具（沿 ADR-222 R9 `eco_transition` 先例） | 禁改生产语义（Eco 降频是正确的事件风暴保护） |
 | T-12 | 六条 `[[slo]]` 的 `continue-on-error` 切换 | 维持现状（R2 复测判为已明文登记的计划债，非疏漏） | `slo.yml:24` 已写切换条件；满足后改 `slo.yml:68`/`:170`/`stress.yml:38` 为 `false` |
 | T-13 | M50/M51 之外的 L3 同族（`scc-cache::SqliteWal`、`cmt-tiering::CmtCoordinator`、`hcw-window::spawn_mask_listener` 未接线而文档以现在时声称闭合） | 与 C-63 同批判「接线 or 显式装配态订正注」，并同批重派生契约头 | 各为生产零构造/零装配（R2 复测亲验行号） |
+| T-14 | M69：格式版本字段已存在但未统一（`schema_version` u16/u16/u64 + `payload_version` u32 + `content_hash` u64 vs String） | 先只统一**声明处语义**（同一宽度 + 同一哈希类型），再议是否升为 L0-A 契约字段；不引新外部依赖（T-3 已裁） | 属破坏性变更（wire + 67 处构造点），需与 C-63 同族重派生链同批；需 target 锁与属主授权 |
 
 ## 6. 验证与回滚
 
