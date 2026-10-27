@@ -147,6 +147,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
   | C-99 | `65e30d6` | 架构视图随新边重派生（G-70 修红：5 件视图 `--write` 重派生后 `--verify` rc=0） | C-63 同批 |
   | C-80 + C-81 | `9ce30bf` | 菜单覆盖由 `[PanelId; 27]` 改为派生自 `PanelId::ALL`（+无重复项/全集 30 双断言，旧写法使 4 个守卫测试变成 27/30 的自循环断言）；旁路类数注释由「仅 4 类」改为「`CRITICAL_MPSC_VARIANTS` 全集 17 类 / 告警过滤 4 类」 | M60/M61 |
   | C-102 | `ab250b0` | 五处「loom 在 Windows GNU 不可用」断言经 E1-a′ 探针实测推翻后逐处订正为「取舍」并补真实理由 | M70/L56（文档面） |
+  | C-79 | `58ac4ce` | **G-66 第二轴：生产者装配可达性**（M59）。`not_default_assembly_crates()`（optional 边 ∪ gated_wiring DECORATIVE/PARTIAL）+ `assembly_reachability()` 纯函数 + 新台账 `event_assembly_gated.txt`（只减不增）+ `[GAP-A]`/`[GAP-A-S]` 判红 + 4 条 selftest；首次跑出 **15** 条（M59 原判仅 2 条） | M59 |
   > 本表是收口时点快照；「已落地多少单」的真值源是 `git log --oneline`，不在本表登记总数。
 
 **收口时点验收读数（2026-10-27，均在 C-63/C-83 全链落地之后现取）**：
@@ -187,7 +188,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | T-7 | L01 sibling facade 单消费者翻案 | 维持观察 | G-129 only-decrease 棘轮翻案需 ADR；触发 = 装配面事故 |
 | T-8 | M16 coverage 46-crate 基线未重测 | CI nightly 出数后抬表 | 本地 llvm-cov E0463 不可代跑 |
 | T-9 | M14/M19/M20 + M44/M45/M46 性能可证伪族 | 补 bench 阈值键 / 给 SLO 找 CI 载体 / 第四表键集对等 / 十六源目标三态 | 需 CI clean-runner 取数；改 release profile 属禁区 |
-| T-10 | M24/M25/M26/M28/M29/M30/M31/M33/M34/L21/L37 零装配族 | 逐条「接线 / GATED / 退役」三选一（R2 已出全量清点表，不再逐单发现） | M27 属 R2 解冻前必清项居首；M33 继承 ADR-224 D4 DEFERRED 不接线；退役需 ADR |
+| T-10 | M24/M25/M26/M28/M29/M30/M31/M33/M34/L21/L37 零装配族（**含 M59 事件生产者装配可达性**） | 逐条「接线 / GATED / 退役」三选一（R2 已出全量清点表，不再逐单发现）；**M59 的第二轴已由 C-79 落地**：台账 `scripts/event_assembly_gated.txt` 现登记 **15** 条「有构造点但默认构建不可达」的事件（跨 9 个非默认构建 crate）⇒ 裁时可直接拿这张表逐条选路 | M27 属 R2 解冻前必清项居首；M33 继承 ADR-224 D4 DEFERRED 不接线；退役需 ADR |
 | T-11 | M57 四条时序断言确定性改造 | 固定 `--test-threads=1` 或抽纯函数夹具（沿 ADR-222 R9 `eco_transition` 先例） | 禁改生产语义（Eco 降频是正确的事件风暴保护） |
 | T-12 | 六条 `[[slo]]` 的 `continue-on-error` 切换 | 维持现状（R2 复测判为已明文登记的计划债，非疏漏） | `slo.yml:24` 已写切换条件；满足后改 `slo.yml:68`/`:170`/`stress.yml:38` 为 `false` |
 | T-13 | M50/M51 之外的 L3 同族（`scc-cache::SqliteWal`、`cmt-tiering::CmtCoordinator`、`hcw-window::spawn_mask_listener` 未接线而文档以现在时声称闭合） | 与 C-63 同批判「接线 or 显式装配态订正注」，并同批重派生契约头 | 各为生产零构造/零装配（R2 复测亲验行号） |
