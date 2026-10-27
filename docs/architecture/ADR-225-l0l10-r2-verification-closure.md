@@ -136,6 +136,9 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
   | C-92 | `9802044` | T-3/T-2 落文档：十六源手册追加两条批注（记忆契约三要素逐要素判定 + loom 愿景行转「待落地」）；T-3 行按 M69 窄化；新增待裁 T-14；L55 登记 `core.ignorecase` 判定坑 | M55/M69/M13/T-2/T-3 |
   | C-93 | `96ce892` | **新建 ADR-226**：loom 四项最小性论证 + E1 前置闸门（主路 ubuntu runner、windows 腿定 `generator` 真伪）；§1.1 记 R1 M13 指针漂移，§1.5 记「Linux CI 承接」零载体债 | M70/M71/L56/T-2 |
   | C-64a | `cc1bcbc` | **拦截上 Merkle 审计链**：`append_rejection`（取被拒绝的原始命令而非 `CommandSpec`）+ 两处拒绝口接线 + 4 条断言（篡改可检、哈希可复现）；零枚举变更 | M49（前半）/M72 |
+  | C-61 | `2b70b93` | session-store 可取消刷写循环：`closing: AtomicBool` + `flush_loop: Mutex<Option<JoinHandle>>`（挂 `CbmrInner` 而非 `CbmrWriter`——后者 `Clone`，挂它会任一副本析构误杀循环）+ `pub async fn shutdown()` + `impl Drop for CbmrInner`（置标志/abort/pending 非空 warn） | M50 |
+  | C-62 | `9fdc4f3` | 抽出 `open_blocking`；新增 `pub async fn open()` 经 `run_blocking`；红线由「SQLite 写入只经 spawn_blocking」扩为「**打开/DDL/写入**」 | M51 |
+  | C-83（部分） | `c29334b` | `experience_loop_closure_e2e.rs` 的 `Err(_) => break` → `continue`：单次 50ms 超时不得终止整个 500ms 截止窗口（**真逻辑缺陷**，非测时不稳） | M63（1/6） |
   > 本表是收口时点快照；「已落地多少单」的真值源是 `git log --oneline`，不在本表登记总数。
 - **C-73（M56 口径传导）已执行；入库情况经逐份 `git ls-files --error-unmatch` 实测，并**订正本 ADR 先前的一条错判**：上轮曾记为「六份 md 全被 `.gitignore:57` 排除 ⇒ 无提交可证」，该判断错。现势：
   | 文件 | tracked? | 处理 |
@@ -168,7 +171,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | T-13 | M50/M51 之外的 L3 同族（`scc-cache::SqliteWal`、`cmt-tiering::CmtCoordinator`、`hcw-window::spawn_mask_listener` 未接线而文档以现在时声称闭合） | 与 C-63 同批判「接线 or 显式装配态订正注」，并同批重派生契约头 | 各为生产零构造/零装配（R2 复测亲验行号） |
 | T-14 | M69：格式版本字段已存在但未统一（`schema_version` u16/u16/u64 + `payload_version` u32 + `content_hash` u64 vs String） | 先只统一**声明处语义**（同一宽度 + 同一哈希类型），再议是否升为 L0-A 契约字段；不引新外部依赖（T-3 已裁） | 属破坏性变更（wire + 67 处构造点），需与 C-63 同族重派生链同批；需 target 锁与属主授权 |
 | T-16 | M72：**审计链在生产零写入**——`audit_and_execute` 生产调用 0（唯一调用方是 `tests/security/owasp_top10.rs` 17 处）；`AuditChain` 无持久化/导出 API；真实执行路径 `gqep-executor`(ExecPolicy)/`nexus-hook`(ProcessFence) 不写链 | 三选一：**A（本 ADR 默认）** 保留 C-64a、链登记 DORMANT-ONLY、红线 #2 措辞按实测收窄；B 授权把两条真实执行路径接进 seccore（改生产语义，需新 ADR + 功能回归面）；C 记 DORMANT 并同批订正 `policy.rs:320` 文本 | C-65（`verify()` 双点）**因此不在本轮实现**：空链 verify 恒真 = 装饰门，导出点不存在。任何选 B 的落地需先回答「白名单会拦掉哪些现在能跑的命令」 |
-| T-17 | M73：release `--ignored` 档在 `--jobs 1` 下仍 **LLVM OOM**（`free≈423 MB` 时；同单元在 `free≈1.9 GB` 下 10m58s 编成功）⇒ 根因是内存竞争而非代码/flags | 单进程重跑取干净读数（日志 `tmp/r2-rel-ignored2.txt`）；仍 OOM 则由 R2 **如实声明本地不可判定**并把该档交 CI（`stress.yml`/`slo.yml`） | 禁改 release profile（D-R2-2）；若交 CI，§六的「无性能劣化」签字须改写为「本地不可判定，以 CI 载体为准」，不得写成「无退化」 |
+| T-17 | M73：release `--ignored` 档在 `--jobs 1` 下仍 **LLVM OOM**（`free≈423 MB` 时；同单元在 `free≈1.9 GB` 下 10m58s 编成功）⇒ 根因是内存竞争而非代码/flags | **✅ 已出数（2026-10-27）**：单进程重跑 `rc=101`、ELAPSED 2566s、**528** 条 `test result:`、**passed=77 / failed=5**；五红全为**存量隔离项**（4 个 `#[ignore]` 态 doctest + 1 条 `#[ignore]` 标定测试 panic，逐文件 `git log` 已证无一属 C-57..C-95）⇒ 登 M74。**CI 仍绿**：去掉 `--ignored` 的 `ci.yml:809-810` 口径在 debug 下复跑全 `test result: ok` | 仍待裁的口径问题：AGENTS §7.2 第 7 步（`--ignored` 档）在 HEAD 上**永不可能转绿** ⇒ 需裁「清隔离项（`ignore`→`text`/`no_run`）or 改清单口径」；禁改 release profile（D-R2-2） |
 
 ## 6. 验证与回滚
 

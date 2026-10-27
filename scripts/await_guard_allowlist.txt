@@ -54,4 +54,4 @@ crates/nexus-app-server/src/sse.rs:121         # DESIGN SSE writer: single-conne
 crates/decb-governor/src/governor.rs:564            # SCANNER `current_total` is `*total` copy; state guard already block-scoped
 crates/mcp-mesh/src/quantum/participant_client.rs:556 # SCANNER `pooled` is a TcpStream removed from the pool; guard dies in and_then
 crates/pvl-layer/src/producer.rs:123                # SCANNER `strategy` is `*read()` Copy value; read guard dies at stmt end
-crates/session-store/src/writer.rs:495              # SCANNER `has_pending` is a bool; flush deliberately runs outside the lock
+crates/session-store/src/writer.rs:577              # SCANNER `has_pending` is a bool; flush deliberately runs outside the lock (line moved 495->577 by R2 C-61; same site, scanner is lexical)
