@@ -52,6 +52,8 @@ chimera-cli|pvl-layer
 chimera-cli|quest-engine
 chimera-cli|repo-wiki
 chimera-cli|seccore
+chimera-cli|session-store      # L10->L3 down; C-63 composition.rs::build_app_server constructs CbmrWriter
+                                     # and injects it via AppServer::with_session_store (ADR-224 D1 / ADR-225 D4)
 chimera-mas|decay-engine
 chimera-mas|event-bus
 chimera-mas|gsoe-evolution

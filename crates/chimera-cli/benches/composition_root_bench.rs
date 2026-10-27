@@ -85,7 +85,7 @@ fn bench_build_app_server(c: &mut Criterion) {
             rt.block_on(async {
                 let ctx =
                     build_with_sharding(black_box(&cfg), ShardingPolicy::Auto).expect("装配应成功");
-                let server = build_app_server(ctx);
+                let server = build_app_server(ctx).await;
                 black_box(&server);
                 drop(server); // server 持 bus；drop → Critical Sender 关闭 + guard abort worker
                 for _ in 0..4 {
@@ -102,7 +102,7 @@ fn bench_build_app_server(c: &mut Criterion) {
 fn bench_handle_op_turn_submit(c: &mut Criterion) {
     let cfg = ChimeraConfig::default();
     let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-    let server = rt.block_on(async { build_app_server(build(&cfg).expect("build")) });
+    let server = rt.block_on(async { build_app_server(build(&cfg).expect("build")).await });
     let thread_id = rt
         .block_on(server.handle_op(&AppOp::ThreadStart(ThreadStartParams::new("g", "r"))))
         .expect("ThreadStart")

@@ -44,7 +44,7 @@ pub async fn execute_with_ctx(ctx: AppContext, config: &ChimeraConfig) -> Result
     // nexus-core 拥有池统计但不持 EventBus,组合根同时持有二者（同款接线先例
     // 见 experience_loop.rs）;句柄命名绑定保活至进程退出（随 runtime 释放）。
     let _saturation_reporter = nexus_core::compute::spawn_saturation_reporter(ctx.bus.clone(), 60);
-    let server = crate::composition::build_app_server(ctx);
+    let server = crate::composition::build_app_server(ctx).await;
     let transport = StdinTransport::new();
 
     // C1: 优雅关闭——正常 EOF 退出与 Ctrl+C 信号竞争；
@@ -135,7 +135,7 @@ mod tests {
     #[tokio::test]
     async fn serve_loop_processes_frames_and_stops_on_eof() {
         let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
-        let server = crate::composition::build_app_server(ctx);
+        let server = crate::composition::build_app_server(ctx).await;
         let ops = vec![
             AppOp::ThreadStart(ThreadStartParams::new("g1", "r1")),
             AppOp::TurnSubmit {
@@ -162,7 +162,7 @@ mod tests {
     #[tokio::test]
     async fn serve_loop_replies_error_frame_on_bad_frame() {
         let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
-        let server = crate::composition::build_app_server(ctx);
+        let server = crate::composition::build_app_server(ctx).await;
         // 第 1 帧 = 坏帧（parse_error, code -32700）；第 2 帧 = 正常 ThreadStart
         let transport = MockTransport::new_with_decode_errors(
             vec![AppOp::ThreadStart(ThreadStartParams::new("g1", "r1"))],
@@ -194,7 +194,7 @@ mod tests {
         use nexus_app_server::{IoTransport, RpcResponse};
 
         let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
-        let server = crate::composition::build_app_server(ctx);
+        let server = crate::composition::build_app_server(ctx).await;
         // 输入流:坏帧 + 合法 ThreadStart 请求帧(id=1)
         // reader 用 Cursor(Vec<u8> 无 AsyncRead;Cursor<T: AsRef<[u8]>> 有)
         let valid = nexus_app_server::RpcCodec::encode_request(

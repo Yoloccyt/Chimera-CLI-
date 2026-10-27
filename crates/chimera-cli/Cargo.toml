@@ -35,6 +35,10 @@ event-bus = { workspace = true }
 chimera-tui = { workspace = true }
 # WI-01 (2026-08-22): nexus-app-server host facade (L10 same-layer, chimera serve)
 nexus-app-server = { workspace = true }
+# C-63（ADR-224 D1 / ADR-225 D4）：组合根构造 CbmrWriter 注入
+# AppServer::with_session_store，使 turn 落盘由 DORMANT 转 PRODUCTION-WIRED。
+# 新增 L10->L3 向下生产边，已同批登记 scripts/dep_edge_freeze.txt。
+session-store = { workspace = true }
 # quest-engine:L9 Quest 层,为 tui 命令提供控制事件上游消费示例(§2.2 向下依赖)
 # Task 1.1/1.2: chimera run / quest 命令真实接入 QuestEngine API
 quest-engine = { workspace = true }

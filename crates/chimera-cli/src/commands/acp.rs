@@ -123,7 +123,7 @@ pub async fn execute_with_ctx(ctx: AppContext, config: &ChimeraConfig) -> Result
     // nexus-core 拥有池统计但不持 EventBus,组合根同时持有二者（同款接线先例
     // 见 experience_loop.rs）;句柄命名绑定保活至进程退出（随 runtime 释放）。
     let _saturation_reporter = nexus_core::compute::spawn_saturation_reporter(ctx.bus.clone(), 60);
-    let server = crate::composition::build_app_server(ctx);
+    let server = crate::composition::build_app_server(ctx).await;
     let transport = StdinTransport::new();
 
     // C1: 优雅关闭——EOF 与 Ctrl+C 竞争（此前 Ctrl+C 硬杀，F-A2-6）。
@@ -260,7 +260,7 @@ mod tests {
     #[tokio::test]
     async fn acp_loop_processes_frames_and_stops_on_eof() {
         let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
-        let server = crate::composition::build_app_server(ctx);
+        let server = crate::composition::build_app_server(ctx).await;
         let ops = vec![AppOp::ThreadStart(ThreadStartParams::new("g1", "r1"))];
         let transport = MockTransport::new(ops);
         acp_loop(&server, &transport)

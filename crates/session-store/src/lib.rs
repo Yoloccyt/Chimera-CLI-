@@ -3,7 +3,7 @@
 //! ROLE:     session-store — 会话事件流存储（append-only 段 + CBMR 微批写）
 //! BACKEND:  sqlite
 //! PRODUCERS: 0 -
-//! CONSUMERS: 1 nexus-app-server
+//! CONSUMERS: 2 chimera-cli,nexus-app-server
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! session-store — 会话事件流存储（append-only 段 + CBMR 微批写）
@@ -67,7 +67,7 @@
 //! 存留项:`model_view` 对中文/混淆键名的敏感启发式边界（`model_view.rs` 文档注明,维持现状）。
 //!
 //! > **装配态订正（2026-10-08 / v3.5 W6-1 全栈取证）**：上方“D2 首个生产消费方
-//! > `AppServer::model_visible_context`”仅在**代码层**成立，**生产链目前未启用双写**：
+//! > `AppServer::model_visible_context`”仅在**代码层**成立，当时**生产链未启用双写**：
 //! > `AppServer::with_session_store` 的唯一调用点在 `server.rs` 的 `#[cfg(test)]` 区之后，
 //! > 而组合根 `chimera-cli/src/composition.rs::build_app_server` 走 `AppServer::with_backend(...)`
 //! > ⇒ `store` 字段为 `None`，`persist_turn`/`model_visible_context` 均直接返回
@@ -78,6 +78,20 @@
 //! > N-4 降级姿态，现仅 Err 无降级）；② 降为 `optional` 并把对外表述从“生产后端”改为“诊断面”，
 //! > 同步 CRATE-CONTRACT 的 CONSUMERS/MATURITY 语义（需 ADR：`MATURITY` 是由 crate 内自陈标签
 //! > **机器派生**的字段，手写改值会被 G-59 拒）。本段只陈述装配态，不改机器字段。
+//!
+//! > **✅ 装配态再订正（2026-10-27 / R2 C-63，ADR-224 D1 + ADR-225 D4）**：上段的「生产链
+//! > 未启用双写」**已不再成立**。选了收口径①：组合根
+//! > `chimera-cli/src/composition.rs::build_app_server` 现在构造 `CbmrWriter` 并经
+//! > `AppServer::with_session_store` 注入 ⇒ 装配态 **DORMANT → PRODUCTION-WIRED**，
+//! > `store` 字段在 `serve`/`acp` 路径上非 `None`。
+//! > - 构造入口是 `CbmrWriter::open()`（async，经阻塞池）而不是 `new()`（M51/C-62）。
+//! > - N-4 降级姿态已定：**打开失败只 `warn!` 并退回 `with_backend`（双写关闭）**，
+//! >   不让持久化成为服务启动的单点失败（best-effort 语义）。
+//! > - `chimera-cli|session-store` 边已登记 `scripts/dep_edge_freeze.txt`；
+//! >   CRATE-CONTRACT 的 CONSUMERS 已由 `--install` 派生为 `2 chimera-cli,nexus-app-server`。
+//! > ⇒ 「崩溃恢复靠段文件」这条红线**自此进入生产可检验面**（此前只在测试里被检验）。
+//! > 数据目录：`~/.chimera/sessions/`（与 `experience_cards.db` 同域）。
+//! > 本段同样只陈述装配态；上段保留为历史快照（只加注不改写）。
 //!
 //! # 红线遵守
 //!

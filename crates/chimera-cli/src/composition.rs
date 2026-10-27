@@ -284,18 +284,53 @@ pub fn build_with_sharding(
     })
 }
 
+/// 会话持久化数据目录：`~/.chimera/sessions/`（C-63）
+///
+/// WHY 与 [`crate::experience_loop::experience_db_path`] 同族（同目录、同 home 展开）：
+/// 两个 SQLite 面必须落在同一处，否则备份/清理脚本要记两套路径。
+pub fn session_store_dir() -> std::path::PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".chimera").join("sessions")
+}
+
 /// 装配协议宿主 AppServer（真实核心后端，C1）
 ///
 /// 与 `AppServer::new`（InMemoryBackend 桩）的目标差异：
 /// `QuestBackend::with_engine` 包装真实 L9 QuestEngine——`TurnSubmit`
 /// 产出含真实 `quest_id` 的 `quest_state` Item。
 ///
-/// Critical 旁路订阅由 [`build`] 标准装配保证（M4-P2 上提），本函数不再重复
-/// 注册（避免双消费者）；engine/bus 移入 `QuestBackend` 后旁路订阅者仍存活
+/// Critical 旁路订阅由 [`build`] 标准装配保证（M4-P2 上提），本函数不再重
+/// 复注册（避免双消费者）；engine/bus 移入 `QuestBackend` 后旁路订阅者仍存活
 /// （EventBus Clone = Arc 共享内核，move 不丢订阅）。
-pub fn build_app_server(ctx: AppContext) -> AppServer {
+///
+/// # CBMR 会话双写（C-63 / ADR-224 D1 / ADR-225 D4）
+/// 本函数是 **组合根**：在此构造 `CbmrWriter` 并交给
+/// `AppServer::with_session_store`，使 `turn_submit` 落盘（段文件 + SQLite 索引）
+/// 从 DORMANT 转为 PRODUCTION-WIRED。构造走 [`CbmrWriter::open`]（async）而不是
+/// `new()`：打开/建库/PRAGMA/DDL 都是阻塞调用，必须进阻塞池（M51/C-62）。
+///
+/// # N-4 降级姿态（必须先定义才能接线的那个前置）
+/// **存储不可用时服务照常启动**：`CbmrWriter::open` 失败只 `warn!` 并退回
+/// [`AppServer::with_backend`]（双写关闭），不让会话持久化变成服务启动的
+/// 单点失败。WHY：本 crate 的旧文档已自陈「现仅 Err 无降级」——若把 Err 向
+/// 上传，磁盘不可写就会把整个协议宿主打死，而持久化的业务语义是
+/// **best-effort 可观测**（replay 能力降级，但 turn 不失败）。
+pub async fn build_app_server(ctx: AppContext) -> AppServer {
     let backend = Box::new(QuestBackend::with_engine(ctx.engine, ctx.bus));
-    AppServer::with_backend(ctx.server_config, backend)
+    let store_dir = session_store_dir();
+    match session_store::CbmrWriter::open(session_store::StoreConfig::with_dir(&store_dir)).await {
+        Ok(store) => AppServer::with_session_store(ctx.server_config, backend, store),
+        Err(e) => {
+            tracing::warn!(
+                dir = %store_dir.display(),
+                error = %e,
+                "会话持久化不可用，已降级为不双写启动（N-4 best-effort）"
+            );
+            AppServer::with_backend(ctx.server_config, backend)
+        }
+    }
 }
 
 /// 轻量 QuestEngine 的唯一合法派生构造点（TUI 协议模式使用）。
@@ -416,10 +451,10 @@ mod tests {
 
     /// 构造已装配的 AppServer，并返回 bus 探针（Clone 共享内核状态，
     /// 用于断言 Critical 旁路订阅者存在性——C1×C3 接线证据）。
-    fn make_running_server() -> (AppServer, EventBus) {
+    async fn make_running_server() -> (AppServer, EventBus) {
         let ctx = make_ctx();
         let probe = ctx.bus.clone();
-        let server = build_app_server(ctx);
+        let server = build_app_server(ctx).await;
         (server, probe)
     }
 
@@ -427,7 +462,7 @@ mod tests {
     /// Item（`quest_state` + 真实 quest_id）——InMemory 桩无此 kind。
     #[tokio::test]
     async fn composition_server_routes_turns_to_real_engine() {
-        let (server, _probe) = make_running_server();
+        let (server, _probe) = make_running_server().await;
         // 完整两步协议流：ThreadStart → TurnSubmit
         let events = server
             .handle_op(&AppOp::ThreadStart(ThreadStartParams::new(
@@ -477,7 +512,7 @@ mod tests {
     /// mpsc 送达保障在协议宿主真实生效（has_critical_subscribers 为 true）。
     #[tokio::test]
     async fn composition_server_subscribes_critical_bypass() {
-        let (server, probe) = make_running_server();
+        let (server, probe) = make_running_server().await;
         let _ = server;
         assert!(
             probe.has_critical_subscribers(),
