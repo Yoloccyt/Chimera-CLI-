@@ -61,6 +61,7 @@ hcw-window|crates/hcw-window/tests/window.rs#bench_retain_by_file_ids_hashset|sl
 kvbsr-router|crates/kvbsr-router/tests/rebalancer.rs#test_rebalance_performance_300_tools|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
 kvbsr-router|crates/kvbsr-router/tests/router.rs#test_route_latency_under_2ms|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
 kvbsr-router|crates/kvbsr-router/tests/router.rs#test_route_speedup_vs_full_scan|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+kvbsr-router|crates/kvbsr-router/tests/router.rs#test_high_volume_routing_latency_p50_p99|slo-daily|C-120/M78:绝对 ns 延迟阈值(P50 2ms / P99 4ms)不得待在默认并行档——全仓并跑实测 P99 4.68ms 越阈(单跑绿);与同文件 test_route_latency_under_2ms 同族,阈值走 perf_scale_ms 以支持 CHIMERA_PERF_SCALE|wired: slo-daily
 kvbsr-router|crates/kvbsr-router/tests/scale.rs#test_scale_route_latency_under_2ms|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
 kvbsr-router|crates/kvbsr-router/tests/scale.rs#test_scale_speedup_vs_full_scan|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
 mca-gateway|crates/mca-gateway/tests/token_efficiency_bench.rs#run_stress_matrix|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no

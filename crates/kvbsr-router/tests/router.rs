@@ -464,16 +464,46 @@ async fn test_route_result_tools_exist() {
     }
 }
 
-/// 验证路由在高压下的性能(1000 次路由)
+/// 验证路由在高压下的功能正确性(10 warmup + 100 测量)
 ///
 /// 这个测试验证路由器在大量请求下的稳定性,
 /// 同时验证自动重平衡触发(rebalance_interval=1000)不会导致错误。
 ///
-/// SubTask 11.2:添加 warmup(10 次)+ P50/P99 统计(100 次测量)
-/// 由于 1000 次路由会触发自动重平衡,改为测量单次路由延迟的 P50/P99,
-/// 总路由次数仍达到 1000 次(10 warmup + 100 测量 × 10 次/测量)
+/// ★ C-120/M78：**本函数不再做延迟断言**。原先它除了功能断言还断
+/// `P50 < 2ms / P99 < 4ms`（绝对 ns 阈值），而它跑在**默认并行档**——实测
+/// 全仓并跑下 P99 = 4.68ms 越阈（单跑绿），而仓内 doctrine 明确写着
+/// 「绝对 ms 级阈值,需静默态单跑」（`scripts/ignored_test_inventory_freeze.txt` 表头，
+/// 同族 73 行均已入 slo 档）。⇒ 延迟部分拆给下面带 `#[ignore]` 的孪生用例，
+/// 本用例保留全部功能断言（选择非空 + route_count）⇒ 默认档覆盖率不降。
 #[tokio::test]
 async fn test_high_volume_routing() {
+    let router = make_router().await;
+    let clv = common::generate_clv_for_block(0, 0.0);
+
+    // Warmup(10 次路由,触发缓存预热)
+    for _ in 0..10 {
+        let _ = router.route(&clv).await.expect("路由应成功");
+    }
+
+    // 正式测量(100 次):本档只断功能（选中的工具非空），不断墙钟延迟
+    for _ in 0..100 {
+        let result = router.route(&clv).await.expect("路由应成功");
+        assert!(!result.selected_tools.is_empty());
+    }
+
+    // 路由计数应为 110(10 warmup + 100 测量)
+    assert_eq!(router.route_count(), 110);
+}
+
+/// 单次路由延迟分布:P50 < 2ms、P99 < 4ms（阈值 × CHIMERA_PERF_SCALE）
+///
+/// C-120/M78：绝对延迟阈值从 `test_high_volume_routing` 分出来的静默态专用位。
+/// 阈值经 `nexus_contracts::util::perf_scale_ms` 缩放（缺省 1.0 ⇒ 与拆出前一致），
+/// 入 `scripts/ignored_test_inventory_freeze.txt` 登记为 `slo-daily`，
+/// 由 `slo.yml` 每日 schedule（`--profile slo`、test-threads=1）跑。
+#[tokio::test]
+#[ignore = "绝对 ns 延迟阈值，需静默态单跑；由 slo.yml 每日 schedule 消费（scripts/ignored_test_inventory_freeze.txt）"]
+async fn test_high_volume_routing_latency_p50_p99() {
     let router = make_router().await;
     let clv = common::generate_clv_for_block(0, 0.0);
 
@@ -495,7 +525,7 @@ async fn test_high_volume_routing() {
     let p99 = latencies[99];
 
     // P50 < 2ms(2_000_000ns,任务要求), P99 < 4ms(原阈值 × 2)
-    let threshold_ns = 2_000_000.0_f64;
+    let threshold_ns = (nexus_contracts::util::perf_scale_ms(2_u64) as f64) * 1_000_000.0;
     assert!(
         p50 < threshold_ns,
         "P50 路由延迟 {}ns 超过 {}ns",
