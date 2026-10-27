@@ -70,6 +70,13 @@ ROOT = os.path.dirname(SCRIPTS)
 TYPES = os.path.join(ROOT, "crates", "event-bus", "src", "types.rs")
 REGISTRY = os.path.join(ROOT, "crates", "event-bus", "src", "registry.rs")
 BASELINE = os.path.join(ROOT, "scripts", "event_ownership_baseline.txt")
+# G-66 第二轴（C-79 / M59）的台账：只记「生产构造点全落在默认构建不可达 crate」的事件。
+# 与 BASELINE 分开是因为语义不同：BASELINE 记「根本没有生产构造点」，本台账记
+# 「有构造点，但那条路径在默认构建里不可达」——1 个事件只能落在其中一边，
+# 混在一起会让 decide() 把另一边判成 STALE。
+ASSEMBLY_LEDGER = os.path.join(ROOT, "scripts", "event_assembly_gated.txt")
+GATED_WIRING = os.path.join(ROOT, "scripts", "gated_wiring_baseline.txt")
+CLI_MANIFEST = os.path.join(ROOT, "crates", "chimera-cli", "Cargo.toml")
 
 ENUM_HEAD = re.compile(r"^pub enum NexusEvent\s*\{")
 VAR_LINE = re.compile(r"^    ([A-Z][A-Za-z0-9]*)\s*[,{]\s*$")
@@ -379,6 +386,96 @@ def crates_with_prod_ctor(tally):
     return out
 
 
+# --- G-66 第二轴：生产者「装配可达性」（C-79 / M59）-----------------------------------
+# 原 GAP-E 只问「有没有生产构造点」，不问「那个构造点在**默认构建**里能不能跑到」。
+# M59 实测反例：`AffinityQuotaExhausted` 与 `StreamSessionCompleted` 的生产构造点全部在
+# `crates/mca-gateway`，而它是 chimera-cli 的 `optional` 边（`mca` feature 默认 off），
+# 且组合根自陈“仅装配不接线、句柄即弃” ⇒ **任何默认构建形态下都没有 emit 路径**，
+# 而 G-66（“每个事件要么有生产构造者、要么已登记”）与 G-09（crate 边可达）双双判绿。
+# 这是 ADR-225 D2「门在、但没人跑它」在**语义轴**上的变体：门量到的是“代码里有构造”，
+# 不是“运行期发得出来”。
+
+
+def not_default_assembly_crates(manifest_path=None, gated_wiring_path=None):
+    """默认构建里**不可达**的 crate 集合——两个可派生来源的并集。
+
+    1. `crates/chimera-cli/Cargo.toml` 里 `optional = true` 的依赖（feature 默认 off ⇒
+       不进默认二进制）；
+    2. `gated_wiring_baseline.txt` 的 DECORATIVE/PARTIAL 行（已声明“可达≠已装配”的债）。
+
+    WHY 用两源并集而不手列：单一来源都会漏——只看 optional 会漏掉“非 optional 但装配点
+    是死的”（那是 G-57 的辖区），只看 gated_wiring 会漏掉“optional 且从未进台账”的新 crate。
+    两个都解析不出来时返回 None（调用方转不可判定，不得把“没查到”当“已满足”）。
+    """
+    mp = manifest_path or CLI_MANIFEST
+    gp = gated_wiring_path or GATED_WIRING
+    try:
+        manifest = _read(mp)
+    except OSError:
+        return None
+    out = set()
+    # [dependencies] / [features] 以外也要认；只需扫“name = { workspace = true, optional = true }”
+    # 与“name = { path = ..., optional = true }”两种形状（本仓实测仅有这两种）。
+    for m in re.finditer(r"^\s*([a-z0-9][a-z0-9_-]*)\s*=\s*\{[^}]*optional\s*=\s*true[^}]*\}",
+                         manifest, re.M):
+        out.add(m.group(1))
+    if os.path.exists(gp):
+        for raw in _read(gp).splitlines():
+            key, _, _why = raw.partition("#")
+            key = key.strip()
+            if not key or "|" not in key:
+                continue
+            crate, verdict = key.split("|", 1)
+            if verdict.strip().upper() in ("DECORATIVE", "PARTIAL", "GATED-UNWIRED"):
+                out.add(crate.strip())
+    return out
+
+
+def assembly_reachability(tally, unreachable, variants=None):
+    """纯函数：返回「有生产构造点，但**全部**落在默认构建不可达 crate」的事件。
+
+    只在“没有一条默认可达的生产构造点”时才报：只要有一条可达构造点，事件就真能
+    在默认二进制里被发出，不属于本轴。
+
+    `unreachable=None` ⇒ 返回 None（不可判定），由调用方转 exit 2，
+    不得静默当成“全部可达”。
+    """
+    if unreachable is None:
+        return None
+    unset = set(unreachable)
+    hits = []
+    for v in sorted(set(variants) if variants is not None else set(tally)):
+        cx = tally.get(v, {}).get("prod_ctor") or []
+        if not cx:
+            continue
+        crates = set()
+        for loc in cx:
+            path = loc.rsplit(":", 1)[0].replace(os.sep, "/")
+            parts = path.split("/")
+            if len(parts) >= 2 and parts[0] == "crates":
+                crates.add(parts[1])
+        if crates and crates <= unset:
+            hits.append((v, ",".join(sorted(crates))))
+    return hits
+
+
+def load_assembly_ledger(path=None):
+    """{variant: evidence} —— 与 load_baseline 同规矩：无证据行 = 配置错，退 2。"""
+    p = path or ASSEMBLY_LEDGER
+    if not os.path.exists(p):
+        return {}
+    out = {}
+    for raw in _read(p).splitlines():
+        key, _, why = raw.partition("#")
+        key = key.strip()
+        if not key:
+            continue
+        if not why.strip():
+            raise ValueError("assembly ledger row needs trailing '# evidence': %r" % key)
+        out[key] = why.strip()
+    return out
+
+
 # --- selftest ----------------------------------------------------------------
 
 def _fixture(root):
@@ -617,6 +714,33 @@ def selftest():
         checks.append(("层表缺失（查不到）不得变成通过，仍算失败",
                        len(layer_event_presence({}, {"anything"})) == len(LAYER_EVENT_MIN)))
 
+        # --- 第二轴（C-79）：assembly_reachability 纯函数双向验证 -----------------
+        # 不用假仓库：直接喂合成 tally（它是纯函数，不碰文件）。
+        _t = {
+            "OnlyInGated": {"prod_ctor": ["crates/gated-a/src/x.rs:1",
+                                         "crates/gated-b/src/y.rs:2"]},
+            "MixedProd": {"prod_ctor": ["crates/gated-a/src/x.rs:3",
+                                       "crates/reach/src/z.rs:4"]},
+            "NoCtor": {"prod_ctor": []},
+        }
+        _hits = assembly_reachability(_t, {"gated-a", "gated-b"})
+        checks.append((
+            "assembly: 全落在不可达 crate ⇒ 报",
+            [v for v, _c in _hits] == ["OnlyInGated"],
+        ))
+        checks.append((
+            "assembly: 有一条可达生产者 ⇒ 不报（只报全不可达）",
+            "MixedProd" not in [v for v, _c in _hits],
+        ))
+        checks.append((
+            "assembly: 零构造点不归本轴",
+            "NoCtor" not in [v for v, _c in _hits],
+        ))
+        checks.append((
+            "assembly: 集合不可派生 ⇒ None（不可判定，不得当“全部可达”）",
+            assembly_reachability(_t, None) is None,
+        ))
+
         bad = [name for name, ok in checks if not ok]
         for name, ok in checks:
             print("  [%s] %s" % ("PASS" if ok else "FAIL", name))
@@ -624,7 +748,7 @@ def selftest():
             print("[SELFTEST] %d/%d FAILED" % (len(bad), len(checks)))
             return 1
         print("[SELFTEST] %d checks：基数闭合 / 构造-模式-测试态三分 / DEAD 不可登记 / "
-              "STALE 双向 / 反证判红 全部验证" % len(checks))
+              "STALE 双向 / 反证判红 / assembly 双向 全部验证" % len(checks))
         return 0
     finally:
         set_root(real_root)
@@ -672,6 +796,13 @@ def main():
             cons = sorted({loc.split(":")[0] for loc in cell["pattern"]})
             print("%s  # prod_ctor=0 test_ctor=%d consumers=%s"
                   % (v, cell["test_ctor"], ",".join(cons) or "-"))
+        _un = not_default_assembly_crates()
+        _ah = assembly_reachability(tally, _un, variants)
+        if _ah:
+            print("# --- assembly-gated producers (C-79 second axis) ---")
+            for v, crates in _ah:
+                print("%s  # prod_ctor only in non-default-build crate(s): %s"
+                      % (v, crates))
         print("# total %d variant(s): %d owned / %d without a production ctor"
               % (len(variants), len(owned), len(unowned)))
         return 0
@@ -701,8 +832,28 @@ def main():
     print("[INFO] 发布面按层统计（有生产态构造点的 crate 数）："
           + " ".join("L%d=%d" % (l, _per.get(l, 0)) for l in sorted(_per)))
 
-    if not any((unowned_rows, dead, stale)) and not layer_fails:
-        print("[OK] 每个事件契约要么有生产态构造者，要么已带证据登记；L2/L3/L6 发布面均在")
+    # 第二轴（C-79）：生产者装配可达性。不可判定时转 exit 2。
+    try:
+        _assembly_ledger = load_assembly_ledger()
+    except ValueError as exc:
+        print("[CONFIG] %s" % exc)
+        return 2
+    _unreachable = not_default_assembly_crates()
+    _assembly_hits = assembly_reachability(tally, _unreachable, variants)
+    if _assembly_hits is None:
+        print("[UNDECIDABLE] 无法派生“默认构建不可达 crate”集合（chimera-cli/Cargo.toml "
+              "或 gated_wiring_baseline.txt 读不到）-- 不因此判红也不因此判绿")
+        return 2
+    _hit_names = {v for v, _c in _assembly_hits}
+    assembly_gap = [(v, c) for v, c in _assembly_hits if v not in _assembly_ledger]
+    assembly_stale = sorted(set(_assembly_ledger) - _hit_names)
+    print("[INFO] 装配可达性轴：%d 个事件的构造点全在非默认构建 crate；台账 %d 行"
+          % (len(_assembly_hits), len(_assembly_ledger)))
+
+    if not any((unowned_rows, dead, stale)) and not layer_fails \
+            and not assembly_gap and not assembly_stale:
+        print("[OK] 每个事件契约要么有**默认可达**的生产态构造者，要么已带证据登记；"
+              "L2/L3/L6 发布面均在")
         return 0
     rc = 1
     if unowned_rows:
@@ -725,6 +876,16 @@ def main():
         for f in layer_fails:
             print("  [GAP-L] %s" % f)
         print("  修法是让该层至少有一个真实发布点（优先复用现有变体，不新增事件变体）。")
+    if assembly_gap:
+        print("[GAP-A] %d 个事件的生产构造点全在默认构建不可达的 crate 里（C-79）:"
+              % len(assembly_gap))
+        for v, crates in assembly_gap:
+            print("  [GAP-A] %s (only producer crate(s): %s)" % (v, crates))
+        print("  修法是三选一：① 把一个可达的生产者接上；② 在装配面真实接线使该 crate"
+              "进默认构建；③ 写入 scripts/event_assembly_gated.txt 带理由登记（只减不增）。")
+    if assembly_stale:
+        print("[GAP-A-S] %d 行 assembly 台账已失效（删行）: %s"
+              % (len(assembly_stale), ",".join(assembly_stale)))
     return rc
 
 

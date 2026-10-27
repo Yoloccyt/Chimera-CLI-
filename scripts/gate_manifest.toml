@@ -766,7 +766,7 @@ cmd = "{python} scripts/check_event_ownership.py --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "夹具 14 断言：enum↔registry 基数闭合 / 构造-模式-测试态三分 / DEAD 不可登记 / STALE 双向 / 抹掉真生产者必判红"
+note = "夹具自证：enum↔registry 基数闭合 / 构造-模式-测试态三分 / DEAD 不可登记 / STALE 双向 / 抹掉真生产者必判红 / assembly 第二轴双向（全不可达⇒报、有一条可达⇒不报、不可派生⇒None）。断言数以 `--selftest` 自报的 `N checks` 为准，本行不登记数字（C-79 时发现本行原写「14 断言」已腐为 24）"
 
 [[gate]]
 id = "G-67"
@@ -775,7 +775,7 @@ cmd = "{python} scripts/check_event_ownership.py"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "真树：变体总数 = 有生产态构造 + 无构造（账本 event_ownership_baseline.txt，账本行数即无构造数）——三计数一律以门自报 [INFO] 行为准，本行不抄数（计数随事件增删漂移、勿逐值追逐；G-01/G-126 同纪律，抄进散文的计数必然比代码先腐烂——本行曾抄 2026-09 时点快照「146 = 133 + 13 / 账本 13 行」，其后事件面增删已漂移（2026-10-25 实跑自报 154 = 136 + 18）而散文停旧值，就地删快照改指针；首版曾误报 18，三枚假阳性见报告 §24.1）。新增未登记的零 emit 变体即红；账本行拿到真生产者后不删行亦红（实测两向：GAP-S 与 GAP-E 各翻红一次后逐字节还原）"
+note = "真树：变体总数 = 有生产态构造 + 无构造（账本 event_ownership_baseline.txt，账本行数即无构造数）——三计数一律以门自报 [INFO] 行为准，本行不抄数（计数随事件增删漂移、勿逐值追逐；G-01/G-126 同纪律，抄进散文的计数必然比代码先腐烂——本行曾抄 2026-09 时点快照「146 = 133 + 13 / 账本 13 行」，其后事件面增删已漂移（2026-10-25 实跑自报 154 = 136 + 18）而散文停旧值，就地删快照改指针；首版曾误报 18，三枚假阳性见报告 §24.1）。**第二轴（C-79）：生产者装配可达性**——判「生产构造点是否全在默认构建不可达的 crate（chimera-cli optional 边 / gated_wiring 的 DECORATIVE|PARTIAL）」，登记册 `scripts/event_assembly_gated.txt`（只减不增）；集合派生不出时退 2，不得当“全部可达”。新增未登记的零 emit 变体即红；账本行拿到真生产者后不删行亦红（实测两向：GAP-S 与 GAP-E 各翻红一次后逐字节还原）"
 
 # 配置样例派生门（架构减法 v2.30 §6 B5「配置样例修复」，agents.md §10.5 自 2026-09-22
 # 起挂🟡 的仓库工件项）。根因不是那 9 个字节，是仓库为一个已有唯一权威渲染
