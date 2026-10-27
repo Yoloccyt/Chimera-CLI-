@@ -288,7 +288,24 @@ pub fn build_with_sharding(
 ///
 /// WHY 与 [`crate::experience_loop::experience_db_path`] 同族（同目录、同 home 展开）：
 /// 两个 SQLite 面必须落在同一处，否则备份/清理脚本要记两套路径。
+///
+/// # Q-2：环境变量覆盖（C-63 附带发现）
+/// `CHIMERA_SESSION_DIR` 优先，空值等同未设。WHY 需要它：组合根接上双写后，
+/// **测试与生产会共用同一个目录**（跑 `composition_root_e2e` 就真写进了用户主目录）。
+/// 有覆盖后，集成测试/CI 可指到 tempdir，不必给别人家的 `~/.chimera/sessions/`
+/// 塞垃圾；本地也能用一行 env 做隔离复现。
+///
+/// 默认路径抽成纯函数 `session_dir_from`，使“有/无覆盖”两条分支都能被单测
+/// 直接驱动——改 env 的测试在并行下是竞态源，不能靠它测。
 pub fn session_store_dir() -> std::path::PathBuf {
+    session_dir_from(std::env::var_os("CHIMERA_SESSION_DIR"))
+}
+
+/// 纯函数：给定覆盖值算出会话目录（`None` / 空串 ⇒ 走默认 `~/.chimera/sessions`）。
+fn session_dir_from(override_dir: Option<std::ffi::OsString>) -> std::path::PathBuf {
+    if let Some(dir) = override_dir.filter(|d| !d.is_empty()) {
+        return std::path::PathBuf::from(dir);
+    }
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
@@ -586,5 +603,33 @@ mod tests {
         );
         // 优雅清理：避免 64 worker 残留到测试 runtime（guard 也会在 drop 时 abort）
         ctx.bus.shutdown_sharding().await;
+    }
+
+    /// C-63 附带发现 / Q-2：会话目录必须有 env 覆盖，否则测试与生产共用用户主目录。
+    ///
+    /// WHY 测纯函数而不是改 env：env 是进程级全局，并行测试里改它本身就制造竞态，
+    /// 所以把“有/无覆盖”两条分支抽成 `session_dir_from` 直接驱动。
+    #[test]
+    fn session_dir_honours_env_override_and_falls_back_to_home() {
+        use std::ffi::OsString;
+
+        // 有覆盖（非空）⇒ 原样用
+        let overridden = session_dir_from(Some(OsString::from("/tmp/chimera-sess-probe")));
+        assert_eq!(overridden.to_string_lossy(), "/tmp/chimera-sess-probe");
+
+        // 空串等同未设 ⇒ 回落到 ~/.chimera/sessions（不把空值当成根目录！）
+        let empty = session_dir_from(Some(OsString::from("")));
+        assert!(
+            empty.ends_with("sessions"),
+            "空覆盖值应回落默认目录，实际: {empty:?}"
+        );
+        assert!(
+            empty.components().count() >= 2,
+            "回落路径不应退化成单段相对路径，实际: {empty:?}"
+        );
+
+        // 未设 ⇒ 同样回落
+        let none = session_dir_from(None);
+        assert_eq!(none, empty, "未设与空串应得到同一个默认目录");
     }
 }
