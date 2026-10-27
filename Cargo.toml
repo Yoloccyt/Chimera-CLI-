@@ -108,11 +108,12 @@ license = "MIT"
 unwrap_used = "warn"
 expect_used = "warn"
 
-# tokio_unstable cfg 声明全局化（原 nexus-core 局部 [lints.rust] 提升）：
-# 全员 opt-in 后局部 lints 与 workspace=true 互斥；check-cfg 对不使用该 cfg
-# 的 crate 仅是放宽白名单，零行为影响。
+# tokio_unstable / loom 两个自定义 cfg 声明全局化：全员 opt-in workspace lints 后，
+# 局部 [lints.rust] 与 `lints.workspace = true` 互斥（cargo 直接报 cannot override），
+# 所以只能放在 workspace 层。check-cfg 对不使用该 cfg 的 crate 仅是放宽白名单，零行为影响。
+# loom（C-94 / ADR-226）：模型检验测试用 `#![cfg(loom)]` 门控，靠 `RUSTFLAGS="--cfg loom"` 拉起。
 [workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)', 'cfg(loom)'] }
 
 [workspace.dependencies]
 tokio = { version = "1.40", features = ["full", "tracing"] }
@@ -315,6 +316,11 @@ tokio-test = "0.4"
 # sysinfo:系统信息库(CPU/内存/进程等)
 # WHY 统一到 workspace:chimera-tui 使用,保持 0.32 版本不变(API 兼容性)
 sysinfo = "0.32"
+# loom:并发 permutation 模型检验（ADR-226 / 业主 T-2「允许 loom，但仅限 dev-dependency」）
+# WHY 进 workspace 而非直接写进 mlc-engine：本仓依赖一律经 workspace 统一版本，
+#     且「只进 dev 面」这条约束靠 mlc-engine 的 [dev-dependencies] 落实；
+#     若哪天它出现在任何 [dependencies]，G-99 / l0b_dep_freeze 两侧会抖红。
+loom = "0.7.2"
 
 # ============================================================
 # E2E 集成测试配置(Week 6 Task 6)

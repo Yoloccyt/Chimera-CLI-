@@ -43,6 +43,11 @@ tokio = { workspace = true }
 criterion = { workspace = true }
 # 属性测试框架(SubTask 15.12:L2 recall_by_clv 分数不变量验证)
 proptest = { workspace = true }
+# loom:并发 permutation 模型检验（ADR-226 D1 / 业主 T-2）
+# WHY 只进 dev 面：loom 只在 `--cfg loom` 的模型检验跑里拉起，不进生产二进制；
+# 首次落地只覆盖 `card_system`（`Arc<Mutex<ExperienceCardSystem>>`）的锁段协议，
+# 因为那是本 crate 唯一“纯同步锁 + 短临界区”的可建模面。
+loom = { workspace = true }
 
 [[bench]]
 name = "l2_recall"

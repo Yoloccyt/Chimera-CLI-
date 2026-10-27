@@ -810,6 +810,48 @@ jobs:
         run: cargo test --workspace --exclude chimera-e2e-tests --doc --no-fail-fast
 
   # ============================================================
+  # loom 模型检验 job（ADR-226 D1/D2，R2 C-94）
+  # WHY 独立 job：`crates/mlc-engine/tests/loom_card_system.rs` 靠
+  #   `#![cfg(loom)]` 门控，必须用 `RUSTFLAGS="--cfg loom"` 才能拉起；而该 flag 是
+  #   **全局** 生效的——tokio 自己也有 `cfg(loom)` 分支（`driver.rs:150` 里直接
+  #   `assert!(!enabled)`，禁止开 IO driver）⇒ 绝不能拿它跑整个 workspace。
+  #   所以本 job 只跑那一个 test binary，这也是 ADR-226 D2 的 E1-a/E1-c：
+  #   载体必须是**真实执行**的步骤（不是 continue-on-error 观测位）。
+  # WHY ubuntu 而非 windows：ADR-226 §1.5 的「Linux CI 承接」是仓内已登记的承诺
+  #   （`docs/reports/phase1-wave0-1-closure.md:101`），此前 `.github/` 里 loom 0 命中。
+  # 代价：`--cfg loom` 会让全部依赖重新编译一轮（本地实测单 crate 链约 19min）。
+  # ============================================================
+  loom:
+    name: test (loom model-check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_CACHE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@1.97.1
+
+      - name: Cache cargo registry & target
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: '.'
+          key: loom
+
+      - name: Setup sccache
+        uses: mozilla/sccache-action@v0.0.11
+
+      # WHY 只跑单个 test binary：见上方注释（tokio 的 cfg(loom) 会让 IO driver 禁能）。
+      # WHY --test-threads 1：loom 模型检验本身已串行执行交错，多线程只会互相抢 CPU。
+      - name: Run loom model check (card_system)
+        env:
+          RUSTFLAGS: '--cfg loom'
+        run: cargo test -p mlc-engine --test loom_card_system -- --test-threads 1
+
+  # ============================================================
   # MCA 双轨旁路 job(ADR-065 决策 6,PANTHEON 计划 M0 PR-4)
   # WHY: feature `mca` 默认 off,默认 CI 不编译不测试下游 crate 中
   # `#[cfg(feature = "mca")]` 门控的接线代码,存在"门控代码腐化、
