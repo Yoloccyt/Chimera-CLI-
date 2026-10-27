@@ -1011,26 +1011,42 @@ mod tests {
             (ticks.load(Ordering::Relaxed) - free_start) as f64 / free_t0.elapsed().as_secs_f64();
 
         let before = ticks.load(Ordering::Relaxed);
+        // C-119/M78：样本量。单次批窗口只有 ~1.6ms，落在窗口里的 tick 是个位数
+        // （实测 delta≈4 → 速率 2474/s，对基线 67723/s 只有 3.7%）——这个样本量下
+        // 「比率」测的是调度噪声而不是让出行为，任何一次外部抢占都能把它打到阈值以下
+        // （单跑绿、满并行红即由此而来）。⇒ 把同一批判重复跑到**累计窗口 ≥ 50ms**
+        // 再算速率：判据一行未改（仍是 批窗口速率 / 空闲基线速率 ≥ 10%），但分子与分母
+        // 都变成有样本量的累计值。真不让出时，累计窗口内的 tick 仍然稀疏，测不过。
+        let min_window = std::time::Duration::from_millis(50);
+        let mut total_window = std::time::Duration::ZERO;
+        let mut batches = 0usize;
+        let mut n = 0usize;
         // 批必须 spawn 成 runtime 任务,才会真的占住 worker(见文档首节)
-        let task = tokio::spawn({
-            let clv = clv.clone();
-            let inputs = Arc::clone(&inputs);
-            async move {
-                let t0 = Instant::now();
-                let scored =
-                    crate::parallel::score_experts_scoring_batch_offloaded(&clv, &inputs, true)
-                        .expect("多线程批量评分应成功");
-                (t0.elapsed(), scored.len())
-            }
-        });
-        let (window, n) = task.await.expect("批任务应正常完成");
+        while total_window < min_window {
+            let (window, got) = tokio::spawn({
+                let clv = clv.clone();
+                let inputs = Arc::clone(&inputs);
+                async move {
+                    let t0 = Instant::now();
+                    let scored =
+                        crate::parallel::score_experts_scoring_batch_offloaded(&clv, &inputs, true)
+                            .expect("多线程批量评分应成功");
+                    (t0.elapsed(), scored.len())
+                }
+            })
+            .await
+            .expect("批任务应正常完成");
+            total_window += window;
+            n = got;
+            batches += 1;
+        }
         let after = ticks.load(Ordering::Relaxed);
         ticker.abort();
 
         let delta = after - before;
-        let batch_rate = delta as f64 / window.as_secs_f64();
+        let batch_rate = delta as f64 / total_window.as_secs_f64();
         println!(
-            "[T2] 批调用窗口 = {window:?}, 窗口内 tick delta = {delta}, \
+            "[T2] 批次数 = {batches}, 累计批窗口 = {total_window:?}, 窗口内 tick delta = {delta}, \
              批窗口速率 = {batch_rate:.0}/s, 空闲基线速率 = {free_rate:.0}/s"
         );
         assert_eq!(n, BULK_EXPERTS, "结果数必须等于输入数");
@@ -1040,7 +1056,7 @@ mod tests {
         // 两侧各有 >8× 余量,且不依赖具体核数/主频。
         assert!(
             batch_rate >= free_rate * 0.1,
-            "批调用窗口 {window:?} 内自旋速率 {batch_rate:.0}/s 仅为空闲基线 \
+            "累计批窗口 {total_window:?}({batches} 批)内自旋速率 {batch_rate:.0}/s 仅为空闲基线 \
              {free_rate:.0}/s 的 10% 以下 —— tokio worker 被同步批评分饿死 \
              (multi_thread 上应经 block_in_place 让出)"
         );
