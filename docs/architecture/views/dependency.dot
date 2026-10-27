@@ -72,6 +72,7 @@ digraph chimera {
   "chimera-cli" -> "repo-wiki";
   "chimera-cli" -> "scc-cache";
   "chimera-cli" -> "seccore";
+  "chimera-cli" -> "session-store";
   "chimera-mas" -> "decay-engine";
   "chimera-mas" -> "event-bus";
   "chimera-mas" -> "gea-activator";
