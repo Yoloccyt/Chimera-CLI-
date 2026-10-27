@@ -487,16 +487,52 @@ mod tests {
         }
     }
 
-    /// Phase 8.3:HNSW 路径同样满足重建幂等(不翻倍)
+    /// Phase 8.3：HNSW 路径同样满足重建幂等（不翻倍）
+    ///
+    /// ★ C-74（M57 根因订正）：本用例曾在满并行全量跑里红、隔离跑绿，先前被归类为
+    /// 「并行负载敏感」——**归因错了**。真实 nondeterminism 来源有两个，都不是时间：
+    /// ① `nodes` 是 `HashMap<String, _>`，`build_semantic_edges` 取 `keys()` 顺序建索引，
+    ///    而 std `HashMap` 的迭代序**逐进程随机**（`RandomState`）⇒ HNSW 的插入序不稳定；
+    /// ② `build_semantic_edges_hnsw` 用 `hnsw_rs::parallel_insert`（rayon 全局池，模块头
+    ///    注已把它登记为「桥接唯一例外」），并发插入的**交错**本身就会改变近似图。
+    ///
+    /// 后果：近似图的边集在两次重建之间**不保证逐条相等**（模块头注已写「差异仅在
+    /// 大规模下 HNSW 近邻的近似性」），所以在此断 `assert_eq!` 是在断一个实现并未承诺的性质。
+    ///
+    /// 处置不是放宽阈值，而是**把断言搬到各自真正成立的性质上**：确定性路径
+    /// （`≤ HNSW_SWITCH_THRESHOLD`，全对打分 + `select_nth_unstable_by`）保留**严格相等**，
+    /// 这条能真拦「重建累积/翻倍」的回归；近似路径只断**不变量**（重建不得累积
+    /// `< first × 3 / 2`、不得清空 `> 0`）——近似抖动远小于 50%，判别间距仍然可观。
     #[test]
     fn test_hnsw_path_rebuild_idempotent() {
+        // ① 确定性路径：精确全对打分 ⇒ 严格幂等，逐条相等
+        let mut exact = MemoryGraph::new();
+        for i in 0..=HNSW_SWITCH_THRESHOLD / 2 {
+            exact.insert_node(node(&format!("e{i}"), unit_clv(i % 4), true));
+        }
+        exact.build_semantic_edges(0.7);
+        let exact_first = exact.edge_count();
+        assert!(exact_first > 0, "精确路径应建立语义边，实际 0");
+        exact.build_semantic_edges(0.7);
+        assert_eq!(
+            exact.edge_count(),
+            exact_first,
+            "精确路径重建必须逐条相等（若不等则是真回归，不是抖动）"
+        );
+
+        // ② 近似路径（> 阈值，走 `parallel_insert`）：只断「不累积 / 不清空」不变量
         let mut graph = MemoryGraph::new();
         for i in 0..1001 {
             graph.insert_node(node(&format!("n{i}"), unit_clv(i % 4), true));
         }
         graph.build_semantic_edges(0.7);
         let first = graph.edge_count();
+        assert!(first > 0, "HNSW 路径应建立语义边，实际 0");
         graph.build_semantic_edges(0.7); // 重建
-        assert_eq!(graph.edge_count(), first, "HNSW 路径重建不应翻倍边数");
+        let second = graph.edge_count();
+        assert!(
+            second < first + first / 2,
+            "HNSW 路径重建不应累积：first={first}, second={second}"
+        );
     }
 }
