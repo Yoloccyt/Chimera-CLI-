@@ -292,7 +292,9 @@ pub fn session_store_dir() -> std::path::PathBuf {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
-    std::path::PathBuf::from(home).join(".chimera").join("sessions")
+    std::path::PathBuf::from(home)
+        .join(".chimera")
+        .join("sessions")
 }
 
 /// 装配协议宿主 AppServer（真实核心后端，C1）
