@@ -826,8 +826,11 @@ mod tests {
 
     /// arc-swap 并发读写 — 独立 ArcSwap<HtsTable>,8 写 × 8 读,无 panic 无数据竞争
     ///
-    /// WHY 替代 loom（同 T8 理由:Windows GNU 工具链 loom 受限）;
-    /// 验证 RCU 语义:读线程任意时刻看到完整快照（要么旧表要么新表,永不撕裂）。
+    /// WHY 而非 loom（同 T8 理由）：原注称「Windows GNU 工具链 loom 受限」，
+    /// **已被 R2 C-102 实测推翻**（loom 0.7.2 在本工具链编过且模型检验有牙）。
+    /// 不用它的真实理由是：arc-swap 的 RCU 语义靠类型系统 + ArcSwap 自身保证，
+    /// loom 不建模 arc-swap 的发布/读取协议，只能验证更底层的原子组合；
+    /// 本测试直接锁该协议的行为结果——读线程任意时刻看到完整快照（要么旧表要么新表，永不撕裂）。
     #[test]
     fn arc_swap_concurrent_read_write() {
         // Arc<ArcSwap<..>> 包装:线程间共享同一 RCU 实例（ArcSwapAny 自身无 Clone）

@@ -1008,8 +1008,10 @@ mod tests {
 
     #[test]
     fn test_same_shard_concurrent_try_push_no_loss_no_dup() {
-        // 第三轮 T1.4:同片多线程并发 try_push 不丢不重(不引入 loom;以真
-        // 并发线程 + barrier 压 crossbeam ArrayQueue 的 MPSC 语义 + 无锁计数守恒)。
+        // 第三轮 T1.4：同片多线程并发 try_push 不丢不重。这里**不引入 loom** 是取舍
+        // （不是能力限制：loom 0.7.2 在本工具链可用且有牙，见 R2 C-102 实测与 ADR-226）：
+        // 目标是把 crossbeam ArrayQueue 的 MPSC 语义 + 无锁计数守恒压在**真并发**下看结果，
+        // 而不是枚举交错。
         // 单片(n_shards=1)强制所有事件争抢同一 ArrayQueue。
         use std::sync::Barrier;
         const THREADS: usize = 8;

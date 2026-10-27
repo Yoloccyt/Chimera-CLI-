@@ -109,5 +109,10 @@ R1 引的 `docs/reports/phase1-wave0-1-closure.md` 三行现取【亲验；该�
 
 1. loom 0.7.2 的**传递闭包**体积（一阶集已实测：默认 feature 下净新增 `generator` + `scoped-tls` 两项；闭包待 `cargo tree -p loom -e dev`）。
 2. `generator 0.8.1` 在 `x86_64-pc-windows-gnu` 上的可编译性（E1-a′；这是本 ADR 唯一未决的技术事实，也是仓内那 5 处断言的真正对象）。已定部分：`rust-version: 1.65` ⇒ 「nightly-only」不成立。
+   **→ 已决（2026-10-27，E1-a′ 实测通过）**：探针 crate `tmp/loom_probe`（不入库、有独立 `[workspace]` 表与独立 `CARGO_TARGET_DIR`）在 `stable-x86_64-pc-windows-gnu` + rustc 1.97.1 上：
+   - `cargo test` → `Finished` 59.92s，`loom 0.7.2` 及其依赖（`tracing-subscriber 0.3.23`、`scoped-tls 1.0.1`、`lazy_static`、`matchers`、`nu-ansi-term`、`thread_local` 等）全部编过；
+   - `loom::model` **有牙**：故意的非原子读改写（`load`+`store`）被 loom 枚举出丢更新交错（该反例测试标 `#[should_panic]` 且 **passed**），原子 `fetch_add` 对照组全通过。
+   ⇒ **仓内 5 处「Windows GNU loom 不可用/编译失败/需 nightly-only」断言均为失实**，已由 **C-102** 逐处订正为「取舍」而非「能力限制」（含不用的真实理由）。
+   ⇒ E1-a′ 因此**不阻塞** D1；剩下未决的只有 **E1-a（ubuntu CI 腿）与 E1-c（workflow 真执行步骤）**——它们需要先在 `mlc-engine` 落 dev-dep 与 `cfg(loom)` 别名，属 C-94 的实施面。
 3. `mlc-engine::card_system` 的 permutation 状态空间规模；若交错数超出可承受预算，需做场景裁剪（缩小 `PER_THREAD` 级参数），裁剪后属性覆盖范围须在测试文件头写明。
 4. §1.2 中「nightly-only」措辞的来源与真实版本——已定论（`rust-version: 1.65` ⇒ loom 0.7.2 在 stable 上可用，该措辞失实），但另开文档订正单修正那 5 处注释，不并入本 ADR（避免把裁决与纠偏混在一个提交里）。

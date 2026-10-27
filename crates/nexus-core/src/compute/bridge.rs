@@ -662,10 +662,12 @@ mod tests {
 
     /// 并发 route — 8 线程 × 1000 次无 panic 无数据竞争
     ///
-    /// WHY 替代 loom L-01:loom 在 Windows GNU 工具链不适用(项目 .toolchain 为
-    /// stable-x86_64-pc-windows-gnu,loom 依赖平台线程模型细节,Windows 支持受限);
-    /// 任务授权回退为普通多线程测试。DispatchPlan 为 Copy 纯枚举 + 静态阈值表,
-    /// 并发读天然无竞争,此测试锁定"并发调用 route 行为一致"。
+    /// WHY 而非 loom L-01：原注称「loom 在 Windows GNU 不适用/Windows 支持受限」，
+    /// **该断言已被 R2 C-102 实测推翻**：loom 0.7.2 在 `stable-x86_64-pc-windows-gnu`
+    /// 上编过（59.9s）且 `loom::model` 能枚举出丢更新交错（证据：`tmp/loom_probe`）。
+    /// 不用它的真实理由是**工具-属性匹配**：`DispatchPlan` 是 Copy 纯枚举 + 静态阈值表，
+    /// 并发读天然无竞争——loom 的排列枚举在这里没东西可枚举，
+    /// 本测试只需锁「并发调用 route 行为一致」。
     #[test]
     fn route_concurrent_reads() {
         let b = bridge();

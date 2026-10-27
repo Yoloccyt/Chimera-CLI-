@@ -3533,8 +3533,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_sharded_concurrent_publish_no_loss() {
-        // loom 替代(Windows GNU 工具链 loom 编译失败):8 线程 × 100 次并发
-        // publish_blocking,验证 Mutex/Atomic/ArrayQueue/CAS 竞争安全 + 漏发率 0
+        // 不用 loom 的理由是**取舍**而非能力限制（原注「Windows GNU 下 loom 编译失败」
+        // 已被 R2 C-102 实测推翻：loom 0.7.2 在本工具链编过且模型检验有牙，
+        // 证据见 `tmp/loom_probe` 与 ADR-226 E1）。
+        // 本测试锁吞吐/守恒：8 线程 × 100 次并发 publish_blocking，
+        // 验证 Mutex/Atomic/ArrayQueue/CAS 竞争安全 + 漏发率 0。
         let bus = EventBus::new();
         bus.enable_sharding(64).unwrap();
         let mut rx = bus.subscribe();
