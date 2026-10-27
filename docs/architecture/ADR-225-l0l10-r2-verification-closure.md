@@ -163,19 +163,21 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | C-82 | `844671d` | `subagent_engine` 装配态订正为 **GATED-UNWIRED**（零生产构造；`chimera-cli` 内 `subagent` 0 命中）+ `dep_edge_freeze.txt` 该边加 2026-10-27 实测注记（沿该文件 mas-sched 行先例，行保留） | M62 |
 | C-69 | `1c98ae2` | `ExperienceCardBus` 四索引上界**明示豁免**：实测「谁兜底 = 没人」（上游 `add_card` 同样无上限），写清三条不淘汰理由 + 两条开工条件；零代码语义 | M54 |
 | C-109 | `83fa7ba` | **修 C-107 自引入的 clippy 红**：65 处 `&content.chars()...collect::<String>()` 去多余 `&`（`cargo test`/`nextest`/`fmt` 全不报，只有 `clippy --all-targets -- -D warnings` 报 16 条 `useless_borrows_in_formatting` ⇒ CI「fmt · check · clippy · test」步会拦）；并把 `sysinfo` 时间断言从**负载量**改钉到**承诺量**：render < 250ms 硬管（面板设计承诺「构造即采集、render 不阻塞」），OS 采集只留实现级回退上界 15s（实测 1.3-1.7s 串行 / 4.24s 51 条并跑 / 6.40s 1765 条并跑，任何常量阈值都会产「负载红牌」） | M77 后续 / T-20 |
+| C-74 | `eaaed33` | M57 四条 flaky 的确定性改造收口 3/4，并**订正其中 3 条的归因**：`health_panel` 两条实为「断言按 En 文本写却靠同 bin 他测遗留的全局 locale」（C-107 已闭）；`mlc-engine::test_hnsw_path_rebuild_idempotent` 与时间无关，真来源是 **`HashMap` 迭代序逐进程随机 + `hnsw_rs::parallel_insert` 的 rayon 交错** ⇒ 原 `assert_eq!` 断的是实现并未承诺的性质。处置不是放宽阈值，而是把断言搬回各自成立的性质：确定性路径（`<= HNSW_SWITCH_THRESHOLD`）新增**逐条严格相等**断言（真拦累积/翻倍），近似路径只断不变量（不累积 `< first*3/2`、不清空 `> 0`）。第 4 条 `osa-coordinator::batch_yields_worker_on_multi_thread_runtime` **不动**：它已是 ADR-222 R9 速率比判据先例（阈值两侧 6x 余量、7/7 vs 3/3 实测），残留敏感度来自外部进程抢 CPU ⇒ 解法在 harness 档（T-11/T-20） | M57 |
   > 本表是收口时点快照；「已落地多少单」的真值源是 `git log --oneline`，不在本表登记总数。
 
 **收口时点验收读数（2026-10-27，均在 C-63/C-83 全链落地之后现取）**：
 
 | 项 | 读数 | 与首轮对比 |
 |---|---|---|
-| 全门集 `run_gate_manifest.py` | **第 13 轮 `[SUM] ok=129 mismatch=0 env-fail=0 unknown=0 skip=7 / 136`**（第 9 轮复跑，在 C-80/C-81/C-102 之后） | 与首轮 `ok=126 mismatch=1` 对比；累计 7 次复跑均 `mismatch=0`（含本轮两次自造门红 G-27/G-35、G-70 已修回） |
-| 全量测试（`--exclude chimera-e2e-tests --lib --bins --tests --jobs 2`） | **447 target / 11386 passed / 0 failed** | 首轮 447/11375/**4 failed** ⇒ target 全集相同、失败清零、通过数 +11（本轮新增断言），旧 4 条 flaky 本次全绿 |
+| 全门集 `run_gate_manifest.py` | **第 14 轮 `[SUM] ok=129 mismatch=0 env-fail=0 unknown=0 skip=7 / 136`（rc=0，在 C-74 落地之后）**（第 9 轮复跑，在 C-80/C-81/C-102 之后） | 与首轮 `ok=126 mismatch=1` 对比；累计 7 次复跑均 `mismatch=0`（含本轮两次自造门红 G-27/G-35、G-70 已修回） |
+| 全量测试（`--exclude chimera-e2e-tests --lib --bins --tests --jobs 2`） | **收口末次复跑（C-107..C-110 之后）：448 target / 11388 passed / 0 failed / rc=0**；中间轮 447/11386/0 | 首轮 447/11375/**4 failed** ⇒ target 全集相同、失败清零、通过数 +11（本轮新增断言），旧 4 条 flaky 本次全绿 |
 | heavy 门 `--with-heavy`（单独申报） | **rc=2 / `[SUM] ok=130 mismatch=0 env-fail=0 unknown=6 skip=0 / 136`**；6 条判**不可判定**（G-12/G-13/G-14/G-15/G-49/G-50），原因逐字自报：`磁盘 6.3 GB < 门槛 20 GB / 25 GB —— 不静默跳过，判不可判定` ⇒ **不得当作通过**，载体交 CI；本机 `target/` 实测 109.9 GB、Free 一度 0.00 GB |
 | CI doctest job 口径（`--doc --no-fail-fast`，无 `--ignored`） | 全 `test result: ok` | — |
 | release `--ignored` 档 | **首次真跑出数**：528 条 `test result:` / 77 passed / 5 failed（全为存量隔离项，M74） | 首轮 `test_result:` = 0（OOM，M73） |
 | 依赖双源 | `.sh` + `.ps1` 均 rc=0 | — |
 | 契约/视图派生 | `crate_contract --check` rc=0、`emit_architecture_views --verify` rc=0、`dep_edge_freeze` rc=0（157==157） | — |
+| 依赖铁律双源 | 收口末次复跑：`.sh` **rc=0** + `.ps1` **rc=0**（`tmp/r2-deprules-sh.txt` / `tmp/r2-deprules-ps1.txt`）；四道文档门（`adr_index_sync` / `check_doc_drift` / `check_doc_consistency` / `check_gates_provenance`）**全部 rc=0** | — |
 | 格式 | `cargo fmt --all` 撞 os error 206 ⇒ 逐包：seccore / session-store / chimera-cli / parliament / quest-engine / efficiency-monitor / chimera-mas 全 clean | — |
 
 > **经验沉淀（两次门红都是同一类）**：改了上游却忘重派生 ⇒ G-27/G-35（两本持锁台账行号）与 G-70（views/ 六件）会分别变红。开工前清单：`crate_contract --install` + `emit_architecture_views --write` + 行号变动时的两本台账，三者同批。
@@ -205,7 +207,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | T-8 | M16 coverage 46-crate 基线未重测 | CI nightly 出数后抬表 | 本地 llvm-cov E0463 不可代跑 |
 | T-9 | M14/M19/M20 + M44/M45/M46 性能可证伪族 | 补 bench 阈值键 / 给 SLO 找 CI 载体 / 第四表键集对等 / 十六源目标三态 | 需 CI clean-runner 取数；改 release profile 属禁区 |
 | T-10 | M24/M25/M26/M28/M29/M30/M31/M33/M34/L21/L37 零装配族（**含 M59 事件生产者装配可达性**） | 逐条「接线 / GATED / 退役」三选一（R2 已出全量清点表，不再逐单发现）；**M59 的第二轴已由 C-79 落地**：台账 `scripts/event_assembly_gated.txt` 现登记 **15** 条「有构造点但默认构建不可达」的事件（跨 9 个非默认构建 crate）⇒ 裁时可直接拿这张表逐条选路 | M27 属 R2 解冻前必清项居首；M33 继承 ADR-224 D4 DEFERRED 不接线；退役需 ADR |
-| T-11 | M57 四条时序断言确定性改造 | 固定 `--test-threads=1` 或抽纯函数夹具（沿 ADR-222 R9 `eco_transition` 先例） | 禁改生产语义（Eco 降频是正确的事件风暴保护） |
+| T-11 | M57 四条时序断言确定性改造 | **已落 3/4（C-107 两条 + C-74 一条），且这 3 条的「并行负载敏感」归因被逐条读码推翻**（2 条 = 隐式全局 locale 依赖；1 条 = `HashMap` 迭代序随机 + `parallel_insert` 交错）；余 1 条 `osa-coordinator::batch_yields_worker_on_multi_thread_runtime` 属**外部 CPU 抢占**敏感，解法在 harness 档（串行执行 / `test-threads` 上限），不在测试内 | 禁改生产语义（Eco 降频是正确的事件风暴保护） |
 | T-12 | 六条 `[[slo]]` 的 `continue-on-error` 切换 | 维持现状（R2 复测判为已明文登记的计划债，非疏漏） | `slo.yml:24` 已写切换条件；满足后改 `slo.yml:68`/`:170`/`stress.yml:38` 为 `false` |
 | T-13 | M50/M51 之外的 L3 同族（`scc-cache::SqliteWal`、`cmt-tiering::CmtCoordinator`、`hcw-window::spawn_mask_listener` 未接线而文档以现在时声称闭合） | 与 C-63 同批判「接线 or 显式装配态订正注」，并同批重派生契约头 | 各为生产零构造/零装配（R2 复测亲验行号） |
 | T-14 | M69：格式版本字段已存在但未统一（`schema_version` u16/u16/u64 + `payload_version` u32 + `content_hash` u64 vs String） | 先只统一**声明处语义**（同一宽度 + 同一哈希类型），再议是否升为 L0-A 契约字段；不引新外部依赖（T-3 已裁） | 属破坏性变更（wire + 67 处构造点），需与 C-63 同族重派生链同批；需 target 锁与属主授权 |
