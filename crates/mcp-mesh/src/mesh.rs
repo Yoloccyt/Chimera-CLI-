@@ -1306,7 +1306,20 @@ mod tests {
     async fn test_publishes_mcp_mesh_transaction_completed() {
         let bus = EventBus::new();
         let mut rx = bus.subscribe();
-        let mesh = McpMesh::with_event_bus(MeshConfig::default(), bus);
+        // C-114/M78：本行原先用 `MeshConfig::default()`（事务超时 200ms），是全仓
+        // 已经收过的那类「把调度延迟当成被测属性」的漏网——16 线程满并行下 2PC 可以
+        // 跑过 200ms ⇒ 直接报 `TransactionTimeout{timeout_ms:200}`（实测并跑红、单跑绿）。
+        // 同文件 `make_mesh_with_servers` 已因 v2.21.0 同款教训改用 30_000ms，本用例
+        // 当时没跟着改。本测试的被测对象是**事件发布**，不是 200ms 预算；
+        // 生产默认 200ms 的语义与超时机制本身均不在本行调整范围内
+        // （`config.rs` 的默认值断言照引）。
+        let mesh = McpMesh::with_event_bus(
+            MeshConfig {
+                transaction_timeout_ms: 30_000,
+                ..Default::default()
+            },
+            bus,
+        );
         mesh.register_server(MeshServer::new("s-1", "203.0.113.1", vec![]))
             .expect("注册失败");
 
