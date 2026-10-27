@@ -2,6 +2,10 @@
 event-bus::attribution::into_task::tokio::ret
 event-bus::bus::spawn_throughput_reporter::tokio::ret
 event-bus::bus::subscribe_critical_events::tokio::ret
+event-bus::error::EventBusError::rmp_serde::implfrom
+event-bus::error::EventBusError::rmp_serde::implfrom
+event-bus::error::EventBusError::serde_json::implfrom
+event-bus::error::EventBusError::tokio::implfrom
 event-bus::experience_card_bus::subscribe::tokio::ret
 event-bus::experience_card_bus::subscribe_critical::tokio::ret
 event-bus::shard::spawn_workers::tokio::arg
@@ -11,4 +15,5 @@ event-bus::subscriber::spawn::tokio::bound
 event-bus::subscriber::spawn::tokio::ret
 event-bus::subscriber::spawn::tokio::ret
 nexus-core::compute/telemetry::spawn_saturation_reporter::tokio::ret
+nexus-core::error::NexusError::serde_json::implfrom
 nexus-telemetry::report::spawn_saturation_reporter::tokio::ret

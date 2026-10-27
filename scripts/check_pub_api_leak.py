@@ -22,19 +22,32 @@ generic-bound positions, not just returns.
 
 What it judges
 --------------
-Key set `<crate>::<module>::<fn>::<extern_crate>::<pos>` with pos in
-{ret, arg, bound}, over the production surface of the three L0-B crates:
+Key set `<crate>::<module>::<fn-or-type>::<extern_crate>::<pos>` with pos in
+{ret, arg, bound, implfrom}, over the production surface of the three L0-B crates.
+Rows are a MULTISET, not a set: two distinct leaks that share a key (e.g. the two
+`impl From<rmp_serde::{encode,decode}::Error> for EventBusError`) take two rows, so
+a third such leak is still caught as NEW. Unique-row enforcement would defeat that.
   * NEW    - a leak site that appeared but is not in the ledger -> red.
   * STALE  - a ledger row no longer observed (someone fixed a leak and must
              delete the row in the same commit) -> red.
-  * malformed / duplicate row, unknown L0-B crate, unknown pos token -> exit 2.
+  * malformed row shape, or a pos token outside POSITIONS -> exit 2 (undecidable).
   * fewer than SIGN_FLOOR scanned pub fn signatures -> exit 2 (a blind parser
     reports exactly like a clean one, so refuse rather than pass).
+A row naming a crate outside L0-B needs no separate guard: the scanner can never
+observe it, so it surfaces as STALE red anyway.
 Dependency vocabulary is taken from scripts/l0b_dep_freeze.txt (the measured
 G-131 ledger), NOT from any prose whitelist: ADR-225 D6 exists precisely
 because the G-125 note's three-value set intersects the measured 27-row
 surface in only 16 rows, so a note-derived bound would plant ~11 false reds.
 Workspace-internal crates are out of scope here: direction is owned by G-125.
+
+Judged positions (4 classes; ADR-225 D6 + the T-6 owner ruling of 2026-10-26):
+  ret      - return type of a `pub fn`
+  arg      - parameter type of a `pub fn` (the strongest coupling: the caller
+             must own a runtime / hand over a handle)
+  bound    - generic parameter list on the fn name, and the `where` clause
+  implfrom - `impl From<External> for LocalError`, visible to all downstream
+             callers and reachable implicitly through `?`
 
 Modes / exit codes
 ------------------
@@ -70,7 +83,18 @@ BASELINE = os.path.join(HERE, "l0b_pub_signature_freeze.txt")
 # clean. Set from the measured L0-B surface and rounded down hard on purpose.
 SIGN_FLOOR = 120
 
-POSITIONS = ("ret", "arg", "bound")
+POSITIONS = ("ret", "arg", "bound", "implfrom")
+
+# `impl From<Ext> for Local` (and the generic form `impl<T> From<Ext> for Local`).
+# Counted as a public-surface leak (owner ruling 2026-10-26, ADR-225 T-6): a trait
+# impl is visible to every downstream crate, and the `?` operator calls it
+# implicitly, so an external error type reaching a public boundary through
+# `From` is the same exposure class as one in a return position -- except the
+# caller often never writes the type name, which is exactly why a
+# signature-only scan would miss it.
+IMPL_FROM_RE = re.compile(
+    r"^\s*impl\s*(?:<[^>]*>\s*)?From\s*<\s*([A-Za-z_]\w*)", re.M)
+IMPL_FOR_TARGET_RE = re.compile(r"\bfor\s+([A-Za-z_]\w*)")
 
 # `pub fn`, `pub async fn`, `pub const fn`, `pub unsafe fn`; optional leading
 # generic list on the name (`pub fn foo<T>(`).
@@ -278,6 +302,21 @@ def scan_signatures(src_dir, crate, vocab):
                                 hits.add(root)
                     for dep in sorted(hits):
                         found.append((mod, name, dep, pos))
+            # `impl From<External> for LocalError`: attributed to the local type
+            # name (there is no fn name to key on), position token `implfrom`.
+            for i, line in enumerate(lines):
+                if mask[i]:
+                    continue
+                m = IMPL_FROM_RE.match(line)
+                if not m:
+                    continue
+                head = m.group(1)
+                dep = head if head in allowed else use_map.get(head)
+                if not dep or dep not in allowed:
+                    continue
+                tgt = IMPL_FOR_TARGET_RE.search(line)
+                site = tgt.group(1) if tgt else "?"
+                found.append((mod, site, dep, "implfrom"))
     return found
 
 
@@ -441,6 +480,17 @@ impl Holder {
     pub fn clean(_x: u32) -> Vec<u32> { Vec::new() }
 }
 
+// `impl From<External> for Local` must count too (owner ruling, ADR-225 T-6):
+// the trait impl is downstream-visible and `?` reaches it without the caller
+// ever naming the type, which a signature-only scan would miss.
+impl From<tokio::task::JoinError> for Holder {
+    fn from(_e: tokio::task::JoinError) -> Self { Holder }
+}
+// A non-external From impl must NOT count (crate-internal error chaining).
+impl From<InnerErr> for Holder {
+    fn from(_e: InnerErr) -> Self { Holder }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,9 +513,10 @@ def run_selftest():
             "%s::lib::leaks_ret::tokio::ret" % _FIXTURE_CRATE,
             "%s::lib::leaks_bound::tokio::bound" % _FIXTURE_CRATE,
             "%s::lib::leaks_via_brace_use::tokio::ret" % _FIXTURE_CRATE,
+            "%s::lib::Holder::tokio::implfrom" % _FIXTURE_CRATE,
         ])
         checks = [
-            ("CLEAN fixture matches exactly the four planted sites",
+            ("CLEAN fixture matches exactly the five planted sites",
              keys == expected),
             ("doc-comment/string mention not counted",
              not any("documented" in k for k in keys)),
@@ -479,6 +530,10 @@ def run_selftest():
              "%s::lib::leaks_arg::tokio::arg" % _FIXTURE_CRATE in keys),
             ("nested-brace use binding resolved (JoinHandle -> tokio)",
              "%s::lib::leaks_via_brace_use::tokio::ret" % _FIXTURE_CRATE in keys),
+            ("impl From<External> counted as implfrom",
+             "%s::lib::Holder::tokio::implfrom" % _FIXTURE_CRATE in keys),
+            ("impl From<local type> NOT counted (no spurious row)",
+             sum(1 for k in keys if k.endswith("::implfrom")) == 1),
             ("production judge: clean ledger -> 0",
              evaluate(keys, expected) == ([], [])),
             ("production judge: planted NEW -> red",
