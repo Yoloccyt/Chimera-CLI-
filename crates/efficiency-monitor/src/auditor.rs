@@ -295,9 +295,10 @@ impl RuntimeAuditor {
     /// 注入 DECB 治理器句柄（第 6 维预算纪律审计输入，M13 重路由）
     ///
     /// 生产装配点：chimera-cli `experience_loop` 组合根构造共享 `DecbGovernor`
-    /// 并经此方法注入（ADR-179 真实生产调用路径——审计报告周期生成时
-    /// `generate_report` 消费 `get_stats()` 预算快照）。未注入时
-    /// `budget_discipline` 维度取中性 0.5（与五维证据纪律同口径，零行为变化）。
+    /// 并经此方法注入（ADR-179 读侧真实：审计报告周期生成时 `generate_report`
+    /// 真消费 `get_stats()` 预算快照）。**但写侧为 0 调用**（C-78/M58）：
+    /// 无任何生产点调 `record_consumption`，利用率恒 0 ⇒ 零消耗时本维度
+    /// 按证据纪律取中性 0.5，而非把「无观测」当「满分」。
     pub fn with_decb_governor(self, governor: std::sync::Arc<DecbGovernor>) -> Self {
         Self {
             decb: Some(governor),
@@ -474,11 +475,20 @@ impl RuntimeAuditor {
     /// `get_stats()` 只读快照(三次轻量锁读取,微秒级),不跨 await 持锁
     /// (§4.4 红线 1 合规)。未注入 DECB 时返回中性 0.5(证据纪律:
     /// 无观测既不给满分也不给零分,与五维同口径)。
+    ///
+    /// WHY 零消耗也取中性值(C-78/M58):利用率 0 有**两种**成因——「真的没花
+    /// 预算」与「根本没人记账」。实测生产侧 `record_consumption` 的调用数
+    /// **为 0**(`DecbCostCallback::record_cost` 无生产构造点),故生产利用率
+    /// 恒为 0;此时返回 1.0 等于把「无观测」记成「满分」,与五维的证据纪律相反。
+    /// 无观测一律给 NEUTRAL_SCORE;接上写侧(T-19)后本分支自然消失。
     fn budget_discipline(&self) -> f32 {
         match self.decb.as_ref() {
             None => NEUTRAL_SCORE,
             Some(governor) => {
                 let stats = governor.get_stats();
+                if stats.total_consumption <= 0.0 {
+                    return NEUTRAL_SCORE;
+                }
                 (1.0 - stats.utilization_rate).clamp(0.0, 1.0)
             }
         }
@@ -845,12 +855,13 @@ mod tests {
     }
 
     #[test]
-    fn test_budget_discipline_full_headroom_with_zero_consumption() {
-        // 注入 DECB 且零消耗:利用率 0 → 预算纪律 = 1.0(头寸充裕)
+    fn test_budget_discipline_neutral_when_no_consumption_observed() {
+        // C-78/M58:注入 DECB 但**零消耗**有两种成因,不得一律记满分——
+        // 未观测到任何预算消耗时与五维同口径取中性 0.5(证据纪律)。
         let governor = std::sync::Arc::new(DecbGovernor::new(Default::default()).unwrap());
         let auditor = RuntimeAuditor::new().with_decb_governor(governor);
         let report = auditor.generate_report();
-        assert!((report.budget_discipline - 1.0).abs() < f32::EPSILON);
+        assert_eq!(report.budget_discipline, NEUTRAL_SCORE);
         assert!(auditor.decb_governor().is_some());
     }
 
@@ -876,11 +887,21 @@ mod tests {
 
     #[test]
     fn test_budget_discipline_with_event_bus_chaining() {
-        // with_event_bus + with_decb_governor 链式装配应同时生效(M13 生产装配形态)
+        // with_event_bus + with_decb_governor 链式装配应同时生效(M13 生产装配形态)。
+        // C-78:先注入一次真实消耗再断言——零消耗已按证据纪律取中性值,
+        // 拿它断言 1.0 等于把"没记账"当"满分"。
         let bus = EventBus::new();
-        let governor = std::sync::Arc::new(DecbGovernor::new(Default::default()).unwrap());
-        let auditor = RuntimeAuditor::with_event_bus(bus).with_decb_governor(governor);
+        let governor = DecbGovernor::new(Default::default()).unwrap();
+        // 默认 total_budget_limit = 1_000_000,记录 100_000 → 利用率 0.1
+        governor
+            .record_consumption(&decb_governor::BudgetConsumption {
+                total_cost: 100_000.0,
+                ..decb_governor::BudgetConsumption::zero()
+            })
+            .unwrap();
+        let auditor =
+            RuntimeAuditor::with_event_bus(bus).with_decb_governor(std::sync::Arc::new(governor));
         let report = auditor.generate_report();
-        assert!((report.budget_discipline - 1.0).abs() < f32::EPSILON);
+        assert!((report.budget_discipline - 0.9).abs() < 1e-6);
     }
 }

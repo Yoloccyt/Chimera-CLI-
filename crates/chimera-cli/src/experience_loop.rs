@@ -174,8 +174,12 @@ pub async fn spawn_experience_loop(
     // 5. RuntimeAuditor:事件计数订阅 + 周期五维报告(发布 HarnessReportGenerated)
     //    M13(decb 重路由):组合根构造共享 DecbGovernor 注入审计器——第 6 维
     //    budget_discipline 每次报告经 get_stats() 真实消费(L9→L8 向下非内环,
-    //    ADR-179 非空转生产调用路径)。DECB 默认配置零消耗,不发布任何事件,
-    //    报告事件面分毫不动(零行为变化)。
+    //    ADR-179 读侧真实)。
+    //    ⚠ 读侧真 ≠ 维度真(C-78/M58 实测):**写侧在生产为 0 调用**——
+    //    `DecbGovernor::record_consumption` 的唯一适配器 `DecbCostCallback`
+    //    无任何生产构造点,全仓 hit 只在测试与 `///` 文档行 ⇒ 利用率恒为 0。
+    //    因此 `budget_discipline()` 在零消耗时按证据纪律返回 NEUTRAL(0.5),
+    //    不再把"没记账"报成满分 1.0。接上写侧见 ADR-225 §5 T-19。
     let decb = Arc::new(
         decb_governor::DecbGovernor::with_event_bus(
             decb_governor::DecbConfig::default(),
