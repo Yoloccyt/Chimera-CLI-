@@ -124,25 +124,32 @@ fn test_host_info_displays_within_1s() {
     chimera_tui::set_locale(chimera_tui::Locale::Zh);
 }
 
-/// 进程信息(Chimera PID/RSS)按 `refresh_interval_ms` 周期刷新。
+/// 进程信息（Chimera PID/RSS）按 `refresh_interval_ms` 周期刷新。
 ///
 /// 验证 spec §Scenario "系统信息面板启动加载" — "进程信息每 5s 刷新一次"。
-/// 通过注入短刷新间隔(50ms)加速测试,验证:
-/// 1. 构造后 `last_refresh_at` 已被设置(初次采集)
+/// 通过注入短刷新间隔加速测试，验证：
+/// 1. 构造后 `last_refresh_at` 已被设置（初次采集）
 /// 2. 短于间隔的连续 render 不触发二次刷新
-/// 3. 长于间隔的等待后再 render,进程信息被重新采集
+/// 3. 跨过间隔后进程信息被重新采集
+///
+/// ★ C-117/M78：原先一个 50ms 间隔同时供「不跨过」与「跨过」两条断言用，于是
+/// 「不跨过」那条把**本机调度延迟 < 50ms** 当成了前提——全仓并跑下两次 render 之间
+/// 可以被拉开 >50ms（实测本用例 6.55s），刷新按规则**正确地**发生，断言却红了。
+/// ⇒ 拆成两个夹具，各自只依赖自己能保证的事：
+/// - 负向用 **60s 间隔**（任何合理的调度拖拉跨不过 60s，因此该断言与负载无关）；
+/// - 正向用 **50ms 间隔 + 轮询至观察到时间戳前进**（而不是 `sleep(120ms)` 然
+///   后直接断「应当已刷新」），看门狗 5s；真不刷新仍会红。
 #[test]
 fn test_process_info_refreshes_every_5s() {
-    // 50ms 间隔,远小于默认 5s,便于在测试时间内验证刷新行为
-    let mut panel = SysinfoPanel::with_refresh_interval(50);
+    // — 负向：间隔远大于任何调度拖拉 ⇒ 「不刷新」不再依赖调度 —
+    let mut panel = SysinfoPanel::with_refresh_interval(60_000);
     let state = TuiState::new();
 
-    // 1. 首次 render:构造 → render 路径(包含 render 期间的 refresh_if_needed)。
-    //    构造后已过去 > 50ms,refresh_if_needed 触发刷新,last_refresh_at 更新。
+    // 1. 首次 render：构造 → render 路径（包含 render 期间的 refresh_if_needed）。
     let _ = render_to_string(&mut panel, &state);
     let initial_ts = panel.last_refresh_at();
 
-    // 2. 短间隔 render(< 50ms):不应触发刷新,时间戳保持不变
+    // 2. 短间隔 render（60s 间隔未跨过）：不应触发刷新，时间戳保持不变
     let _ = render_to_string(&mut panel, &state);
     assert_eq!(
         panel.last_refresh_at(),
@@ -150,14 +157,24 @@ fn test_process_info_refreshes_every_5s() {
         "no refresh expected before interval elapses"
     );
 
-    // 3. 等待 120ms(> 50ms × 2,确保跨过 tick 边界,避免 Windows 15.6ms
-    //    默认 timer 精度边界值)
-    std::thread::sleep(std::time::Duration::from_millis(120));
-    let _ = render_to_string(&mut panel, &state);
-    let after_sleep_ts = panel.last_refresh_at();
+    // — 正向：50ms 短间隔 + 轮询至收敛 —
+    let mut fast = SysinfoPanel::with_refresh_interval(50);
+    let _ = render_to_string(&mut fast, &state);
+    let fast_initial = fast.last_refresh_at();
+
+    // 3. 轮询直到跨过 50ms 间隔并观察到刷新发生（取代「睡 120ms 再直接断」）：
+    //    旧写法在 Windows 15.6ms timer 精度下本就接近边界，全仓并跑下更是必跨。
+    //    看门狗 5s = 间隔的 100 倍，真不刷新仍会红。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut after_ts = fast.last_refresh_at();
+    while after_ts == fast_initial && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let _ = render_to_string(&mut fast, &state);
+        after_ts = fast.last_refresh_at();
+    }
     assert!(
-        after_sleep_ts > initial_ts,
-        "refresh should have happened after interval, {after_sleep_ts:?} <= {initial_ts:?}"
+        after_ts > fast_initial,
+        "refresh should have happened after interval, {after_ts:?} <= {fast_initial:?}"
     );
 
     // 4. 默认间隔必须为 5000ms(spec 默认值)
