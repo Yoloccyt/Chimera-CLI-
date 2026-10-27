@@ -120,7 +120,12 @@ async fn auditor_publishes_assessment_events() {
             Ok(Ok(NexusEvent::HarnessReportGenerated { .. })) => saw_harness = true,
             Ok(Ok(NexusEvent::AssessmentUpdated { .. })) => saw_assessment = true,
             Ok(_) => continue,
-            Err(_) => break,
+            // R2 C-83（M63）：此处原本是 `break` —— 单次 50ms 超时就跳出**整个**
+            // 500ms 截止窗口。超时只说明“这 50ms 内没新事件”（broadcast 已订阅但
+            // 发布方可能还没跑到），不代表“不会再有”；用 `break` 把一次调度延迟
+            // 升格为「事件缺失」的断言失败，是真正的逻辑缺陷而非测试不稳。
+            // 改成 continue 后仍受外层 deadline 约束，不会悬挂。
+            Err(_) => continue,
         }
     }
     assert!(saw_harness, "应收到 HarnessReportGenerated");
