@@ -170,9 +170,10 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 
 | 项 | 读数 | 与首轮对比 |
 |---|---|---|
-| 全门集 `run_gate_manifest.py` | **第 14 轮 `[SUM] ok=129 mismatch=0 env-fail=0 unknown=0 skip=7 / 136`（rc=0，在 C-74 落地之后）**（第 9 轮复跑，在 C-80/C-81/C-102 之后） | 与首轮 `ok=126 mismatch=1` 对比；累计 7 次复跑均 `mismatch=0`（含本轮两次自造门红 G-27/G-35、G-70 已修回） |
+| 全门集 `run_gate_manifest.py` | **第 15 轮 `[SUM] ok=129 mismatch=0 env-fail=0 unknown=0 skip=7 / 136`（rc=0，在 C-74/C-111 落地之后；workspace 级 `check`/`clippy` 亦各自补跑 rc=0）**（第 9 轮复跑，在 C-80/C-81/C-102 之后） | 与首轮 `ok=126 mismatch=1` 对比；累计 7 次复跑均 `mismatch=0`（含本轮两次自造门红 G-27/G-35、G-70 已修回） |
 | 全量测试（`--exclude chimera-e2e-tests --lib --bins --tests --jobs 2`） | **收口末次复跑（C-107..C-110 之后）：448 target / 11388 passed / 0 failed / rc=0**；中间轮 447/11386/0 | 首轮 447/11375/**4 failed** ⇒ target 全集相同、失败清零、通过数 +11（本轮新增断言），旧 4 条 flaky 本次全绿 |
 | heavy 门 `--with-heavy`（单独申报） | **rc=2 / `[SUM] ok=130 mismatch=0 env-fail=0 unknown=6 skip=0 / 136`**；6 条判**不可判定**（G-12/G-13/G-14/G-15/G-49/G-50），原因逐字自报：`磁盘 6.3 GB < 门槛 20 GB / 25 GB —— 不静默跳过，判不可判定` ⇒ **不得当作通过**，载体交 CI；本机 `target/` 实测 109.9 GB、Free 一度 0.00 GB |
+| heavy 逐门申报（6 条 unknown 的真因分解） | **G-12 / G-13 手工补跑取到真读数**：`cargo check --workspace --all-targets --jobs 2` → **rc=0**；`cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` → **rc=0**（4m38s）⇒ 门的 `disk_gb=20` 是**资源门槛**而非失败判据，实际编译在本机可完成（Free 6.1 GB）。**G-14**（`cargo test --workspace --jobs 4`）以 D1 口径改跑 `--jobs 2` → **448 target / 11388 passed / 0 failed / rc=0**。**G-15**（release `--ignored`）已出数 = rc=101 / 528 行 / 77 passed / **5 failed**（全为存量隔离项，M74/T-17 待裁口径）。**G-49** → rc=2：脚本内 `cargo: command not found`（bash 子环境拿不到项目内工具链 PATH）⇒ 环境载体缺口。**G-50** → rc=2：`[UNDECIDABLE] release binary 不存在: target/release/chimera`——该产物今日为**腾盘**被删（L61 处置），恢复需 `cargo build --release`（约 9 GB），本机余量不足 ⇒ 如实保持不可判定 | — |
 | CI doctest job 口径（`--doc --no-fail-fast`，无 `--ignored`） | 全 `test result: ok` | — |
 | release `--ignored` 档 | **首次真跑出数**：528 条 `test result:` / 77 passed / 5 failed（全为存量隔离项，M74） | 首轮 `test_result:` = 0（OOM，M73） |
 | 依赖双源 | `.sh` + `.ps1` 均 rc=0 | — |
