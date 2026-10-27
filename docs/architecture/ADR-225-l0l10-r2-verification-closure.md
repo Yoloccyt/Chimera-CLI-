@@ -40,7 +40,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 - **决策**：业主裁决「审计链留痕 + 升 Critical+mpsc 两者都做」，R2 按工程可实现性拆为：**C-64a**（只改 `crates/seccore/src/sandbox.rs` 拒绝分支，在 `return Err` 之前补审计链 append）先行；**C-64b**（Normal→Critical 全套，MPSC 17→18、TOTAL 21→22、三锁 CRITICAL 21→22 / NORMAL 122→121、`LANE_FORBIDDEN_SHARD` +1、旁路臂 +1、**L0-A `ImmutableSurface` 增变体使 `all() -> [ImmutableSurface; 32]` 变 33**、G-117 note 去手抄计数）作为独立批次，前置 = 在途 fuzz 批次收尾 + G-115 closed/open 裁决。
 - **依据**：`harness_spec.rs:98` 明文「Critical 事件清单（18 = 17 mpsc 旁路全覆盖 + CheckpointSaved broadcast-only）」且每个 mpsc-Critical 事件是一个独立枚举变体；`fuzz/fuzz_targets/harness_spec_parse.rs` 是该枚举的 fuzz 消费者，本轮实测**处于在途批次未提交态**。TUI 侧经复测确认**不需改**（`panels/event_stream.rs:557`、`panels/log.rs:406` 按 topic 分派、`:605/:454` 按硬编 priority 分派、`event_coverage_drift_test.rs:267` 用 `TuiEventClass::Consumed`，均不读 `severity()`）。
 - **被否反方案**：一次做完（八组单一提交）—— 会把最高风险面与他人的未提交工作绑进同一颗提交，违背「整提交可独立 revert」与「禁碰在途改动」两条既定纪律；两单都完成后效果与业主裁决一致。
-- **落地状态**：⏳ C-64a 待执行；C-64b 转 §5 待裁 T-1。
+- **落地状态**：✅ **C-64a 已执行（`cc1bcbc`）**：新增 `AuditChain::append_rejection`（取**被拒绝的原始命令**而非 `CommandSpec`，因两条拒绝路径上规格从未生成）+ 两处拒绝口接线；零枚举变更（用既有 `Failed` 状态与 `Result` 步骤）；新增 4 条断言（含「篡改 outcome 被 `verify()` 检出」与「同命令两次 `command_hash` 恒等」）。验收：`cargo check -p seccore --all-targets` 0 error 0 warning；`cargo test -p seccore` 全 target 0 failed（`sandbox_integration` 19 passed 含新增 4 条）。C-64b 仍转 §5 待裁 T-1。
 
 ### D4（M22/C-29）session-store 采「先加固、后接线」
 
@@ -132,8 +132,10 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
   | C-88 | `e6a7f84` | 订正我自己「所有 md 不可审」的过度概括（D5 适用边界第一次收窄） | M43 初版 |
   | C-89 | `8407444` | G-135 计入 `impl From<第三方>`（业主 T-6）：四类判据齐备、台账 13→18、selftest 14→16 | M37/T-6 |
   | C-90 | `17f968e` | 本 ADR §5 归档 T-2/T-3/T-6 补裁结果；§6 回滚清单去枚举改指针 | 补裁三项 |
-  | C-91 | 本单 | D5 适用面第二次订正：`git ls-files -- <path>` + `git check-ignore -v` 逐份双验推翻「`CODE_WIKI.md`/v3.4.0 二十三篇不可审」；§4 推论行与 T-4 行同步；方案甲反白面收窄至两份 | M43/M68 |
-  | C-92 | 本单 | T-3/T-2 落文档：十六源手册追加两条批注（记忆契约三要素逐要素判定 + loom 愿景行转「待落地」）；T-3 行按 M69 窄化；新增待裁 T-14；L55 登记 `core.ignorecase` 判定坑 | M55/M69/M13/T-2/T-3 |
+  | C-91 | `07a8b07` | D5 适用面第二次订正：`git ls-files -- <path>` + `git check-ignore -v` 逐份双验推翻「`CODE_WIKI.md`/v3.4.0 二十三篇不可审」；§4 推论行与 T-4 行同步；方案甲反白面收窄至两份 | M43/M68 |
+  | C-92 | `9802044` | T-3/T-2 落文档：十六源手册追加两条批注（记忆契约三要素逐要素判定 + loom 愿景行转「待落地」）；T-3 行按 M69 窄化；新增待裁 T-14；L55 登记 `core.ignorecase` 判定坑 | M55/M69/M13/T-2/T-3 |
+  | C-93 | `96ce892` | **新建 ADR-226**：loom 四项最小性论证 + E1 前置闸门（主路 ubuntu runner、windows 腿定 `generator` 真伪）；§1.1 记 R1 M13 指针漂移，§1.5 记「Linux CI 承接」零载体债 | M70/M71/L56/T-2 |
+  | C-64a | `cc1bcbc` | **拦截上 Merkle 审计链**：`append_rejection`（取被拒绝的原始命令而非 `CommandSpec`）+ 两处拒绝口接线 + 4 条断言（篡改可检、哈希可复现）；零枚举变更 | M49（前半）/M72 |
   > 本表是收口时点快照；「已落地多少单」的真值源是 `git log --oneline`，不在本表登记总数。
 - **C-73（M56 口径传导）已执行；入库情况经逐份 `git ls-files --error-unmatch` 实测，并**订正本 ADR 先前的一条错判**：上轮曾记为「六份 md 全被 `.gitignore:57` 排除 ⇒ 无提交可证」，该判断错。现势：
   | 文件 | tracked? | 处理 |
@@ -165,6 +167,8 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | T-12 | 六条 `[[slo]]` 的 `continue-on-error` 切换 | 维持现状（R2 复测判为已明文登记的计划债，非疏漏） | `slo.yml:24` 已写切换条件；满足后改 `slo.yml:68`/`:170`/`stress.yml:38` 为 `false` |
 | T-13 | M50/M51 之外的 L3 同族（`scc-cache::SqliteWal`、`cmt-tiering::CmtCoordinator`、`hcw-window::spawn_mask_listener` 未接线而文档以现在时声称闭合） | 与 C-63 同批判「接线 or 显式装配态订正注」，并同批重派生契约头 | 各为生产零构造/零装配（R2 复测亲验行号） |
 | T-14 | M69：格式版本字段已存在但未统一（`schema_version` u16/u16/u64 + `payload_version` u32 + `content_hash` u64 vs String） | 先只统一**声明处语义**（同一宽度 + 同一哈希类型），再议是否升为 L0-A 契约字段；不引新外部依赖（T-3 已裁） | 属破坏性变更（wire + 67 处构造点），需与 C-63 同族重派生链同批；需 target 锁与属主授权 |
+| T-16 | M72：**审计链在生产零写入**——`audit_and_execute` 生产调用 0（唯一调用方是 `tests/security/owasp_top10.rs` 17 处）；`AuditChain` 无持久化/导出 API；真实执行路径 `gqep-executor`(ExecPolicy)/`nexus-hook`(ProcessFence) 不写链 | 三选一：**A（本 ADR 默认）** 保留 C-64a、链登记 DORMANT-ONLY、红线 #2 措辞按实测收窄；B 授权把两条真实执行路径接进 seccore（改生产语义，需新 ADR + 功能回归面）；C 记 DORMANT 并同批订正 `policy.rs:320` 文本 | C-65（`verify()` 双点）**因此不在本轮实现**：空链 verify 恒真 = 装饰门，导出点不存在。任何选 B 的落地需先回答「白名单会拦掉哪些现在能跑的命令」 |
+| T-17 | M73：release `--ignored` 档在 `--jobs 1` 下仍 **LLVM OOM**（`free≈423 MB` 时；同单元在 `free≈1.9 GB` 下 10m58s 编成功）⇒ 根因是内存竞争而非代码/flags | 单进程重跑取干净读数（日志 `tmp/r2-rel-ignored2.txt`）；仍 OOM 则由 R2 **如实声明本地不可判定**并把该档交 CI（`stress.yml`/`slo.yml`） | 禁改 release profile（D-R2-2）；若交 CI，§六的「无性能劣化」签字须改写为「本地不可判定，以 CI 载体为准」，不得写成「无退化」 |
 
 ## 6. 验证与回滚
 
