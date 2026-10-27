@@ -310,7 +310,18 @@ fn test_mcp_nodes_panel_offline_alert_banner() {
 
 #[test]
 fn test_mcp_nodes_panel_no_alert_when_all_online() {
-    let now = Utc::now();
+    // C-113/M78：心跳锚点必须与「本用例被调度延迟多久」无关。
+    // 面板规则是 `HEARTBEAT_TIMEOUT_SECS = 5`：`last_seen` 距**渲染时的真实时钟**
+    // 超过 5s 即判心跳超时并画 `[ALERT]` 横幅（见 `panels/mcp_nodes.rs` 的 `is_timed_out`）。
+    // 本用例原先把锚点设为 `Utc::now()`，于是它同时断了两件事：「全在线不告警」
+    // +「这次进程调度快于 5 秒」——实测 1765 用例并跑下本用例耗 **7.8s**，节点被
+    // 面板**正确地**判成超时 ⇒ 断言假红（单跑 1.8s 则绿）。
+    // `content()` 不接时钟（Panel trait 无注入口，加一个属生产 API 变更，不在本单），
+    // 所以把锚点放到未来 1 小时：`now - last_seen > 5s` 对任何非负调度延迟恒假，
+    // 本用例回到它真正要测的命题「无 Offline 节点 ⇒ 不渲染告警横幅」。
+    // 心跳超时判定本身（含 `last_seen == None` 与差值边界）由同文件里**显式传 `now`**
+    // 的纯函数单测覆盖，不依赖这里。
+    let now = Utc::now() + chrono::Duration::hours(1);
     let snapshot = DataSnapshot {
         mcp_nodes: vec![
             McpNodeStatus {
