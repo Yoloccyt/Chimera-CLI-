@@ -163,7 +163,7 @@ fn test_chtc_panel_renders_title() {
     assert!(
         content.contains("CHTC"),
         "CHTC panel title should be rendered, got: {}",
-        &content[..content.len().min(200)]
+        &content.chars().take(200).collect::<String>()
     );
 }
 
@@ -191,7 +191,7 @@ fn test_chtc_panel_renders_adapter_list_when_non_empty() {
     assert!(
         content.contains("vscode") || content.contains("VSCode"),
         "vscode adapter should be rendered, got: {}",
-        &content[..content.len().min(400)]
+        &content.chars().take(400).collect::<String>()
     );
     assert!(
         content.contains("jetbrains") || content.contains("JetBrains"),
@@ -234,7 +234,7 @@ fn test_chtc_panel_empty_adapters_shows_placeholder() {
     assert!(
         content.contains(chimera_tui::t!("panel.chtc.no_adapters")),
         "empty adapter list should show placeholder, got: {}",
-        &content[..content.len().min(300)]
+        &content.chars().take(300).collect::<String>()
     );
     chimera_tui::set_locale(chimera_tui::Locale::Zh);
 }
@@ -263,7 +263,7 @@ fn test_chtc_panel_renders_compatibility_scores() {
     assert!(
         content.contains("95"),
         "score 95 should be rendered, got: {}",
-        &content[..content.len().min(500)]
+        &content.chars().take(500).collect::<String>()
     );
     assert!(content.contains("88"), "score 88 should be rendered");
     assert!(content.contains("72"), "score 72 should be rendered");
@@ -273,7 +273,7 @@ fn test_chtc_panel_renders_compatibility_scores() {
     assert!(
         content.contains("/100"),
         "score should display as X/100 format, got: {}",
-        &content[..content.len().min(400)]
+        &content.chars().take(400).collect::<String>()
     );
 }
 
@@ -432,7 +432,7 @@ fn test_chtc_panel_renders_progress_bar() {
     assert!(
         content.contains('[') && content.contains(']'),
         "progress bar should render [====----] form, got: {}",
-        &content[..content.len().min(400)]
+        &content.chars().take(400).collect::<String>()
     );
     assert!(
         content.contains('='),
@@ -471,7 +471,7 @@ fn test_chtc_panel_renders_request_distribution() {
     assert!(
         content.contains(&requests_prefix),
         "request distribution section should be rendered, got: {}",
-        &content[..content.len().min(500)]
+        &content.chars().take(500).collect::<String>()
     );
     chimera_tui::set_locale(chimera_tui::Locale::Zh);
 }

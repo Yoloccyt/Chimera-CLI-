@@ -77,6 +77,13 @@ fn render_to_string(app: &mut TuiApp, width: u16, height: u16) -> String {
 
 #[test]
 fn test_health_panel_renders_with_sample_data() {
+    // C-107/M77：标题断言按 En 文本写，就必须**自己** pin locale——不能拿同 bin
+    // 他测遗留的全局 locale 当输入（nextest 进程级隔离下必红；cargo test 同进程
+    // 因别处 set_locale(En) 而偶然绿）。lock 与 set 同持，避免与并行测试的
+    // locale 写点抢窗口。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::En);
+
     let snapshot = DataSnapshot {
         health_metrics: HealthMetrics {
             events_per_second: 120.5,
@@ -133,6 +140,10 @@ fn test_health_score_formula() {
 
 #[test]
 fn test_health_panel_empty_data_renders_defaults() {
+    // C-107/M77：同上——locale 自 pin，不依赖同 bin 他测。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::En);
+
     let snapshot = DataSnapshot {
         health_metrics: HealthMetrics::default(),
         ..Default::default()
