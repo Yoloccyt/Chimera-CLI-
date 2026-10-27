@@ -48,7 +48,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 - **对 ADR-224 D1 的两处事实订正**：① 原施工图引用的假想 API `SessionStore::new(dir)` **确实不存在**（该 crate 全量仅 `lib.rs:229`/`replay.rs:4` 出现该词），真构造是 `writer.rs:123 pub fn new(config: StoreConfig)` + `types.rs:258 StoreConfig::with_dir`；② `server.rs:293 pub fn with_session_store(config, backend: Box<dyn CoreBackend>, store: CbmrWriter)` **存在**且签名可用（原报告称「两处未闭合设计」之一），但 `nexus-app-server` **不** re-export `CbmrWriter` ⇒ 原「路径 B 最小暴露」并非纯接线而需改 app-server 代码。
 - **Δ1「无新增依赖边」承诺的修订**：亲验 `dep_edge_freeze.txt` 现无 `chimera-cli|session-store` ⇒ 任何直接装配路径必新增一条生产边。判为**计划缺陷而非决策缺陷**（该承诺建立在已失效的假想 API 上），由本 ADR 明文修订：C-63 允许新增 L10→L3 向下一条合法向下边，并登记台账。
 - **被否反方案 ①**：忽略 M50/M51 直接接线 —— 把一个不可取消的永生刷写循环与运行期阻塞 IO 搬进生产，且 `append` 已返回 Ok（`writer.rs:150-152` 自陈「入队成功，非 fsync 确认」）而 pending 可能永不落盘，与 `segment.rs:288` 红线相悖。**被否反方案 ②**：`new()` 改 async 返回 JoinHandle —— 破坏调用面且制造「双构造路径」病理（同 R1 L46 双 `MtpeConfig` 教训）。
-- **落地状态**：⏳ 待执行（本 ADR 记录裁决，不改码）。
+- **落地状态**：✅ **已执行**（三单先后序严厉遵守）：**C-61** `2b70b93`（取消令牌 + 托管句柄 + `shutdown()` + `Drop`）→ **C-62** `9fdc4f3`（打开/DDL 入阻塞池）→ **C-63** `b6f79c4` + `627e256`（组合根接线 + lock 行）+ `65e30d6`（架构视图重派生）。**N-4 降级姿态已在 `build_app_server` 内定义**（`open` 失败只 `warn!` 并退回 `with_backend`，服务照常启动）。运行时证据（非编译证据）：`composition_root_e2e` 跑完后 `~/.chimera/sessions/` 实际产生 `sessions.sqlite3`（98,304 B）与段文件 `g~~r.0.jsonl`（86,212 B）⇒ 双写真生效。
 
 ### D5（M43）治理文档入库政策：采「方案乙」，不改 `.gitignore`
 
@@ -139,6 +139,12 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
   | C-61 | `2b70b93` | session-store 可取消刷写循环：`closing: AtomicBool` + `flush_loop: Mutex<Option<JoinHandle>>`（挂 `CbmrInner` 而非 `CbmrWriter`——后者 `Clone`，挂它会任一副本析构误杀循环）+ `pub async fn shutdown()` + `impl Drop for CbmrInner`（置标志/abort/pending 非空 warn） | M50 |
   | C-62 | `9fdc4f3` | 抽出 `open_blocking`；新增 `pub async fn open()` 经 `run_blocking`；红线由「SQLite 写入只经 spawn_blocking」扩为「**打开/DDL/写入**」 | M51 |
   | C-83（部分） | `c29334b` | `experience_loop_closure_e2e.rs` 的 `Err(_) => break` → `continue`：单次 50ms 超时不得终止整个 500ms 截止窗口（**真逻辑缺陷**，非测时不稳） | M63（1/6） |
+  | C-95 | `7fb55ba` | 本 ADR 回写 C-64a 落地 + §5 新增 T-16/T-17 | M72/M73 |
+  | C-96 | `7bd473e` | 两本持锁跨 await 台账行号随 C-61 更新（自造门红 G-27/G-35 修回；不新增豁免、不删代码） | M39 后续 |
+  | C-97/C-98 | `887e59d`/`572a59e` | 两处 rustfmt 偏差归位（`cargo fmt --all` 撞 os error 206，改逐包跑才发现） | M39 后续 |
+  | C-63 | `b6f79c4` | **组合根接 CBMR 双写**：新增生产边 `chimera-cli\|session-store`、`build_app_server` 转 async 并走 `CbmrWriter::open()`、11 个调用点补 `.await`、N-4 降级姿态定案、DORMANT→PRODUCTION-WIRED | M22/ADR-224 D1 |
+  | C-63b | `627e256` | `Cargo.lock` 补登 C-63 的依赖行（只 1 行；不带会被 `--locked` 构建拒） | C-63 同批 |
+  | C-99 | `65e30d6` | 架构视图随新边重派生（G-70 修红：5 件视图 `--write` 重派生后 `--verify` rc=0） | C-63 同批 |
   > 本表是收口时点快照；「已落地多少单」的真值源是 `git log --oneline`，不在本表登记总数。
 - **C-73（M56 口径传导）已执行；入库情况经逐份 `git ls-files --error-unmatch` 实测，并**订正本 ADR 先前的一条错判**：上轮曾记为「六份 md 全被 `.gitignore:57` 排除 ⇒ 无提交可证」，该判断错。现势：
   | 文件 | tracked? | 处理 |
