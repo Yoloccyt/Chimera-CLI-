@@ -148,6 +148,20 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
   | C-80 + C-81 | `9ce30bf` | 菜单覆盖由 `[PanelId; 27]` 改为派生自 `PanelId::ALL`（+无重复项/全集 30 双断言，旧写法使 4 个守卫测试变成 27/30 的自循环断言）；旁路类数注释由「仅 4 类」改为「`CRITICAL_MPSC_VARIANTS` 全集 17 类 / 告警过滤 4 类」 | M60/M61 |
   | C-102 | `ab250b0` | 五处「loom 在 Windows GNU 不可用」断言经 E1-a′ 探针实测推翻后逐处订正为「取舍」并补真实理由 | M70/L56（文档面） |
   | C-79 | `58ac4ce` | **G-66 第二轴：生产者装配可达性**（M59）。`not_default_assembly_crates()`（optional 边 ∪ gated_wiring DECORATIVE/PARTIAL）+ `assembly_reachability()` 纯函数 + 新台账 `event_assembly_gated.txt`（只减不增）+ `[GAP-A]`/`[GAP-A-S]` 判红 + 4 条 selftest；首次跑出 **15** 条（M59 原判仅 2 条） | M59 |
+- **第 4 轮追加落地（接上表）**：
+  | 单 | 提交 | 内容 | 承载 ID |
+  |---|---|---|---|
+  | C-100 | `c1ba350` | 本 ADR 回写 C-63 全链落地与第六轮门集读数 | M22/M51/留证 |
+  | C-101 | `7e735e4` | 本 ADR 新增「收口时点验收读数」表（门集/全量/doctest/release 档/依赖双源/派生/格式七行） | 留证 |
+  | C-103 | `7b43006` | 本 ADR 回写 C-80/C-81/C-102 与第 9 轮门集读数 | M60/M61/M70 |
+  | C-104 | `5af8d14` | 本 ADR 回写 C-79 第二轴与第 10 轮门集读数 | M59 |
+  | C-94 | `5fa2cea` | **E1 载体落地**：`[workspace.dependencies] loom = "0.7.2"`（只进 dev 面）+ `mlc-engine/tests/loom_card_system.rs`（`#![cfg(loom)]`，2 写 1 读锁段模型检验）+ `ci.yml` 新增 `loom` job（ubuntu，步骤级 `RUSTFLAGS='--cfg loom'`，只跑单 test binary）；`[workspace.lints.rust]` 的 check-cfg 加 `cfg(loom)`（crate 级声明会被 `cannot override workspace.lints` 拒） | ADR-226 D1 / E1-a′/E1-c |
+  | C-105 | `8e0009e` | ADR-226 §7 回填实施状态表（E1-a′ ✅ / E1-c ✅ / E1-a ⏳待 CI / E1-b ⏳） | ADR-226 |
+  | C-106 | `632cb5a` | `session_store_dir()` 支持 `CHIMERA_SESSION_DIR` 覆盖 + 纯函数 `session_dir_from(Option<OsString>)` + 1 条单测（非空覆盖 / 空串回落 / 未设同值）——消 C-63 附带发现的「测试与生产共用 `~/.chimera/sessions/`」 | M75/L64 |
+| C-107 | `127b11f` | **面板测试去「隐式全局 locale 依赖」**：5 条断言按 En 文本写却靠同 bin 他测的 `set_locale` 遗留（nextest 进程级隔离下必红）⇒ 改为自 pin `locale_test_guard()`+`set_locale(En)`；65 处 `&content[..content.len().min(N)]` 按**字节**切 UTF-8（实测 `end byte index 300 is not a char boundary`——把看得见的断言失败变成看不见的 panic）⇒ 全改按字符截断；`sysinfo` 首采预算 3s→5s（实测并跑 4.24s / 串行 1.3-1.7s，逐处给判别间距） | M77 |
+| C-78 | `a2cf55e` | 第 6 维 `budget_discipline` 零消耗取 NEUTRAL（实测写侧 `record_consumption` 生产调用 **0**，`DecbCostCallback` 无生产构造点）+ 两处「非空转生产调用路径」现在时态订正 + 两条测试按新语义改写（先注入真实消耗再断言） | M58（诚实降级路径） |
+| C-82 | `844671d` | `subagent_engine` 装配态订正为 **GATED-UNWIRED**（零生产构造；`chimera-cli` 内 `subagent` 0 命中）+ `dep_edge_freeze.txt` 该边加 2026-10-27 实测注记（沿该文件 mas-sched 行先例，行保留） | M62 |
+| C-69 | `1c98ae2` | `ExperienceCardBus` 四索引上界**明示豁免**：实测「谁兜底 = 没人」（上游 `add_card` 同样无上限），写清三条不淘汰理由 + 两条开工条件；零代码语义 | M54 |
   > 本表是收口时点快照；「已落地多少单」的真值源是 `git log --oneline`，不在本表登记总数。
 
 **收口时点验收读数（2026-10-27，均在 C-63/C-83 全链落地之后现取）**：
@@ -195,6 +209,9 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | T-14 | M69：格式版本字段已存在但未统一（`schema_version` u16/u16/u64 + `payload_version` u32 + `content_hash` u64 vs String） | 先只统一**声明处语义**（同一宽度 + 同一哈希类型），再议是否升为 L0-A 契约字段；不引新外部依赖（T-3 已裁） | 属破坏性变更（wire + 67 处构造点），需与 C-63 同族重派生链同批；需 target 锁与属主授权 |
 | T-16 | M72：**审计链在生产零写入**——`audit_and_execute` 生产调用 0（唯一调用方是 `tests/security/owasp_top10.rs` 17 处）；`AuditChain` 无持久化/导出 API；真实执行路径 `gqep-executor`(ExecPolicy)/`nexus-hook`(ProcessFence) 不写链 | 三选一：**A（本 ADR 默认）** 保留 C-64a、链登记 DORMANT-ONLY、红线 #2 措辞按实测收窄；B 授权把两条真实执行路径接进 seccore（改生产语义，需新 ADR + 功能回归面）；C 记 DORMANT 并同批订正 `policy.rs:320` 文本 | C-65（`verify()` 双点）**因此不在本轮实现**：空链 verify 恒真 = 装饰门，导出点不存在。任何选 B 的落地需先回答「白名单会拦掉哪些现在能跑的命令」 |
 | T-17 | M73：release `--ignored` 档在 `--jobs 1` 下仍 **LLVM OOM**（`free≈423 MB` 时；同单元在 `free≈1.9 GB` 下 10m58s 编成功）⇒ 根因是内存竞争而非代码/flags | **✅ 已出数（2026-10-27）**：单进程重跑 `rc=101`、ELAPSED 2566s、**528** 条 `test result:`、**passed=77 / failed=5**；五红全为**存量隔离项**（4 个 `#[ignore]` 态 doctest + 1 条 `#[ignore]` 标定测试 panic，逐文件 `git log` 已证无一属 C-57..C-95）⇒ 登 M74。**CI 仍绿**：去掉 `--ignored` 的 `ci.yml:809-810` 口径在 debug 下复跑全 `test result: ok` | 仍待裁的口径问题：AGENTS §7.2 第 7 步（`--ignored` 档）在 HEAD 上**永不可能转绿** ⇒ 需裁「清隔离项（`ignore`→`text`/`no_run`）or 改清单口径」；禁改 release profile（D-R2-2） |
+| T-18 | M76：`cargo audit` 在当前 advisory DB 下**大批量红**——逐字取 `audit.yml` 的 `--deny unmaintained --deny unsound` + 6 条 `--ignore` 后 **rc=1**：`36 vulnerabilities found!` + `13 denied warnings found!`（扫 700 crate 依赖），命中 13 个 crate：`quinn-proto`/`rustls`/`rustls-webpki`/`webpki-roots`/`wasmtime`/`zip`/`zstd`/`zstd-safe`/`zstd-sys`/**`tokio`（RUSTSEC-2026-0386 `AsyncFd::new` 违反 I/O safety，unsound）**/`chacha20`/`anymap2`/`unsafe-libyaml` | 二选一：**（a）**升 `quinn/rustls/wasmtime/zip/zstd/tokio` 到已修复版（需评 API 破面 + 走 G-08/契约重派生）；**（b）**按 `audit.yml` 现有惯例逐条加 `--ignore` 并写清「不可达/暂无修复/仅构建期」理由，同批改 `AGENTS §7.2` 的 ignore 清单 | 归因为**非 R2 引入**（R2 只加 dev-only `loom`，与上列 13 crate 无交集；RustSec DB 随时间新增 + 仓内版本未动 = 时间依赖存量红）；不擅加 ignore（覆盖面政策变更）、不做无验证依赖升级；同类先例见 M39/M74「门在、但没人跑它」 |
+| T-19 | M58 写侧：`budget_discipline` 的生产利用率**恒为 0** —— `record_consumption` 生产调用数 0，`DecbCostCallback` 无生产构造点（C-78 已把该维度降级为「无观测 → NEUTRAL」） | 接写侧：在现有的 `StreamSessionCompleted` 订阅循环里回算 `cost_actual_micro` → `DecbCostCallback::record_cost`（同 `omega-learner::s9_integration` 先例）；接上即删掉 C-78 的零消耗 NEUTRAL 分支 | **改生产语义**：`switch_tier` 降档与 `BudgetExceeded` 事件面会真的被触发 ⇒ 需属主授权 + 新 ADR + 「哪些现有会话会被降档」的回归面；不得以「让维度有数」为名顺手接 |
+| T-20 | M77/M78：`cargo nextest run --workspace --profile ci-fast` **rc=100**（11388 tests: 11380 passed / 8 failed / 65 skipped）；8 条逐条归因后 C-107 修掉 6 条，余 **2** 条为负载敏感 | 余 2 条（`history_wiring_test::pipeline_with_history_backfills_and_persists`、`mcp_nodes_panel_test::test_mcp_nodes_panel_no_alert_when_all_online`）按 M57/C-83 同款「轮询至收敛」改造 | 实测：单独跑 1.8s/2.2s 全绿、并跑 8s+ 才红 ⇒ 判负载敏感、非回归；`nextest` 档因此仍非绿，**收口判据仍是门集 `[SUM] mismatch=0`（D2）**，不当它是「CI 红」 |
 
 ## 6. 验证与回滚
 
