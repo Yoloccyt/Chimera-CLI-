@@ -596,6 +596,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sesa-router",
+ "session-store",
  "ssra-fusion",
  "tempfile",
  "thiserror 1.0.69",
