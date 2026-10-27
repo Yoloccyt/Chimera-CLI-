@@ -985,13 +985,22 @@ mod tests {
             })
         };
 
-        // 预热自旋 + 量「worker 空闲」基线速率,作为机器无关的判别标尺
-        for _ in 0..10_000 {
+        // 预热自旋 + 量「worker 空闲」基线速率，作为机器无关的判别标尺
+        //
+        // C-115/M78：预热点从「固定 10_000 次 yield」改成「轮询至 ticker 真的产出，
+        // 上限 10s 看门狗」。定次预热在满并行下不成立：本 runtime 只有 1 个 worker，
+        // 整个 worker 被 OS 抢走时，当前任务可以把 10_000 次 `yield_now` 全烧完而
+        // ticker 仍拿到 0 个时间片（实测全仓并跑报「ticker 未存活,本测试失去判别力」，
+        // 单独跑绿）。看门狗只区分「真挂死」与「被抢 CPU」：**基线/比例两道断言一行未动**，
+        // 判别力不降（真挂死仍红，只是晚 10s）。
+        let warm_deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while ticks.load(Ordering::Relaxed) == 0 && Instant::now() < warm_deadline {
             tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         assert!(
             ticks.load(Ordering::Relaxed) > 0,
-            "ticker 未存活,本测试失去判别力"
+            "ticker 在 10s 看门狗内仍未存活（真挂死级饥饿），本测试失去判别力"
         );
         let free_t0 = Instant::now();
         let free_start = ticks.load(Ordering::Relaxed);
