@@ -400,7 +400,11 @@ async fn test_blocked_command_appends_audit_record() {
         "拦截必须在 Merkle 链上留下一个记录(M49)"
     );
     let block = &sandbox.audit_chain.blocks[0];
-    assert_eq!(block.status, AuditRecordStatus::Failed, "拦截记录应为终态 Failed");
+    assert_eq!(
+        block.status,
+        AuditRecordStatus::Failed,
+        "拦截记录应为终态 Failed"
+    );
     assert_eq!(block.decision_chain.len(), 1, "拒绝原因应作为单个步骤入链");
     let step = &block.decision_chain[0];
     assert_eq!(step.step_type, DecisionStepType::Result);
@@ -420,9 +424,7 @@ async fn test_blocked_command_appends_audit_record() {
 #[tokio::test]
 async fn test_env_blocked_command_appends_audit_record() {
     let mut sandbox = Sandbox::with_default_policy();
-    let cmd = Command::new("echo")
-        .arg("hello")
-        .env("SECRET_KEY", "leak");
+    let cmd = Command::new("echo").arg("hello").env("SECRET_KEY", "leak");
     let result = sandbox.audit_and_execute(cmd).await;
     assert!(result.is_err(), "环境变量泄露应被拦截");
 
