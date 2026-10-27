@@ -353,6 +353,24 @@ impl Sandbox {
                 detail,
             }) => {
                 self.publish_violation(&format!("{attack_type:?}"), detail.clone());
+                // C-64a(M49):拦截必须上 Merkle 审计链。在这一步之前只有计数与
+                // 可丢的 broadcast 事件 ⇒ 「拒了就无痕」。必须在这里写而不是在
+                // `publish_violation` 里写:该方法持 `&self`,而 append_rejection 需 `&mut`。
+                // WHY 写失败不替换掉拦截结果:命令已被拒绝执行,这是安全决定;
+                //      把 CommandBlocked 降级成 AuditError 会让调用方误判为「策略引擎
+                //      故障」而可能重试/绕过。留痕失败的可见性走 warn(与同文件
+                //      `:194-196`「未注入 EventBus 时静默跳过、发布失败仅 warn」同一取舍),
+                //      并由 C-65 的启动侧 `verify()` 在下一轮暴露块数与拦截计数的偏差。
+                if let Err(audit_err) = self.audit_chain.append_rejection(
+                    &command,
+                    &format!("{attack_type:?}"),
+                    &detail,
+                ) {
+                    warn!(
+                        error = %audit_err,
+                        "拦截记录写入 Merkle 审计链失败(命令仍按拦截处理)"
+                    );
+                }
                 self.stats.record_blocked();
                 return Err(SecCoreError::CommandBlocked {
                     attack_type,
@@ -370,6 +388,19 @@ impl Sandbox {
                     "env_blocked",
                     format!("env var '{name}' matched pattern '{pattern}'"),
                 );
+                // C-64a(M49):同上——环境变量过滤拦截也必须在返回前上链。
+                // 分类用 `"env_blocked"` 与 publish_violation 里的字面同一口径,
+                // 避免观测面与审计面对同一次拦截给出两个不同的原因标签。
+                if let Err(audit_err) = self.audit_chain.append_rejection(
+                    &command,
+                    "env_blocked",
+                    &format!("env var '{name}' matched pattern '{pattern}'"),
+                ) {
+                    warn!(
+                        error = %audit_err,
+                        "环境变量拦截记录写入 Merkle 审计链失败(命令仍按拦截处理)"
+                    );
+                }
                 self.stats.record_blocked();
                 return Err(SecCoreError::EnvVarBlocked { name, pattern });
             }

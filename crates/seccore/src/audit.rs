@@ -21,7 +21,7 @@ use tracing::warn;
 
 use crate::asa::AuditResult;
 use crate::error::SecCoreError;
-use crate::types::{CommandSpec, ExecutionResult};
+use crate::types::{Command, CommandSpec, ExecutionResult};
 
 /// 审计记录状态 — pre-execution audit 模式的状态机(N5 修复)。
 ///
@@ -454,6 +454,91 @@ impl AuditChain {
         Ok(())
     }
 
+    /// 追加一条「拦截」终态记录 — 静态分析/环境变量过滤拒绝的命令(M49 / R2 C-64a)。
+    ///
+    /// WHY: `append_intent` 与 `append_intent_with_chain` 都要求 `&CommandSpec`,
+    ///      而这两条拒绝路径恰恰是「拿不到规格」的路径(`validate_command`/`validate_env`
+    ///      返回 Err 时规格从未生成)。在此之前,拦截只留下 `InterceptorStats` 计数与
+    ///      Normal 级 broadcast 事件(`sandbox.rs:349-377`),Merkle 审计链上**零痕迹**
+    ///      ⇒ 红线 #2「Merkle 审计链完整性不可篡改」当时只覆盖被放行的命令,拒绝面无留痕;
+    ///      而 broadcast 对慢消费者可丢 ⇒ 丢了就彻底无痕。
+    ///
+    /// 设计取舍(刻意零枚举变更):
+    /// - 状态用既有 `AuditRecordStatus::Failed`——其文档原文即「执行失败**或被拦截**」,
+    ///   语义本就是这一类;新增 `Blocked` 变体会扩到 L4 公共枚举并触及 4 个文件的穷尽匹配。
+    /// - 拒绝原因作为单个 `DecisionStepType::Result` 步骤入链,outcome 前缀 `blocked:`,
+    ///   与 ASA/Parliament 拒绝路径同族 ⇒ 原因被改写会改变 `decision_chain_hash`,
+    ///   进而被 `verify()` 检测(红线要求是「留痕不可篡改」,不只是「有痕」)。
+    /// - `command_hash` 覆盖的是**被拒绝的原始命令**(program + args + env),不是任何
+    ///   通过校验的规格;两者域不同,故不复用 `hash_command`。
+    ///
+    /// 与 `update_status` 一致地发布 `AuditLogged`(**零新增事件变体**,severity 编码终态),
+    /// 使「链上有新块」这一事实在观测面上同样成立。
+    ///
+    /// # 参数
+    /// - `command`:被拒绝的原始命令(不可信,零信任下原样入哈希)
+    /// - `attack_type`:拒绝分类(如 `"Injection"` / `"env_blocked"`)
+    /// - `detail`:拒绝详情(仅入 `step_hash`,不入 outcome 文本防止注入换行/控制字符)
+    ///
+    /// # 返回
+    /// - `Ok(RecordId)`:终态记录已入链
+    /// - `Err(SecCoreError::AuditError)`:哈希计算失败(理论上不会发生)
+    pub fn append_rejection(
+        &mut self,
+        command: &Command,
+        attack_type: &str,
+        detail: &str,
+    ) -> Result<RecordId, SecCoreError> {
+        let index = self.blocks.len() as u64;
+        let timestamp = Utc::now().timestamp();
+        let command_hash = hash_rejected_command(command);
+        // 终态记录无执行结果:result_hash 保持空占位(与 Failed 语义一致)
+        let result_hash = String::new();
+        let prev_hash = self.current_hash.clone();
+        let status = AuditRecordStatus::Failed;
+
+        // 拒绝原因入决策链:step_hash 覆盖 (attack_type, detail),outcome 只带分类。
+        // WHY outcome 不带 detail:outcome 是人类可读字段且参与拼接哈希,控字符会模糊
+        //      分隔边界;detail 已全部进 step_hash,取证时靠 step_hash 对拍原文。
+        let mut reason_hasher = Sha256::new();
+        reason_hasher.update(attack_type.as_bytes());
+        reason_hasher.update(b"\x00");
+        reason_hasher.update(detail.as_bytes());
+        let step_hash = hex::encode(reason_hasher.finalize());
+        let decision_chain = vec![DecisionStep {
+            step_type: DecisionStepType::Result,
+            timestamp,
+            step_hash,
+            outcome: format!("blocked:{attack_type}"),
+        }];
+        let decision_chain_hash = hash_decision_chain(&decision_chain);
+        let merkle_root = compute_block_hash(
+            index,
+            timestamp,
+            &command_hash,
+            &result_hash,
+            &prev_hash,
+            status,
+            &decision_chain_hash,
+        );
+
+        let block = AuditBlock {
+            index,
+            timestamp,
+            command_hash,
+            result_hash,
+            prev_hash,
+            merkle_root: merkle_root.clone(),
+            status,
+            decision_chain,
+        };
+
+        self.current_hash = merkle_root.clone();
+        self.blocks.push(block);
+        self.notify_audit_logged(&merkle_root, status);
+        Ok(index)
+    }
+
     /// 验证审计链完整性 — 检测任何篡改。
     ///
     /// 验证逻辑:
@@ -687,6 +772,33 @@ fn hash_command(command: &CommandSpec) -> String {
         hasher.update(k.as_bytes());
         hasher.update(b"=");
         hasher.update(v.as_bytes());
+    }
+    hex::encode(hasher.finalize())
+}
+
+/// 计算被拒绝命令的 SHA-256 哈希(M49 / C-64a)。
+///
+/// 与 `hash_command` 的区别是实质性的:那个函数吃的是**已过校验的规格**
+/// (`allowed_args`/`env_whitelist`),而拒绝路径上规格从未生成。哈希域不同
+/// ⇒ 不得复用,否则审计里会出现「根本没通过校验的命令却拥有规格哈希」的歧义。
+///
+/// WHY env 按 key 排序:`HashMap` 迭代序不稳定,不排序则同一条命令两次拒绝
+/// 会得到不同 command_hash ⇒ 审计记录不可复现、不可跨进程对拍。
+/// 分隔符与 `hash_command` 保持同一纪律(`\x00`,防拼接歧义)。
+fn hash_rejected_command(command: &Command) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(command.program.as_bytes());
+    for arg in &command.args {
+        hasher.update(b"\x00");
+        hasher.update(arg.as_bytes());
+    }
+    let mut keys: Vec<&String> = command.env.keys().collect();
+    keys.sort_unstable();
+    for k in keys {
+        hasher.update(b"\x00");
+        hasher.update(k.as_bytes());
+        hasher.update(b"=");
+        hasher.update(command.env[k].as_bytes());
     }
     hex::encode(hasher.finalize())
 }
