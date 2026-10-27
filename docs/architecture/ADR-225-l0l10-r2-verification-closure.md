@@ -146,6 +146,20 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
   | C-63b | `627e256` | `Cargo.lock` 补登 C-63 的依赖行（只 1 行；不带会被 `--locked` 构建拒） | C-63 同批 |
   | C-99 | `65e30d6` | 架构视图随新边重派生（G-70 修红：5 件视图 `--write` 重派生后 `--verify` rc=0） | C-63 同批 |
   > 本表是收口时点快照；「已落地多少单」的真值源是 `git log --oneline`，不在本表登记总数。
+
+**收口时点验收读数（2026-10-27，均在 C-63/C-83 全链落地之后现取）**：
+
+| 项 | 读数 | 与首轮对比 |
+|---|---|---|
+| 全门集 `run_gate_manifest.py` | **`[SUM] ok=129 mismatch=0 env-fail=0 unknown=0 skip=7 / 136`** | 与首轮 `ok=126 mismatch=1`、第三/四/六轮 `mismatch=0` 一致；本轮两次自造门红（G-27/G-35、G-70）均已修回 |
+| 全量测试（`--exclude chimera-e2e-tests --lib --bins --tests --jobs 2`） | **447 target / 11386 passed / 0 failed** | 首轮 447/11375/**4 failed** ⇒ target 全集相同、失败清零、通过数 +11（本轮新增断言），旧 4 条 flaky 本次全绿 |
+| CI doctest job 口径（`--doc --no-fail-fast`，无 `--ignored`） | 全 `test result: ok` | — |
+| release `--ignored` 档 | **首次真跑出数**：528 条 `test result:` / 77 passed / 5 failed（全为存量隔离项，M74） | 首轮 `test_result:` = 0（OOM，M73） |
+| 依赖双源 | `.sh` + `.ps1` 均 rc=0 | — |
+| 契约/视图派生 | `crate_contract --check` rc=0、`emit_architecture_views --verify` rc=0、`dep_edge_freeze` rc=0（157==157） | — |
+| 格式 | `cargo fmt --all` 撞 os error 206 ⇒ 逐包：seccore / session-store / chimera-cli / parliament / quest-engine / efficiency-monitor / chimera-mas 全 clean | — |
+
+> **经验沉淀（两次门红都是同一类）**：改了上游却忘重派生 ⇒ G-27/G-35（两本持锁台账行号）与 G-70（views/ 六件）会分别变红。开工前清单：`crate_contract --install` + `emit_architecture_views --write` + 行号变动时的两本台账，三者同批。
 - **C-73（M56 口径传导）已执行；入库情况经逐份 `git ls-files --error-unmatch` 实测，并**订正本 ADR 先前的一条错判**：上轮曾记为「六份 md 全被 `.gitignore:57` 排除 ⇒ 无提交可证」，该判断错。现势：
   | 文件 | tracked? | 处理 |
   |---|---|---|
