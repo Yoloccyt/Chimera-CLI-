@@ -26,6 +26,29 @@
 //!   （Week 6 SSRA 教训：broadcast 先 subscribe 再 spawn）
 //! - **Top-K 用 `select_nth_unstable_by`**: O(n) 而非 O(n log n)（红线 R8）
 //!
+//! # 索引上界：明示豁免（C-69 / M54，2026-10-27 实测后记账）
+//!
+//! 四个索引（`task_index` / `node_index` / `card_id→factor` / `error_hash→card_ids`）
+//! **无上界、无 TTL、无淘汰**；上游 `ExperienceCardSystem::add_card` 同样无上限
+//! ——即“谁兜底”的实测答案是：**目前没有人兜底**。
+//!
+//! 流量不是零：组合根 `spawn_experience_loop` 订阅 `PredictionVerified` 后由
+//! `spawn_card_generation_trigger` 里的 `ExperienceCardGenerator::generate_and_publish`
+//! 逐次投卡（按函数名定位，不引行号——行号引用不得比代码活得久，L50/C-72 同族），
+//! 所以索引增长量级 = **O(预测验证事件数)**，且高分卡同时进 Critical 旁路与双流持久化。
+//!
+//! **本单不实现淘汰**，理由是取舍而非遗忘（属主未指定路径时按方案默认走“豁免注记”）：
+//! 1. 加淘汰 = 行为变更：任一上限值都会改变“命中的卡片集合”，必须先有容量论证
+//!    与命中率回归面；而本 crate **零基准**（M54 原判仍成立，装窗 bench 未落）；
+//! 2. 索引存的是 `ExperienceCard` 的 **clone**，单卡大小与卡片字段同阶（不含 CLV 向量），
+//!    真正决定占用的是“每会话投卡数 × 卡片留存期”，而**这两项都没被测量过**；
+//! 3. 若只加上界不加淘汰策略，就等于用“静默丢弃后进的卡”换来有界，与
+//!    ADR-065 的“高分必达”语义直接冲突——那需要一个新 ADR，不是本单能兼的。
+//!
+//! ⇒ 记为本轮**已量化但未处理**的内存面缺口；开工条件（任一成立即重审）：
+//! - 拿到 `cards/turn` 与 RSS 斜率的生产读数（需观测面，不属 R2）；
+//! - 卡片生产者从“单点订阅”扩展为多路（当前仅 `PredictionVerified` 一路）。
+//!
 //! # 与 EventBus 的关系
 //!
 //! `ExperienceCardBus` 挂在 `EventBus` 之上作为**独立数据面**：
