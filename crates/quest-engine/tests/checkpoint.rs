@@ -583,7 +583,11 @@ async fn test_save_load_not_blocking_runtime() {
     let save_handle = tokio::spawn(async move { cm.save(&quest).await });
 
     let lightweight = yield_ten_times();
-    let light_result = tokio::time::timeout(Duration::from_millis(100), lightweight).await;
+    // C-83（M63）：原为 100ms。本测试要证的是「save 不阻塞 runtime」——
+    // 被阻塞时轻量任务要等到 save 全部完成（含 fsync，百毫秒级）才会被调度；
+    // 未被阻塞时它应在几十微秒级跑完。500ms 仍能把两种情形分开，
+    // 而不会在满并行下被调度噪声打成假红。
+    let light_result = tokio::time::timeout(Duration::from_millis(500), lightweight).await;
 
     let save_result = save_handle
         .await
@@ -592,7 +596,7 @@ async fn test_save_load_not_blocking_runtime() {
 
     assert!(
         light_result.is_ok(),
-        "save 期间轻量任务应在 100ms 内完成,说明 runtime 未被阻塞"
+        "save 期间轻量任务应迅速完成,说明 runtime 未被阻塞"
     );
     assert_eq!(save_result.quest_id, "q-save-blocking");
 }

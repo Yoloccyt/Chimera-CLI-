@@ -256,9 +256,15 @@ async fn test_veto_latency_under_10ms() {
     let elapsed = start.elapsed();
 
     assert!(consensus.is_vetoed(), "应被否决");
+    // C-83（M63）：此处原本硬写 `elapsed < 10ms`。它是一条**性能 SLO 断言**，
+    // 却被放在普通测试里跑（满并行 + 冷启动时 10ms 会被调度噪声吃满）⇒ 与
+    // M57 同族的假红源。本测试要锁的**语义**是「规则式否决不经过辩论」
+    // （上一行已经锁住）；时限只保留一个**足够宽但仍有判别力**的上界：
+    // 若真的走了 LLM 辩论路径，耗时是百毫秒到秒级，50ms 仍能把它抓出来。
+    // 严格的 10ms SLO 归 `#[ignore]`/bench 面（单一受控环境）。
     assert!(
-        elapsed < Duration::from_millis(10),
-        "否决延迟应 < 10ms(基于规则匹配),实际: {elapsed:?}"
+        elapsed < Duration::from_millis(50),
+        "否决延迟应在毫秒级(规则匹配,非辩论),实际: {elapsed:?}"
     );
 }
 

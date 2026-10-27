@@ -347,6 +347,11 @@ async fn test_execute_delegation_uses_acceptable_latency() {
         !results[0].success,
         "应因 acceptable_latency=50ms 超时而失败"
     );
+    // C-83（M63）审查结论：本断言的判别间距是**刻意的**，不动数值。
+    // slow_runner 睡 5s、default_timeout 10s、acceptable_latency 50ms：
+    // 走对路径时耗时 ≈ 50ms，走错（误用 default_timeout）时 ≈ 5s。
+    // 2s 位于两者中间且远离 50ms 一个量级 ⇒ 满并行下的调度噪声吃不穿它。
+    // 把它写在这里是为了防止后人“顺手收紧到接近 50ms”而重新引入 flaky。
     assert!(
         elapsed < Duration::from_secs(2),
         "应在 acceptable_latency(50ms)附近超时,而非等 default_timeout(10s),实际 {elapsed:?}"
