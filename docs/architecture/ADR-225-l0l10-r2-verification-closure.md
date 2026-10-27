@@ -132,11 +132,11 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | # | 事项 | 建议方向 | 前置 / 触发条件 |
 |---|---|---|---|
 | T-1 | C-64b `SandboxViolation` 升档八组全套 | 独立批次，单一提交 | 在途 `fuzz/fuzz_targets/harness_spec_parse.rs` 收尾 + G-115 closed/open 裁决 |
-| T-2 | M13 loom 并发正确性三态 | 落 loom（L2 两处持锁-广播首批）or 作废手册愿景行 | 业主对「R2 是否允许新外部依赖」表态 |
-| T-3 | M36/M55 `ExperienceCard` schema 版本化 | 先 L0-A 内部统一范式（`checkpoint.rs` u16 共存式 vs `event_metadata.rs` u32 serde-default 式），再议 card | 实测破面 67 处（src 32 / tests+benches 35，无 `impl Default`）；`blake3` 被 `check_l0_purity.py:72 ALLOW_DEPS={"serde","chrono","uuid","thiserror"}` 硬阻断（`Cargo.lock` 内 blake3 0 命中，sha2 已在） |
-| T-4 | M43 治理文档入库政策（方案甲窄口径反白） | 独立授权批次 | 须同批改 `check_doc_consistency.sh`/`adr_index_sync.py`/G-37 的 gitignore-skip 断言语义 |
+| T-2 | M13 loom 并发正确性三态 | **已裁（2026-10-26）：允许 loom，但仅作 dev-dependency**；在 `hcw-window` / `mlc-engine` 两处持锁-广播先例首批落地 | 前置 = 按 ADR-222 附录 §9 补四项最小性论证并另立 ADR；不优入生产二进制 |
+| T-3 | M36/M55 `ExperienceCard` schema 版本化 | **已裁：不允许新外部依赖** ⇒ 走「作废愿景行」：将十六源手册 Memory Capsule v2.1 的 `schema_version`/`content_hash` 三要素登记为本仓不采纳项，并订正两份权威文档对应章节为「设计目标未采纳」 | L0-A 内部两套范式的统一（`checkpoint.rs` u16 共存式 vs `event_metadata.rs` u32 serde-default 式）不依新 crate，仍可做；升契约破面实测 67 处（src 32 / tests+benches 35，无 `impl Default`） |
+| T-4 | M43 治理文档入库政策（方案甲窄口径反白） | 独立授权批次 | 须同批改 `check_doc_consistency.sh`/`adr_index_sync.py`/G-37 的 gitignore-skip 断言语义；边界已按 §4 的订正收窄（仅针对真未入库那批） |
 | T-5 | M48 审计导出点定位 | 启动 + 导出双点 | 若无稳定导出入口则退化「启动 + 关账」并回写本 ADR |
-| T-6 | G-135 判据口径：`impl From<第三方> for EventBusError`（`error.rs:55/68/75/82`）是否计入 | 建议计入（trait 实现在 crate 外部可见） | C-66 立门前定；计则基线 +4 站点 |
+| T-6 | G-135 判据口径：`impl From<第三方>` 是否计入 | **已裁：计入。✅ 已落地 C-89（`8407444`）**：新增 `implfrom` 位置类（ret/arg/bound/implfrom 四类齐备），台账 13→18 行，selftest 14→16 | 当场多捕出 G1 深审未报的一条泄漏 `nexus-core::error::NexusError::serde_json::implfrom` ⇒ 口径扩张非纸面动作；`rmp_serde` 两条（encode/decode）被多重集正确计为 2 行 |
 | T-7 | L01 sibling facade 单消费者翻案 | 维持观察 | G-129 only-decrease 棘轮翻案需 ADR；触发 = 装配面事故 |
 | T-8 | M16 coverage 46-crate 基线未重测 | CI nightly 出数后抬表 | 本地 llvm-cov E0463 不可代跑 |
 | T-9 | M14/M19/M20 + M44/M45/M46 性能可证伪族 | 补 bench 阈值键 / 给 SLO 找 CI 载体 / 第四表键集对等 / 十六源目标三态 | 需 CI clean-runner 取数；改 release profile 属禁区 |
@@ -148,4 +148,4 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 ## 6. 验证与回滚
 
 - **本 ADR 落档验证**：`adr_index.md` 行与磁盘实体名一致；`py -3 scripts/adr_index_sync.py` rc=0（BROKEN LINK 无 / UNINDEXED 无）；`bash scripts/check_doc_consistency.sh` rc=0。
-- **回滚**：文档面 = 删本文件 + 删 `adr_index.md` 对应行（两文件同批）。代码面按交付物 04 §3 的耦合组**整提交 revert**，禁半 revert（尤其 C-64b 八组、C-66 四件、C-63 装配链、C-61/C-62 与 C-63 的先后序）；已落地四单逆序：`8432504 → b043674 → 5af76c9 → c8fcd1c`；任何 revert 后重跑全门集 `[SUM]` + `cargo check --workspace --all-targets --jobs 2`。
+- **回滚**：文档面 = 删本文件 + 删 `adr_index.md` 对应行（两文件同批）。代码面按交付物 04 §3 的耦合组**整提交 revert**，禁半 revert（尤其 C-64b 八组、C-66/C-89 四件与台账、C-63 装配链、C-61/C-62 与 C-63 的先后序）；已落地单的逆序回滚清单见 §4 两段表格（不在此登记数值，总单数是 `git log` 的函数）；任何 revert 后重跑全门集 `[SUM]`（收口判据 = `mismatch=0`）+ `cargo check --workspace --all-targets --jobs 2`。
