@@ -164,14 +164,23 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | C-69 | `1c98ae2` | `ExperienceCardBus` 四索引上界**明示豁免**：实测「谁兜底 = 没人」（上游 `add_card` 同样无上限），写清三条不淘汰理由 + 两条开工条件；零代码语义 | M54 |
 | C-109 | `83fa7ba` | **修 C-107 自引入的 clippy 红**：65 处 `&content.chars()...collect::<String>()` 去多余 `&`（`cargo test`/`nextest`/`fmt` 全不报，只有 `clippy --all-targets -- -D warnings` 报 16 条 `useless_borrows_in_formatting` ⇒ CI「fmt · check · clippy · test」步会拦）；并把 `sysinfo` 时间断言从**负载量**改钉到**承诺量**：render < 250ms 硬管（面板设计承诺「构造即采集、render 不阻塞」），OS 采集只留实现级回退上界 15s（实测 1.3-1.7s 串行 / 4.24s 51 条并跑 / 6.40s 1765 条并跑，任何常量阈值都会产「负载红牌」） | M77 后续 / T-20 |
 | C-74 | `eaaed33` | M57 四条 flaky 的确定性改造收口 3/4，并**订正其中 3 条的归因**：`health_panel` 两条实为「断言按 En 文本写却靠同 bin 他测遗留的全局 locale」（C-107 已闭）；`mlc-engine::test_hnsw_path_rebuild_idempotent` 与时间无关，真来源是 **`HashMap` 迭代序逐进程随机 + `hnsw_rs::parallel_insert` 的 rayon 交错** ⇒ 原 `assert_eq!` 断的是实现并未承诺的性质。处置不是放宽阈值，而是把断言搬回各自成立的性质：确定性路径（`<= HNSW_SWITCH_THRESHOLD`）新增**逐条严格相等**断言（真拦累积/翻倍），近似路径只断不变量（不累积 `< first*3/2`、不清空 `> 0`）。第 4 条 `osa-coordinator::batch_yields_worker_on_multi_thread_runtime` **不动**：它已是 ADR-222 R9 速率比判据先例（阈值两侧 6x 余量、7/7 vs 3/3 实测），残留敏感度来自外部进程抢 CPU ⇒ 解法在 harness 档（T-11/T-20） | M57 |
+| C-113 | `4a9ed70` | T-20 前两条：`history_wiring` 看门狗 `build_scaled_timeout!(2.0)`→`(5.0)`（debug 20s；实测并跑烧尽 8s、单跑 2.2s）；`mcp_nodes` 心跳锚点改未来 1 小时（面板 `HEARTBEAT_TIMEOUT_SECS=5` 读**渲染时**真实时钟，原锚点把「本机调度快于 5s」当成了前提；实测并跑 7.8s 时节点被**正确地**判超时） | M78 |
+| C-114 | `667fa91` | `mcp-mesh` 事务事件用例的事务超时对齐到 30s（同文件 `make_mesh_with_servers` 早已因 v2.21.0 同款教训这么做，本用例是漏网）——原本 200ms 预算把「本机调度」当成了被测属性 | M78 |
+| C-115/116 | `72273ae`/`c934396` | T2 让出用例的**预热点**从「固定 10_000 次 yield」改成「轮询至 ticker 真的产出，10s 看门狗」（faae-router + osa-coordinator 同款；速率比判据与 10% 阈值一行未动） | M78 / T-11 |
+| C-117 | `2224db1` | `sysinfo` 刷新周期用例拆负向/正向夹具：负向用 **60s 间隔**（与负载解耦）、正向用 **50ms 间隔 + 轮询至时间戳前进**（取代 `sleep(120ms)` 熟值） | M78 |
+| C-118/120/121 | `7403810`/`7a96131`/`c2b125d` | **绝对阈值不得待在默认并行档**：ssra 的 `latency_ms<=20`、kvbsr 的 P50/P99、mlc 的 recall 三档契约，按仓内 doctrine 拆出为 `#[ignore]` 用例并登记 `ignored_test_inventory_freeze.txt`（`slo-daily`、`wired: slo-daily`），阈值改走 `perf_scale_ms`；**结构不变量（图-主表一致 / 路由计数 / 选中非空 / stale）仍留默认档** | M78 / T-20 |
+| C-119 | `3d5bed4` | faae T2 让出判据改为**累计窗口取样**（单次窗口仅 1.6ms、delta≈4，让出与不让出在这个样本量下不可区分；改为累计 ≥50ms 再算速率，判据不变） | M78 |
+| C-122 | `9286b40` | 虚拟滚动判据从「绝对 16ms」改成**自基准比值**（`t(10k)/t(64) < 20`）：虚拟滚动的承诺是「只渲染可见行」，其可观测形态是「与 N 无关」；旧断言对 O(n) 退化其实很弱、对负载却极敏感 | M78 |
+| C-123 | `c4555fd` | `quest-engine` 分解耗时 `100ms`→`2s` 数量级看门狗（分解是纯规则切分，100ms 是代理量；真回退=同步 IO/远程拆解 必越 2s） | M78 |
+| C-124 | `bcf8e1e` | **类别级修复**：`[profile.ci-fast] test-threads = 4`——消掉「自己的测试互相抢 CPU」这个变量（默认 num-cpus=8 跑 ~450 binary × 11387 用例）。实测：默认并发 535s + 每轮轮换 1 条假红；限 4 后 **11387/11387 passed，581.8s（+8.7%）** | T-20 收口 |
   > 本表是收口时点快照；「已落地多少单」的真值源是 `git log --oneline`，不在本表登记总数。
 
 **收口时点验收读数（2026-10-27，均在 C-63/C-83 全链落地之后现取）**：
 
 | 项 | 读数 | 与首轮对比 |
 |---|---|---|
-| 全门集 `run_gate_manifest.py` | **第 15 轮 `[SUM] ok=129 mismatch=0 env-fail=0 unknown=0 skip=7 / 136`（rc=0，在 C-74/C-111 落地之后；workspace 级 `check`/`clippy` 亦各自补跑 rc=0）**（第 9 轮复跑，在 C-80/C-81/C-102 之后） | 与首轮 `ok=126 mismatch=1` 对比；累计 7 次复跑均 `mismatch=0`（含本轮两次自造门红 G-27/G-35、G-70 已修回） |
-| 全量测试（`--exclude chimera-e2e-tests --lib --bins --tests --jobs 2`） | **收口末次复跑（C-107..C-110 之后）：448 target / 11388 passed / 0 failed / rc=0**；中间轮 447/11386/0 | 首轮 447/11375/**4 failed** ⇒ target 全集相同、失败清零、通过数 +11（本轮新增断言），旧 4 条 flaky 本次全绿 |
+| 全门集 `run_gate_manifest.py` | **收口末次复跑 `[SUM] ok=129 mismatch=0 env-fail=0 unknown=0 skip=7 / 136`（rc=0）**；R2 全程连续十余轮 `mismatch=0`，本轮含 C-74/C-113..C-124 十余单落地后仍为 0（第 9 轮复跑，在 C-80/C-81/C-102 之后） | 与首轮 `ok=126 mismatch=1` 对比；累计 7 次复跑均 `mismatch=0`（含本轮两次自造门红 G-27/G-35、G-70 已修回） |
+| 全量测试（`--exclude chimera-e2e-tests --lib --bins --tests --jobs 2`） | **收口末次复跑：448 target / 11387 passed / 0 failed / rc=0**（`tmp/r2-fulltest-f2.txt`）；中间轮 447/11386/0 | 首轮 447/11375/**4 failed** ⇒ target 全集相同、失败清零、通过数 +11（本轮新增断言），旧 4 条 flaky 本次全绿 |
 | heavy 门 `--with-heavy`（单独申报） | **rc=2 / `[SUM] ok=130 mismatch=0 env-fail=0 unknown=6 skip=0 / 136`**；6 条判**不可判定**（G-12/G-13/G-14/G-15/G-49/G-50），原因逐字自报：`磁盘 6.3 GB < 门槛 20 GB / 25 GB —— 不静默跳过，判不可判定` ⇒ **不得当作通过**，载体交 CI；本机 `target/` 实测 109.9 GB、Free 一度 0.00 GB |
 | heavy 逐门申报（6 条 unknown 的真因分解） | **G-12 / G-13 手工补跑取到真读数**：`cargo check --workspace --all-targets --jobs 2` → **rc=0**；`cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` → **rc=0**（4m38s）⇒ 门的 `disk_gb=20` 是**资源门槛**而非失败判据，实际编译在本机可完成（Free 6.1 GB）。**G-14**（`cargo test --workspace --jobs 4`）以 D1 口径改跑 `--jobs 2` → **448 target / 11388 passed / 0 failed / rc=0**。**G-15**（release `--ignored`）已出数 = rc=101 / 528 行 / 77 passed / **5 failed**（全为存量隔离项，M74/T-17 待裁口径）。**G-49** → rc=2：脚本内 `cargo: command not found`（bash 子环境拿不到项目内工具链 PATH）⇒ 环境载体缺口。**G-50** → rc=2：`[UNDECIDABLE] release binary 不存在: target/release/chimera`——该产物今日为**腾盘**被删（L61 处置），恢复需 `cargo build --release`（约 9 GB），本机余量不足 ⇒ 如实保持不可判定 | — |
 | CI doctest job 口径（`--doc --no-fail-fast`，无 `--ignored`） | 全 `test result: ok` | — |
@@ -179,6 +188,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | 依赖双源 | `.sh` + `.ps1` 均 rc=0 | — |
 | 契约/视图派生 | `crate_contract --check` rc=0、`emit_architecture_views --verify` rc=0、`dep_edge_freeze` rc=0（157==157） | — |
 | 依赖铁律双源 | 收口末次复跑：`.sh` **rc=0** + `.ps1` **rc=0**（`tmp/r2-deprules-sh.txt` / `tmp/r2-deprules-ps1.txt`）；四道文档门（`adr_index_sync` / `check_doc_drift` / `check_doc_consistency` / `check_gates_provenance`）**全部 rc=0** | — |
+| `cargo nextest --workspace --profile ci-fast` | **rc=0：11387 tests run / 11387 passed / 69 skipped（581.8s）**（`tmp/r2-nextest-f3.txt`，`[profile.ci-fast] test-threads = 4`）。此前默认并发下**每轮轮换 1 条假红**（8 条 → 3 条 → 2 条 → 1 条，逐条归因修掉后仍会轮换） |
 | 格式 | `cargo fmt --all` 撞 os error 206 ⇒ 逐包：seccore / session-store / chimera-cli / parliament / quest-engine / efficiency-monitor / chimera-mas 全 clean | — |
 
 > **经验沉淀（两次门红都是同一类）**：改了上游却忘重派生 ⇒ G-27/G-35（两本持锁台账行号）与 G-70（views/ 六件）会分别变红。开工前清单：`crate_contract --install` + `emit_architecture_views --write` + 行号变动时的两本台账，三者同批。
@@ -216,7 +226,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | T-17 | M73：release `--ignored` 档在 `--jobs 1` 下仍 **LLVM OOM**（`free≈423 MB` 时；同单元在 `free≈1.9 GB` 下 10m58s 编成功）⇒ 根因是内存竞争而非代码/flags | **✅ 已出数（2026-10-27）**：单进程重跑 `rc=101`、ELAPSED 2566s、**528** 条 `test result:`、**passed=77 / failed=5**；五红全为**存量隔离项**（4 个 `#[ignore]` 态 doctest + 1 条 `#[ignore]` 标定测试 panic，逐文件 `git log` 已证无一属 C-57..C-95）⇒ 登 M74。**CI 仍绿**：去掉 `--ignored` 的 `ci.yml:809-810` 口径在 debug 下复跑全 `test result: ok` | 仍待裁的口径问题：AGENTS §7.2 第 7 步（`--ignored` 档）在 HEAD 上**永不可能转绿** ⇒ 需裁「清隔离项（`ignore`→`text`/`no_run`）or 改清单口径」；禁改 release profile（D-R2-2） |
 | T-18 | M76：`cargo audit` 在当前 advisory DB 下**大批量红**——逐字取 `audit.yml` 的 `--deny unmaintained --deny unsound` + 6 条 `--ignore` 后 **rc=1**：`36 vulnerabilities found!` + `13 denied warnings found!`（扫 700 crate 依赖），命中 13 个 crate：`quinn-proto`/`rustls`/`rustls-webpki`/`webpki-roots`/`wasmtime`/`zip`/`zstd`/`zstd-safe`/`zstd-sys`/**`tokio`（RUSTSEC-2026-0386 `AsyncFd::new` 违反 I/O safety，unsound）**/`chacha20`/`anymap2`/`unsafe-libyaml` | 二选一：**（a）**升 `quinn/rustls/wasmtime/zip/zstd/tokio` 到已修复版（需评 API 破面 + 走 G-08/契约重派生）；**（b）**按 `audit.yml` 现有惯例逐条加 `--ignore` 并写清「不可达/暂无修复/仅构建期」理由，同批改 `AGENTS §7.2` 的 ignore 清单 | 归因为**非 R2 引入**（R2 只加 dev-only `loom`，与上列 13 crate 无交集；RustSec DB 随时间新增 + 仓内版本未动 = 时间依赖存量红）；不擅加 ignore（覆盖面政策变更）、不做无验证依赖升级；同类先例见 M39/M74「门在、但没人跑它」 |
 | T-19 | M58 写侧：`budget_discipline` 的生产利用率**恒为 0** —— `record_consumption` 生产调用数 0，`DecbCostCallback` 无生产构造点（C-78 已把该维度降级为「无观测 → NEUTRAL」） | 接写侧：在现有的 `StreamSessionCompleted` 订阅循环里回算 `cost_actual_micro` → `DecbCostCallback::record_cost`（同 `omega-learner::s9_integration` 先例）；接上即删掉 C-78 的零消耗 NEUTRAL 分支 | **改生产语义**：`switch_tier` 降档与 `BudgetExceeded` 事件面会真的被触发 ⇒ 需属主授权 + 新 ADR + 「哪些现有会话会被降档」的回归面；不得以「让维度有数」为名顺手接 |
-| T-20 | M77/M78：`cargo nextest run --workspace --profile ci-fast` **rc=100**（11388 tests: 11380 passed / 8 failed / 65 skipped）；8 条逐条归因后 C-107 修掉 6 条，余 **2** 条为负载敏感 | 余 2 条（`history_wiring_test::pipeline_with_history_backfills_and_persists`、`mcp_nodes_panel_test::test_mcp_nodes_panel_no_alert_when_all_online`）按 M57/C-83 同款「轮询至收敛」改造 | 实测：单独跑 1.8s/2.2s 全绿、并跑 8s+ 才红 ⇒ 判负载敏感、非回归；`nextest` 档因此仍非绿，**收口判据仍是门集 `[SUM] mismatch=0`（D2）**，不当它是「CI 红」 |
+| T-20 | M77/M78：默认并行档里的**代理量断言**与**宿主机超订** | **✅ 已收口**：8 条逐条归因并修复 7 条（locale / UTF-8 切片 / 首采预算 / 心跳锚点 / 时间断言对象 / HNSW 图质量 / 样本量），余下的「轮换红」是宿主机被自己超订 ⇒ `ci-fast` 并发限 4（C-124），复跑 **11387/11387 passed** | 后续若给 CI 换更大 runner，可重新评估 `test-threads` 取值；`slo` 档仍按 `test-threads=1` 静默态跑绝对阈值项 |
 
 ## 6. 验证与回滚
 
