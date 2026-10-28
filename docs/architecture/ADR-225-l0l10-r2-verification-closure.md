@@ -232,3 +232,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 
 - **本 ADR 落档验证**：`adr_index.md` 行与磁盘实体名一致；`py -3 scripts/adr_index_sync.py` rc=0（BROKEN LINK 无 / UNINDEXED 无）；`bash scripts/check_doc_consistency.sh` rc=0。
 - **回滚**：文档面 = 删本文件 + 删 `adr_index.md` 对应行（两文件同批）。代码面按交付物 04 §3 的耦合组**整提交 revert**，禁半 revert（尤其 C-64b 八组、C-66/C-89 四件与台账、C-63 装配链、C-61/C-62 与 C-63 的先后序）；已落地单的逆序回滚清单见 §4 两段表格（不在此登记数值，总单数是 `git log` 的函数）；任何 revert 后重跑全门集 `[SUM]`（收口判据 = `mismatch=0`）+ `cargo check --workspace --all-targets --jobs 2`。
+- **本轮（C-113..C-124）新增的耦合组**：
+  - `C-118 / C-120 / C-121`：**测试 + `scripts/ignored_test_inventory_freeze.txt` 两文件同批**——只退测试会让台账指向不存在的用例（STALE→FAIL），只退台账会让 `#[ignore]` 未登记（未登记→FAIL）；
+  - `C-124`：`.config/nextest.toml` 单文件，独立可 revert（revert 后回到「默认并发 + 轮换 1 条假红」的旧态，属预期）；
+  - `C-113..C-117 / C-119 / C-122 / C-123`：均为**单文件测试改动**，逐单独立可 revert。
