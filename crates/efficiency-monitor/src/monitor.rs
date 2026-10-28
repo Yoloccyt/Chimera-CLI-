@@ -709,7 +709,8 @@ fn handle_critical_event(
     critical_enabled: bool,
     event: &NexusEvent,
 ) {
-    // mpsc 旁路投递的是 bus.rs 侧 CRITICAL_MPSC_VARIANTS 全集（现取 17 类，不是 4 类）；本处只对其中的 4 类安全告警做即时告警过滤
+    // mpsc 旁路投递的是 bus.rs 侧 CRITICAL_MPSC_VARIANTS 全集（现取 18 类，不是 4 类）；本处对到达旁路的**每一个** Critical 事件都记一次 critical 告警并即时发布
+    // （C-64b 起 `SandboxViolation` 也在此列——沙箱拦截必须可观测，见 ADR-225 M49）。
     // WHY 不调用 record_event：避免与 broadcast 主流 double-count event 指标
     if critical_enabled {
         collectors.record_alert(AlertSeverity::Critical.as_str());
