@@ -213,9 +213,10 @@ fn test_representative_classification_pinned() {
             EventSeverity::Normal,
             EventTopic::Memory,
         ),
+        // C-64b：安全类拦截事件，Normal→Critical（与 registry 注册表同批）
         (
             "SandboxViolation",
-            EventSeverity::Normal,
+            EventSeverity::Critical,
             EventTopic::Security,
         ),
         ("SkepticVeto", EventSeverity::Critical, EventTopic::Security),

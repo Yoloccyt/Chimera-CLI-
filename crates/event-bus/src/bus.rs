@@ -59,21 +59,21 @@ pub const CRITICAL_CHANNEL_CAPACITY: usize = 4096;
 /// 熔断跳闸为不可逆 fail-closed 状态变更,丢失则治理面无从感知;升级把
 /// 「API 决定旁路」(gsoe 侧 publish_critical 无条件入旁路而定级 Normal)
 /// 的失配收敛为「分类决定旁路」的一致语义(ADR-224 D2)。
-pub const CRITICAL_MPSC_VARIANTS: usize = 17;
+pub const CRITICAL_MPSC_VARIANTS: usize = 18;
 
 /// severity() 返回 Critical 的变体总数 — D-8 口径
 ///
 /// 21 = 17(mpsc 旁路)+ 4(历史 Critical 只走 broadcast:
 /// CheckpointSaved / ConsensusReached / SlowConsumerDropped / OrphanCallDetected)。
 /// 本任务不改变 4 个历史 Critical 事件的通道归属(既定设计,推演 D-8 裁决)。
-pub const CRITICAL_TOTAL: usize = 21;
+pub const CRITICAL_TOTAL: usize = 22;
 
-/// 分片禁区声明 — 21 个 Critical 变体名清单(T12 分片时使用)
+/// 分片禁区声明 — 22 个 Critical 变体名清单(T12 分片时使用)
 ///
 /// WHY 声明但不实现:T12 分片改造(SPSC 环阵列 + 分片总线)将按此清单
 /// 禁止把 Critical 单流切片 —— Critical 分片会破坏"发布方 → 订阅方"的
 /// 全序投递语义与 mpsc 旁路免背压保证(推演 9:Critical 背压 = 死锁源)。
-/// 本任务只声明常量 + 测试守护(断言 21 个名字与 severity() Critical 清单
+/// 本任务只声明常量 + 测试守护(断言 22 个名字与 severity() Critical 清单
 /// 一一对应),不实现分片总线。
 pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
     "CheckpointSaved",
@@ -101,6 +101,8 @@ pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
     // C-13(M09): ShadowBreakerTripped 升 Critical 后进分片禁区
     // (定级与旁路双清单同批同步,registry.rs 注册表定级对齐)
     "ShadowBreakerTripped",
+    // C-64b：SandboxViolation 升 Critical 后进分片禁区（与定级、旁路同批）
+    "SandboxViolation",
 ];
 
 /// §(b.1) 裁决权外置·消费辅助:供 UI/下游**只读**提取 CertifyIssued 的 claim_ref,
@@ -126,7 +128,7 @@ impl NexusEvent {
 /// - `severity()` 是事件总线背压级别(同步函数,不依赖运行时值;
 ///   AsaIntervention 自 P1-W2.1.4 起统一返回 Critical,见 registry.rs 注册表定级)
 /// - `is_critical_mpsc_event` 是 mpsc 旁路通道判定,权威清单即下方 matches! 臂,
-///   规模锚定 [`CRITICAL_MPSC_VARIANTS`](当前 17)
+///   规模锚定 [`CRITICAL_MPSC_VARIANTS`](当前 18)
 ///
 /// WHY 单独定义:AsaIntervention 的 severity() 曾返回 Normal(P1-W2.1.4 修复前),
 /// 旁路判定因此独立于 severity() 存在;修复后两清单语义已对齐,由 D-8/R7
@@ -192,6 +194,8 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
             // 已无条件入旁路(bus.rs send_critical_mpsc),本臂使 decay 侧
             // publish_blocking 的分类路由同样命中旁路,两生产方语义收敛。
             | NexusEvent::ShadowBreakerTripped { .. }
+            // C-64b（M49 后半）：沙箱违规为安全类 Critical，拦截事件必须确保投递
+            | NexusEvent::SandboxViolation { .. }
     )
 }
 
@@ -241,7 +245,7 @@ impl DsRuntime {
 ///
 /// # Critical 事件双通道(§6.2 红线,2026-06-29)
 /// Critical 安全/治理告警事件(权威清单 = [`is_critical_mpsc_event`],
-/// 规模锚定 [`CRITICAL_MPSC_VARIANTS`],当前 17 类)额外走 mpsc 旁路通道,
+/// 规模锚定 [`CRITICAL_MPSC_VARIANTS`],当前 18 类)额外走 mpsc 旁路通道,
 /// 确保在 broadcast Lagged 场景下仍能被订阅者接收。订阅者通过
 /// [`subscribe_critical_events`](Self::subscribe_critical_events)
 /// 获取 mpsc Receiver。旁路通道按需初始化(首次订阅时创建),无订阅者时
@@ -421,7 +425,7 @@ pub struct EventBus {
 /// 供运维观测接线覆盖率。Normal 级静默丢弃,避免日志噪声。
 ///
 /// # §6.2 红线双通道(2026-06-29)
-/// Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 17 类;第三轮
+/// Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 18 类;第三轮
 /// T1.3 纠漂——旧值 14 未计入 v2.3 的 CertifyIssued/FailureRegistered)
 /// 额外走 mpsc 旁路通道,确保在 broadcast Lagged 场景下
 /// 仍能被 `subscribe_critical_events` 订阅者接收。旁路通道未初始化时
@@ -1698,7 +1702,7 @@ impl EventBus {
     ///
     /// 返回 [`CriticalSubscriberBuilder`](crate::subscriber::CriticalSubscriberBuilder)`<Unsubscribed>`,
     /// 用于订阅 §6.2 红线定义的 Critical 安全/治理告警事件(is_critical_mpsc_event
-    /// 清单,当前 17 类;第三轮 T1.3 纠漂)的 mpsc 旁路通道。
+    /// 清单,当前 18 类;第三轮 T1.3 纠漂)的 mpsc 旁路通道。
     ///
     /// 与 [`subscriber`](Self::subscriber) 区别:返回 `mpsc::Receiver` 而非 `EventReceiver`,
     /// 确保在 broadcast Lagged 场景下仍能收到 Critical 事件。
@@ -2121,7 +2125,7 @@ pub fn deserialize_json(s: &str) -> Result<NexusEvent, EventBusError> {
 /// Critical 变体构造测试辅助(D-8 口径)
 ///
 /// WHY pub(crate):shard.rs 的 Lane 判定全量断言(21 Critical → Critical)
-/// 复用本模块构造事件,避免两处维护 21 个变体构造代码漂移(新增 Critical
+/// 复用本模块构造事件,避免两处维护 22 个变体构造代码漂移(新增 Critical
 /// 事件时只需改此处一处,三处清单同步守护见 test_critical_double_list_d8_counts)。
 /// 仅测试构建存在(cfg(test)),生产零足迹。
 #[cfg(test)]
@@ -2129,9 +2133,15 @@ pub fn deserialize_json(s: &str) -> Result<NexusEvent, EventBusError> {
 pub(crate) mod tests_helpers {
     use super::*;
 
-    /// 全量 17 个 mpsc 旁路变体构造(D-8 口径,双清单同步红线)
+    /// 全量 18 个 mpsc 旁路变体构造(D-8 口径,双清单同步红线)
     pub fn all_mpsc_critical_variants() -> Vec<NexusEvent> {
         vec![
+            // C-64b（M49 后半）：沙箱违规升 Critical 后进 mpsc 旁路
+            NexusEvent::SandboxViolation {
+                metadata: EventMetadata::new("t"),
+                violation_type: "path_traversal".into(),
+                detail: "attempted /etc/passwd".into(),
+            },
             // v2.3 (b.1)/(b.4): Certify 与 FailureRegistry 进 mpsc 旁路清单(D-8 口径)
             NexusEvent::CertifyIssued {
                 metadata: EventMetadata::new("t"),
@@ -2244,9 +2254,9 @@ pub(crate) mod tests_helpers {
         ]
     }
 
-    /// 全量 21 个 severity() Critical 变体构造(D-8 口径)
+    /// 全量 22 个 severity() Critical 变体构造(D-8 口径)
     ///
-    /// 21 = 17(mpsc 旁路,见 [`all_mpsc_critical_variants`])
+    /// 22 = 18(mpsc 旁路,见 [`all_mpsc_critical_variants`])
     ///   + 4(历史 Critical 只走 broadcast:CheckpointSaved/ConsensusReached/
     ///     SlowConsumerDropped/OrphanCallDetected,按既定设计不回退通道归属)。
     pub fn all_severity_critical_variants() -> Vec<NexusEvent> {
@@ -2281,7 +2291,7 @@ pub(crate) mod tests_helpers {
 
     /// 按变体名构造 Critical 事件(供 LANE_FORBIDDEN_SHARD 逐名断言)
     ///
-    /// 名字不在 21 清单中返回 None(调用方断言消息定位漂移名字)。
+    /// 名字不在 22 清单中返回 None(调用方断言消息定位漂移名字)。
     pub fn critical_variant_by_name(name: &str) -> Option<NexusEvent> {
         all_severity_critical_variants()
             .into_iter()
@@ -2641,7 +2651,7 @@ mod tests {
             "severity() Critical 变体数必须等于 CRITICAL_TOTAL({CRITICAL_TOTAL})"
         );
 
-        // 17 个 mpsc 变体:is_critical_mpsc_event 必中 + severity() Critical
+        // 18 个 mpsc 变体:is_critical_mpsc_event 必中 + severity() Critical
         for event in &mpsc_variants {
             assert!(
                 is_critical_mpsc_event(event),
@@ -2655,7 +2665,7 @@ mod tests {
                 event.type_name()
             );
         }
-        // 21 个 Critical 变体:severity() 全部为 Critical(21 口径)
+        // 22 个 Critical 变体:severity() 全部为 Critical(21 口径)
         for event in &critical_variants {
             assert_eq!(
                 event.severity(),
@@ -2675,7 +2685,7 @@ mod tests {
             );
         }
 
-        // LANE_FORBIDDEN_SHARD 分片禁区声明:21 个名字与 Critical 清单一一对应
+        // LANE_FORBIDDEN_SHARD 分片禁区声明:22 个名字与 Critical 清单一一对应
         // WHY 双向断言:T12 分片实现将按此清单禁止切片 Critical 单流;
         // 任一方向缺失都意味着声明与实际清单漂移
         assert_eq!(
@@ -3597,10 +3607,10 @@ mod tests {
     /// OrphanCallDetected)按既定设计只走 broadcast,误捕即回潮破裂。
     #[test]
     // 函数名 exact_13_not_17 为历史标签(T17 立测时的旧规模),现值以
-    // CRITICAL_MPSC_VARIANTS=17 为准(第三轮 T1.3 注;改名留 T3)
+    // CRITICAL_MPSC_VARIANTS=18 为准(C-64b 后;改名留 T3)
     fn mpsc_bypass_exact_13_not_17() {
         let mpsc = tests_helpers::all_mpsc_critical_variants();
-        assert_eq!(mpsc.len(), CRITICAL_MPSC_VARIANTS, "17 名单规模锁定");
+        assert_eq!(mpsc.len(), CRITICAL_MPSC_VARIANTS, "18 名单规模锁定");
         for ev in &mpsc {
             assert!(
                 is_critical_mpsc_event(ev),
@@ -3632,7 +3642,7 @@ mod tests {
         );
     }
 
-    /// T17(b) 分片红线:17 个 mpsc 旁路变体全部判定为 Critical 车道(永不进分片,
+    /// T17(b) 分片红线:18 个 mpsc 旁路变体全部判定为 Critical 车道(永不进分片,
     /// 单流旁路投递)—— 分片(shard)仅服务非 Critical,与 event_lane/§11.2 对齐。
     #[test]
     fn mpsc_critical_variants_are_single_stream_never_sharded() {

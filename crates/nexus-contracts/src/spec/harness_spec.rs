@@ -25,7 +25,7 @@
 //!   配合 `gsoe-evolution` 的 `SpecRegistry` 实现谱系追踪（lineage）
 //!
 //! - **不可进化面硬编码（P4-W15.1.1）**: `ImmutableSurface` 枚举穷尽列出所有
-//!   不可进化面（8 条红线 + 18 Critical 事件 + INV-7/8/9 + 沙箱/QEEP + 验证器本身），
+//!   不可进化面（8 条红线 + 19 Critical 事件 + INV-7/8/9 + 沙箱/QEEP + 验证器本身），
 //!   `validate()` 方法拒绝任何试图修改不可进化面的 spec
 //!
 //! - **Merkle 输入规范化（P4-W15.1.1）**: `canonical_merkle_input()` 返回规范化字符串，
@@ -141,6 +141,10 @@ pub enum ImmutableSurface {
     /// 2026-10-25 随定级 Normal→Critical 升入不可进化面——不可逆 fail-closed
     /// 状态变更的通道保障必须与 spec 冻结同步，G-117/118 parity 双向对拍）
     CriticalShadowBreakerTripped,
+    /// C19: SandboxViolation（沙箱违规拦截，mpsc 旁路；C-64b/M49 后半
+    /// 2026-10-28 随定级 Normal→Critical 升入不可进化面——同上一条 C18 的
+    /// 口径：安全类 Critical 的通道保障必须与 spec 冻结同步）
+    CriticalSandboxViolation,
 
     // === INV-7/8/9 不变量 ===
     /// INV-7: chimera-mas MemoryBudgetModel 117MB 预算（130MB×0.9）
@@ -163,7 +167,7 @@ pub enum ImmutableSurface {
 
 impl ImmutableSurface {
     /// 返回所有不可进化面（用于 validate() 全集检查）
-    pub const fn all() -> [ImmutableSurface; 32] {
+    pub const fn all() -> [ImmutableSurface; 33] {
         [
             // 8 条红线
             Self::RedlineLockAcrossAwait,
@@ -193,6 +197,7 @@ impl ImmutableSurface {
             Self::CriticalCertifyIssued,
             Self::CriticalFailureRegistered,
             Self::CriticalShadowBreakerTripped,
+            Self::CriticalSandboxViolation,
             // 3 个不变量
             Self::Invariant7MemoryBudget,
             Self::Invariant8ArchiveMonotonic,
@@ -241,6 +246,7 @@ impl ImmutableSurface {
             Self::CriticalCertifyIssued => "critical-certify-issued",
             Self::CriticalFailureRegistered => "critical-failure-registered",
             Self::CriticalShadowBreakerTripped => "critical-shadow-breaker-tripped",
+            Self::CriticalSandboxViolation => "critical-sandbox-violation",
             // 3 个不变量
             Self::Invariant7MemoryBudget => "inv-7-memory-budget",
             Self::Invariant8ArchiveMonotonic => "inv-8-archive-monotonic",
@@ -282,7 +288,8 @@ impl ImmutableSurface {
             | Self::CriticalFormalVerificationFailed
             | Self::CriticalCertifyIssued
             | Self::CriticalFailureRegistered
-            | Self::CriticalShadowBreakerTripped => "critical-event",
+            | Self::CriticalShadowBreakerTripped
+            | Self::CriticalSandboxViolation => "critical-event",
 
             Self::Invariant7MemoryBudget
             | Self::Invariant8ArchiveMonotonic
@@ -992,7 +999,7 @@ impl HarnessSpec {
     /// WHY 提供: gsoe-evolution SpecRegistry（P4-W15.2）调用此方法
     /// 验证 spec 是否试图突破不可进化面。返回不可进化面全集，
     /// SpecRegistry 据此与 spec 字段引用对比
-    pub fn immutable_surfaces() -> &'static [ImmutableSurface; 32] {
+    pub fn immutable_surfaces() -> &'static [ImmutableSurface; 33] {
         &ImmutableSurface::ALL_CONST
     }
 }
@@ -1008,7 +1015,7 @@ impl ImmutableSurface {
     /// - all() 是 const fn，可在 const 上下文调用
     /// - ALL_CONST 是 const 静态关联常量，可返回 &'static 引用
     /// - immutable_surfaces() 需返回 &'static 引用，必须用 const 变量
-    pub const ALL_CONST: [ImmutableSurface; 32] = [
+    pub const ALL_CONST: [ImmutableSurface; 33] = [
         // 8 条红线
         ImmutableSurface::RedlineLockAcrossAwait,
         ImmutableSurface::RedlineRusqliteBlocking,
@@ -1037,6 +1044,7 @@ impl ImmutableSurface {
         ImmutableSurface::CriticalCertifyIssued,
         ImmutableSurface::CriticalFailureRegistered,
         ImmutableSurface::CriticalShadowBreakerTripped,
+        ImmutableSurface::CriticalSandboxViolation,
         // 3 个不变量
         ImmutableSurface::Invariant7MemoryBudget,
         ImmutableSurface::Invariant8ArchiveMonotonic,
@@ -1152,11 +1160,11 @@ mod tests {
     // ============================================================
 
     #[test]
-    fn test_immutable_surface_all_returns_32() {
-        // 验证不可进化面总数 = 32（8 红线 + 18 Critical + 3 INV + 2 沙箱/QEEP + 1 验证器；
+    fn test_immutable_surface_all_returns_33() {
+        // 验证不可进化面总数 = 33（8 红线 + 19 Critical + 3 INV + 2 沙箱/QEEP + 1 验证器；
         // C-13/M09 后 17+1=18，C18=ShadowBreakerTripped）
         let all = ImmutableSurface::all();
-        assert_eq!(all.len(), 32);
+        assert_eq!(all.len(), 33);
     }
 
     #[test]
@@ -1692,9 +1700,9 @@ mod tests {
     #[test]
     fn test_immutable_surfaces_returns_static_ref() {
         let surfaces = HarnessSpec::immutable_surfaces();
-        assert_eq!(surfaces.len(), 32);
+        assert_eq!(surfaces.len(), 33);
         // 验证返回值与 ALL_CONST 内容一致
-        // WHY 不用 std::ptr::eq: immutable_surfaces() 返回 &[T; 32] 切片引用，
+        // WHY 不用 std::ptr::eq: immutable_surfaces() 返回 &[T; 33] 切片引用，
         // 在调用点可能产生临时切片，指针比较不稳定。值相等是更可靠的检查
         assert_eq!(surfaces, &ImmutableSurface::ALL_CONST);
         // 验证包含所有不可进化面类别

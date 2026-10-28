@@ -17,7 +17,7 @@
 //! 主动路由。两者正交,合并会造成单文件双主题(维护者需跳跃理解),故独立成模块。
 //!
 //! # Lane 三车道(手册 §8.5)
-//! - `Critical`：21 个 Critical 事件（`severity() == Critical`，与
+//! - `Critical`：22 个 Critical 事件（`severity() == Critical`，与
 //!   [`crate::bus::LANE_FORBIDDEN_SHARD`] 一一对应，守护测试保证）
 //!   —— 上方数字**不是无人管的裸注释**：它由 `scripts/check_perf_redlines.py` 不变式 **I8**
 //!   机器校验必须等于 `bus::CRITICAL_TOTAL`（深审 E-7c：此处曾手工漂过 17→18，
@@ -533,7 +533,7 @@ async fn shard_worker(
 /// 5. 其余 → [`Lane::Unordered`]。
 #[must_use = "Lane 判定决定事件路由,忽略返回值将导致错误分片"]
 pub fn event_lane(event: &NexusEvent) -> Lane {
-    // 1. Critical 车道(红线:21 个 Critical 永不进分片)
+    // 1. Critical 车道(红线:22 个 Critical 永不进分片)
     if event.severity() == EventSeverity::Critical {
         return Lane::Critical;
     }
@@ -628,7 +628,7 @@ mod tests {
     #[test]
     fn test_lane_forbidden_shard_list_covers_all_critical() {
         // 红线:LANE_FORBIDDEN_SHARD 清单与 severity() Critical 一一对应
-        // (全量 21 个逐一构造断言)—— helper 复用 bus.rs 测试模块的
+        // (全量 22 个逐一构造断言)—— helper 复用 bus.rs 测试模块的
         // all_severity_critical_variants(pub(crate),D-8 口径)
         let critical_variants = super::super::bus::tests_helpers::all_severity_critical_variants();
         assert_eq!(critical_variants.len(), crate::bus::CRITICAL_TOTAL);

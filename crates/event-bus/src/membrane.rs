@@ -835,12 +835,15 @@ mod tests {
 
     #[test]
     fn test_categorize_high_risk_sandbox_violation() {
+        // C-64b（M49 后半）：SandboxViolation 由 Normal 升 Critical ⇒ categorize
+        // 依 severity 派生，从 HighRisk 变为 Critical。这是**有意的语义变更**：
+        // 拦截事件属安全类 Critical，须与 Veto/Formal 同族进入 Critical 档处理。
         let e = NexusEvent::SandboxViolation {
             metadata: EventMetadata::new("seccore"),
             violation_type: "path_traversal".into(),
             detail: "attempted /etc/passwd".into(),
         };
-        assert_eq!(MembraneFilter::categorize(&e), EventCategory::HighRisk);
+        assert_eq!(MembraneFilter::categorize(&e), EventCategory::Critical);
     }
 
     #[test]
@@ -968,13 +971,19 @@ mod tests {
             "Critical 档仅放行 Critical 事件族,MemoryWrite 应本地消化"
         );
 
-        // HighRisk 在 Critical 档被本地消化
-        let high_risk = NexusEvent::SandboxViolation {
+        // C-64b 前：SandboxViolation 属 HighRisk ⇒ Critical 档被本地消化。
+        // C-64b 后：它已是 Critical 族 ⇒ **必须 PassToCore**（这正是 M49 的
+        // 目的：超载时拦截事件不能被本地吃掉，否则攻击面无痕）。
+        let sandbox = NexusEvent::SandboxViolation {
             metadata: EventMetadata::new("seccore"),
             violation_type: "test".into(),
             detail: "attempted /etc".into(),
         };
-        assert_eq!(f.decide(&high_risk), PermeationDecision::LocalConsume);
+        assert_eq!(
+            f.decide(&sandbox),
+            PermeationDecision::PassToCore,
+            "C-64b 后 SandboxViolation 属 Critical 族，Critical 档必须放行"
+        );
     }
 
     #[test]

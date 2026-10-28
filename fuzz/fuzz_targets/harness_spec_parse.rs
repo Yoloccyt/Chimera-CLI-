@@ -63,13 +63,14 @@ fuzz_target!(|data: &[u8]| {
             );
 
             // === 目标 5: 不可进化面清单可访问 ===
-            // immutable_surfaces() 应返回固定 32 个变体（8 红线 + 18 Critical
+            // immutable_surfaces() 应返回固定 33 个变体（8 红线 + 19 Critical
             // + 3 不变量 + 2 沙箱/QEEP + 1 验证器）。
             // 口径：C-138 按代码实测校正（此前 HEAD 写 20、在途改稿写 31，均与
             // `ImmutableSurface` 实际枚举不符；真值由 `harness_spec.rs` 的
-            // `assert_eq!(surfaces.len(), 32)` 守着）。C-64b 升档后会变 33。
+            // `assert_eq!(surfaces.len(), 33)` 守着）。
+            // C-64b：SandboxViolation 升 Critical 后冻结面 +1（32→33），本断言同批改。
             let surfaces = SpecLoader::immutable_surfaces();
-            assert_eq!(surfaces.len(), 32, "不可进化面清单应固定为 32 个变体");
+            assert_eq!(surfaces.len(), 33, "不可进化面清单应固定为 33 个变体");
         }
         // 若 result 为 Err，这是预期的（畸形/恶意输入应被拒绝），不需断言
     }

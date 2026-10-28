@@ -27,8 +27,8 @@
 //!   注册表逐变体生成取元数据臂,与手写表逐字等价。
 //!
 //! # 双清单同步红线(刻意保留的人工清单)
-//! bus.rs `is_critical_mpsc_event`(17 个 mpsc 旁路变体)与
-//! `LANE_FORBIDDEN_SHARD`(21 个 Critical 变体名)**不**由本注册表生成,
+//! bus.rs `is_critical_mpsc_event`(18 个 mpsc 旁路变体)与
+//! `LANE_FORBIDDEN_SHARD`(22 个 Critical 变体名)**不**由本注册表生成,
 //! 维持独立手写清单 —— 这是设计特性而非疏漏:两张独立清单 + 守护测试
 //! 互锁(bus.rs `test_mpsc_required_events_hit_both_lists` 等)使
 //! "severity 定级"与"mpsc 旁路判定"的漂移可被双向捕获;若二者同源于
@@ -154,7 +154,10 @@ define_event_registry! {
     // 背压场景被丢弃,导致超限无人响应、Quest 持续消耗直至 OOM
     BudgetExceeded => Critical, Parliament;
     // L4 Security → L9 Quest:沙箱违规
-    SandboxViolation => Normal, Security;
+    // C-64b（M49 后半）：沙箱违规是**安全类** Critical——与 R2Freeze/Formal 同族，
+    // 拦截一旦丢失，攻击面即无痕。定级 Normal→Critical，并同批同步 bus.rs 的
+    // mpsc 旁路 / 计数 / 分片禁区三处与 spec 冻结面（G-117 parity）。
+    SandboxViolation => Critical, Security;
     // L7 Execution → L6 Router:操作产出
     OperationProduced => Normal, Execution;
     PredictionVerified => Normal, Execution;

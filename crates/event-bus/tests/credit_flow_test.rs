@@ -50,10 +50,20 @@ fn make_checkpoint_saved() -> NexusEvent {
     }
 }
 
-/// 全量 17 个 mpsc 旁路变体构造(与 bus.rs 双清单守护同源,D-8 口径;
+/// 全量 18 个 mpsc 旁路变体构造(与 bus.rs 双清单守护同源,D-8 口径;
 /// 规模锚定 bus.rs CRITICAL_MPSC_VARIANTS——历史散文曾滞后旧值 13/14)
+///
+/// ⚠ 本文件是 crate 内 `bus::tests_helpers::all_mpsc_critical_variants()` 的**复制夹具**
+/// （集成测试无法访问 cfg(test) 模块）。两处必须手工同步：C-64b 加 SandboxViolation 时
+/// 两处都要改，漏一处只会让本文件的规模断言红。
 fn all_mpsc_critical_variants() -> Vec<NexusEvent> {
     vec![
+        // C-64b：沙箱违规升 Critical 后进 mpsc 旁路（与 crate 内夹具同批）
+        NexusEvent::SandboxViolation {
+            metadata: EventMetadata::new("t"),
+            violation_type: "path_traversal".into(),
+            detail: "attempted /etc/passwd".into(),
+        },
         NexusEvent::SkepticVeto {
             metadata: EventMetadata::new("t"),
             quest_id: "q".into(),
@@ -172,13 +182,13 @@ fn all_mpsc_critical_variants() -> Vec<NexusEvent> {
 
 #[test]
 fn test_public_d8_constants_consistent() {
-    // 常量口径:17(mpsc 旁路)+ 4(历史 broadcast-only)= 21(Critical 总数)
-    assert_eq!(CRITICAL_MPSC_VARIANTS, 17);
-    assert_eq!(CRITICAL_TOTAL, 21);
-    assert_eq!(LANE_FORBIDDEN_SHARD.len(), 21, "分片禁区必须恰好 21 个名字");
-    // LANE_FORBIDDEN_SHARD 与全量 17 变体名一一覆盖(17 ⊆ 21)
+    // 常量口径(C-64b 后):18(mpsc 旁路)+ 4(历史 broadcast-only)= 22(Critical 总数)
+    assert_eq!(CRITICAL_MPSC_VARIANTS, 18);
+    assert_eq!(CRITICAL_TOTAL, 22);
+    assert_eq!(LANE_FORBIDDEN_SHARD.len(), 22, "分片禁区必须恰好 22 个名字");
+    // LANE_FORBIDDEN_SHARD 与全量 18 变体名一一覆盖(18 ⊆ 22)
     let forbidden: HashSet<&str> = LANE_FORBIDDEN_SHARD.iter().copied().collect();
-    assert_eq!(forbidden.len(), 21, "LANE_FORBIDDEN_SHARD 名字必须唯一");
+    assert_eq!(forbidden.len(), 22, "LANE_FORBIDDEN_SHARD 名字必须唯一");
     for ev in all_mpsc_critical_variants() {
         assert!(
             forbidden.contains(ev.type_name()),
@@ -440,7 +450,7 @@ async fn test_chaos_slow_consumer_critical_zero_loss() {
         bus.publish_blocking(make_event(i)).unwrap();
     }
 
-    // 3) Critical 零丢失:mpsc 旁路全部收到 17 个(有界 4096 内,不受慢消费者影响)
+    // 3) Critical 零丢失:mpsc 旁路全部收到 18 个(有界 4096 内,不受慢消费者影响)
     let mut received = Vec::with_capacity(CRITICAL_MPSC_VARIANTS);
     for _ in 0..CRITICAL_MPSC_VARIANTS {
         let ev = tokio::time::timeout(Duration::from_secs(2), critical_rx.recv())
@@ -459,14 +469,14 @@ async fn test_chaos_slow_consumer_critical_zero_loss() {
         CRITICAL_MPSC_VARIANTS,
         "慢消费者场景下 Critical 事件必须零丢失"
     );
-    // 17 个名字全部到位(去重后仍 17 —— 无重复无缺失)
+    // 18 个名字全部到位(去重后仍 18 —— 无重复无缺失)
     let unique: HashSet<&str> = received.iter().copied().collect();
     assert_eq!(
         unique.len(),
         CRITICAL_MPSC_VARIANTS,
         "全量 Critical 变体应各出现一次"
     );
-    // 与分片禁区交集:收到的正是 17 个 mpsc 变体
+    // 与分片禁区交集:收到的正是 18 个 mpsc 变体
     for name in &unique {
         assert!(
             LANE_FORBIDDEN_SHARD.contains(name),

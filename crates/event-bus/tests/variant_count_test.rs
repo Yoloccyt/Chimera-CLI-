@@ -15,7 +15,7 @@
 //! 3. **分级分布锁** `test_severity_distribution_lock` — severity() 的
 //!    Critical/Info/Normal 分布必须等于 `CRITICAL_LOCK`/`INFO_LOCK`/
 //!    `NORMAL_LOCK` 常量(数值以常量定义为权威);并与 bus.rs
-//!    `LANE_FORBIDDEN_SHARD` 的 21 个 Critical 名单双向互锁。
+//!    `LANE_FORBIDDEN_SHARD` 的 22 个 Critical 名单双向互锁。
 //!
 //! # 维护规约(新增变体时必须同步修改)
 //! - enum 新增变体 → 编译器强制修改 severity()/type_name()/topic(),
@@ -44,14 +44,15 @@ use nexus_contracts::reward::RewardSignal;
 /// L4 深度优化 P1-1:FormalVerificationFailed 升入 Critical 后 18/11/117 分布;
 /// ADR-197:+ComputePoolSaturated(Normal/System)= 152,分布 20/11/121;
 /// ADR-223 D2:+TelemetryCalibrationApplied / TelemetryReporterDegraded = 154,分布 20/11/123;
-/// C-13/M09:ShadowBreakerTripped Normal→Critical(定级升级,变体零新增)= 154,分布 21/11/122)
+/// C-13/M09:ShadowBreakerTripped Normal→Critical(定级升级,变体零新增)= 154,分布 21/11/122;
+/// C-64b: SandboxViolation Normal→Critical(同为定级升级、变体零新增)= 154,分布 22/11/121
 const VARIANT_COUNT_LOCK: usize = 154;
 /// severity 分布锁定值(Critical,与 bus.rs CRITICAL_TOTAL = 21 一致)
-const CRITICAL_LOCK: usize = 21;
+const CRITICAL_LOCK: usize = 22;
 /// severity 分布锁定值(Info)
 const INFO_LOCK: usize = 11;
 /// severity 分布锁定值(Normal)
-const NORMAL_LOCK: usize = 122;
+const NORMAL_LOCK: usize = 121;
 
 /// 变体清单第 1 段（`NexusEvent::UserIntentEncoded` … `NexusEvent::ContextWindowSwitched`，声明序连续切片）
 ///
@@ -1346,7 +1347,7 @@ fn test_severity_distribution_lock() {
 
 #[test]
 fn test_critical_set_matches_lane_forbidden_shard() {
-    // 与 bus.rs LANE_FORBIDDEN_SHARD(21 个 Critical 变体名)双向互锁:
+    // 与 bus.rs LANE_FORBIDDEN_SHARD(22 个 Critical 变体名)双向互锁:
     // severity() 的 Critical 集合 == 分片禁区名单,任何一侧漂移即失败
     let critical_names: HashSet<&str> = all_variant_samples()
         .iter()

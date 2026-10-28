@@ -969,11 +969,10 @@ pub enum EventSeverity {
 
 ### 5.4 Critical事件清单(必须走mpsc)
 
-> **双清单口径(2026-10-28 代码级复算,规模以代码常量为唯一事实源、勿抄数字)**:本表覆盖 **`severity()=Critical` 事件(共 21 个 = 17 mpsc 旁路 + 4 broadcast-only)**；
-> ⚠ 本节数字是**快照**：2026-10-28 实测为 21/17（此前误写 20/16，且名单漏了 C-13/M09 升档的 `ShadowBreakerTripped`）。
-> 待落的 C-64b（`SandboxViolation` Normal→Critical）会把它们变成 **22 = 18 + 4** —— 改时同步本节、`CRITICAL_TOTAL`、`CRITICAL_MPSC_VARIANTS` 与 `LANE_FORBIDDEN_SHARD` 四处（见 ADR-225 T-1 / M81）。
+> **双清单口径(2026-10-28 代码级复算,规模以代码常量为唯一事实源、勿抄数字)**:本表覆盖 **`severity()=Critical` 事件(共 22 个 = 18 mpsc 旁路 + 4 broadcast-only)**；
+> ⚠ 本节数字是**快照**，且**已在同一天连改两次**：C-135 先把误写的 20/16 校正为 21/17（补上漏记的 `ShadowBreakerTripped`），C-64b 又把 `SandboxViolation`（沙箱拦截）由 Normal 升为 Critical ⇒ **22 = 18 + 4**。两处常量（`CRITICAL_TOTAL` / `CRITICAL_MPSC_VARIANTS`）与 `LANE_FORBIDDEN_SHARD` 已同批对齐。
 > 权威源为 `crates/event-bus/src/registry.rs` 的 `define_event_registry!` 注册表 severity 列(单点展开生成,types.rs 保留 enum 本体,勿引行号)。
-> **mpsc 旁路清单为 severity-Critical 的子集(17 个,`bus.rs::is_critical_mpsc_event()` matches 臂唯一事实源,规模常量 `CRITICAL_MPSC_VARIANTS`=17)**:含 `SkepticVeto/RedTeamAudit/BudgetExceeded/AgentTaskFailed/AsaIntervention/AffinityQuotaExhausted/R2FreezeViolation/R2FreezeRollbackFailed/FormalViolation/VetoOverridden/R1ShadowRollbackFailed/StopRulingIssued/ErrorSignatureMatched/FormalVerificationFailed/CertifyIssued/FailureRegistered/ShadowBreakerTripped`（末项由 C-13/M09 于 2026-10-25 升入；本条此前在 16 项名单里漏记）。
+> **mpsc 旁路清单为 severity-Critical 的子集(18 个,`bus.rs::is_critical_mpsc_event()` matches 臂唯一事实源,规模常量 `CRITICAL_MPSC_VARIANTS`=18)**:含 `SkepticVeto/RedTeamAudit/BudgetExceeded/AgentTaskFailed/AsaIntervention/AffinityQuotaExhausted/R2FreezeViolation/R2FreezeRollbackFailed/FormalViolation/VetoOverridden/R1ShadowRollbackFailed/StopRulingIssued/ErrorSignatureMatched/FormalVerificationFailed/CertifyIssued/FailureRegistered/ShadowBreakerTripped/SandboxViolation`（`ShadowBreakerTripped` 由 C-13/M09 于 2026-10-25 升入、`SandboxViolation` 由 C-64b 于 2026-10-28 升入）。
 > **broadcast-only 注记**:`CheckpointSaved/ConsensusReached/SlowConsumerDropped/OrphanCallDetected` 4 个为 severity-Critical 但**不进 mpsc 旁路**(记忆/协商/慢消费者/孤儿检测语义,依赖 broadcast 重订阅恢复;总规模常量 `CRITICAL_TOTAL`=20)。历史:`VetoOverridden`/`R1ShadowRollbackFailed` 于 Phase 10 W5 补入旁路;`FormalVerificationFailed` 曾按 ADR-159 被当作 `GsoeError` 变体剔除,复证 types.rs 有其枚举变体且已定级 Critical 后纳入旁路;v2.3 Certify 体系补入 `CertifyIssued`/`FailureRegistered`(旧文档值 14 由此到 16)。
 >   **v2.10.0-omega 时点(历史)**:Critical 事件清单彼时保持 13 不变;新增 3 个
 >   **Normal 级**观测事件(`DebateCompleted` / `DelegationCompleted` /
