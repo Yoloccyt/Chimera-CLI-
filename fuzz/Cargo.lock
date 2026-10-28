@@ -1047,9 +1047,64 @@ name = "nexus-contracts"
 version = "2.29.0-omega"
 dependencies = [
  "chrono",
+ "nexus-contracts-core",
+ "nexus-contracts-mca",
+ "nexus-contracts-memory",
+ "nexus-contracts-safety",
+ "nexus-contracts-seams",
+ "nexus-contracts-sparse",
  "serde",
  "thiserror 1.0.69",
  "uuid",
+]
+
+[[package]]
+name = "nexus-contracts-core"
+version = "2.29.0-omega"
+dependencies = [
+ "chrono",
+ "serde",
+ "uuid",
+]
+
+[[package]]
+name = "nexus-contracts-mca"
+version = "2.29.0-omega"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "nexus-contracts-memory"
+version = "2.29.0-omega"
+dependencies = [
+ "chrono",
+ "nexus-contracts-core",
+ "nexus-contracts-mca",
+ "nexus-contracts-seams",
+ "serde",
+]
+
+[[package]]
+name = "nexus-contracts-safety"
+version = "2.29.0-omega"
+dependencies = [
+ "serde",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "nexus-contracts-seams"
+version = "2.29.0-omega"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "nexus-contracts-sparse"
+version = "2.29.0-omega"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -1063,12 +1118,22 @@ dependencies = [
  "hex",
  "ndarray",
  "nexus-contracts",
+ "nexus-telemetry",
  "rand 0.8.7",
  "rayon",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "nexus-telemetry"
+version = "2.29.0-omega"
+dependencies = [
+ "event-bus",
  "tokio",
  "tracing",
 ]
