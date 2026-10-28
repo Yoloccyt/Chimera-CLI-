@@ -42,9 +42,14 @@ async fn test_4_step_task_decomposition() {
     let elapsed = start.elapsed();
 
     assert_eq!(quest.tasks.len(), 4, "应分解为 4 个 Task");
+    // C-123/M78：原先断「分解耗时 < 100ms」。这条分解是**纯规则切分**（无 IO、无 LLM），
+    // 100ms 只是个「看得出很快」的代理量；而满并行档实测 **159.5ms** 越限
+    // （单跑 < 5ms）——量到的是本机负载，不是分解是否退化（L63 同类教训）。
+    // ⇒ 保留同样意图的**数量级看门狗**（2s）：真回退（例如变成同步 IO / 远程拆解）
+    // 是数量级差异，必然越过 2s；而调度拖动最多几十~几百 ms，碰不到。
     assert!(
-        elapsed.as_millis() < 100,
-        "分解耗时 {:?} 超过 100ms",
+        elapsed.as_secs_f64() < 2.0,
+        "分解耗时 {:?} 超过 2s 看门狗（纯规则切分不该达此量级，疑似引入了 IO/远程调用）",
         elapsed
     );
 
