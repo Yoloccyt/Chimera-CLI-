@@ -175,6 +175,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | C-124 | `bcf8e1e` | **类别级修复**：`[profile.ci-fast] test-threads = 4`——消掉「自己的测试互相抢 CPU」这个变量（默认 num-cpus=8 跑 ~450 binary × 11387 用例）。实测：默认并发 535s + 每轮轮换 1 条假红；限 4 后 **11387/11387 passed，581.8s（+8.7%）** | T-20 收口 |
 | C-128 | `cb18402` | 「让出行为」两条速率比用例（`osa-coordinator::batch_yields_worker_on_multi_thread_runtime`、`faae-router::t2_multi_thread_batch_does_not_starve_worker`）入 `slo-daily`：判据是「批窗口速率 / 空闲基线速率 ≥ 10%」，**该比值的可判定性以「机器不被别人占用」为前提**——超订下 ticker 与 rayon 池一起被饿，实测塌到 0.3%。静默态仍跑（`--ignored` 各 1 passed）；C-116 的预热点修复保留 | M78 / T-20 收口 |
 | C-130 | （docs-only） | **六件套终态订正**（交付物为 gitignored 本地权威源，故本行是本 ADR 侧的镜像）：去掉所有「⬜ 待执行 / 未跑」的陈旧态——`00` 的 3b/audit-fuzz/release 三行改落末次读数（含 audit **rc=1→M76/T-18**、release **528/77/5→M74**）；`02` 的 M50/M51 标 ✅（`2b70b93`/`9fdc4f3`）、M48 补「T-16 A 已执行（C-127）」、表头覆盖范围到 **L64**；`03` 的「已落地 4 单」改为指针（真值源 = `git log` + 本 ADR §4）并新增 §3「状态口径」行（**唯一未执行 = C-64b**）；`05` 记第三次订正；`01` 的 Cpt-21 标「已收口（C-127）」；`04` §1.3 的「无安全漏洞」行同步 | — |
+| C-132 | （docs-only） | **§六 两条判据从「抽查」补成「全量」**：① 格式——`cargo metadata` 取权威包清单后**逐包 `cargo fmt -p <pkg> -- --check` 全扫 47 个包**（46 crate + 根包），**bad=[] / rc=0**（此前只抽查改动过的包，且 `fmt --all` 撞 os error 206）；② 静态——`clippy --workspace --all-targets -D warnings` **终态复跑 rc=0**（在 C-127 的 seccore 生产码改动之后）。同时登记 **L65 零样本假绿**：首版扫描用正则只抓到 26/47、改用 `ConvertFrom-Json` 又在该 PS 版本下失败而变成 0 样本仍报绿 ⇒ 遍历型检查必须**打印并断言样本量** | — |
   > 本表是收口时点快照；「已落地多少单」的真值源是 `git log --oneline`，不在本表登记总数。
 
 **收口时点验收读数（2026-10-27，均在 C-63/C-83 全链落地之后现取）**：
