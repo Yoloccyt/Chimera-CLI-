@@ -1204,6 +1204,7 @@ mod tests {
     /// 强制撤 `block_in_place`:3/3 轮 FAILED(退出码 101),批窗口速率仅为基线的
     /// **0.55%~0.79%**。阈值两侧各有 >6× 余量。另注:撤补丁那三轮窗口内 `delta`
     /// 仍有 6~7 —— 裸 `delta >= 1` 在本设计下**依然空过**,故主断言只能是速率比。
+    #[ignore = "让出行为由速率比判据，需静默态单跑（宿主机不被自己的测试超订）；由 slo.yml 每日 schedule 消费（scripts/ignored_test_inventory_freeze.txt）"]
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn batch_yields_worker_on_multi_thread_runtime() {
         use std::sync::atomic::{AtomicU64, Ordering};

@@ -954,6 +954,7 @@ mod tests {
     /// 故改为**自校准速率比**:先量 worker 空闲时的自旋速率作基线,再要求批窗口
     /// 速率 ≥ 基线的 10%。实测让出时为基线的 63%~89%,不让出时仅 1.6%~2.8%,
     /// 阈值两侧各有 >8× 余量,且不随核数/主频漂移。
+    #[ignore = "让出行为由速率比判据，需静默态单跑（宿主机不被自己的测试超订）；由 slo.yml 每日 schedule 消费（scripts/ignored_test_inventory_freeze.txt）"]
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn t2_multi_thread_batch_does_not_starve_worker() {
         use std::sync::atomic::AtomicU64;

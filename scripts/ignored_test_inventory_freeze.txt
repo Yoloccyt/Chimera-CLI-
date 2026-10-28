@@ -97,3 +97,5 @@ sesa-router|crates/sesa-router/benches/router_benchmark.rs#test_enforce_sparsity
 sesa-router|crates/sesa-router/benches/router_benchmark.rs#test_mask_ops_latency_under_100us|manual-only|criterion harness=false 下 #[ignore] 为惰性属性,cargo bench 不尊重|wired: no
 nexus-core|crates/nexus-core/tests/calibration_observe_datatake.rs#calibration_observe_datatake|manual-only|WI-G6c 阶段 3 静默窗口取数驱动:需 CHIMERA_COMPUTE_CALIBRATION=observe + --ignored 手动运行(runbook 见文件头),刻意不接入自动通道|wired: no
 ssra-fusion|crates/ssra-fusion/tests/proptest.rs#test_latency_within_deadline|slo-daily|C-118/M78:绝对 ms 阈值(20ms)不得待在默认并行档——全仓 nextest 并跑下调度拖拉即可越阈(实测单跑绿);按仓内 doctrine 入每日 schedule 观测,不阻塞 PR。阈值已改走 perf_scale_ms 以支持 CHIMERA_PERF_SCALE|wired: slo-daily
+osa-coordinator|crates/osa-coordinator/src/coordinator.rs#batch_yields_worker_on_multi_thread_runtime|slo-daily|C-128/M78:让出行为只能用「批窗口速率 / 空闲基线速率 ≥ 10%」来断,而该比值在宿主机被自己超订时会整体塌陷（实测塌到 0.3%）;ADR-222 R9 设计正确,但**只在独占机器上可判定**|wired: slo-daily
+faae-router|crates/faae-router/src/router.rs#t2_multi_thread_batch_does_not_starve_worker|slo-daily|C-128/M78:与 osa 同款速率比判据(阈值 10%,实测两侧 >8x 余量);超订下不可判定|wired: slo-daily
