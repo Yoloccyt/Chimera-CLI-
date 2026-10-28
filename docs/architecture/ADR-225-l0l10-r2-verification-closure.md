@@ -173,6 +173,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | C-122 | `9286b40` | 虚拟滚动判据从「绝对 16ms」改成**自基准比值**（`t(10k)/t(64) < 20`）：虚拟滚动的承诺是「只渲染可见行」，其可观测形态是「与 N 无关」；旧断言对 O(n) 退化其实很弱、对负载却极敏感 | M78 |
 | C-123 | `c4555fd` | `quest-engine` 分解耗时 `100ms`→`2s` 数量级看门狗（分解是纯规则切分，100ms 是代理量；真回退=同步 IO/远程拆解 必越 2s） | M78 |
 | C-124 | `bcf8e1e` | **类别级修复**：`[profile.ci-fast] test-threads = 4`——消掉「自己的测试互相抢 CPU」这个变量（默认 num-cpus=8 跑 ~450 binary × 11387 用例）。实测：默认并发 535s + 每轮轮换 1 条假红；限 4 后 **11387/11387 passed，581.8s（+8.7%）** | T-20 收口 |
+| C-128 | `cb18402` | 「让出行为」两条速率比用例（`osa-coordinator::batch_yields_worker_on_multi_thread_runtime`、`faae-router::t2_multi_thread_batch_does_not_starve_worker`）入 `slo-daily`：判据是「批窗口速率 / 空闲基线速率 ≥ 10%」，**该比值的可判定性以「机器不被别人占用」为前提**——超订下 ticker 与 rayon 池一起被饿，实测塌到 0.3%。静默态仍跑（`--ignored` 各 1 passed）；C-116 的预热点修复保留 | M78 / T-20 收口 |
   > 本表是收口时点快照；「已落地多少单」的真值源是 `git log --oneline`，不在本表登记总数。
 
 **收口时点验收读数（2026-10-27，均在 C-63/C-83 全链落地之后现取）**：
@@ -180,7 +181,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | 项 | 读数 | 与首轮对比 |
 |---|---|---|
 | 全门集 `run_gate_manifest.py` | **收口末次复跑 `[SUM] ok=129 mismatch=0 env-fail=0 unknown=0 skip=7 / 136`（rc=0）**；R2 全程连续十余轮 `mismatch=0`，本轮含 C-74/C-113..C-124 十余单落地后仍为 0（第 9 轮复跑，在 C-80/C-81/C-102 之后） | 与首轮 `ok=126 mismatch=1` 对比；累计 7 次复跑均 `mismatch=0`（含本轮两次自造门红 G-27/G-35、G-70 已修回） |
-| 全量测试（`--exclude chimera-e2e-tests --lib --bins --tests --jobs 2`） | **收口末次复跑：448 target / 11387 passed / 0 failed / rc=0**（`tmp/r2-fulltest-f2.txt`）；中间轮 447/11386/0 | 首轮 447/11375/**4 failed** ⇒ target 全集相同、失败清零、通过数 +11（本轮新增断言），旧 4 条 flaky 本次全绿 |
+| 全量测试（`--exclude chimera-e2e-tests --lib --bins --tests --jobs 2`） | **末次（HEAD `cb18402`）：448 target / 11385 passed / 0 failed / rc=0**（`tmp/r2-fulltest-f4.txt`；11385 = 11387 − 2，即 C-128 移入 slo 档的两条）。中间轮 447/11386/0 | 首轮 447/11375/**4 failed** ⇒ target 全集相同、失败清零、通过数 +11（本轮新增断言），旧 4 条 flaky 本次全绿 |
 | heavy 门 `--with-heavy`（单独申报） | **rc=2 / `[SUM] ok=130 mismatch=0 env-fail=0 unknown=6 skip=0 / 136`**；6 条判**不可判定**（G-12/G-13/G-14/G-15/G-49/G-50），原因逐字自报：`磁盘 6.3 GB < 门槛 20 GB / 25 GB —— 不静默跳过，判不可判定` ⇒ **不得当作通过**，载体交 CI；本机 `target/` 实测 109.9 GB、Free 一度 0.00 GB |
 | heavy 逐门申报（6 条 unknown 的真因分解） | **G-12 / G-13 手工补跑取到真读数**：`cargo check --workspace --all-targets --jobs 2` → **rc=0**；`cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` → **rc=0**（4m38s）⇒ 门的 `disk_gb=20` 是**资源门槛**而非失败判据，实际编译在本机可完成（Free 6.1 GB）。**G-14**（`cargo test --workspace --jobs 4`）以 D1 口径改跑 `--jobs 2` → **448 target / 11388 passed / 0 failed / rc=0**。**G-15**（release `--ignored`）已出数 = rc=101 / 528 行 / 77 passed / **5 failed**（全为存量隔离项，M74/T-17 待裁口径）。**G-49** → rc=2：脚本内 `cargo: command not found`（bash 子环境拿不到项目内工具链 PATH）⇒ 环境载体缺口。**G-50** → rc=2：`[UNDECIDABLE] release binary 不存在: target/release/chimera`——该产物今日为**腾盘**被删（L61 处置），恢复需 `cargo build --release`（约 9 GB），本机余量不足 ⇒ 如实保持不可判定 | — |
 | CI doctest job 口径（`--doc --no-fail-fast`，无 `--ignored`） | 全 `test result: ok` | — |
@@ -188,7 +189,7 @@ R1（ADR-224）自陈病灶形状为「门在、但承诺面与投递面/装配�
 | 依赖双源 | `.sh` + `.ps1` 均 rc=0 | — |
 | 契约/视图派生 | `crate_contract --check` rc=0、`emit_architecture_views --verify` rc=0、`dep_edge_freeze` rc=0（157==157） | — |
 | 依赖铁律双源 | 收口末次复跑：`.sh` **rc=0** + `.ps1` **rc=0**（`tmp/r2-deprules-sh.txt` / `tmp/r2-deprules-ps1.txt`）；四道文档门（`adr_index_sync` / `check_doc_drift` / `check_doc_consistency` / `check_gates_provenance`）**全部 rc=0** | — |
-| `cargo nextest --workspace --profile ci-fast` | **rc=0：11387 tests run / 11387 passed / 69 skipped（581.8s）**（`tmp/r2-nextest-f3.txt`，`[profile.ci-fast] test-threads = 4`）。此前默认并发下**每轮轮换 1 条假红**（8 条 → 3 条 → 2 条 → 1 条，逐条归因修掉后仍会轮换） |
+| `cargo nextest --workspace --profile ci-fast` | **末次（HEAD `cb18402`）：rc=0，11385 tests run / 11385 passed / 71 skipped（630.9s）**；上一轮 11387/11387（69 skipped，581.8s）（`tmp/r2-nextest-f3.txt`，`[profile.ci-fast] test-threads = 4`）。此前默认并发下**每轮轮换 1 条假红**（8 条 → 3 条 → 2 条 → 1 条，逐条归因修掉后仍会轮换） |
 | 格式 | `cargo fmt --all` 撞 os error 206 ⇒ 逐包：seccore / session-store / chimera-cli / parliament / quest-engine / efficiency-monitor / chimera-mas 全 clean | — |
 
 > **经验沉淀（两次门红都是同一类）**：改了上游却忘重派生 ⇒ G-27/G-35（两本持锁台账行号）与 G-70（views/ 六件）会分别变红。开工前清单：`crate_contract --install` + `emit_architecture_views --write` + 行号变动时的两本台账，三者同批。
