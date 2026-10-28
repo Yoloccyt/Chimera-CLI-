@@ -11,6 +11,19 @@
 //! - **Pre-execution audit (N5 修复)**:借鉴数据库 WAL 思想,执行前先写 Intent
 //!   记录,执行后更新为 Executed/Failed。这样即使执行中崩溃或 append 失败,
 //!   审计链仍保留意图痕迹,关闭"执行成功但 append 失败导致无痕"的漏洞窗口。
+//!
+//! # 装配态：DORMANT-ONLY（R2 T-16 采纳默认路径 A，2026-10-27 实测）
+//!
+//! 本链的能力是真的，但它**在生产执行路径上零流量**，这一点必须写在文件开头而不是只写在 ADR 里：
+//! - `Sandbox::audit_and_execute` 的生产调用数 **为 0**（唯一调用方是 `tests/security/owasp_top10.rs`）；
+//! - 真实命令执行走 `gqep-executor::exec_tool_executor`（ExecPolicy）与 `nexus-hook::executor`
+//!   （ProcessFence），二者**不写本链**；
+//! - 本链无持久化/导出 API（`impl Default` 无 load 路径）。
+//!
+//! 因此红线 #2 的有效范围是「**已入链的记录不可篡改**」（C-64a 把拦截接到链上，
+//! `verify()` 能检出对 outcome 的篡改，在 OWASP 套件里真实执行），
+//! 而不是「生产的所有执行都有链」。把两条真实执行路径接进来是另一次功效变更
+//! （需新 ADR + 回归面）， 见 ADR-225 T-16 B/C。
 
 use chrono::Utc;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
