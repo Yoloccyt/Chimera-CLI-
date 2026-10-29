@@ -17,8 +17,6 @@ import sys
 import gate_rc  # F37：平铺脚本无 __main__ 可包 => 崩溃经 excepthook 退 2, 不借默认 1
 gate_rc.install()
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
 meta = subprocess.run(["cargo", "metadata", "--format-version", "1", "--no-deps"],
                       capture_output=True, text=True, encoding="utf-8", errors="replace")
 if meta.returncode != 0:

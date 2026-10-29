@@ -422,16 +422,19 @@ def except_handler_red(py_files):
 
 
 def stdio_duplicates(py_files, baseline_path=None, root=HERE):
-    """H9: the UTF-8 stdio dance lives in gate_rc, not in N copies of itself.
+    """H9: the UTF-8 stdio pin lives in gate_rc, not in N copies of itself.
 
-    Measured 2026-10-29: 31 scripts re-implement the same
-    ``sys.stdout.reconfigure(encoding="utf-8", errors="replace")`` block (H8's
-    B-F06 lineage: one fact, thirty places, each free to drift). Rewriting all
-    thirty at once would touch working gates for style, so the axis ships as an
-    **only-decrease register**: the listed files are tolerated, anything new is a
-    finding, and a listed file that no longer duplicates is STALE (the register
-    must be cleaned in the same commit that fixed it). Shrinking the list is the
-    intended direction, and each removal is verifiable on its own.
+    Detection is by **call node**, not by text: the first draft scanned for the
+    substring ``reconfigure(`` and therefore registered this very gate as a
+    duplicate, because its own docstring quotes the pattern. A detector that
+    flags prose teaches people to distrust the register, so prose and test
+    fixtures are structurally exempt (fixture below).
+
+    The axis is an **only-decrease register**: listed files are tolerated, an
+    unlisted call site is a finding, and a row whose file no longer calls
+    reconfigure is STALE (clean it in the same commit that fixed it). Shrinking
+    the list is the intended direction -- the six blocks whose gate_rc entry
+    already ran before them were deleted outright rather than rewritten.
     """
     path = baseline_path or STDIO_BASELINE
     try:
@@ -449,17 +452,19 @@ def stdio_duplicates(py_files, baseline_path=None, root=HERE):
         try:
             with open(p, encoding="utf-8", errors="replace") as fh:
                 src = fh.read()
-        except OSError:
-            continue
-        if "reconfigure(" in src:
+            tree = ast.parse(src)
+        except (OSError, SyntaxError, ValueError):
+            continue                                 # H1 COMPILE already reports it
+        if any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+               and node.func.attr == "reconfigure" for node in ast.walk(tree)):
             hits.add(rel)
 
     bad = [(f, "STDIODUP",
-            "re-implements the UTF-8 stdio block; call gate_rc.utf8_stdio() or add a "
+            "calls .reconfigure() directly; call gate_rc.utf8_stdio() or add a "
             "registered row (register: %s)" % os.path.basename(path))
            for f in sorted(hits - set(baseline))]
     bad += [(f, "STDIODUP_STALE",
-             "row registered but the file no longer duplicates stdio (delete the row)")
+             "row registered but the file no longer calls reconfigure (delete the row)")
             for f in sorted(set(baseline) - hits)]
     return bad, len(hits), "ok"
 
@@ -773,6 +778,14 @@ def selftest():
         write_reg("dup.py | registered row, still duplicating\n")
         bad, n_hits, state = stdio_duplicates(h9_files, baseline_path=reg, root=h9)
         add("H9 registered duplicate is tolerated", bad == [] and state == "ok", bad)
+        # Prose must not count as a call site: this is exactly the false positive
+        # that registered the gate itself while it documented the pattern.
+        prose = _mkdir(tmp, "h9prose", {"mentions.py":
+                                        '"""uses sys.stdout.reconfigure(encoding=...) """\n'})
+        bad, prose_hits, prose_state = stdio_duplicates(
+            [os.path.join(prose, "mentions.py")], baseline_path=reg, root=prose)
+        add("H9 counts call nodes, not text: a docstring mentioning reconfigure is not a duplicate",
+            prose_hits == 0 and prose_state == "ok", (bad, prose_hits))
         write_reg("clean.py | row outlives the code\n")
         bad, _n, _s = stdio_duplicates(h9_files, baseline_path=reg, root=h9)
         add("H9 reports the new duplicate AND the stale row (register cannot drift "

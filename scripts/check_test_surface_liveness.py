@@ -22,8 +22,6 @@ import tomllib
 import gate_rc  # 崩溃经 excepthook 退 2，不借默认 1
 gate_rc.install()
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
 FREEZE = "scripts/test_surface_freeze.txt"
 # 整 target 屏蔽的惯用写法：恒假 cfg。`cfg(all())` 是恒真，不算屏蔽。
 MUTED_RE = re.compile(r"^\s*#!\[cfg\(\s*any\(\)\s*\)\s*\]", re.M)
