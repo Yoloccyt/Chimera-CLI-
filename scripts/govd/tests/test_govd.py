@@ -547,6 +547,46 @@ class ReportCliTests(TempDirTest):
         self.assertIn("invalid choice", err.getvalue())
 
 
+class ShardTests(unittest.TestCase):
+    """--shard k/n: deterministic partitioning, or a refusal -- never a silent subset."""
+
+    def tasks(self, n, needs=()):
+        return [make_task(id="T-%d" % (i + 1), needs=needs if i == 0 else ())
+                for i in range(n)]
+
+    def test_parse_shard_accepts_only_valid_k_over_n(self):
+        self.assertIsNone(planner.parse_shard(""))
+        self.assertEqual(planner.parse_shard("2/4"), (2, 4))
+        for bad in ("5/4", "0/4", "abc", "2/0", "1"):
+            with self.assertRaises(planner.PlanError, msg=bad):
+                planner.parse_shard(bad)
+
+    def test_shards_partition_without_overlap_and_cover_everything(self):
+        tasks = self.tasks(10)
+        parts = planner.shards(tasks, 3)
+        self.assertEqual([len(p) for p in parts], [4, 3, 3])
+        ids = [t.id for p in parts for t in p]
+        self.assertEqual(sorted(ids), sorted(t.id for t in tasks))
+        self.assertEqual(len(set(ids)), len(ids))
+
+    def test_apply_shard_refuses_plans_that_declare_needs(self):
+        with self.assertRaises(planner.PlanError):
+            planner.apply_shard(self.tasks(3, needs=("T-9",)), "1/2")
+
+    def test_apply_shard_reports_an_empty_shard_instead_of_hiding_it(self):
+        selected, note = planner.apply_shard(self.tasks(2), "3/5")
+        self.assertEqual(selected, [])
+        self.assertEqual(note, "3/5")
+        whole, noteshard = planner.apply_shard(self.tasks(2), "")
+        self.assertEqual(len(whole), 2)
+        self.assertEqual(noteshard, "")
+
+    def test_shard_flag_is_parsed_by_cli(self):
+        args = cli.build_parser().parse_args(
+            ["list", "--profile", "pr", "--shard", "1/4"])
+        self.assertEqual(args.shard, "1/4")
+
+
 if __name__ == "__main__":
     # F30 dialect: an uncaught crash must exit 2, never borrow the interpreter's 1
     # (which would read as "ran and judged red" to run_gate_manifest).

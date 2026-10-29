@@ -42,3 +42,42 @@ def shards(ordered, jobs: int):
     if jobs <= 1:
         return [list(ordered)]
     return [list(ordered[i::jobs]) for i in range(jobs) if ordered[i::jobs]]
+
+
+def parse_shard(spec):
+    """`k/n` -> (k, n); empty spec means "everything".
+
+    Malformed or out-of-range specs raise PlanError so the caller exits 2: a
+    typo like `--shard 5/4` must not silently run a different subset (that is
+    the same silent-degradation family as F24's unknown-flag bug).
+    """
+    if not spec:
+        return None
+    try:
+        index, total = (int(part) for part in spec.split("/"))
+    except ValueError:
+        raise PlanError("shard must be k/n with integers, got %r" % spec)
+    if total < 1 or index < 1 or index > total:
+        raise PlanError("shard %r out of range (need 1 <= k <= n)" % spec)
+    return index, total
+
+
+def apply_shard(ordered, spec):
+    """Return (selected, note). Refuses to split a plan that has `needs` edges.
+
+    WHY refuse instead of reorder: a declared dependency can land in another
+    shard, and then the shard either skips its precondition or the ordering
+    guarantee silently stops meaning anything. Today no gate declares `needs`,
+    so the refusal costs nothing -- but it costs everything the day someone
+    adds one and CI starts sharding by default.
+    """
+    parsed = parse_shard(spec)
+    if parsed is None:
+        return ordered, ""
+    if any(task.needs for task in ordered):
+        raise PlanError("--shard cannot split a plan that declares needs edges")
+    index, total = parsed
+    parts = shards(ordered, total)
+    if index > len(parts):          # fewer gates than shards: an empty shard is
+        return [], spec             # legitimate, but it must be visible as such
+    return parts[index - 1], spec

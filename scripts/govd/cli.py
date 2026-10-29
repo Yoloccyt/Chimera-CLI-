@@ -70,10 +70,16 @@ def cmd_list(args):
         return 2
     profile = policy.profiles[args.profile]
     ordered, skipped = planner.plan(tasks, profile, args.allow_mutating)
+    try:
+        ordered, shard_note = planner.apply_shard(ordered, args.shard)
+    except planner.PlanError as exc:
+        print("[UNDECIDABLE] %s" % exc)
+        return 2
     for t in ordered:
         print("  " + t.id + " " + t.kind + " expect=" + str(t.expect))
         print("      timeout=" + str(pol.timeout_for(t, policy)) + "s " + t.cmd)
-    print(chr(91) + "SUM" + chr(93) + " selected=" + str(len(ordered)) + " total=" + str(len(tasks)) + " skipped=" + str(len(skipped)))
+    tail = (" shard=" + shard_note) if shard_note else ""
+    print(chr(91) + "SUM" + chr(93) + " selected=" + str(len(ordered)) + " total=" + str(len(tasks)) + " skipped=" + str(len(skipped)) + tail)
     return 0
 def _completed(journal_path):
     done = set()
@@ -135,6 +141,16 @@ def cmd_run(args):
         return 2
     profile = policy.profiles[args.profile]
     ordered, skipped = planner.plan(tasks, profile, args.allow_mutating)
+    try:
+        ordered, shard_note = planner.apply_shard(ordered, args.shard)
+    except planner.PlanError as exc:
+        print("UNDECIDABLE " + str(exc))
+        return 2
+    # A shard is a partial run, so its ledger must be shard-local: `skipped`
+    # (the heavy gates the profile never selected) is reported by shard 1 only,
+    # otherwise four CI jobs would each claim the whole profile's accounting.
+    owns_skipped = not shard_note or shard_note.split("/")[0] == "1"
+    reported_skipped = skipped if owns_skipped else []
 
 
     mutating = [t for t in ordered if t.mutating]
@@ -166,6 +182,7 @@ def cmd_run(args):
 
     journal.append("run_start", {"run_id": rid, "profile": args.profile,
                                  "head": meta.head, "dirty": meta.dirty,
+                                 "shard": shard_note,
                                  "selected": len(ordered), "skipped": len(skipped)})
 
 
@@ -228,12 +245,15 @@ def cmd_run(args):
         print("POLICY-VIOLATION " + ",".join(extra))
 
 
-    (journal.dir / "report.json").write_text(rp.to_json(meta, attempts, skipped), encoding="utf-8")
-    (journal.dir / "junit.xml").write_text(rp.to_junit(attempts, skipped), encoding="utf-8")
-    sha = journal.append("run_end", {"counts": dict(rp.counts(attempts, skipped))})
+    (journal.dir / "report.json").write_text(rp.to_json(meta, attempts, reported_skipped), encoding="utf-8")
+    (journal.dir / "junit.xml").write_text(rp.to_junit(attempts, reported_skipped), encoding="utf-8")
+    sha = journal.append("run_end", {"counts": dict(rp.counts(attempts, reported_skipped))})
 
 
-    summary = rp.step_summary(meta, attempts, skipped, sha)
+    summary = rp.step_summary(meta, attempts, reported_skipped, sha)
+    if shard_note:
+        summary = summary.replace("profile=" + args.profile,
+                                  "profile=" + args.profile + " shard=" + shard_note)
     (journal.dir / "summary.md").write_text(summary, encoding="utf-8")
     step = os.environ.get("GITHUB_STEP_SUMMARY")
     if step:
@@ -243,9 +263,10 @@ def cmd_run(args):
 
     store.write_latest(ROOT, rid, {"status": "done"})
     store.rebuild_index(ROOT)
-    print(rp.sum_line(attempts, skipped, len(tasks)))
+    expected = len(ordered) + len(reported_skipped)
+    print(rp.sum_line(attempts, reported_skipped, expected))
     print("run_id=" + rid)
-    rc = rp.exit_code(attempts, skipped, len(tasks))
+    rc = rp.exit_code(attempts, reported_skipped, expected)
     if cancelled:
         rc = 2  # 中断不是红门，但绝不能被读成「全绿」
     if extra:
@@ -311,6 +332,8 @@ def build_parser():
 
         s.add_argument("--allow-mutating", action="store_true")
         s.add_argument("--jobs", type=int, default=0)
+        s.add_argument("--shard", default="",
+                      help="run only shard k of n, e.g. 2/4 (deterministic round-robin)")
         s.add_argument("--resume", default="")
         s.add_argument("--report", choices=("text", "json", "junit", "all"),
                        default="all", help="CI shadow compatibility")
