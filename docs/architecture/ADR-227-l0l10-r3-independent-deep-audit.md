@@ -43,7 +43,7 @@ R2（`C-57…C-141`）已收口。R3 的目标**不是复述结论**，而是：
 | 7 | 存储与记忆 | 观察：`content_hash` 57 / `schema_version` 15 / `payload_version` 12 三套命名并存 → `R3-T02` |
 | 8 | 性能与资源 | **无违规**：I5 11rl+6slo、I6 62、I8 家族全 PASS；Top-K 形态抽样合法 |
 | 9 | 测试与门禁 | **无缺口**：129 门 OK / 7 heavy SKIP / 0 mismatch；fnlen 由 **G-48** 承载（`measured=4 / baseline=4` only-decrease） |
-| 10 | 文档一致性 | **2 处缺口**：`R3-F02`（doc-count 锚点 39/152，P2）、`R3-F06`（C-138 无档，P3） |
+| 10 | 文档一致性 | **3 处缺口**：`R3-F02`（doc-count 锚点 39/152，P2）、`R3-F06`（C-138 无档，P3）、`R3-F07`（R2 两本账条目集不一致，P3） |
 
 ## 4. 问题与撤销（完整链见交付物 02）
 
@@ -51,6 +51,7 @@ R2（`C-57…C-141`）已收口。R3 的目标**不是复述结论**，而是：
 |---|---|---|
 | `R3-F02` | **doc-count 门自己的锚点写着过期数字并以 registered drift 放行**：`DOC-AUDIT-FACTS_2026-09-20.md:175/176` = `39 crates` / `152 变体`，实测 46/154；且注册理由是「.gitignore'd」——但 `.gitignore:76` 有反白 `!docs/reports/DOC-AUDIT-FACTS_*.md`、`git ls-files` 命中 ⇒ **豁免理由基于失效前提** | **P2** |
 | `R3-F04` | 生产面 `Box<dyn>` **78**（45 为 `Fn/Future/Any`，33 为注入接缝） | **P4 记录**（见 D1） |
+| `R3-F07` | **R2 的两本账条目集不一致**：`02` 索引 53 条 vs `tmp` 登记册 59 条，11 个只在登记册、5 个只在索引 | **P3** |
 | `R3-F06` | `C-138` 提交 `d47e575` 消息无编号、ADR-225 无落地行，仅被 T-1 叙述性引用 | **P3** |
 | ~~`R3-F01`~~ | ~~「fnlen 红线无门」~~ → **撤销**：G-48 承载（`test_fnlen_smoke.sh` + `fnlen_baseline.txt`），4 条债已封 cap（生产 2：467 / 215） | 撤销 |
 | ~~`R3-F03`~~ | ~~生产面 unwrap/expect 311~~ → **撤销**：真生产面 **0**（4 处残留全部落在 `#[cfg(test)] fn`） | 撤销 |
