@@ -1,0 +1,286 @@
+"""govd CLI: list / run / verify-journal / report / resume."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+from pathlib import Path
+
+from . import __version__
+from . import manifest as mf
+from . import planner
+from . import policy as pol
+from . import report as rp
+from . import store
+from .executor import augment_path, env_fingerprint, run_attempt, usable_bash
+from .model import PROFILE_NAMES, Attempt, RunMeta, Verdict
+
+ROOT = Path(__file__).resolve().parents[2]
+MANIFEST = ROOT / "scripts" / "gate_manifest.toml"
+POLICY = ROOT / "scripts" / "govd" / "policy.toml"
+TASKS = ROOT / "scripts" / "govd" / "tasks.toml"
+
+
+def _git(args, default=""):
+    try:
+        p = subprocess.run(["git"] + args, cwd=str(ROOT), capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return default
+    return p.stdout.strip() if p.returncode == 0 else default
+
+
+def new_run_id():
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    head = _git(["rev-parse", "--short", "HEAD"], "nohead")
+    return "%s-%s-%d" % (stamp, head, os.getpid())
+
+
+def meta_for(run, profile_name, digest_value, role):
+    dirty = len([l for l in _git(["status", "--porcelain"]).splitlines() if l.strip()])
+    actor = (os.environ.get("GITHUB_ACTOR") or os.environ.get("USERNAME")
+             or os.environ.get("USER") or "unknown")
+    return RunMeta(run_id=run, profile=profile_name,
+                   started_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                   head=_git(["rev-parse", "--short", "HEAD"], "nohead"), dirty=dirty,
+                   actor=actor, host=socket.gethostname(),
+                   python=sys.version.split()[0], manifest_digest=digest_value,
+                   env_fingerprint=env_fingerprint(), role=role)
+
+
+def load_all(profile_name=""):
+    """Gates always; rust/external families only for release (ADR-228 §3.2)."""
+    tasks = list(mf.load(str(MANIFEST)))
+    if profile_name == "release":
+        tasks.extend(mf.load_tasks(str(TASKS)))
+    return mf._finalize(tuple(tasks)), pol.load(str(POLICY))
+
+
+def cmd_list(args):
+    tasks, policy = load_all(args.profile)
+    role_err = pol.role_check(policy, args.role, args.profile)
+    if role_err:
+        print("[UNDECIDABLE] %s" % role_err)
+        return 2
+    profile = policy.profiles[args.profile]
+    ordered, skipped = planner.plan(tasks, profile, args.allow_mutating)
+    for t in ordered:
+        print("  " + t.id + " " + t.kind + " expect=" + str(t.expect))
+        print("      timeout=" + str(pol.timeout_for(t, policy)) + "s " + t.cmd)
+    print(chr(91) + "SUM" + chr(93) + " selected=" + str(len(ordered)) + " total=" + str(len(tasks)) + " skipped=" + str(len(skipped)))
+    return 0
+def _completed(journal_path):
+    done = set()
+    p = Path(journal_path)
+    if not p.exists():
+        return done
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        ev = json.loads(line)
+        if ev.get("kind") == "attempt":
+            done.add(ev.get("payload", {}).get("task_id"))
+    return done
+
+
+def _execute_one(task, policy, bash_path, logs, n):
+    reason = pol.whitelist_check(policy, task.cmd)
+
+
+    if reason:
+        return Attempt(task.id, n, Verdict.LAUNCH, None, 0.0, "policy")
+
+
+    budget = pol.retry_budget(task, policy)
+    while True:
+        log = logs / (task.id + "." + str(n) + ".log")
+
+
+        attempt = run_attempt(task, str(log), pol.timeout_for(task, policy), bash_path)
+        attempt.n = n
+        if attempt.verdict.retryable and n <= budget:
+            n += 1
+            continue
+        return attempt
+
+
+def cmd_run(args):
+    tasks, policy = load_all(args.profile)
+    role_err = pol.role_check(policy, args.role, args.profile)
+    if role_err:
+
+
+        print("UNDECIDABLE " + role_err)
+        return 2
+    profile = policy.profiles[args.profile]
+    ordered, skipped = planner.plan(tasks, profile, args.allow_mutating)
+
+
+    mutating = [t for t in ordered if t.mutating]
+    before = pol.snapshot(ROOT)
+    if mutating and not args.allow_mutating:
+        print("UNDECIDABLE mutating tasks need allow-mutating")
+        return 2
+
+
+    if mutating and before:
+        print("UNDECIDABLE dirty tree; mutating tasks need a clean tree")
+        return 2
+    augment_path()
+    bash_path, bash_note = usable_bash()
+    print("bash=" + str(bash_path) + " :: " + bash_note)
+
+
+    rid = args.resume or new_run_id()
+    journal = store.Journal(ROOT, rid)
+    meta = meta_for(rid, args.profile, mf.digest(tasks), args.role)
+    done = _completed(journal.events) if args.resume else set()
+
+
+    journal.append("run_start", {"run_id": rid, "profile": args.profile,
+                                 "head": meta.head, "dirty": meta.dirty,
+                                 "selected": len(ordered), "skipped": len(skipped)})
+
+
+    free = shutil.disk_usage(str(ROOT)).free / 1024 ** 3
+    attempts = []
+    order = {t.id: i for i, t in enumerate(tasks)}
+
+    def execute(task):
+        if task.kind == "heavy" and task.disk_gb and free < task.disk_gb:
+            return Attempt(task.id, 1, Verdict.UNKNOWN, None, 0.0, "disk")
+        return _execute_one(task, policy, bash_path, journal.logs, 1)
+
+    def record(att):
+        # 逐条落盘，不是攒齐再写：Ctrl-C 之后 events.jsonl 仍能证明哪些门真的跑过。
+        # 旧写法 `list(pool.map(...))` 让整轮 run 在 journal 里只留一个 run_start，
+        # 与 Spec §3.4「已完成事件保留」直接冲突。
+        journal.attempt(att)
+        attempts.append(att)
+        print("  " + att.task_id + " " + att.verdict.value + " rc=" + str(att.rc))
+
+    pending = [t for t in ordered if t.id not in done]
+    futs = []
+    cancelled = False
+    try:
+        if args.jobs and args.jobs > 1:
+            with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+                futs = [pool.submit(execute, t) for t in pending]
+                for fut in as_completed(futs):
+                    record(fut.result())
+        else:
+            for task in pending:
+                record(execute(task))
+    except KeyboardInterrupt:
+        cancelled = True
+        for fut in futs:
+            fut.cancel()
+        journal.append("cancelled", {"done": sorted(a.task_id for a in attempts)})
+        print("CANCELLED: kept %d/%d finished attempt(s) in the journal"
+              % (len(attempts), len(pending)))
+
+    # 汇总按 manifest 序，不看完成先后：并发不能让报告顺序变成调度噪声。
+    attempts.sort(key=lambda a: order.get(a.task_id, 10 ** 9))
+
+
+    after = pol.snapshot(ROOT)
+    extra = pol.violations(before, after, policy.mutable_prefixes)
+    if extra:
+        journal.append("policy_violation", {"paths": extra})
+        print("POLICY-VIOLATION " + ",".join(extra))
+
+
+    (journal.dir / "report.json").write_text(rp.to_json(meta, attempts, skipped), encoding="utf-8")
+    (journal.dir / "junit.xml").write_text(rp.to_junit(attempts, skipped), encoding="utf-8")
+    sha = journal.append("run_end", {"counts": dict(rp.counts(attempts, skipped))})
+
+
+    summary = rp.step_summary(meta, attempts, skipped, sha)
+    (journal.dir / "summary.md").write_text(summary, encoding="utf-8")
+    step = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step:
+        with open(step, "a", encoding="utf-8") as fh:
+            fh.write(summary)
+
+
+    store.write_latest(ROOT, rid, {"status": "done"})
+    store.rebuild_index(ROOT)
+    print(rp.sum_line(attempts, skipped, len(tasks)))
+    print("run_id=" + rid)
+    rc = rp.exit_code(attempts, skipped, len(tasks))
+    if cancelled:
+        rc = 2  # 中断不是红门，但绝不能被读成「全绿」
+    if extra:
+        rc = 2
+    return rc
+
+
+def cmd_verify_journal(args):
+    rid = args.run_id or store.read_latest(ROOT)
+    if not rid:
+        print("UNDECIDABLE no run id")
+        return 2
+    path = ROOT / "tmp" / "govd" / "runs" / rid / "events.jsonl"
+    ok, n, bad, reason = store.verify(path)
+
+
+    print("journal=" + str(path))
+    print("events=" + str(n) + " bad_line=" + str(bad) + " reason=" + reason)
+    return 0 if ok else 2
+
+
+def cmd_report(args):
+    base = ROOT / "tmp" / "govd" / "runs"
+    rid = args.run_id or store.read_latest(ROOT)
+    if not rid:
+        print("UNDECIDABLE no run id")
+        return 2
+    path = base / rid / "events.jsonl"
+    if not path.exists():
+        print("UNDECIDABLE journal missing")
+        return 2
+
+
+    rows = store.rebuild_index(ROOT)
+    print("indexed=" + str(rows) + " run=" + rid)
+    print((base / rid / "summary.md").read_text(encoding="utf-8"))
+    return 0
+
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="govd")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    for name in ("list", "run"):
+        s = sub.add_parser(name)
+        s.add_argument("--profile", choices=PROFILE_NAMES, default="pr")
+        s.add_argument("--role", default="local-dev")
+
+
+        s.add_argument("--allow-mutating", action="store_true")
+        s.add_argument("--jobs", type=int, default=0)
+        s.add_argument("--resume", default="")
+        s.add_argument("--report", choices=("text", "json", "junit", "all"),
+                       default="all", help="CI shadow compatibility")
+    v = sub.add_parser("verify-journal")
+    v.add_argument("run_id", nargs="?", default="")
+    r = sub.add_parser("report")
+    r.add_argument("--run-id", default="")
+    return p
+
+
+def main(argv):
+    args = build_parser().parse_args(argv)
+    if args.cmd == "list":
+        return cmd_list(args)
+    if args.cmd == "run":
+        return cmd_run(args)
+    if args.cmd == "verify-journal":
+        return cmd_verify_journal(args)
+    return cmd_report(args)
+

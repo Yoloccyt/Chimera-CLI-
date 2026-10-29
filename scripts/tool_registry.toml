@@ -1,0 +1,401 @@
+# tool_registry.toml -- lifecycle register for scripts that are NOT gates.
+#
+# WHY: gate_manifest.toml answers "what blocks CI"; the exemptions file answers
+# "why this self-testing script is not a gate". Neither answers "what is this
+# script, who owns it, and is it still supposed to exist". Direction C of
+# check_gates_provenance.py requires every scripts/**/{py,sh,ps1} to be
+# accounted for by exactly one of: gate_manifest.toml, the exemptions file, or
+# a row below. unaccounted=0 is therefore a measured fact, not a claim.
+#
+# status semantics (ADR-228 §5):
+#   active     -- on a scheduling path today (manifest task, govd package, CI helper)
+#   diagnostic -- manual entry point, run on demand, must never block
+#   evidence   -- one-off census/audit artefact, kept as evidence only
+#   retired    -- dead; kept so history stays traceable, never executed
+#
+# Every row needs owner + evidence. A row without either is a schema error
+# (govd.manifest.validate_registry), not a silent pass.
+
+[[tool]]
+script = "scripts/audit_fnlen.py"
+status = "active"
+owner = "audit"
+evidence = "helper invoked by .github/workflows/ci.yml:589 for G-48; not a gate"
+
+[[tool]]
+script = "scripts/audit_patched_ranges.py"
+status = "evidence"
+owner = "audit"
+evidence = "从 cargo audit --json 提取\"受影响版本 / 官方修补版本\"，用于确定升级目标。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/audit_sync_negative_control.py"
+status = "evidence"
+owner = "audit"
+evidence = "scripts/audit_cmd_sync.py 的两组阴性对照（证明它自己不是假门禁）。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/bench_test_runtime.ps1"
+status = "diagnostic"
+owner = "perf"
+evidence = "bench_test_runtime.ps1 — P9-T2 测试运行时间基准采集与对比 (Windows) | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/bench_test_runtime.sh"
+status = "diagnostic"
+owner = "perf"
+evidence = "bench_test_runtime.sh — P9-T2 测试运行时间基准采集与对比 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/check_fuzz_config.ps1"
+status = "diagnostic"
+owner = "ci"
+evidence = "Chimera CLI fuzz 配置静态验证脚本(Windows / PowerShell) | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/check_fuzz_config.sh"
+status = "diagnostic"
+owner = "ci"
+evidence = "Chimera CLI fuzz 配置静态验证脚本(Linux/macOS / Bash) | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/check_r2_shadow_redlines.ps1"
+status = "diagnostic"
+owner = "governance"
+evidence = "Chimera CLI R2 Shadow 红线静态检查（P2-T10 门禁） | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/check_release_size.ps1"
+status = "diagnostic"
+owner = "release"
+evidence = "分析 chimera CLI release 构建的体积大头，输出 top N crate 体积占比。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/classify_fmt_vs_semantic.py"
+status = "diagnostic"
+owner = "tooling"
+evidence = "严格判定：哪些 dirty Rust 文件的改动 100% 由 rustfmt 产生（无夹带语义改动）。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/clean_test_temp.ps1"
+status = "diagnostic"
+owner = "infra"
+evidence = "P9-T4: Clean accumulated test temporary files to prevent I/O degradation | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/cleanup_disk_space.ps1"
+status = "diagnostic"
+owner = "infra"
+evidence = "Chimera CLI 磁盘空间诊断与清理脚本 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/cleanup_external.ps1"
+status = "diagnostic"
+owner = "infra"
+evidence = "沙箱外临时文件清理脚本(需系统 PowerShell 管理员执行) | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/cleanup_lestore_download.ps1"
+status = "diagnostic"
+owner = "infra"
+evidence = "清理 D:\\LeStoreDownload 联想应用商店下载缓存 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/count_lines.ps1"
+status = "diagnostic"
+owner = "tooling"
+evidence = "count_lines.ps1 - Count total lines of code in the project (fast pipeline) | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/count_lines.py"
+status = "diagnostic"
+owner = "tooling"
+evidence = "count_lines.py - Count total lines of code in the project | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/count_test_attrs.py"
+status = "diagnostic"
+owner = "tooling"
+evidence = "按\"测试属性宏\"分口径统计静态测试数，判定 AGENTS.md 的 11,433 静态口径是否仍成立。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/fetch_nmc_assets.ps1"
+status = "diagnostic"
+owner = "assets"
+evidence = "fetch_nmc_assets.ps1 - NMC model asset fetcher (WI-C2; ADR-196 D4 preflight) | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/fetch_nmc_assets.sh"
+status = "diagnostic"
+owner = "assets"
+evidence = "fetch_nmc_assets.sh - NMC model asset fetcher (WI-C2; ADR-196 D4 preflight) | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/fn_scan.py"
+status = "diagnostic"
+owner = "tooling"
+evidence = "no header comment (22 lines on disk) | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/generate_changelog.ps1"
+status = "diagnostic"
+owner = "release"
+evidence = "用 git-cliff 生成 CHANGELOG 初稿（辅助手写，不替代） | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/govd/__init__.py"
+status = "active"
+owner = "govd"
+evidence = "ADR-228 §3.1 govd package; exercised by scripts/govd/tests/test_govd.py"
+
+[[tool]]
+script = "scripts/govd/__main__.py"
+status = "active"
+owner = "govd"
+evidence = "ADR-228 §3.1 govd package; exercised by scripts/govd/tests/test_govd.py"
+
+[[tool]]
+script = "scripts/govd/classify.py"
+status = "active"
+owner = "govd"
+evidence = "ADR-228 §3.1 govd package; exercised by scripts/govd/tests/test_govd.py"
+
+[[tool]]
+script = "scripts/govd/cli.py"
+status = "active"
+owner = "govd"
+evidence = "ADR-228 §3.1 govd package; exercised by scripts/govd/tests/test_govd.py"
+
+[[tool]]
+script = "scripts/govd/executor.py"
+status = "active"
+owner = "govd"
+evidence = "ADR-228 §3.1 govd package; exercised by scripts/govd/tests/test_govd.py"
+
+[[tool]]
+script = "scripts/govd/manifest.py"
+status = "active"
+owner = "govd"
+evidence = "ADR-228 §3.1 govd package; exercised by scripts/govd/tests/test_govd.py"
+
+[[tool]]
+script = "scripts/govd/model.py"
+status = "active"
+owner = "govd"
+evidence = "ADR-228 §3.1 govd package; exercised by scripts/govd/tests/test_govd.py"
+
+[[tool]]
+script = "scripts/govd/planner.py"
+status = "active"
+owner = "govd"
+evidence = "ADR-228 §3.1 govd package; exercised by scripts/govd/tests/test_govd.py"
+
+[[tool]]
+script = "scripts/govd/policy.py"
+status = "active"
+owner = "govd"
+evidence = "ADR-228 §3.1 govd package; exercised by scripts/govd/tests/test_govd.py"
+
+[[tool]]
+script = "scripts/govd/report.py"
+status = "active"
+owner = "govd"
+evidence = "ADR-228 §3.1 govd package; exercised by scripts/govd/tests/test_govd.py"
+
+[[tool]]
+script = "scripts/govd/store.py"
+status = "active"
+owner = "govd"
+evidence = "ADR-228 §3.1 govd package; exercised by scripts/govd/tests/test_govd.py"
+
+[[tool]]
+script = "scripts/govd/tests/__init__.py"
+status = "active"
+owner = "govd"
+evidence = "unittest suite for scripts/govd; scheduled as E-01 in scripts/govd/tasks.toml"
+
+[[tool]]
+script = "scripts/govd/tests/test_govd.py"
+status = "active"
+owner = "govd"
+evidence = "unittest suite for scripts/govd; scheduled as E-01 in scripts/govd/tasks.toml"
+
+[[tool]]
+script = "scripts/l0_roster.py"
+status = "evidence"
+owner = "audit"
+evidence = "L0-A crate roster -- the single source of truth for \"which crates are pure | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/lru_evict_chain.py"
+status = "evidence"
+owner = "audit"
+evidence = "闭合\"push 是否经 pop_lru 逐出\"这一环，并核对 ratatui 实际调用的 LruCache 方法。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/lru_facts.py"
+status = "evidence"
+owner = "audit"
+evidence = "从 cargo metadata 取 lru 的版本约束与可用升级空间（为 ADR-167 的 A/B 裁决供事实）。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/lru_lock_facts.py"
+status = "evidence"
+owner = "audit"
+evidence = "Cargo.lock 里 lru 的全部版本与引用者（为 ADR-167 的豁免范围定界）。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/lru_reachability.py"
+status = "evidence"
+owner = "audit"
+evidence = "判定 RUSTSEC-2026-0253 的影响面是否经 ratatui 实际用到的 API 可达。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/measure_startup.ps1"
+status = "diagnostic"
+owner = "perf"
+evidence = "scripts/measure_startup.ps1 — 工具链启动/装配分段测量（性能重构 Task 0） | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/measure_unsafe.py"
+status = "diagnostic"
+owner = "perf"
+evidence = "重测 R1-T2 台账所需的 unsafe / forbid 覆盖数字（不凭记忆搬数）。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/nc_coupling.py"
+status = "evidence"
+owner = "audit"
+evidence = "audit_commit_coupling.py 的负对照 + 干净退出码复测。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/nc_d3_d4.py"
+status = "evidence"
+owner = "audit"
+evidence = "D3 / D4 两条新门禁的阴性对照（含还原校验）。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/nc_d3_d4_d5.py"
+status = "evidence"
+owner = "audit"
+evidence = "D3 / D4 / D5 三条新门禁的阴性对照（备份 → 变异 → 跑门 → 还原 → sha256 校验）。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/nc_gate_manifest.py"
+status = "evidence"
+owner = "audit"
+evidence = "manifest 负对照（v3）：统一按 LF 读写，避免 newline 双重翻译。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/nc_gate_manifest_dead.py"
+status = "evidence"
+owner = "audit"
+evidence = "负对照：证明 runner 现在能抓到\"死判据\"（引用不存在脚本的条目），且 light 模式也报。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/nc_gate_selfreport.py"
+status = "evidence"
+owner = "audit"
+evidence = "audit_gate_selfreport.py 的负对照：三条判据必须各自能独立变红。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/nc_spec_coverage.py"
+status = "evidence"
+owner = "audit"
+evidence = "audit_spec_coverage 的负对照：喂一份含\"不存在的任务/交付物\"的 Spec，必须报盲区。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/nc_spec_probe.py"
+status = "evidence"
+owner = "audit"
+evidence = "audit_phaseR_spec.py 的 T5 / Dockerfile 判定阴性对照。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/panel_facts2.py"
+status = "evidence"
+owner = "audit"
+evidence = "数准 REGISTERED_FOCUS_ORDER 长度，并定位\"25 vs 27\"注释矛盾谁对谁错。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/recover_s7_s0.py"
+status = "evidence"
+owner = "audit"
+evidence = "取回原计划 §7（数字来源台账）与 §0（冲突裁决）正文。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/recover_spec_sections.py"
+status = "evidence"
+owner = "audit"
+evidence = "从本任务 transcript 取回\"原计划 §5 红线合规自检 / §7 数字来源台账 / §0 冲突裁决\"的原文。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/run_shadow_sojourn.ps1"
+status = "diagnostic"
+owner = "governance"
+evidence = "影子双跑长跑驱动包装（P4-T7） | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/s7_relock_measure.py"
+status = "evidence"
+owner = "audit"
+evidence = "复测 Spec §7 数字来源台账里各量的当前值。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/scan_mojibake.py"
+status = "diagnostic"
+owner = "tooling"
+evidence = "扫描 CHANGELOG 中疑似 mojibake（UTF-8 被按 GBK 读后回写）残留的行。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/setup-gpg-signing.ps1"
+status = "diagnostic"
+owner = "release"
+evidence = "scripts/setup-gpg-signing.ps1 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/structure_displacement_report.py"
+status = "evidence"
+owner = "audit"
+evidence = "NexusEvent 变体数:types.rs 内 enum 体顶层 `Variant {` 计数(brace 感知)。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/t2_coupling_audit.py"
+status = "evidence"
+owner = "audit"
+evidence = "T2 批次清单的两条耦合核实（不靠断言，靠 git 事实）。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/t2_doc_paths_verify.py"
+status = "evidence"
+owner = "audit"
+evidence = "校验 phaseR-t2-commit-batches.md 点名的每个路径确实存在且被跟踪状态与文述一致。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/test_benchmark_parser.ps1"
+status = "diagnostic"
+owner = "ci"
+evidence = "P1-7 Parser Unit Test - ASCII only to avoid GBK encoding issues | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/tui_verify.ps1"
+status = "diagnostic"
+owner = "tui"
+evidence = "Chimera TUI 非交互验证脚本(遗留问题 1 的自动化前置部分)。 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/verify-p0-cleanup.ps1"
+status = "diagnostic"
+owner = "release"
+evidence = "scripts/verify-p0-cleanup.ps1 | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/verify_docker_locally.ps1"
+status = "diagnostic"
+owner = "release"
+evidence = "Chimera CLI 本地 Docker 镜像验证脚本(Windows / PowerShell) | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/verify_docker_locally.sh"
+status = "diagnostic"
+owner = "release"
+evidence = "Chimera CLI 本地 Docker 镜像验证脚本(Linux/macOS / Bash) | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"

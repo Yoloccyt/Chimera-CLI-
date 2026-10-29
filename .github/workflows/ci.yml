@@ -147,6 +147,17 @@ jobs:
           python3 scripts/check_pub_api_leak.py --selftest
           python3 scripts/check_pub_api_leak.py
 
+      # WHY: G-137/G-138 把「清单 vs CI 两个执行面」和「清单自身 schema」变成机器门
+      # (ADR-228 3.6, PYG-F01)。此前 136 门清单与 108 个硬编码 CI 步骤无人对拍，
+      # 一条门可以从 CI 静默消失而清单仍显示已登记；v2 字段写错也只在调度器跑到一半时崩。
+      # 先跑 selftest 证门有牙，再跑真实裁决。
+      - name: Manifest schema + CI parity (G-137..G-140)
+        run: |
+          python3 scripts/check_manifest_schema.py --selftest
+          python3 scripts/check_manifest_schema.py
+          python3 scripts/check_ci_manifest_parity.py --selftest
+          python3 scripts/check_ci_manifest_parity.py
+
       # WHY: PowerShell 5.1 parity 守门(ADR-198 G-85)——本仓将 .ps1 定位为
       # “Windows 权威执行体”，但 CI 与 gate_manifest 均以 pwsh（默认 UTF-8）调用，
       # 而无 BOM 且含非 ASCII 的文件在 5.1 下会按 ANSI 解码。2026-10-02 实测：
@@ -950,3 +961,36 @@ jobs:
       # 退出码:0=通过 / 1=超阈值 / 2=脚本错误
       - name: repo-wiki benchmark threshold check (10K)
         run: bash scripts/check_repo_wiki_benchmark.sh
+
+  # ============================================================
+  # governance-shadow — govd pr profile, deliberately non-blocking (ADR-228 §3.6 / I7)
+  # WHY: the 108 hard-coded steps above are the legacy execution surface. Before
+  # retiring any of them, run the same 133 light gates through govd for 3 green
+  # runs (continue-on-error) and compare [SUM]/JUnit artifacts. Only then flip
+  # this job to blocking and delete steps in batches. `--report junit` is
+  # accepted for forward compatibility; govd always writes report.json/junit.xml.
+  # ============================================================
+  governance-shadow:
+    name: govd pr shadow (non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: govd pr profile (133 light gates)
+        run: python3 -m scripts.govd run --profile pr --jobs 4 --report junit
+
+      - name: Upload govd run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: govd-shadow
+          path: tmp/govd/runs/**/*
+          if-no-files-found: warn

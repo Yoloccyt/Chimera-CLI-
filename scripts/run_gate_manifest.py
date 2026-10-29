@@ -162,14 +162,46 @@ def classify(rc, expect, log_text, cmd):
 
 
 KNOWN_FLAGS = ("--selftest", "--list", "--with-heavy")
+ENGINES = ("legacy", "govd")
 USAGE = ("用法: py -3 scripts/run_gate_manifest.py [--list] [--selftest] [--with-heavy]\n"
+         "                              [--engine legacy|govd]\n"
          "  无参数 = 跑全部 light 判据（heavy 需显式 --with-heavy）\n"
+         "  --engine govd = 默认：同一清单交给 scripts.govd 执行（--engine legacy 保留回滚面）\n"
          "  ⚠ 未知参数不再静默降级为「跑全部」，而是退 2（不可判定）")
+
+
+def engine_of(argv):
+    """Return (engine, error). govd is now the default after the 133-gate A/B parity.
+
+    `--engine legacy` remains as the one-version rollback surface; it is no
+    longer the silent default, because a silent legacy path is how the two
+    execution planes drifted apart in the first place.
+    """
+    for i, arg in enumerate(argv):
+        if arg == "--engine":
+            if i + 1 >= len(argv):
+                return None, "--engine needs a value"
+            return argv[i + 1], None
+        if arg.startswith("--engine="):
+            return arg.split("=", 1)[1], None
+    return "govd", None
 
 
 def unknown_flags(argv):
     """返回本工具不认识的参数。空列表才算"调用方式合法"。"""
-    return [a for a in argv if a not in KNOWN_FLAGS]
+    out, skip = [], False
+    for arg in argv:
+        if skip:
+            skip = False
+            continue
+        if arg == "--engine":
+            skip = True
+            continue
+        if arg.startswith("--engine="):
+            continue
+        if arg not in KNOWN_FLAGS:
+            out.append(arg)
+    return out
 
 
 def is_launcher_absent(err: OSError) -> bool:
@@ -230,12 +262,27 @@ def mode_selftest():
         ("flags-help-unknown", ["--help"], 1),
         ("flags-typo", ["--lit"], 1),
         ("flags-positional", ["gate"], 1),
+        ("flags-engine-value", ["--engine", "govd"], 0),
+        ("flags-engine-equals", ["--engine=govd"], 0),
     ]
     for name, argv_in, want_unknown in flag_cases:
         got = len(unknown_flags(argv_in))
         ok = got == want_unknown
         fails += 0 if ok else 1
         print(f"  [{'PASS' if ok else 'FAIL'}] selftest-{name} (want_unknown={want_unknown} got={got})")
+    # --engine 的值本身也要有夹具：未知引擎必须退 2，不得悄悄回落到 legacy。
+    engine_cases = [
+        ("engine-default", [], "govd", False),
+        ("engine-explicit", ["--engine", "govd"], "govd", False),
+        ("engine-equals", ["--engine=govd"], "govd", False),
+        ("engine-missing-value", ["--engine"], None, True),
+    ]
+    for name, argv_in, want_engine, want_err in engine_cases:
+        got_engine, got_err = engine_of(argv_in)
+        ok = got_engine == want_engine and bool(got_err) == want_err
+        fails += 0 if ok else 1
+        print(f"  [{'PASS' if ok else 'FAIL'}] selftest-{name} "
+              f"(want_engine={want_engine} got={got_engine} err={got_err!r})")
     # F33: 判决的**顺序**也要有夹具 —— 只看分类器有牙不够, expect=1 的门崩掉时必须
     # 落进 env 而不是 ok, 否则台账上是一次静默假绿（这条正是本轮实测到的形状）。
     verdict_cases = [
@@ -253,7 +300,7 @@ def mode_selftest():
         ok = got == want
         fails += 0 if ok else 1
         print(f"  [{'PASS' if ok else 'FAIL'}] selftest-{name} (want={want} got={got})")
-    total = len(cases) + len(launcher_cases) + len(flag_cases) + len(verdict_cases)
+    total = (len(cases) + len(launcher_cases) + len(flag_cases) + len(engine_cases) + len(verdict_cases))
     print(f"  RESULT: {'FAIL' if fails else 'PASS'} ({fails}/{total} assertion(s) violated)")
     return 1 if fails else 0
 
@@ -327,6 +374,25 @@ def usable_bash():
     return None, "; ".join(rejected) or "无可用 bash"
 
 
+def run_govd(list_only, with_heavy):
+    """Thin adapter: same gate_manifest.toml, govd executor.
+
+    The adapter deliberately runs serially (`--jobs 1`) so that the parity run
+    compares like with like; parallelism is a govd flag the caller can opt into
+    directly via `python -m scripts.govd`. `--engine legacy` remains available
+    as the rollback surface for one version.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from govd import cli as govd_cli
+
+    profile = "nightly" if with_heavy else "pr"
+    argv = ["list" if list_only else "run", "--profile", profile]
+    if not list_only:
+        argv += ["--jobs", "1"]
+    return govd_cli.main(argv)
+
 def main(argv):
     os.chdir(ROOT)
     bad_flags = unknown_flags(argv)
@@ -337,10 +403,18 @@ def main(argv):
         print(f"[UNDECIDABLE] 未知参数: {' '.join(bad_flags)} —— 未执行任何判据，"
               f"不把拼错的旗标降级成「跑全部」")
         return 2
+    engine, engine_err = engine_of(argv)
+    if engine_err or engine not in ENGINES:
+        print(USAGE)
+        print("[UNDECIDABLE] --engine 只接受 legacy|govd（收到 %r）——未执行任何判据"
+              % (engine if engine else engine_err))
+        return 2
     if "--selftest" in argv:
         return mode_selftest()
     list_only = "--list" in argv
     with_heavy = "--with-heavy" in argv
+    if engine == "govd":
+        return run_govd(list_only, with_heavy)
     try:
         gates, problems = load()
     except Exception as e:

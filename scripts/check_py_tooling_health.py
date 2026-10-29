@@ -7,7 +7,7 @@ Why this gate exists
 The repository carries 120 machine gates that judge the Rust code, and it pins
 the Rust toolchain for exactly four CI jobs because `-D warnings` was once turned
 red by a floating stable picking up a new clippy lint. The Python side -- which is
-where those gates are *implemented* (91 files under scripts/, 51 of them invoked
+where those gates are *implemented* (100+ files under scripts/ scanned recursively, 51 of them invoked
 directly by workflows) -- had no equivalent judgement at all: `grep -riE
 "ruff|flake8|black|mypy|pylint|pyright"` over .github/workflows and
 scripts/*.toml returns zero hits. So the tooling that decides whether the code is
@@ -96,6 +96,17 @@ JOB_RE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 def _stdlib_names():
     """Names that are never third-party (kept for the H2 comment's reasoning)."""
     return set(sys.stdlib_module_names) | {"__future__"}
+
+
+def scan_py_files(root=HERE):
+    """Recursive walk: scripts/govd/** used to escape H1/H2/H6/H7 (PYG-F06)."""
+    found = []
+    for base, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+        for name in sorted(files):
+            if name.endswith(".py"):
+                found.append(os.path.join(base, name))
+    return sorted(found)
 
 
 def compile_all(py_files):
@@ -189,7 +200,9 @@ def _invokes_python(body):
         s = line.strip()
         if not s or s.startswith("#"):
             continue
-        if re.search(r"\bpython3?\b\s+\S*\.py", s) or re.match(r"^python3?\b", s):
+        if (re.search(r"\bpython3?\b\s+\S*\.py", s)
+                or re.search(r"\bpython3?\b\s+-m\b", s)
+                or re.match(r"^python3?\b", s)):
             return True
     return False
 
@@ -396,8 +409,7 @@ def run_real():
               "here target tomllib and must not be judged by an older interpreter"
               % (sys.version_info[0], sys.version_info[1], FLOOR_TEXT))
         return 2
-    py_files = sorted(os.path.join(HERE, f) for f in os.listdir(HERE)
-                      if f.endswith(".py"))
+    py_files = scan_py_files()
     if not os.path.isdir(WORKFLOWS):
         print("[TOOL-ERROR] workflows dir not found: %s" % WORKFLOWS)
         return 2
@@ -506,6 +518,10 @@ def selftest():
         bad1, scanned = compile_all(files)
         add("planted positive: a non-compiling script is caught by name",
             scanned == 6 and len(bad1) == 1 and bad1[0][0] == "broken.py")
+        nested = _mkdir(pyd, "nested", {"deep.py": USED_SRC})
+        add("recursive scan reaches scripts/*/*.py",
+            len(scan_py_files(pyd)) == 7
+            and any(os.sep + "nested" + os.sep in x for x in scan_py_files(pyd)))
         # H2 across the whole fixture set: dead.py has 1 unused (json), short.py
         # has 1 (reason too short), used/exempt have 0.
         bad2, nimp = dead_imports(files)
@@ -560,6 +576,14 @@ def selftest():
             sorted(blocks) == ["a", "b"] and "python3" in blocks["a"]
             and "python3" not in blocks["b"])
 
+        add("`python3 -m pkg` counts as an invocation (govd shape)",
+            pin_parity(_mkdir(tmp, "wf4", {"e.yml": (
+                "name: t\njobs:\n  a:\n    steps:\n      - run: python3 -m scripts.govd run\n"
+                )}))[2] == 1)
+        wf_mod = WF_PINNED.replace("python3 scripts/whatever.py",
+                                   "python3 -m scripts.govd run")
+        add("a pinned `python3 -m` job is clean",
+            not pin_parity(_mkdir(tmp, "wf5", {"f.yml": wf_mod}))[0])
         # H3: the classifier is the SAME function repo_eol uses, so the fixture
         # cannot pass while production mis-reads a row.
         add("i/crlf and i/mixed are violations, i/lf and i/-text are not",
@@ -573,8 +597,7 @@ def selftest():
         hf = sorted(os.path.join(h67, f) for f in os.listdir(h67))
         a_bad = abs_module_paths(hf)
         e_bad = envfail_exit1(hf)
-        live_py = sorted(os.path.join(HERE, f) for f in os.listdir(HERE)
-                         if f.endswith(".py"))
+        live_py = scan_py_files()
         add("H6 planted positive: module-level `D:\\...` and `/home/bob/proj` both caught",
             len(a_bad) == 2 and set(x[0] for x in a_bad) == {"abs.py"})
         add("H6 planted negative: __file__-derived ROOT and an os.name-guarded "

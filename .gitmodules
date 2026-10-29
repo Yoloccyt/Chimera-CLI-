@@ -1,0 +1,6 @@
+[submodule "Aegis"]
+path = Aegis
+url = https://github.com/GanyuanRan/Aegis.git
+[submodule "dsh-taskboard"]
+path = dsh-taskboard
+url = https://github.com/cloader/dsh-taskboard.git

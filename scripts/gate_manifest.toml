@@ -113,6 +113,7 @@ expect = 1
 kind = "light"
 test_kind = "cross_crate"
 note = "按 Spec 字面条目判 PROVEN/NOT PROVEN/MISSING；当前唯一非 PROVEN 是 T6 heredoc 延后（按设计为 1）"
+ci_exempt = "按设计 expect=1（T6 heredoc 延后）；不进 CI 阻塞面，收口时本地跑"
 
 [[gate]]
 id = "G-11"
@@ -1519,3 +1520,46 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "G-135 夹具（tempdir 真实路径，走与生产同一个 scan_all/evaluate）：CLEAN 夹具须恰好舍去 doc 注释/字符串/行注释/`pub(crate)`/私有 fn/cfg(test) 尾并保留 ret|arg|bound 三类植入各一行；特别须证 `use tokio::{sync::mpsc, task::JoinHandle};` 这种嵌套 brace 绑定能被解析（早期版本仅认裸名，因此漏判三处真实返回位泄露——该回归已固定为夹具）；同名重复增长必报 NEW；修泄露不删行必报 STALE；同批删除转绿；畸形行与未知位置退 2；台账注释行不当行。任一断言未成立⇒退 1"
+
+# ============================================================
+# G-137..G-140 -- CI/manifest parity + manifest schema (ADR-228 §3.6)
+# 轴分工：G-137 判"两个执行面是否说同一件事"（CI 步骤 ↔ 清单），
+# G-138 判"清单自身是否可被调度器安全消费"（v1 形状 + v2 字段/依赖/白名单）。
+# 两门各配 --selftest（G-139/G-140），沿 G-121/G-122 先例：先证门有牙，
+# 再跑真实裁决；断言数以 --selftest 自报为准，本行不抄数。
+# ============================================================
+[[gate]]
+id = "G-137"
+spec_ref = "ADR-228 §3.6 / PYG-F01（双执行面）"
+cmd = "{python} scripts/check_ci_manifest_parity.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "CI↔manifest 双向对拍。方向 A：workflow 里每个 scripts/*.{py,sh,ps1} 必须是已登记门脚本（精确路径或同 stem 的 .sh/.ps1 双胞胎），否则须在 HELPERS 带理由登记；方向 B：每条非 ci_exempt 且 cmd 指名脚本的门必须在某个 workflow 出现。打印 workflows/ci_refs/ci_steps/manifest_gates/matched/allowlisted/unmatched/gate_missing。0=一致 / 1=有发现 / 2=输入不可读。G-10 是 expect=1 的收口审计项，已登记 ci_exempt；audit_fnlen.py 是 G-48 调用的 helper，不是门。"
+
+[[gate]]
+id = "G-138"
+spec_ref = "ADR-228 §3.6 / PYG-F01（清单独木难支）"
+cmd = "{python} scripts/check_manifest_schema.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "清单 schema 门：v1 形状（六必填、id 唯一且 G-<digits>、expect 0/1/2、kind light|heavy）+ v2 字段（timeout_s>0、retry -1..3、mutating bool、needs 目标存在且无环、profiles 属四档、disk_gb>=0）+ cmd 首 token 在 {python}/bash/pwsh/cargo/git 白名单 + 未知键判红 + tasks.toml 行必须带 source + tool_registry 行走 govd.manifest.validate_registry。0=全过 / 1=有发现 / 2=不可读。本门让'清单写错一个 v2 字段'在 CI 红，而不是在调度器跑到一半时崩。"
+
+[[gate]]
+id = "G-139"
+spec_ref = "G-137 配套（门自身有牙）"
+cmd = "{python} scripts/check_ci_manifest_parity.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "G-137 夹具（tempdir 真 workflow + 真 manifest）：干净夹具 exact/twin/helper 三路均匹配且 0 missing；删掉 a.py 步骤 ⇒ G-01 被点名；加 orphan.py ⇒ unmatched；ci_exempt 的 G-02 缺席不得误报；空 cmd 的 cargo 门不得制造 missing；TOML 往返 + 畸形 TOML 必抛。任一断言不成立 ⇒ 退 1。"
+
+[[gate]]
+id = "G-140"
+spec_ref = "G-138 配套（门自身有牙）"
+cmd = "{python} scripts/check_manifest_schema.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "G-138 夹具：一个合法夹具 + 每类失败各一（重复 id、缺 note、expect=3、kind=slow、timeout=0、retry=4、mutating 非 bool、未知 profile、mutating 列入 pr、needs 未知、needs 成环、disk_gb<0、首 token 非白名单、未知键、id 非 G-、空清单、expect=True、source 越词表、tasks 行缺 source）+ TOML 往返 + 畸形 TOML 必抛。任一断言不成立 ⇒ 退 1。"

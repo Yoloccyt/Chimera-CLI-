@@ -320,6 +320,21 @@ def selfcheck():
                                 ["old.py::C1::gone::return 1"]):
         print("  [SELFTEST-BASE] three-way split wrong: %r" % ((supp, unres, stale),))
         ok = False
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="entry-")
+    try:
+        os.makedirs(os.path.join(tmp, "sub"))
+        with io.open(os.path.join(tmp, "sub", "tool.py"), "w",
+                     encoding="utf-8") as fh:
+            fh.write("import sys\nargv = sys.argv\n"
+                     "if '--x' in argv:\n    pass\n")
+        nested, n_nested = scan(set(), root=tmp)
+        if n_nested != 1 or [x[0] for x in nested] != ["sub/tool.py"]:
+            print("  [SELFTEST-RECURSE] got n=%d %r" % (n_nested, nested))
+            ok = False
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     return ok
 
 
@@ -422,16 +437,27 @@ def load_baseline():
     return keys, no_reason, dup
 
 
-def scan(registered):
+def scan(registered, root=SCRIPTS):
     """扫 scripts/*.py，只产事实不裁决。返回 (findings, 扫描文件数)。
 
     finding = (file, kind, key, msg)，其中 msg 的**未加注解前缀**供论域判据使用。
     """
     out = []
-    files = sorted(f for f in os.listdir(SCRIPTS) if f.endswith(".py"))
-    for f in files:
-        src = io.open(os.path.join(SCRIPTS, f), encoding="utf-8-sig").read()
-        in_reg = f in registered
+    files = []
+    for base, dirs, names in os.walk(root):
+        # tests/ is NOT excluded: a test helper is still executable code, and the
+        # govd package put real logic under scripts/govd/tests/. C2/C3 stay
+        # suppressed for non-registered files (library/test semantics), so the
+        # only effect of scanning them is that C1/C4 keep their teeth there.
+        dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+        for name in sorted(names):
+            if name.endswith(".py"):
+                files.append(os.path.join(base, name))
+    files.sort()
+    for path in files:
+        f = os.path.relpath(path, root).replace(os.sep, "/")
+        src = io.open(path, encoding="utf-8-sig").read()
+        in_reg = os.path.basename(f) in registered
         raw = []
         for fn_name, ln, frag in c1_rc_as_counter(src):
             raw.append(("C1", "%s -> %s" % (fn_name, frag),
