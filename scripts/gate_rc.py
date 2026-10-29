@@ -67,6 +67,16 @@ def _utf8_stdio():
             pass
 
 
+def utf8_stdio():
+    """Public name for the stdio pin, so callers do not reach for the private one.
+
+    Every gate gets this through run()/install(); scripts that print before those
+    entry points should call *this* function instead of re-typing the
+    reconfigure block (register: scripts/stdio_dup_baseline.txt, axis H9).
+    """
+    return _utf8_stdio()
+
+
 def install():
     """给**平铺式**门脚本装崩溃兜底（F37）：顶层直接执行判定、没有 `__main__` 可包的那一类。
 

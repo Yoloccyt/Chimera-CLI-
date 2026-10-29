@@ -84,6 +84,9 @@ cmd = "{python} scripts/audit_commit_coupling.py"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
+# 实测时长 225-234s（串行与 4 并发各一轮），默认 300s 预算在同一宿主有其它负载时
+# 会越线（2026-10-29 一次真 timeout）；按 ~4x p95 给边界，而不是让慢门靠运气绿。
+timeout_s = 900
 note = "已跟踪执行体引用未跟踪文件的全集；在途批次已于 c5a5327 落地→耦合消解，按'各批落地后应归 0'从 1 翻为 0；若再现新未跟踪引用则重新变红（2026-09-21 F32 批次即属此类：run_gate_manifest.py 新增 import gate_rc，消解条件＝同 commit 内 git add scripts/gate_rc.py）"
 ci_exempt = "收口审计项:未跟踪文件耦合核查,随批次落地归零时跑,非 PR 快轨"
 
@@ -94,6 +97,8 @@ cmd = "bash scripts/check_dependency_rules.sh"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
+# 同上：实测 152-165s，与 G-07 同批占满默认预算时也会越线；给 600s 边界。
+timeout_s = 600
 note = "依赖铁律与 forbid(unsafe_code)（39/39 层图；.sh 侧曾因 CRLF 空跑，见 RK-P35）"
 
 [[gate]]

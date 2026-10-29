@@ -59,6 +59,10 @@ exemptions -- the cleanest possible admission state)
                  gate with expect=1 that is a silent false green; on expect=0 it
                  files a broken gate as a repository defect. Bool returns are not
                  red codes (True == 1) -- see the fixture below.
+  H9 STDIODUP    the UTF-8 stdio pin lives in gate_rc. Duplicates are tolerated
+                 only while listed in scripts/stdio_dup_baseline.txt, one row per
+                 file with a reason; a new duplicate is a finding and a row whose
+                 file has been cleaned is STALE. Only-decrease by construction.
 
 Stdlib only, on purpose: the pinned CI interpreter has no site-packages, so a
 `import yaml` here would pass locally (dev boxes usually have PyYAML) and fail in
@@ -92,6 +96,8 @@ FLOOR_TEXT = "%d.%d" % PYTHON_FLOOR
 # 12 workflows; floors sit comfortably under that but far above zero.
 PY_FILES_FLOOR = 80
 WORKFLOW_FLOOR = 8
+
+STDIO_BASELINE = os.path.join(HERE, "stdio_dup_baseline.txt")
 
 SIDE_EFFECT_RE = re.compile(r"#\s*side-effect-import:\s*(.+)$")
 MIN_REASON_LEN = 24
@@ -415,6 +421,65 @@ def except_handler_red(py_files):
     return bad
 
 
+def stdio_duplicates(py_files, baseline_path=None, root=HERE):
+    """H9: the UTF-8 stdio dance lives in gate_rc, not in N copies of itself.
+
+    Measured 2026-10-29: 31 scripts re-implement the same
+    ``sys.stdout.reconfigure(encoding="utf-8", errors="replace")`` block (H8's
+    B-F06 lineage: one fact, thirty places, each free to drift). Rewriting all
+    thirty at once would touch working gates for style, so the axis ships as an
+    **only-decrease register**: the listed files are tolerated, anything new is a
+    finding, and a listed file that no longer duplicates is STALE (the register
+    must be cleaned in the same commit that fixed it). Shrinking the list is the
+    intended direction, and each removal is verifiable on its own.
+    """
+    path = baseline_path or STDIO_BASELINE
+    try:
+        baseline = load_stdio_baseline(path)
+    except FileNotFoundError:
+        return [("<baseline>", "STDIODUP", "register missing: %s" % path)], 0, "missing"
+    except ValueError as exc:
+        return [("<baseline>", "STDIODUP", str(exc))], 0, "malformed"
+
+    hits = set()
+    for p in py_files:
+        rel = os.path.relpath(p, root).replace(os.sep, "/")
+        if rel == "gate_rc.py":                      # the single allowed home
+            continue
+        try:
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                src = fh.read()
+        except OSError:
+            continue
+        if "reconfigure(" in src:
+            hits.add(rel)
+
+    bad = [(f, "STDIODUP",
+            "re-implements the UTF-8 stdio block; call gate_rc.utf8_stdio() or add a "
+            "registered row (register: %s)" % os.path.basename(path))
+           for f in sorted(hits - set(baseline))]
+    bad += [(f, "STDIODUP_STALE",
+             "row registered but the file no longer duplicates stdio (delete the row)")
+            for f in sorted(set(baseline) - hits)]
+    return bad, len(hits), "ok"
+
+
+def load_stdio_baseline(path):
+    """Parse `<script> | <reason>` rows. A row without a reason is an error."""
+    out = {}
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        for lineno, raw in enumerate(fh, 1):
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            key, sep, why = line.partition("|")
+            key = key.strip()
+            if not sep or not why.strip():
+                raise ValueError("%s:%d: row needs the form '<script> | <reason>'" % (path, lineno))
+            out[key] = why.strip()
+    return out
+
+
 def judge(py_files, workflow_dir, sub_path="scripts"):
     out = []
     fails = 0
@@ -437,15 +502,19 @@ def judge(py_files, workflow_dir, sub_path="scripts"):
     bad5 = abs_module_paths(py_files)
     bad6 = envfail_exit1(py_files)
     bad7 = except_handler_red(py_files)
+    bad8, n_stdio, stdio_state = stdio_duplicates(py_files)
+    if stdio_state != "ok":
+        out.append("[TOOL-ERROR] the H9 stdio register is unusable (%s) -> refusing to judge" % stdio_state)
+        return 2, out
     for group, kind in ((bad1, "COMPILE"), (bad2, "DEADIMPORT"),
                         (bad3, "REPOEOL"), (bad4, "PINPARITY"),
                         (bad5, "ABSPATH"), (bad6, "ENVFAIL"),
-                        (bad7, "EXCEPTRED")):
+                        (bad7, "EXCEPTRED"), (bad8, "STDIODUP")):
         for f, k, msg in group:
             out.append("[GAP][%s] %s: %s" % (k, f, msg))
         fails += len(group)
     stats = {"py_files": nscanned, "imports": nimports, "eol_rows": nrows,
-             "workflows": nwf, "python_jobs": npyj}
+             "workflows": nwf, "python_jobs": npyj, "stdio_dups": n_stdio}
     if fails:
         out.append("Python tooling health BROKEN: %d violation(s) -- %s"
                    % (fails, " ".join("%s=%d" % (k, v) for k, v in sorted(stats.items()))))
@@ -561,14 +630,14 @@ def selftest():
     ok = True
     n = 0
 
-    def add(label, cond):
+    def add(label, cond, detail=""):
         nonlocal ok, n
         n += 1
         if cond:
             print("[SELFTEST] %s" % label)
         else:
             ok = False
-            print("[SELFTEST-FAIL] %s" % label)
+            print("[SELFTEST-FAIL] %s%s" % (label, "" if not detail else " -- %r" % (detail,)))
 
     tmp = tempfile.mkdtemp(prefix="pytool-")
     try:
@@ -690,6 +759,37 @@ def selftest():
             not any(x[0] == "excbool.py" for x in x_bad))
         add("H8 is green on the live tree (%d files) -- the four gates that failed "
             "it were moved to exit 2" % len(live_py), not except_handler_red(live_py))
+
+        # H9: the register must match reality in both directions.
+        h9 = _mkdir(tmp, "h9", {"dup.py": 'import sys\nsys.stdout.reconfigure(encoding="utf-8")\n',
+                               "clean.py": "print('ok')\n"})
+        h9_files = [os.path.join(h9, f) for f in ("clean.py", "dup.py")]
+        reg = os.path.join(h9, "reg.txt")
+
+        def write_reg(text):
+            with open(reg, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(text)
+
+        write_reg("dup.py | registered row, still duplicating\n")
+        bad, n_hits, state = stdio_duplicates(h9_files, baseline_path=reg, root=h9)
+        add("H9 registered duplicate is tolerated", bad == [] and state == "ok", bad)
+        write_reg("clean.py | row outlives the code\n")
+        bad, _n, _s = stdio_duplicates(h9_files, baseline_path=reg, root=h9)
+        add("H9 reports the new duplicate AND the stale row (register cannot drift "
+            "silently)",
+            any(c[1] == "STDIODUP" for c in bad) and any(c[1] == "STDIODUP_STALE" for c in bad),
+            bad)
+        write_reg("dup.py no separator no reason\n")
+        bad, _n, state = stdio_duplicates(h9_files, baseline_path=reg, root=h9)
+        add("H9 a row without a reason is malformed, not silently accepted",
+            state == "malformed", (bad, state))
+        bad, _n, state = stdio_duplicates(h9_files,
+                                         baseline_path=os.path.join(h9, "nope.txt"), root=h9)
+        add("H9 missing register is undecidable, never a green over zero rows",
+            state == "missing", (bad, state))
+        live_bad, live_hits, live_state = stdio_duplicates(live_py)
+        add("H9 register matches the live tree (%d duplicate file(s))" % live_hits,
+            live_state == "ok" and not live_bad, live_bad)
 
         # Floors must be satisfiable on reality but not trivially true.
         real_py = live_py
