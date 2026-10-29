@@ -173,6 +173,9 @@ class ManifestTests(TempDirTest):
         self.assertIn("status must be one of", text)
         self.assertIn("under scripts/", text)
         self.assertIn("owner is required", text)
+        # Spec 3.2 requires BOTH columns per row: owner without evidence is an
+        # unevaluated claim, which is what this register exists to prevent.
+        self.assertIn("evidence is required", text)
 
 
 class PlannerTests(unittest.TestCase):

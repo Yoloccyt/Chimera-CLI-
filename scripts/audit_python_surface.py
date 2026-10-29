@@ -473,9 +473,20 @@ def render_markdown(payload):
 
 def print_summary(payload):
     c, g, w, d = payload["counts"], payload["gates"], payload["workflows"], payload["docs"]
+    aegis = payload["aegis"] or {}
+    aegis_rows = aegis.get("rows", [])
+    unparsed = sum(1 for r in payload["files"]
+                   if r["kind"] == "py" and not r.get("parsed", True))
+    # The Spec's census clause is "print scanned=N on every run", and the point of
+    # that token is not the number -- it is that a truncated walk cannot hide. So
+    # the line names what could NOT be read too (unreadable docs, unparsable py).
+    print("[scanned] files=%d (repo=%d aegis=%d) docs=%d workflows=%d "
+          "unreadable=%d parse_failures=%d"
+          % (len(payload["files"]) + len(aegis_rows), c["repo_scripts"],
+             len(aegis_rows), d["files"], w["files"], d["unreadable"], unparsed))
     print("[surface] py=%d ps1=%d sh=%d (repo) | aegis_py=%d"
           % (c["repo_py"], c["repo_ps1"], c["repo_sh"],
-             len([r for r in (payload["aegis"] or {}).get("rows", []) if r["kind"] == "py"])))
+             len([r for r in aegis_rows if r["kind"] == "py"])))
     print("[gates] total=%d python=%d bash=%d pwsh=%d other=%d heavy=%d ci_exempt=%d max=G-%s"
           % (g["total"], g["by_cmd"]["python"], g["by_cmd"]["bash"], g["by_cmd"]["pwsh"],
              g["by_cmd"]["other"], g["heavy"], g["ci_exempt"], g["max_numeric_id"]))
