@@ -152,8 +152,7 @@ def judge(root):
 
 def selftest():
     """植入式正对照：三类判定必须各自「会触发」，且干净夹具必须放过。"""
-    import tempfile
-    tmp = tempfile.mkdtemp(prefix="tsl_")
+    tmp = gate_rc.tmpdir(prefix="tsl_")
     os.makedirs(os.path.join(tmp, "tests", "sub"))
     os.makedirs(os.path.join(tmp, "scripts"))
     def w(rel, body):
@@ -185,7 +184,7 @@ def selftest():
     out.append(("stale-fires", judge(tmp) == 1))
     # 规模闸门：另起一个小 root（tmp 里 41 个自动发现 target 会把闸门撑过去，
     # 首版正是把这条断言写在 tmp 上才让它在仪器有 bug 时"意外通过"）
-    small = tempfile.mkdtemp(prefix="tsl_small_")
+    small = gate_rc.tmpdir(prefix="tsl_small_")
     os.makedirs(os.path.join(small, "tests"))
     with open(os.path.join(small, "Cargo.toml"), "w", encoding="utf-8") as fh:
         fh.write('[[test]]\nname = "only"\npath = "tests/t0.rs"\n')

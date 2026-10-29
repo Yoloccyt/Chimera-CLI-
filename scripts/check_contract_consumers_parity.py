@@ -29,10 +29,10 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import crate_contract as cc  # noqa: E402  (sibling module, same dir)
+import gate_rc  # noqa: E402  (selftest fixtures must not leak temp dirs)
 
 
 def metadata_internal_edges(root):
@@ -114,7 +114,7 @@ def _toml(crate, deps, extra_tables=""):
 
 def _fixture():
     """Tiny workspace planting one of every edge class."""
-    tmp = tempfile.mkdtemp(prefix="consumers-parity-")
+    tmp = gate_rc.tmpdir(prefix="consumers-parity-")
     members = ["alpha", "beta", "gamma", "delta", "epsilon"]
     os.makedirs(os.path.join(tmp, "crates"))
     with open(os.path.join(tmp, "Cargo.toml"), "w", encoding="utf-8") as fh:

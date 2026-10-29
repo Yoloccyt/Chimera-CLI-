@@ -207,12 +207,11 @@ def _fixture(tmp, doc_text, baseline_text, rust_text):
 
 
 def selftest():
-    import tempfile
     import io
     checks = []
 
     def run(name, doc_text, base_text, rust_text, want, want_in="", want_not=None):
-        tmp = tempfile.mkdtemp(prefix="dsc-")
+        tmp = gate_rc.tmpdir(prefix="dsc-")
         doc, base, crates = _fixture(tmp, doc_text, base_text, rust_text)
         buf = io.StringIO()
         try:
@@ -255,7 +254,7 @@ def selftest():
     # 9 a name that exists as a repo ARTIFACT (file/dir) is not a gap.
     #    Regression pin: `Dockerfile` and the doc stem `ARCHITECTURE_HEALTH_AUDIT`
     #    were false GAPs when the universe was .rs tokens only.
-    tmp9 = tempfile.mkdtemp(prefix="dsc-")
+    tmp9 = gate_rc.tmpdir(prefix="dsc-")
     d9, b9, c9 = _fixture(tmp9, "| **key types** | `BuildArtifact` |\n", "", rust)
     with open(os.path.join(tmp9, "BuildArtifact.md"), "w", encoding="utf-8") as fh:
         fh.write("stub artifact\n")
@@ -264,7 +263,7 @@ def selftest():
     checks.append(("t9-artifact-not-gap", "exit=%d" % code,
                    code == 0 and "PASS" in buf.getvalue()))
     # 10 undecidable: missing doc -> 2, never a silent pass.
-    tmp = tempfile.mkdtemp(prefix="dsc-")
+    tmp = gate_rc.tmpdir(prefix="dsc-")
     doc, base, crates = _fixture(tmp, real_type, "", rust)
     buf = io.StringIO()
     code = judge(os.path.join(tmp, "absent.md"), base, crates, stream=buf)
