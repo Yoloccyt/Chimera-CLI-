@@ -205,7 +205,7 @@ kind = "heavy"
 test_kind = "cross_crate"
 disk_gb = 0
 note = "逐包 cargo fmt --check（本机 cargo fmt --all 报 os error 206，所用聚合法）；覆盖面 = 门自报的 workspace 包数 + 全部**隔离 workspace**（如 fuzz/，`--all` 与 `-p` 都够不到，2026-09-24 前零守门）；包数不在本条登记，以门输出为准，全部干净才算过"
-ci_exempt = "收口审计项:全包 fmt 验证;PR 快轨已由 cargo fmt --check 覆盖,此项为收口全量复核"
+ci_exempt = "收口审计项:全包 fmt 验证。PR 快轨由两步合起来才等于本门覆盖面：根 workspace 的 ci.yml「Format check」+ 隔离 workspace 的「Format check (isolated workspace: fuzz)」(A-F08 补，2026-10-29)。旧文案只说“已由 cargo fmt --check 覆盖”，对 fuzz/ 这类 `--all` 与 `-p` 都够不到的面是过度声明（本门 note 已记同一事实）。本门仍是唯一能一次跑完全包+全部隔离 workspace 的形态，且 windows 宿主 `cargo fmt --all` 报 os error 206 → 逐包聚合只能收口本地/Linux runner 跑"
 
 # C9 Top-K sort_by 例外登记表守护门（ADR-160 同族；此前登记无门，现补牙）。
 # 只 enforce 登记表自身不退化（格式/重复/失效/裁决词/只减不增），不做启发式

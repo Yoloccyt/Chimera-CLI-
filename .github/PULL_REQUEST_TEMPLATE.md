@@ -32,6 +32,7 @@
 
 ```bash
 py -3 scripts/run_gate_manifest.py            # 期望末行 [SUM] 各类计数之和 == 门清单数，且 rc=0
+py -3 -m scripts.govd run --profile pr --jobs 4   # 同一清单的 govd 调度器（ADR-228）：额外给 run_id/逐门时长/哈希链 journal；heavy 在 pr 档为 skip，不得读作全量通过
 py -3 scripts/check_entry_contract.py         # 新增/改动 scripts/ 下脚本时必跑
 py -3 scripts/crate_contract.py --check       # 改了 crate 契约块时必跑（勿手改派生字段，用 --install 再生）
 py -3 scripts/check_doc_symbol_claims.py      # 文档写了符号名时必跑

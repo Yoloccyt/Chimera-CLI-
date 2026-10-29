@@ -7,8 +7,9 @@ Why this gate exists
 The repository carries 120 machine gates that judge the Rust code, and it pins
 the Rust toolchain for exactly four CI jobs because `-D warnings` was once turned
 red by a floating stable picking up a new clippy lint. The Python side -- which is
-where those gates are *implemented* (100+ files under scripts/ scanned recursively, 51 of them invoked
-directly by workflows) -- had no equivalent judgement at all: `grep -riE
+where those gates are *implemented* (100+ files under scripts/ scanned recursively; the number
+actually invoked from workflows is reported by check_ci_manifest_parity.py as ci_steps,
+not copied here) -- had no equivalent judgement at all: `grep -riE
 "ruff|flake8|black|mypy|pylint|pyright"` over .github/workflows and
 scripts/*.toml returns zero hits. So the tooling that decides whether the code is
 healthy was itself the least healthy part of the tree.

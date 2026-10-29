@@ -609,6 +609,15 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
+      # WHY(PYG/A-F08): `cargo fmt --all` 和 `-p` 都够不到**隔离 workspace**（fuzz/
+      # 有自己的 [workspace] 表，不属根 workspace）。G-19 的 note 已记下这一点，
+      # 但其 ci_exempt 曾声称“PR 快轨已覆盖”——对 fuzz/ 不成立，等于一个过度声明
+      # 掩盖零守门。本步把 fuzz/ 纳入同一 PR 快轨；本地已逐文件验证
+      # `rustfmt --check --edition 2021` 对 fuzz 下 9 个 .rs 零违规（本机
+      # `cargo fmt --all` 在 windows 宿主上报 os error 206，故只能逐文件验）。
+      - name: Format check (isolated workspace: fuzz)
+        run: cd fuzz && cargo fmt --all -- --check
+
       # WHY 删除独立 `cargo check`（T1.7）：clippy 使用 clippy-driver 重编全部
       # crate，不复用 check 的 rmeta；`--all-targets` 已含类型检查，保留 check
       # 等于同一 workspace 多跑一整轮编译。
