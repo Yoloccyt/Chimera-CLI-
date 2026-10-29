@@ -69,12 +69,25 @@ class ClassifyTests(unittest.TestCase):
         ("shell-sig-without-error-shape",
          "note: invalid option name is not accepted here\n[FAIL] 2 gaps\n",
          "bash s.sh", False),
+        # Measured shape from release-lane task R-01 on a Windows host: cargo
+        # aborts on a long path and prints its usage banner, then exits 1 --
+        # identical to a real "rustfmt found diffs" verdict.
+        ("cargo-longpath-usage-banner",
+         "文件名或扩展名太长。 (os error 206)\nThis utility formats all bin and lib files"
+         " of the current crate using rustfmt.\n\nUsage: cargo fmt [OPTIONS]\n",
+         "cargo fmt --all -- --check", True),
+        ("shell-quoting-longpath-mid-body",
+         "scripts/x.sh: cannot stat: os error 206\n[FAIL] real finding\n",
+         "bash s.sh", False),
         ("empty-log", "\n\n", "bash s.sh", False),
     )
 
     VERDICT_CASES = (
         ("expect1-crash-is-not-ok", 1, 1,
          "Traceback (most recent call last):\nSyntaxError: bad decode\n", Verdict.ENV),
+        ("cargo-longpath-exit1-is-env-not-mismatch", 1, 0,
+         "文件名或扩展名太长。 (os error 206)\nUsage: cargo fmt [OPTIONS] [-- <rustfmt_options>...]\n",
+         Verdict.ENV),
         ("expect1-real-red-is-ok", 1, 1,
          "[GAP] two sources disagree\n[FAIL] 2 gaps\n", Verdict.OK),
         ("expect0-green-is-ok", 0, 0, "[OK] all gates as expected\n", Verdict.OK),
@@ -82,8 +95,8 @@ class ClassifyTests(unittest.TestCase):
          "[UNDECIDABLE] missing data file: scripts/x.toml\n", Verdict.MISMATCH),
     )
 
-    def test_env_fixture_count_is_eight(self):
-        self.assertEqual(len(self.ENV_CASES), 8)
+    def test_env_fixture_count_is_ten(self):
+        self.assertEqual(len(self.ENV_CASES), 10)
 
     def test_env_fixtures(self):
         for name, text, cmd, want in self.ENV_CASES:

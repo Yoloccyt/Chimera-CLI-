@@ -20,6 +20,12 @@ AMBIGUOUS_ENV_SIGS = (
     "No such file or directory",
     "SyntaxError",
     "Traceback (most recent call last)",
+    # Measured 2026-10-29: `cargo fmt --all -- --check` aborts on this host with
+    # ERROR_INVALID_NAME (long path) plus a usage banner, and exits 1 -- the exact
+    # code a real "rustfmt found diffs" verdict uses. Treated like the other
+    # ambiguous signatures: env for non-shell commands (cargo/python), while a
+    # bash/sh gate still needs a shell-error first line to be called env.
+    "os error 206",
 )
 SHELL_ERROR_RE = re.compile(r"^.+: line \d+: ")
 

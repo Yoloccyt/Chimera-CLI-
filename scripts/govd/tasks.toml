@@ -14,7 +14,7 @@ kind = "light"
 source = "rust"
 timeout_s = 300
 owner = "rust-owners"
-note = "格式只读门：cargo fmt --check 只读不写；release 前置。与 CI 的 fmt 步骤同判据，但由 govd 记录 rc/时长/日志。"
+note = "格式只读门：cargo fmt --check 只读不写；release 前置。与 CI 的 fmt 步骤同判据，但由 govd 记录 rc/时长/日志。宿主限制（2026-10-29 实测）：在 Windows 长路径环境下 `cargo fmt --all` 不执行任何检查即中断（输出 `os error 206` + 用法横幅）并以 rc=1 退出——与“rustfmt 发现差异”的红码相同；classify.py 已把该形状归为环境失败（退 2，不记 mismatch），所以本任务的红判据只在其能真正执行的档（Linux CI）上才有意义。仓内另有 G-19 逐包 rustfmt 检查作为本机可用替代品。"
 
 [[task]]
 id = "R-02"
