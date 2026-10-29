@@ -55,10 +55,23 @@ def meta_for(run, profile_name, digest_value, role):
 
 
 def load_all(profile_name=""):
-    """Gates always; rust/external families only for release (ADR-228 §3.2)."""
+    """Gates always; release merges every task family, other lanes merge only the
+    external rows that explicitly name them (ADR-228 §3.2).
+
+    WHY `profiles` is required on external rows instead of merging all tasks: the
+    pr ledger must keep reading as "133 light + 7 heavy skipped". If six extra
+    out-of-profile tasks were loaded and then skipped, `skip=` would silently grow
+    from 7 to 13 and the one number an operator watches would stop meaning
+    "the disk-gated heavies".
+    """
     tasks = list(mf.load(str(MANIFEST)))
-    if profile_name == "release":
-        tasks.extend(mf.load_tasks(str(TASKS)))
+    if TASKS.is_file():
+        rows = mf.load_tasks(str(TASKS))
+        if profile_name == "release":
+            tasks.extend(rows)
+        else:
+            tasks.extend(r for r in rows
+                         if r.source == "external" and profile_name in r.profiles)
     return mf._finalize(tuple(tasks)), pol.load(str(POLICY))
 
 

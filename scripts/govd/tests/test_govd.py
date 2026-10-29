@@ -612,6 +612,30 @@ class ResumeLedgerTests(TempDirTest):
         self.assertEqual(args.profile, "")   # "" = read it back from report.json
 
 
+class TaskFamilySelectionTests(unittest.TestCase):
+    """Which lane sees which task family (ADR-228 §3.2)."""
+
+    def ids(self, profile):
+        tasks, _policy = cli.load_all(profile)
+        return {t.id for t in tasks if t.source != "gate"}
+
+    def test_pr_lane_sees_no_task_families(self):
+        pr_ids = self.ids("pr")
+        self.assertEqual(pr_ids, set(), "pr must stay 133 light + 7 heavy gates only")
+
+    def test_nightly_gets_external_rows_only(self):
+        nightly = self.ids("nightly")
+        self.assertTrue(nightly, "E-01..E-03 must be scheduled by nightly")
+        self.assertTrue(all(i.startswith("E-") for i in nightly), sorted(nightly))
+        self.assertFalse(any(i.startswith("R-") for i in nightly),
+                         "rust rows stay release-only (they shell out to cargo)")
+
+    def test_release_gets_every_family(self):
+        release = self.ids("release")
+        self.assertTrue(any(i.startswith("R-") for i in release), sorted(release))
+        self.assertTrue(any(i.startswith("E-") for i in release), sorted(release))
+
+
 if __name__ == "__main__":
     # F30 dialect: an uncaught crash must exit 2, never borrow the interpreter's 1
     # (which would read as "ran and judged red" to run_gate_manifest).

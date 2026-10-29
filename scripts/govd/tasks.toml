@@ -1,10 +1,12 @@
 # Non-gate task families for govd (ADR-228 §3.2).
-# These rows are NOT gates: they never appear in gate_manifest.toml and only
-# the release profile merges them, so pr/nightly accounting stays 140/140.
+# These rows are NOT gates: they never appear in gate_manifest.toml. `release`
+# merges every family; the other lanes merge only the `external` rows that name
+# them in `profiles`, so the pr ledger keeps meaning "133 light + 7 heavy".
 # `source` is one of gate|rust|external|diagnostic (G-138 enforces it).
 
 [[task]]
 id = "R-01"
+profiles = ["release"]
 spec_ref = "ADR-228 §3.2 rust 只读族"
 cmd = "cargo fmt --all -- --check"
 expect = 0
@@ -16,6 +18,7 @@ note = "格式只读门：cargo fmt --check 只读不写；release 前置。与 
 
 [[task]]
 id = "R-02"
+profiles = ["release"]
 spec_ref = "ADR-228 §3.2 rust 只读族"
 cmd = "cargo metadata --no-deps --format-version 1"
 expect = 0
@@ -27,6 +30,7 @@ note = "workspace 元数据可解析性：只读、不编译；用于在 release
 
 [[task]]
 id = "R-03"
+profiles = ["release"]
 spec_ref = "ADR-228 §3.2 rust 只读族（编译类仍归 CI）"
 cmd = "cargo check --workspace --all-targets"
 expect = 0
@@ -38,6 +42,7 @@ owner = "rust-owners"
 note = "全 workspace 类型检查。本地磁盘 <8GB 时 govd 记 UNKNOWN 而不静默跳过；权威载体是 CI，release 机器足够磁盘时才真正执行。"
 [[task]]
 id = "E-01"
+profiles = ["nightly", "release"]
 spec_ref = "ADR-228 §3.2 external（Aegis 套件）/ Spec I9"
 cmd = "{python} -m unittest discover -s Aegis/tests/helpers -p \"test_aegis_[d]*.py\""
 expect = 0
@@ -49,6 +54,7 @@ note = "Aegis 脚本单测（aegis-deferred-ledger + aegis-doctor）：实测 Ra
 
 [[task]]
 id = "E-02"
+profiles = ["nightly", "release"]
 spec_ref = "ADR-228 §3.2 external（Aegis 套件）/ Spec I9"
 cmd = "{python} -m unittest discover -s Aegis/tests/helpers -p \"test_workspace_*.py\""
 expect = 0
@@ -60,6 +66,7 @@ note = "workspace 证据收敛 + 文本写入兼容：实测 rc 0（2026-10-29�
 
 [[task]]
 id = "E-03"
+profiles = ["nightly", "release"]
 spec_ref = "ADR-228 §3.2 external（Aegis 套件）/ Spec I9"
 cmd = "{python} -m unittest discover -s Aegis/tests/helpers -p \"test_*.py\""
 expect = 0
