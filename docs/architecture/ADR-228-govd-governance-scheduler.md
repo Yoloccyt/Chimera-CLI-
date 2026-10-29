@@ -27,7 +27,7 @@
 
 `gate_manifest.toml` 只**新增可选字段**：`timeout_s`、`retry`、`mutating`、`needs`、`profiles`、`owner`、`source`、`disk_gb`。v1 条目（140 门）无需改动即可被 v2 加载器消费。
 
-**拒绝项 R1**：拒绝把 rust/external 任务塞进 `gate_manifest.toml`。理由：`[[gate]]` 的计数被 `check_manifest_schema`、`check_ci_manifest_parity`、`check_py_tooling_health` 三方读作“门数”，混入 `cargo check` 会让“140 门”这个口径失去意义。因此新增 `scripts/govd/tasks.toml` 的 `[[task]]` 族，且**只有 release profile 合并**（`cli.load_all` 仅在 `profile=="release"` 时 `load_tasks`）。
+**拒绝项 R1**：拒绝把 rust/external 任务塞进 `gate_manifest.toml`。理由：`[[gate]]` 的计数被 `check_manifest_schema`、`check_ci_manifest_parity`、`check_py_tooling_health` 三方读作“门数”，混入 `cargo check` 会让“140 门”这个口径失去意义。因此新增 `scripts/govd/tasks.toml` 的 `[[task]]` 族：`release` 合并全族，其余档只合并 `profiles` 显式点名它的 `external` 行（本句为 2026-10-29 追加节 D-1 对原文“只有 release 合并”的订正）。
 
 ### 2.3 退出码与七态判决
 
@@ -53,10 +53,12 @@
 
 | profile | 选择面 | 并发 | 用途 |
 |---|---|---|---|
-| `pr` | 133 light（140 - 7 heavy） | `--jobs 4` | 本地/CI 影子 |
-| `nightly` | light + heavy | `--jobs 2` | 夜间全量 |
-| `release` | 140 门 + 6 任务（R-01..R-03/E-01..E-03） | `--jobs 1` | 发版前 |
+| `pr` | 133 light（140 - 7 heavy）——不含任何 task 族 | `--jobs 4` | 本地/CI 影子 |
+| `nightly` | 140 门 + `external` 三行（E-01..E-03）= 143 | `--jobs 2` | 夜间全量（含子仓回归） |
+| `release` | 140 门 + 6 任务（R-01..R-03/E-01..E-03）= 146 | `--jobs 1` | 发版前 |
 | `local` | 同 pr | 1 | 串行调试 |
+
+> 面大小以 `govd list --profile <p>` 实报为准（2026-10-29 实测：pr `selected=133 total=140 skipped=7`，nightly `143/143`，release `146/146`）。
 
 ### 2.7 CI 影子先行
 
@@ -66,8 +68,8 @@
 
 | 层 | 回滚动作 | 影响 |
 |---|---|---|
-| 执行面 | `run_gate_manifest.py` 默认 engine 仍是 `legacy`；删 `--engine` 分支即回到 2026-10-28 行为 | 零 |
-| 清单 | `tasks.toml` 仅在 release 合并；删除该文件后 `load_all` 只读 manifest | release 少 6 项 |
+| 执行面 | 默认 engine 已翻为 `govd`（A/B 对拍后）；`--engine legacy` 保留为回滚面，也可改 `engine_of()` 默认值 | 一步即可退回 legacy 行为（其夹具与 `[SUM]` 文本仍在） |
+| 清单 | `tasks.toml` 行靠 `profiles` 声明归属；删除该文件后 `load_all` 只读 manifest | nightly 少 3 项、release 少 6 项 |
 | 证据 | `tmp/govd/` 可整目录删除（gitignored）；不影响任何门 | 零 |
 | 门 | G-137..G-140 为新增门；从 manifest + ci.yml 同批删除即可，无下游依赖 | CI 少 4 步 |
 | Aegis | `.gitmodules` 单文件新增；删除后 gitlink 恢复为“无映射”原状 | 干净克隆不可 init（原病） |
@@ -86,3 +88,17 @@
 - **ADR-197 D5 / ADR-198 §3.4**：新增门仍遵守“脚本 + manifest 两条 + workflow 一步”的四件同批；G-137..G-140 即按此登记。
 - **ADR-060**：rc 0/1/2 语义不变，七态只在内部记账。
 - **ADR-033**：`scripts/` 不参与十层依赖，故本决策不产生跨层边。
+
+## 6. 追加节（实施期修订，2026-10-29）
+
+> 本节是 P3 分批实施与接管验收期间的**已执行修订**。代码与本节一致；§2.2/§2.6/§3 中被本节订正的旧句子已就地更新，不留双口径。
+
+| 编号 | 修订 | 为何（含被否的方案） | 机证 |
+|---|---|---|---|
+| **D-1** | `nightly` 合并 `external` 三行（E-01..E-03），`release` 仍合并全族；非 gate 行靠 `profiles` 字段声明归属 | 原设计只在 release 合并，子仓回归最晚一次/版本才暴露，而 nightly 的存在意义就是抓 release 之间的漂移。**否**：“全族无条件合并”——会把 pr 账本的 `skip=7` 撑成 13，使运维唯一要看的那个数不再等于“磁盘 gated 的 heavy” | `list pr` 仍 `133/140 skip=7`；`nightly=143/143`；实测 `E-01/E-02/E-03 ok rc=0`（run `20261029T142854Z-9979e60-45500`，`ok=137 unknown=6`，journal `events=145 bad_line=0`） |
+| **D-2** | G-138 开始校验 `govd/policy.toml`：`reuse_ok` 不得为 true、mutating 仅限 release、白名单非空且合法、role 必须指向存在的 profile | profiles/白名单/两个开关**就是**权限模型本体，此前无人校验——一行无人复核的 TOML 编辑就能静默削弱它（尤其 release 继承旧判决） | schema 自检 22→33 条；真树 rc=0 打印 `policy_profiles=4` |
+| **D-3** | 慢门显式 `timeout_s`：G-07=900s、G-08=600s | 默认 300s 对实测 225-242s / 152-205s 只剩几秒余量，2026-10-29 真发生一次 timeout——把环境噪声报成仓库缺陷的 flake 发生器 | 清单内注释记录测量值；`list` 显示 `timeout=900s/600s` |
+| **D-4** | “无域不得交判定”：扫描根/语料缺失时**拒绝交出判定**（rc 2），不得返回空账本或 `continue` | `check_dead_contract_apis` 缺 `crates/` 曾把全部 WIRED 报成死契约；`audit_phaseR_artifacts` 对缺报告 `continue` ⇒ **删证据即变绿的单调形状** | 三门各加夹具（+4）；真实运行 rc=0 不变；`verify_fmt_all_packages` 解析失败打 `[UNKNOWN]` 后退 2 |
+| **D-5** | H9 STDIODUP 只减不增登记表（`scripts/stdio_dup_baseline.txt`，31 行）+ `gate_rc.utf8_stdio()` 公开入口 | 31 份重复的 UTF-8 stdio 代码属客观冗余，但为风格一次性改 31 个在工作门，回归风险大于收益——改为**只防增长**并鼓励逐个收敛 | py_tooling_health 自检 32→37，打印 `stdio_dups=31`；登记表行必须带理由，缺表/ malformed 均退 2 |
+| **D-6** | 逐文件清单由工具生成（`audit_python_surface.py --markdown-out`）；并修正 `_third_party` 把仓内模块误报为第三方依赖 | “stdlib-only”这条声明此前由一个坏探针（只看同目录 stem）背书；`gate_rc`/`scripts` 被报成第三方依赖——不查就是仪表谎报安全 | 清单 344 行（116 py + 46 sh/ps1 + Aegis 182）；`third_party_importers=0`（沿脚本目录/`scripts/`/仓根三处解析） |
+| **D-7** | 默认 engine 翻为 `govd`，`--engine legacy` 保留为回滚面；legacy **不** import govd 的分类器 | 回滚面若依赖被测物本身就不是回滚面；两份 env 分类实现由同一批夹具钉住（legacy 26 条 + govd 分类测试） | A/B 对拍 `union=140 matched=133`；翻转后全量 pr rc=0 |
