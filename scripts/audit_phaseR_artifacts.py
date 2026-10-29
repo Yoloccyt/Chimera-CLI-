@@ -75,6 +75,20 @@ REPORTS = [
 ]
 
 
+def partition_reports(reports, exists=os.path.exists):
+    """(present, missing) for the report corpus.
+
+    WHY a report that vanished is **not** just skipped: skipping it also drops every
+    evidence reference it contained, so deleting a report would make this gate
+    strictly greener. A judgement that shrinks when evidence disappears is the same
+    false-green channel F33 closes on the runner side, so the missing set must be
+    reported and turned into an undecidable verdict instead of silence.
+    """
+    present = [r for r in reports if exists(r)]
+    missing = [r for r in reports if not exists(r)]
+    return present, missing
+
+
 def git_tracked(path: str) -> bool:
     r = subprocess.run(["git", "ls-files", "--error-unmatch", path],
                        capture_output=True, text=True)
@@ -124,7 +138,21 @@ def mode_selftest() -> int:
         ok = got == want
         bad += 0 if ok else 1
         print(f"  [{'PASS' if ok else 'FAIL'}] selftest-{cand} (want_ephemeral={want} got={got})")
-    print(f"  RESULT: {'FAIL' if bad else 'PASS'} ({bad}/{len(cases)} assertion(s) violated)")
+    # 报告语料缺失必须判“不可判定”，不得当成“没有引用要查”而静默变绿。
+    corpus_cases = [
+        ("all present -> nothing missing",
+         (["a.md", "b.md"], frozenset({"a.md", "b.md"}), (["a.md", "b.md"], []))),
+        ("one missing -> reported, not skipped",
+         (["a.md", "b.md"], frozenset({"a.md"}), (["a.md"], ["b.md"]))),
+        ("empty corpus -> entirely missing (never silently green)",
+         (["a.md"], frozenset(), ([], ["a.md"]))),
+    ]
+    for name, (reports, have, want) in corpus_cases:
+        got = partition_reports(reports, exists=lambda p: p in have)
+        ok = got == tuple(want)
+        bad += 0 if ok else 1
+        print(f"  [{'PASS' if ok else 'FAIL'}] selftest-corpus: {name} (got={got})")
+    print(f"  RESULT: {'FAIL' if bad else 'PASS'} ({bad} assertion group(s) violated)")
     return 1 if bad else 0
 
 
@@ -156,8 +184,11 @@ def main() -> int:
 
     print("\n=== 2) 报告引用的证据文件是否仍在 ===")
     live = all_basenames()
+    present_reports, missing_reports = partition_reports(REPORTS)
+    for rep in missing_reports:
+        print(f"  [MISSING-CORPUS] {rep} 不在盘上：它引用的证据无法被本门判定")
     missing_permanent, ephemeral = [], []
-    for rep in REPORTS:
+    for rep in present_reports:
         if not os.path.exists(rep):
             continue
         text = io.open(rep, encoding="utf-8", errors="replace").read()
@@ -192,6 +223,7 @@ def main() -> int:
 
     print("\n=== 结论 ===")
     print(f"  交付物缺失: {len(lost)}")
+    print(f"  报告语料缺失（引用面不可判）: {len(missing_reports)}")
     print(f"  未跟踪交付物（随时可能丢，advisory 不改退出码）: {len(untracked)}")
     print(f"  报告引用但已消失的**持久**证据: {len(missing_permanent)}")
     print(f"  同批按易逝政策豁免的引用（tmp/、criterion 产物、报告自称不入库）: {len(ephemeral)}")
@@ -199,6 +231,13 @@ def main() -> int:
     # 退出码只受**真交付物 + 持久证据**影响；灵敏度项永远缺失，不能把它算成失败；
     # 易逝引用按 .gitignore 政策本就不该存在，报红会让这道门永远绿不了、
     # 从而淹掉"真丢失"信号（RK-P40 同族教训）。
+    # 但报告语料缺失是“本门没判”，既不是绿也不是红：报为不可判定，
+    # 否则“删掉一份报告”会把它引用的所有失效指针一起带走，门反而变绿。
+    # 用 raise 而非 return 2：与同族门（check_doc_pointer_integrity 的
+    # “surface doc missing”）同一形态，runner 会把它归入 env 而不是“判了但不符”。
+    if missing_reports:
+        raise ValueError("report corpus incomplete, references undecidable: %s"
+                         % ", ".join(missing_reports))
     return 1 if (lost or missing_permanent or sens_present) else 0
 
 

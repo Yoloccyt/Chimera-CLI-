@@ -25,7 +25,16 @@ if meta.returncode != 0:
     print("[UNKNOWN] cargo metadata 失败：", (meta.stderr or "")[:200])
     sys.exit(2)
 
-pkgs = sorted({p["name"] for p in json.loads(meta.stdout)["packages"]})
+try:
+    # A truncated/invalid `cargo metadata` stdout is an environment failure, not a
+    # verdict: bare json.loads() did reach exit 2 via gate_rc's excepthook, but it
+    # threw away the only line that would tell a reader *which* stage broke.
+    payload = json.loads(meta.stdout)
+except ValueError as exc:
+    print(f"[UNKNOWN] cargo metadata 输出不可解析：{type(exc).__name__}: {exc}")
+    print(f"          stdout 前 120 字节 = {(meta.stdout or '')[:120]!r}")
+    sys.exit(2)
+pkgs = sorted({p["name"] for p in payload["packages"]})
 print(f"workspace 包数 = {len(pkgs)}")
 
 bad, unknown = [], []

@@ -288,7 +288,11 @@ def scan(crates_root: Path) -> list[dict]:
              "exclude_files": sorted(exclude)}
             for c, _, exclude in compiled]
     if not crates_root.is_dir():
-        return rows
+        # A missing scan root is not "every contract has zero callers": returning
+        # the all-zero rows here made evaluate() call every WIRED contract a FAIL,
+        # i.e. a whole-tree false red caused by the gate not having looked. That
+        # belongs in the dialect's third bucket: undecidable (rc=2 via gate_rc).
+        raise ValueError(f"scan root missing: {crates_root}")
     for path in crates_root.rglob("*.rs"):
         try:
             if "target" in path.parts:
@@ -413,6 +417,16 @@ def selftest() -> int:
         by_self = {r["name"]: r["self_uses"] for r in rows}
 
         problems = []
+        # A missing scan root must refuse to judge rather than hand back an
+        # all-zero ledger: the first version returned uses=0 for every contract,
+        # which evaluate() then reported as "all WIRED contracts are dead" -- a
+        # whole-tree false red produced by a gate that had looked at nothing.
+        try:
+            scan(root / "no-such-directory")
+            problems.append("selftest: missing scan root was judged instead of refused")
+        except ValueError:
+            pass
+
         # true positive: wired patterns present in production scope
         if by_name.get("ComputeBridge::spawn_compute_batch", 0) != 1:
             problems.append("selftest: spawn_compute_batch use not detected")
