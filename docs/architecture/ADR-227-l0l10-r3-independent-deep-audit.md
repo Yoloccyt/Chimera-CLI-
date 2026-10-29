@@ -49,10 +49,10 @@ R2（`C-57…C-141`）已收口。R3 的目标**不是复述结论**，而是：
 
 | 编号 | 结论 | 级别 |
 |---|---|---|
-| `R3-F02` | **doc-count 门自己的锚点写着过期数字并以 registered drift 放行**：`DOC-AUDIT-FACTS_2026-09-20.md:175/176` = `39 crates` / `152 变体`，实测 46/154；且注册理由是「.gitignore'd」——但 `.gitignore:76` 有反白 `!docs/reports/DOC-AUDIT-FACTS_*.md`、`git ls-files` 命中 ⇒ **豁免理由基于失效前提** | **P2** |
+| `R3-F02` ✅ 已修 | **doc-count 门自己的锚点写着过期数字并以 registered drift 放行**：`DOC-AUDIT-FACTS_2026-09-20.md:175/176` = `39 crates` / `152 变体`，实测 46/154；且注册理由是「.gitignore'd」——但 `.gitignore:76` 有反白 `!docs/reports/DOC-AUDIT-FACTS_*.md`、`git ls-files` 命中 ⇒ **豁免理由基于失效前提** | **P2** |
 | `R3-F04` | 生产面 `Box<dyn>` **78**（45 为 `Fn/Future/Any`，33 为注入接缝） | **P4 记录**（见 D1） |
 | `R3-F07` | **R2 的两本账条目集不一致**：`02` 索引 53 条 vs `tmp` 登记册 59 条，11 个只在登记册、5 个只在索引 | **P3** |
-| `R3-F06` | `C-138` 提交 `d47e575` 消息无编号、ADR-225 无落地行，仅被 T-1 叙述性引用 | **P3** |
+| `R3-F06` ✅ 已修 | `C-138` 提交 `d47e575` 消息无编号、ADR-225 无落地行，仅被 T-1 叙述性引用 | **P3 → 已修（R3-C02）** |
 | ~~`R3-F01`~~ | ~~「fnlen 红线无门」~~ → **撤销**：G-48 承载（`test_fnlen_smoke.sh` + `fnlen_baseline.txt`），4 条债已封 cap（生产 2：467 / 215） | 撤销 |
 | ~~`R3-F03`~~ | ~~生产面 unwrap/expect 311~~ → **撤销**：真生产面 **0**（4 处残留全部落在 `#[cfg(test)] fn`） | 撤销 |
 | ~~`R3-F05`~~ | ~~Top-K 退化 19 文件~~ → **撤销**：均为「`select_nth_unstable` 取前 K，再对前 K 排序」的合法形态 | 撤销 |
@@ -82,7 +82,7 @@ R2（`C-57…C-141`）已收口。R3 的目标**不是复述结论**，而是：
 | `R3-T02` | `schema_version`/`payload_version`/`content_hash` 是否统一命名 | **不统一**，在文档写清三者适用面 |
 | `R3-T03` | 「库层 thiserror」对纯契约层的适用边界（10 个 crate 无 `src/error.rs`） | **纯契约层豁免**，写入 ADR |
 | `R3-T04` | fnlen 的 2 条生产债（467 / 215 行）是否本轮拆 | **不拆**，另立专项（拆 467 行函数需独立评审 + 回归面） |
-| `R3-T05` | 是否批准本轮落 `R3-C01`（doc 锚点 46/154 + 删 2 条注册）与 `R3-C02`（补 C-138 落地行） | **批准**（3 文件、零代码；验证命令见交付物 04） |
+| `R3-T05` | 是否批准落 `R3-C01` + `R3-C02` | ✅ **已批准并执行**（2026-10-29，业主「授权执行」）：锚点 39→46 / 152→154、删 2 条 drift 注册、ADR-225 补 `C-138` 行；`check_doc_drift.sh` = **0 registered drift**，门集 `ok=129 mismatch=0`，四道文档门 rc=0 |
 
 ## 8. 收口读数（W5，同 HEAD；R3 未改代码）
 
@@ -100,6 +100,12 @@ R2（`C-57…C-141`）已收口。R3 的目标**不是复述结论**，而是：
 | fuzz 语法 | `cargo check --manifest-path fuzz/Cargo.toml` rc=0 |
 | 格式 | 47 包逐包 `fmt --check` bad=[] |
 | **未跑（如实）** | heavy 7 门（G-12/13/14/15/19/49/50）、真全量 `cargo test --workspace`、release `--ignored` 档、`cargo audit`、coverage 实测 ⇒ **交 CI 载体**（磁盘 free 0.29 GB） |
+
+## 8a. 执行记录（T-05 落地）
+
+- **2026-10-29 业主授权执行**：落 `R3-C01`（`docs/reports/DOC-AUDIT-FACTS_2026-09-20.md` 锚点 **39→46 / 152→154**；`scripts/doc_count_freeze.txt` 删两条已失效 `drift =` 注册）与 `R3-C02`（ADR-225 补 `C-138 \| d47e575` 落地行）。
+- **读数**：`check_doc_drift.sh` → **0 registered drift**（原 2 条）；门集 `ok=129 mismatch=0 env-fail=0 unknown=0 skip=7`；四道文档门全 rc=0。
+- **回滚**：三文件同批 revert（缺一则 drift 门因声明与锁定不一致转红）。
 
 ## 9. 回滚与入库边界
 
