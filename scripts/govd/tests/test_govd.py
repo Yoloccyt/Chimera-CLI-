@@ -671,11 +671,20 @@ class CancellationTests(TempDirTest):
                 rc = cli.cmd_run(self.run_args())
         return rc, buf.getvalue()
 
-    def test_interrupt_keeps_journal_and_exits_undecidable(self):
+    def _cancelled_run(self):
+        """Interrupt a two-task run once; return (run_id, rc, stdout).
+
+        A helper rather than ``test_a()`` calling ``test_b()``: unittest warns on
+        non-None returns from a test, and shared fixtures must not depend on test
+        discovery order.
+        """
         rc, out = self._interrupt_one_of_two()
+        return store.read_latest(self.tmp), rc, out
+
+    def test_interrupt_keeps_journal_and_exits_undecidable(self):
+        rid, rc, out = self._cancelled_run()
         self.assertEqual(rc, 2, out)
         self.assertIn("CANCELLED", out)
-        rid = store.read_latest(self.tmp)
         kinds = [e["kind"] for e in self.events(rid)]
         self.assertIn("cancelled", kinds)
         # run_end still lands so the ledger is closed, but the cancelled event is
@@ -686,10 +695,9 @@ class CancellationTests(TempDirTest):
         report = json.loads((self.tmp / "tmp" / "govd" / "runs" / rid / "report.json")
                             .read_text(encoding="utf-8"))
         self.assertEqual([a["task_id"] for a in report["attempts"]], ["T-1"])
-        return rid
 
     def test_resume_of_a_cancelled_run_only_fills_the_gap(self):
-        rid = self.test_interrupt_keeps_journal_and_exits_undecidable()
+        rid, _rc, _out = self._cancelled_run()
         ok2 = Attempt("T-2", 1, Verdict.OK, 0, 0.05, "rc=0")
         with mock.patch.object(cli, "ROOT", self.tmp), \
              mock.patch.object(cli, "load_all", lambda profile="": (self.tasks, self.policy)), \
@@ -705,6 +713,50 @@ class CancellationTests(TempDirTest):
         # the resume must not re-execute the finished gate.
         self.assertEqual(len([e for e in self.events(rid)
                               if e["kind"] == "attempt"]), 2)
+
+
+class ReportSurfaceTests(TempDirTest):
+    """`run --report X` must guarantee the artefact, not merely accept the flag.
+
+    The CI lane is wired as `run --profile pr --jobs 4 --report junit`. That flag
+    used to be parsed and ignored -- a decorative surface. It is now a
+    post-condition: the requested artefact must exist and be non-empty, or the run
+    exits 2 instead of claiming to have delivered a report it did not.
+    """
+
+    def test_requested_artefact_is_surfaced_with_its_size(self):
+        run = self.tmp / "r1"
+        run.mkdir()
+        (run / "junit.xml").write_text("<testsuites/>", encoding="utf-8")
+        surfaced, missing = cli.report_surface(run, "junit")
+        self.assertEqual(missing, [])
+        self.assertEqual(len(surfaced), 1)
+        self.assertIn("junit.xml", surfaced[0])
+        self.assertIn("bytes", surfaced[0])
+
+    def test_missing_and_empty_are_both_undelivered(self):
+        run = self.tmp / "r2"
+        run.mkdir()
+        (run / "junit.xml").write_text("", encoding="utf-8")   # empty != delivered
+        surfaced, missing = cli.report_surface(run, "all")
+        self.assertEqual(surfaced, [])
+        self.assertEqual(sorted(missing), ["junit.xml", "report.json", "summary.md"])
+
+    def test_run_prints_the_surface_it_promised(self):
+        ok = Attempt("T-1", 1, Verdict.OK, 0, 0.01, "rc=0")
+        tasks, pol = (make_task(id="T-1"),), policy.load(str(POLICY))
+        with mock.patch.object(cli, "ROOT", self.tmp), \
+             mock.patch.object(cli, "load_all", lambda profile="": (tasks, pol)), \
+             mock.patch.object(policy, "snapshot", lambda root: set()), \
+             mock.patch.object(cli, "_execute_one", return_value=ok):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.cmd_run(cli.build_parser().parse_args(
+                    ["run", "--profile", "local", "--report", "junit"]))
+        out = buf.getvalue()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("REPORT junit.xml=", out)
+        self.assertNotIn("summary.md=", out)   # junit was the only promise
 
 
 if __name__ == "__main__":

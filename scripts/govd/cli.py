@@ -164,6 +164,35 @@ def _reuse_refusal(profile_name, reuse_ok):
     return ""
 
 
+REPORT_FILES = {
+    "text": ("summary.md",),
+    "json": ("report.json",),
+    "junit": ("junit.xml",),
+    "all": ("report.json", "junit.xml", "summary.md"),
+}
+
+
+def report_surface(run_dir, kind):
+    """Return (surfaced, missing) for the artefacts this `run --report` promised.
+
+    WHY a guarantee rather than a switch: every run writes all three artefacts
+    because the journal directory is the evidence (Spec §3.3), so turning writing
+    off would only make CI lose data. What the flag *must* do is give the caller a
+    post-condition: a lane that asks for junit has to be told, in the exit code,
+    when that artefact is not there. Accepting `--report junit` while producing
+    nothing is exactly the decorative-flag shape this batch removed elsewhere.
+    """
+    names = REPORT_FILES.get(kind, REPORT_FILES["all"])
+    surfaced, missing = [], []
+    for name in names:
+        path = Path(run_dir) / name
+        if path.is_file() and path.stat().st_size > 0:
+            surfaced.append("%s=%s (%d bytes)" % (name, path, path.stat().st_size))
+        else:
+            missing.append(name)
+    return surfaced, missing
+
+
 def cmd_run(args):
     tasks, policy = load_all(args.profile)
     role_err = pol.role_check(policy, args.role, args.profile)
@@ -306,6 +335,14 @@ def cmd_run(args):
         with open(step, "a", encoding="utf-8") as fh:
             fh.write(summary)
 
+    surfaced, missing = report_surface(journal.dir, getattr(args, "report", "all"))
+    for line in surfaced:
+        print("REPORT " + line)
+    if missing:
+        print("UNDECIDABLE requested --report %s but these artefacts are absent or empty: %s"
+              % (getattr(args, "report", "all"), ",".join(missing)))
+        return 2
+
 
     store.write_latest(ROOT, rid, {"status": "done"})
     store.rebuild_index(ROOT)
@@ -401,7 +438,8 @@ def build_parser():
                       help="run only shard k of n, e.g. 2/4 (deterministic round-robin)")
         s.add_argument("--resume", default="")
         s.add_argument("--report", choices=("text", "json", "junit", "all"),
-                       default="all", help="CI shadow compatibility")
+                       default="all",
+                       help="guarantee these artefacts exist after the run (missing -> rc 2)")
     v = sub.add_parser("verify-journal")
     v.add_argument("run_id", nargs="?", default="")
     res = sub.add_parser("resume")
