@@ -50,10 +50,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# 环境设置
-$env:CARGO_HOME = "D:\Chimera CLI\.toolchain\cargo"
-$env:RUSTUP_HOME = "D:\Chimera CLI\.toolchain\rustup"
-$env:PATH = "$env:CARGO_HOME\bin;D:\msys64\mingw64\bin;$env:PATH"
+# 环境设置（根路径由脚本自身位置推导，不再钉死 D 盘）
+. (Join-Path $PSScriptRoot 'toolchain-env.ps1')
+Set-ChimeraToolchainEnv | Out-Null
 
 # 路径
 $scriptDir = $PSScriptRoot

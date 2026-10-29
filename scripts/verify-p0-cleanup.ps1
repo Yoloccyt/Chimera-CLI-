@@ -166,7 +166,7 @@ Write-Host "  brew install gitleaks                      # macOS"
 Write-Host "  sudo apt install gitleaks                  # Debian/Ubuntu"
 Write-Host ""
 Write-Host "  # 全历史深度扫描:"
-Write-Host "  cd 'D:\Chimera CLI'"
+Write-Host "  cd '$PSScriptRoot\..'"
 Write-Host '  gitleaks detect --source . --verbose --log-opts="--all"'
 Write-Host ""
 Write-Host "  # 若发现泄漏，熔断处理:"

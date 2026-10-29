@@ -45,13 +45,10 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # ============================================================
-# 工具链环境设置(对齐 .claude/CLAUDE.md §1)
+# 工具链环境设置(对齐 .claude/CLAUDE.md §1；根路径由脚本自身位置推导)
 # ============================================================
-$env:CARGO_HOME = 'D:\Chimera CLI\.toolchain\cargo'
-$env:RUSTUP_HOME = 'D:\Chimera CLI\.toolchain\rustup'
-$env:TMP = 'D:\Chimera CLI\tmp'
-$env:TEMP = 'D:\Chimera CLI\tmp'
-$env:PATH = "D:\Chimera CLI\.toolchain\cargo\bin;D:\msys64\mingw64\bin;$env:PATH"
+. (Join-Path $PSScriptRoot 'toolchain-env.ps1')
+Set-ChimeraToolchainEnv | Out-Null
 
 # ============================================================
 # 配置

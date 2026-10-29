@@ -39,8 +39,23 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 
-# Relative to ROOT. Kept as a tuple so adding a target is a one-line change.
-PS1_TARGETS = ("scripts/check_dependency_rules.ps1",)
+# The domain used to be the literal tuple ("scripts/check_dependency_rules.ps1",):
+# one file out of the 27 .ps1 living in the governed directory, so 26 of them were
+# never parsed by any executor even though this gate's header says it closed that
+# hole. Derive the targets from the directory instead, and keep a floor: a walk
+# that comes back empty or truncated must report "blind" (rc=2), never a green
+# over zero files.
+PS1_TARGET_FLOOR = 20
+
+
+def ps1_targets(root=None):
+    """Relative `.ps1` paths under scripts/, sorted so the output is stable."""
+    base = os.path.join(root or ROOT, "scripts")
+    try:
+        names = sorted(n for n in os.listdir(base) if n.endswith(".ps1"))
+    except OSError:
+        return []
+    return ["scripts/" + n for n in names]
 
 # PowerShell parses the file and prints one `line:col: message` per diagnostic.
 # The target path travels through the environment so no shell quoting is involved.
@@ -136,6 +151,14 @@ def judge_targets(targets, runner=None):
     return 0, ["[OK] PowerShell syntax parses: %d file(s)" % len(targets)]
 
 
+def target_report(targets, runner=None):
+    """(rc, report) over the derived domain, with the blind-scan floor applied."""
+    if len(targets) < PS1_TARGET_FLOOR:
+        return 2, ("[UNDECIDABLE] found %d .ps1 target(s), floor is %d -- the scan "
+                   "is blind, refusing to call that green" % (len(targets), PS1_TARGET_FLOOR))
+    return judge_targets(targets, runner=runner)
+
+
 def selftest():
     """Every judgement must bite in both directions, through the production judge."""
     n = 0
@@ -187,9 +210,15 @@ def selftest():
         check("host timeout is undecidable", rc, 2)
 
         # The real tree must be green through the same multi-target path.
-        rc, report = judge_targets(PS1_TARGETS)
+        rc, report = target_report(ps1_targets())
         check("real tree rc", rc, 0)
         check("real tree reports a parse line", report[0].startswith("[OK]"), True)
+        check("domain covers at least the floor (%d targets)" % len(ps1_targets()),
+              len(ps1_targets()) >= PS1_TARGET_FLOOR, True)
+        rc, report = target_report([])
+        check("a blind scan is undecidable, never a green over zero files", rc, 2)
+        rc, _ = target_report(ps1_targets("/nonexistent-path"))
+        check("a missing scripts dir is undecidable", rc, 2)
 
     print("  RESULT: %s (%d assertions)" % ("PASS" if not bad else "FAIL", n))
     return 1 if bad else 0
@@ -202,7 +231,8 @@ def main(argv):
         print("usage: check_ps1_syntax.py [--selftest]")
         return 2
 
-    rc, report = judge_targets(PS1_TARGETS)
+    targets = ps1_targets()
+    rc, report = target_report(targets)
     for line in report:
         print(line)
     if rc == 2:

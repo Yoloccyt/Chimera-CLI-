@@ -115,16 +115,20 @@ cargo fmt --all -- --check      # 长路径报 os error 206 时逐包 -p 聚合�
 
 # 测试（16 核宿主必须限流防编译 OOM；D 盘空间为硬前置）
 cargo test --workspace --no-fail-fast --jobs 2
-cargo test --workspace --release --no-fail-fast -- --ignored --test-threads=1 --nocapture   # 压测/性能红线
+# 压测/性能红线：需 release 档 + 单线程，且以 GB 计的磁盘预算为硬前置。
+# 宿主磁盘不足时本地不得假装跑过：该项由 CI 承载，本地只记“不可判定”。
+cargo test --workspace --release --no-fail-fast -- --ignored --test-threads=1 --nocapture
 
 # 治理门（PR 模板 §4 要求）
-py -3 scripts/run_gate_manifest.py            # G-01~G-98 清单执行器，默认 light 档，rc=0
+py -3 scripts/run_gate_manifest.py            # 门清单执行器（默认 light 档，rc=0）；门数以门自报的 total 为准，本行不抄数
+py -3 -m scripts.govd run --profile pr --jobs 4   # govd 调度器（ADR-228）：同一清单，带 run_id/时长/哈希链 journal
 py -3 scripts/check_entry_contract.py         # 改动 scripts/ 下脚本时
 py -3 scripts/check_doc_symbol_claims.py      # 文档写了符号名时
 pwsh -NoProfile -File scripts/check_doc_consistency.ps1   # 文档-代码三方一致性
 ```
 
-`scripts/gate_manifest.toml` 是门禁清单 SSOT（每条含 id/spec/cmd/expect/kind/note）；
+`scripts/gate_manifest.toml` 是门禁清单 SSOT（每条含 id/spec/cmd/expect/kind/note，v2 可选 timeout_s/retry/mutating/needs）；
+本地与 CI 的执行面由 `scripts/check_ci_manifest_parity.py` 双向对拍（不再靠人记步骤数）。
 判据修复优先于豁免登记。完整发布前检查（audit/deny/docker/体积）见 agents.md §7.2 与
 [docs/release/release_guide.md](docs/release/release_guide.md)。
 

@@ -2,11 +2,20 @@
 # ============================================================
 # Release GPG 签名 — 一次性密钥生成 + 配置指引
 # ============================================================
-# 前置:需要 MSYS2 的 gpg (D:\msys64\usr\bin\gpg.exe)
+# 前置:需要 GnuPG（MSYS2 的 usr/bin/gpg.exe 或其他安装均可）
 # 运行此脚本后,按提示完成交互操作。
 # ============================================================
 
-$GPG = "D:\msys64\usr\bin\gpg.exe"
+# WHY not a pinned path: the script only worked on the one host that happened to
+# have MSYS2 at D:\msys64. Honour an explicit override, else take whatever gpg
+# the PATH already provides, and keep the documented path as last resort (the
+# error message below prints the resolved value, so a miss stays diagnosable).
+$GPG = if ($env:CHIMERA_GPG) {
+    $env:CHIMERA_GPG
+} else {
+    $found = Get-Command gpg.exe, gpg -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($found) { $found.Source } else { 'D:\msys64\usr\bin\gpg.exe' }
+}
 
 if (-not (Test-Path $GPG)) {
     Write-Output "ERROR: MSYS2 GPG not found at $GPG"

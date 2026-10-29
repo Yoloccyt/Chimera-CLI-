@@ -19,11 +19,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$env:CARGO_HOME = 'D:\Chimera CLI\.toolchain\cargo'
-$env:RUSTUP_HOME = 'D:\Chimera CLI\.toolchain\rustup'
-$env:TMP = 'D:\Chimera CLI\tmp'
-$env:TEMP = 'D:\Chimera CLI\tmp'
-$env:PATH = "D:\Chimera CLI\.toolchain\cargo\bin;D:\msys64\mingw64\bin;$env:PATH"
+# Toolchain env comes from the shared, repo-root-derived helper (see
+# scripts/toolchain-env.ps1) instead of a pinned absolute path copy.
+. (Join-Path $PSScriptRoot 'toolchain-env.ps1')
+Set-ChimeraToolchainEnv | Out-Null
 
 $profile = if ($Release) { 'release' } else { 'debug' }
 Write-Host "building chimera ($profile) ..." -ForegroundColor Cyan

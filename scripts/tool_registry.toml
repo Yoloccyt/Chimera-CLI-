@@ -399,3 +399,9 @@ script = "scripts/verify_docker_locally.sh"
 status = "diagnostic"
 owner = "release"
 evidence = "Chimera CLI 本地 Docker 镜像验证脚本(Linux/macOS / Bash) | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/toolchain-env.ps1"
+status = "active"
+owner = "ops"
+evidence = "shared repo-root-derived toolchain env, dot-sourced by measure_startup.ps1 / run_shadow_sojourn.ps1 / check_repo_wiki_benchmark.ps1 / check_release_size.ps1 / generate_changelog.ps1 (replacing five copies of a pinned D:\\Chimera CLI); parses under check_ps1_syntax.py's 27-file domain (measured 2026-10-29)"

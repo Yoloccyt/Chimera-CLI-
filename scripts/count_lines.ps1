@@ -2,7 +2,9 @@
 # Encoding: UTF-8 BOM (ASCII-safe content)
 
 $ErrorActionPreference = 'SilentlyContinue'
-$root = "d:\Chimera CLI"
+# Derive the root from this script's own location: a pinned drive letter makes
+# the line-count reported in a document reproducible on one machine only.
+$root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 $excluded = @('tmp_podman', 'node_modules', 'target', '.git')

@@ -8,7 +8,7 @@
          含 ANSI 备用屏与中文面板文案、增量 diff 生效);
       B. CHIMERA_NO_V3_ENGINE=1 回退路径(与 A 对比输出规模);
       C. 尽力向 stdin 写入 q(验证事件循环对管道输入不挂死/优雅退出)。
-    证据报告写入 D:\Chimera CLI\tmp\tui_verify_report.txt(不入库)。
+    证据报告写入仓内 tmp\tui_verify_report.txt(不入库；路径由脚本位置推导)。
 
 .NOTES
     真实终端交互验证仍须由用户在 Windows Terminal 人工执行
@@ -17,7 +17,8 @@
 #>
 param(
     # 已构建的 CLI 二进制路径;不存在时脚本直接失败并提示构建命令
-    [string]$BinaryPath = "D:\Chimera CLI\target\debug\chimera.exe",
+    # （默认从脚本自身位置推导，不再钉盘符：换机器/换克隆路径时仍可用）
+    [string]$BinaryPath = (Join-Path (Split-Path -Parent $PSScriptRoot) 'target\debug\chimera.exe'),
     # 场景 A/B 的观察时长(秒)
     [int]$RunSeconds = 8,
     # 场景 C 的 stdin 输入等待与总超时(秒)
@@ -25,7 +26,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ProjectRoot = 'D:\Chimera CLI'
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
 $ReportPath = Join-Path $ProjectRoot 'tmp\tui_verify_report.txt'
 $Report = [System.Collections.Generic.List[string]]::new()
 

@@ -7,12 +7,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$env:CARGO_HOME = 'D:\Chimera CLI\.toolchain\cargo'
-$env:RUSTUP_HOME = 'D:\Chimera CLI\.toolchain\rustup'
-$env:TMP = 'D:\Chimera CLI\tmp'
-$env:TEMP = 'D:\Chimera CLI\tmp'
-$env:PATH = "D:\Chimera CLI\.toolchain\cargo\bin;D:\msys64\mingw64\bin;$env:PATH"
-Set-Location 'D:\Chimera CLI'
+# Repo-root-derived toolchain env; the old block pinned 'D:\Chimera CLI' twice
+# (once for the env, once in Set-Location), which broke on any other clone path.
+. (Join-Path $PSScriptRoot 'toolchain-env.ps1')
+Set-ChimeraToolchainEnv | Out-Null
+Set-Location $ChimeraRepoRoot
 
 $env:SOJOURN_DAYS = "$Days"
 cargo run -p event-bus --example shadow_sojourn
