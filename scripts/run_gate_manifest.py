@@ -118,6 +118,23 @@ AMBIGUOUS_ENV_SIGS = (
 ENV_FAILURE_SIGNATURES = UNCONDITIONAL_ENV_SIGS + AMBIGUOUS_ENV_SIGS
 # shell 解释器报错的形态（`<path>: line <N>: ...`）；用于把 `.sh` 判据的误判风险压到零。
 SHELL_ERROR_RE = re.compile(r"^.+: line \d+: ")
+# 与 govd.classify 同步（2026-10-29）：本仓方言只有 0/1/2，G-138 也强制 expect∈{0,1,2}，
+# 因此任何其他退出码都不可能是判决：126/127 是 shell 跑不起来，3221225773 是 Windows
+# fastfail，2147516553 是控制台/RPC 异常。实测一次被污染的全量 run 里这三种都被记成了
+# mismatch（4 个假红），单独重跑均达期望。回滚面与默认面必须同判决,否则紧急切回 legacy
+# 会把环境问题报成仓库缺陷（一致性由 govd 单测逐条验证）。
+VERDICT_CODES = (0, 1, 2)
+
+
+def abnormal_exit_reason(rc, expect):
+    """退出码不属于判决方言时的环境成因，否则 None。"""
+    if rc is None:
+        return None
+    if rc not in VERDICT_CODES:
+        return "abnormal-exit:rc=%d" % rc
+    if rc == 2 and expect != 2:
+        return "gate-declared-undecidable"
+    return None
 
 
 def env_failure_reason(log_text, cmd):
@@ -162,6 +179,9 @@ def classify(rc, expect, log_text, cmd):
     sig = env_failure_reason(log_text, cmd)
     if sig:
         return "env", sig
+    abnormal = abnormal_exit_reason(rc, expect)
+    if abnormal:
+        return "env", abnormal
     return ("ok", None) if rc == expect else ("mismatch", None)
 
 
@@ -302,8 +322,13 @@ def mode_selftest():
         ("expect1-real-red-is-ok", 1, 1,
          "[GAP] two sources disagree\n[FAIL] 2 gaps\n", "ok"),
         ("expect0-green-is-ok", 0, 0, "[OK] all gates as expected\n", "ok"),
-        ("expect0-undecidable-is-mismatch", 2, 0,
-         "[UNDECIDABLE] missing data file: scripts/x.toml\n", "mismatch"),
+        # 门自己宣布“不可判定”(rc=2)：既不是红也不是绿，而是未判定。
+        ("expect0-undecidable-is-env", 2, 0,
+         "[UNDECIDABLE] missing data file: scripts/x.toml\n", "env"),
+        ("abnormal-shell-127-is-env", 127, 0, "", "env"),
+        ("abnormal-fastfail-is-env", 3221225773, 1, "", "env"),
+        ("abnormal-rpc-console-is-env", 2147516553, 0, "", "env"),
+        ("expect2-is-honoured-as-ok", 2, 2, "[UNDECIDABLE] declared\n", "ok"),
     ]
     for name, rc, exp, text, want in verdict_cases:
         got = classify(rc, exp, text, "{python} x.py")[0]

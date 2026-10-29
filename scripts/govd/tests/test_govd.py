@@ -91,8 +91,14 @@ class ClassifyTests(unittest.TestCase):
         ("expect1-real-red-is-ok", 1, 1,
          "[GAP] two sources disagree\n[FAIL] 2 gaps\n", Verdict.OK),
         ("expect0-green-is-ok", 0, 0, "[OK] all gates as expected\n", Verdict.OK),
-        ("expect0-undecidable-is-mismatch", 2, 0,
-         "[UNDECIDABLE] missing data file: scripts/x.toml\n", Verdict.MISMATCH),
+        ("expect0-undecidable-is-env", 2, 0,
+         "[UNDECIDABLE] missing data file: scripts/x.toml\n", Verdict.ENV),
+        # Codes outside the 0/1/2 dialect cannot be verdicts (G-138 enforces the
+        # expect side); each of these three was measured as a false `mismatch`.
+        ("abnormal-shell-127-is-env", 127, 0, "", Verdict.ENV),
+        ("abnormal-fastfail-is-env", 3221225773, 1, "", Verdict.ENV),
+        ("abnormal-rpc-console-is-env", 2147516553, 0, "", Verdict.ENV),
+        ("expect2-is-honoured-as-ok", 2, 2, "[UNDECIDABLE] declared\n", Verdict.OK),
     )
 
     def test_env_fixture_count_is_ten(self):
@@ -126,6 +132,11 @@ class ClassifyTests(unittest.TestCase):
             self.assertIn(sig, legacy.AMBIGUOUS_ENV_SIGS, "legacy missing signature")
         for sig in classify.UNCONDITIONAL_ENV_SIGS:
             self.assertIn(sig, legacy.UNCONDITIONAL_ENV_SIGS, "legacy missing signature")
+        # Same comparison one level up: the three-way verdict itself.
+        for name, rc, expect, text, want in self.VERDICT_CASES:
+            with self.subTest(verdict=name):
+                self.assertEqual(legacy.classify(rc, expect, text, "{python} x.py")[0],
+                                 want.value)
 
     def test_attempt_precedence(self):
         launch = classify.classify_attempt(0, 0, "", "x", launch_error="OSError")

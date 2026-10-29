@@ -28,6 +28,31 @@ AMBIGUOUS_ENV_SIGS = (
     "os error 206",
 )
 SHELL_ERROR_RE = re.compile(r"^.+: line \d+: ")
+# The repository dialect: 0 pass, 1 judged red, 2 undecidable -- and G-138 enforces
+# `expect in {0,1,2}` for every row. So any other exit code cannot be a verdict:
+# it is the shell's "could not run it" (126/127), a Windows fastfail (0xC0000409),
+# or an RPC/console failure under load. Measured 2026-10-29 in one polluted pr run:
+# rc=3221225773 / 2147516553 / 127 were all filed as `mismatch` -- four fake red
+# gates that pass when re-run alone.
+VERDICT_CODES = (0, 1, 2)
+
+
+def abnormal_exit_reason(rc, expect):
+    """Why this exit code is not a verdict, or None.
+
+    Two kinds, both environment rather than repository state:
+      * a code outside the 0/1/2 dialect -> the gate never reached a verdict
+      * rc == 2 with expect != 2 -> the gate itself declared 不可判定. Recording
+        that as `mismatch` files "I could not decide" as "the repository is
+        broken", which is the same category error in the other direction.
+    """
+    if rc is None:
+        return None
+    if rc not in VERDICT_CODES:
+        return "abnormal-exit:rc=%d" % rc
+    if rc == 2 and expect != 2:
+        return "gate-declared-undecidable"
+    return None
 
 
 def env_failure_reason(log_text, cmd):
@@ -53,6 +78,9 @@ def classify(rc, expect, log_text, cmd):
     sig = env_failure_reason(log_text, cmd)
     if sig:
         return Verdict.ENV, "env:%s" % sig
+    abnormal = abnormal_exit_reason(rc, expect)
+    if abnormal:
+        return Verdict.ENV, abnormal
     if rc == expect:
         return Verdict.OK, "rc=%d" % rc
     return Verdict.MISMATCH, "rc=%d!=%d" % (rc, expect)
