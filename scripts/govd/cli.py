@@ -94,7 +94,8 @@ def _execute_one(task, policy, bash_path, logs, n):
 
 
     if reason:
-        return Attempt(task.id, n, Verdict.LAUNCH, None, 0.0, "policy")
+        return Attempt(task.id, n, Verdict.LAUNCH, None, 0.0, "policy",
+                       cmd_digest=task.cmd_digest())
 
 
     budget = pol.retry_budget(task, policy)
@@ -104,10 +105,20 @@ def _execute_one(task, policy, bash_path, logs, n):
 
         attempt = run_attempt(task, str(log), pol.timeout_for(task, policy), bash_path)
         attempt.n = n
+        attempt.cmd_digest = task.cmd_digest()
         if attempt.verdict.retryable and n <= budget:
             n += 1
             continue
         return attempt
+
+
+def _reuse_refusal(profile_name, reuse_ok):
+    """`release` forbids reuse outright; every other profile needs the explicit flag."""
+    if reuse_ok and profile_name == "release":
+        return ("release profile forbids --reuse-ok: a release verdict must be "
+                "produced by this run, not inherited from an earlier one "
+                "(ADR-228 §3.4)")
+    return ""
 
 
 def cmd_run(args):
@@ -117,6 +128,10 @@ def cmd_run(args):
 
 
         print("UNDECIDABLE " + role_err)
+        return 2
+    refuse = _reuse_refusal(args.profile, getattr(args, "reuse_ok", False))
+    if refuse:
+        print("UNDECIDABLE " + refuse)
         return 2
     profile = policy.profiles[args.profile]
     ordered, skipped = planner.plan(tasks, profile, args.allow_mutating)
@@ -139,8 +154,14 @@ def cmd_run(args):
 
     rid = args.resume or new_run_id()
     journal = store.Journal(ROOT, rid)
-    meta = meta_for(rid, args.profile, mf.digest(tasks), args.role)
+    digest_value = mf.digest(tasks)
+    meta = meta_for(rid, args.profile, digest_value, args.role)
     done = _completed(journal.events) if args.resume else set()
+    # Reuse is opt-in per run and keyed on the whole manifest digest, so an edit
+    # anywhere in gate_manifest.toml invalidates every cached verdict at once.
+    reuse = (store.reusable_ok_runs(ROOT, digest_value, meta.env_fingerprint,
+                                    exclude_run=rid)
+             if getattr(args, "reuse_ok", False) else {})
 
 
     journal.append("run_start", {"run_id": rid, "profile": args.profile,
@@ -154,7 +175,17 @@ def cmd_run(args):
 
     def execute(task):
         if task.kind == "heavy" and task.disk_gb and free < task.disk_gb:
-            return Attempt(task.id, 1, Verdict.UNKNOWN, None, 0.0, "disk")
+            return Attempt(task.id, 1, Verdict.UNKNOWN, None, 0.0, "disk",
+                           cmd_digest=task.cmd_digest())
+        hit = reuse.get(task.id)
+        if hit and hit[1] == task.cmd_digest():
+            # The gate did not run here. It is reported as ok because the operator
+            # asked for it, but it is stamped reused/reused_from, counted separately
+            # in [SUM], and rendered as <skipped/> in JUnit so no consumer can read
+            # an unexecuted gate as fresh evidence.
+            return Attempt(task.id, 0, Verdict.OK, 0, 0.0,
+                           "reused-ok from " + hit[0], cmd_digest=task.cmd_digest(),
+                           reused=True, reused_from=hit[0])
         return _execute_one(task, policy, bash_path, journal.logs, 1)
 
     def record(att):
@@ -163,7 +194,8 @@ def cmd_run(args):
         # 与 Spec §3.4「已完成事件保留」直接冲突。
         journal.attempt(att)
         attempts.append(att)
-        print("  " + att.task_id + " " + att.verdict.value + " rc=" + str(att.rc))
+        marker = " (reused from %s)" % att.reused_from if att.reused else ""
+        print("  " + att.task_id + " " + att.verdict.value + " rc=" + str(att.rc) + marker)
 
     pending = [t for t in ordered if t.id not in done]
     futs = []
@@ -269,6 +301,10 @@ def build_parser():
                        default="all", help="CI shadow compatibility")
     v = sub.add_parser("verify-journal")
     v.add_argument("run_id", nargs="?", default="")
+    # --reuse-ok belongs to `run` only: `list` must not silently accept a flag it
+    # ignores (the F24/F29 silent-default family that check_entry_contract C3 judges).
+    sub.choices["run"].add_argument("--reuse-ok", action="store_true",
+                                    help="skip gates already ok under the same manifest/cmd/env fingerprint")
     r = sub.add_parser("report")
     r.add_argument("--run-id", default="")
     return p

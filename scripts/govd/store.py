@@ -106,6 +106,41 @@ def rebuild_index(root):
     return rows
 
 
+def reusable_ok_runs(root, manifest_digest, env_fingerprint, exclude_run=""):
+    """Map task_id -> (run_id, cmd_digest) for gates that already passed here.
+
+    Key = (manifest_digest, task_id, cmd_digest, env_fingerprint), per ADR-228
+    §3.4. The scan reads each previous run's derived `report.json`, and a
+    missing or unreadable report simply means "not reusable": reuse must never
+    depend on a corrupt cache being read as a pass. Attempts that were
+    themselves reused are excluded, so a reuse chain cannot grow across runs.
+    """
+    out = {}
+    base = Path(root) / "tmp" / "govd" / "runs"
+    if not base.is_dir():
+        return out
+    for report_file in sorted(base.glob("*/report.json")):
+        run_id = report_file.parent.name
+        if run_id == exclude_run:
+            continue
+        try:
+            doc = json.loads(report_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        run = doc.get("run", {})
+        if run.get("manifest_digest") != manifest_digest:
+            continue
+        if run.get("env_fingerprint") != env_fingerprint:
+            continue
+        for att in doc.get("attempts", []):
+            if att.get("verdict") != "ok" or att.get("reused"):
+                continue
+            if not att.get("cmd_digest") or not att.get("task_id"):
+                continue
+            out[att["task_id"]] = (run_id, att["cmd_digest"])
+    return out
+
+
 def write_latest(root, run_id, extra=None):
     p = Path(root) / "tmp" / "govd" / "latest.json"
     p.parent.mkdir(parents=True, exist_ok=True)

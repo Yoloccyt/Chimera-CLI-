@@ -436,6 +436,63 @@ class SelectionTests(unittest.TestCase):
                     f.rmdir()
             run.rmdir()
 
+class ReuseTests(TempDirTest):
+    """--reuse-ok keys on (manifest digest, task id, cmd digest, env fingerprint)."""
+
+    def write_report(self, run_id, digest, env, attempts):
+        run = self.tmp / "tmp" / "govd" / "runs" / run_id
+        run.mkdir(parents=True)
+        (run / "report.json").write_text(json.dumps({
+            "run": {"manifest_digest": digest, "env_fingerprint": env},
+            "attempts": attempts}), encoding="utf-8")
+        return run
+
+    def test_cmd_digest_tracks_the_command_not_the_id(self):
+        before = make_task(id="T-1", cmd="{python} scripts/x.py")
+        after = make_task(id="T-1", cmd="{python} scripts/x.py --new-predicate")
+        self.assertNotEqual(before.cmd_digest(), after.cmd_digest())
+
+    def test_reuse_requires_matching_digest_and_env(self):
+        task = make_task(id="T-1")
+        self.write_report("r1", "d" * 64, "env-a",
+                          [{"task_id": "T-1", "verdict": "ok",
+                            "cmd_digest": task.cmd_digest()}])
+        self.assertEqual(store.reusable_ok_runs(self.tmp, "d" * 64, "env-a"),
+                         {"T-1": ("r1", task.cmd_digest())})
+        self.assertEqual(store.reusable_ok_runs(self.tmp, "e" * 64, "env-a"), {})
+        self.assertEqual(store.reusable_ok_runs(self.tmp, "d" * 64, "env-b"), {})
+        self.assertEqual(store.reusable_ok_runs(self.tmp, "d" * 64, "env-a",
+                                                exclude_run="r1"), {})
+
+    def test_reuse_ignores_reused_sources_and_unreadable_reports(self):
+        task = make_task(id="T-1")
+        self.write_report("r1", "d" * 64, "env-a", [
+            {"task_id": "T-1", "verdict": "ok",
+             "cmd_digest": task.cmd_digest(), "reused": True},
+            {"task_id": "T-2", "verdict": "ok"},
+            {"task_id": "T-3", "verdict": "mismatch", "cmd_digest": "f" * 64},
+        ])
+        self.assertEqual(store.reusable_ok_runs(self.tmp, "d" * 64, "env-a"), {})
+        broken = self.write_report("r2", "d" * 64, "env-a", [])
+        (broken / "report.json").write_text("{not json", encoding="utf-8")
+        self.assertEqual(store.reusable_ok_runs(self.tmp, "d" * 64, "env-a"), {})
+
+    def test_release_profile_refuses_reuse(self):
+        self.assertIn("release", cli._reuse_refusal("release", True))
+        self.assertEqual(cli._reuse_refusal("pr", True), "")
+        self.assertEqual(cli._reuse_refusal("release", False), "")
+
+    def test_report_marks_reused_separately(self):
+        att = Attempt("T-1", 0, Verdict.OK, 0, 0.0, "reused-ok from r1",
+                      cmd_digest="a" * 64, reused=True, reused_from="r1")
+        self.assertIn("ok=1", report.sum_line([att], [], 1))
+        self.assertIn("reused=1(not executed)", report.sum_line([att], [], 1))
+        self.assertIn("reused", report.counts([att], []))
+        xml = report.to_junit([att], [])
+        self.assertIn('skipped message="reused-ok from r1"', xml)
+        self.assertEqual(ET.fromstring(xml).get("skipped"), "1")
+
+
 if __name__ == "__main__":
     # F30 dialect: an uncaught crash must exit 2, never borrow the interpreter's 1
     # (which would read as "ran and judged red" to run_gate_manifest).

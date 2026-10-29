@@ -5,6 +5,7 @@ is still the repository dialect 0/1/2. Nothing here touches the filesystem.
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -61,6 +62,16 @@ class Task:
             return False
         return True
 
+    def cmd_digest(self) -> str:
+        """Digest of the command string -- the third leg of the `--reuse-ok` key.
+
+        WHY hash the cmd instead of trusting the id: a gate can be edited in
+        place (same id, new predicate). Reuse must then be invalidated, or the
+        scheduler would report yesterday's verdict for today's gate -- the same
+        laundering class F33 guards against, only arriving through the cache side.
+        """
+        return hashlib.sha256(self.cmd.encode("utf-8")).hexdigest()
+
     def to_dict(self) -> dict:
         return {
             "id": self.id, "cmd": self.cmd, "expect": self.expect,
@@ -90,6 +101,9 @@ class Attempt:
     reason: str
     log: str = ""
     timed_out: bool = False
+    cmd_digest: str = ""
+    reused: bool = False
+    reused_from: str = ""
 
     def to_dict(self) -> dict:
         return {
@@ -97,6 +111,8 @@ class Attempt:
             "verdict": self.verdict.value, "rc": self.rc,
             "duration_s": round(self.duration_s, 3), "reason": self.reason,
             "log": self.log, "timed_out": self.timed_out,
+            "cmd_digest": self.cmd_digest, "reused": self.reused,
+            "reused_from": self.reused_from,
         }
 
 
