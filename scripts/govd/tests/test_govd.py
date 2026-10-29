@@ -1,6 +1,7 @@
 """govd self-tests (stdlib unittest). ADR-228 P3 batches I3-I5."""
 from __future__ import annotations
 
+import ast
 import io
 import json
 import subprocess
@@ -865,6 +866,89 @@ class AuditFieldTests(TempDirTest):
         # selection is recorded too, so a later reader can tell what was planned
         self.assertEqual(start["selected"], 1)
 
+
+
+class DependencyFreedomTests(unittest.TestCase):
+    """Spec default decision 8.1 / ADR-228 §6: stdlib-only is a hard constraint.
+
+    WHY a test rather than trust the census: `audit_python_surface.py` reports
+    repo-wide third-party importers, but a gate that reports a number is not a
+    fence that fails. The pinned CI interpreter has no site-packages, so a single
+    `import yaml` inside govd would pass locally on a dev box and crash the lane
+    that runs the scheduler -- the exact failure mode G-121 exists to prevent.
+    """
+
+    PACKAGE = Path(__file__).resolve().parents[1]        # scripts/govd
+    SCRIPTS = PACKAGE.parent                             # scripts/
+
+    def is_local(self, root):
+        """A module is local if it resolves inside this repo.
+
+        Sibling resolution matters: `scripts/govd/__main__.py` imports `gate_rc`,
+        which lives one level up and only becomes importable because __main__.py
+        injects scripts/ into sys.path (Spec 3.1). Treating "same directory" as the
+        whole of local is the exact bug the census tool shipped with first.
+        """
+        if root in {"scripts", "govd", self.PACKAGE.name}:
+            return True
+        return (self.SCRIPTS / (root + ".py")).is_file() or (self.SCRIPTS / root).is_dir()
+
+    def module_roots(self):
+        """(file, module root) for every non-relative import in the package."""
+        found = []
+        for path in sorted(self.PACKAGE.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        found.append((path, alias.name.split(".")[0]))
+                elif isinstance(node, ast.ImportFrom):
+                    if node.level:                        # relative import: local
+                        continue
+                    if node.module:
+                        found.append((path, node.module.split(".")[0]))
+        return found
+
+    def test_package_imports_only_stdlib_and_itself(self):
+        stdlib = set(sys.stdlib_module_names) | {"__future__"}
+        offenders = [(p.name, root) for p, root in self.module_roots()
+                     if root not in stdlib and not self.is_local(root)]
+        self.assertEqual(offenders, [], "govd must stay stdlib-only")
+
+    NETWORK_ROOTS = {"urllib", "urllib3", "requests", "http", "ftplib", "smtplib",
+                     "telnetlib", "xmlrpc", "socketserver"}
+
+    def test_no_network_module_is_imported(self):
+        """The scheduler runs local commands; it never reaches the network.
+
+        The first draft of this case scanned the source for text needles and
+        matched its own list of needles -- a textbook self-reference. Detection is
+        by import root now, which cannot be tripped by the test's own prose.
+        """
+        offenders = []
+        for path in sorted(self.PACKAGE.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                names = set()
+                if isinstance(node, ast.Import):
+                    names = {alias.name.split(".")[0] for alias in node.names}
+                elif isinstance(node, ast.ImportFrom) and node.module:
+                    names = {node.module.split(".")[0]}
+                hit = names & self.NETWORK_ROOTS
+                if hit:
+                    offenders.append((path.name, sorted(hit)))
+        self.assertEqual(offenders, [])
+
+    def test_socket_is_used_only_to_record_the_hostname(self):
+        """Spec 3.5 wants `host` in the audit fields; that must not slide into sockets."""
+        offenders = []
+        for path in sorted(self.PACKAGE.rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name)
+                        and node.value.id == "socket" and node.attr != "gethostname"):
+                    offenders.append((path.name, "socket." + node.attr))
+        self.assertEqual(offenders, [])
 
 if __name__ == "__main__":
     # F30 dialect: an uncaught crash must exit 2, never borrow the interpreter's 1
