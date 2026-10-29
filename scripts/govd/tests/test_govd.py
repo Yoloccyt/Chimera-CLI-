@@ -759,6 +759,71 @@ class ReportSurfaceTests(TempDirTest):
         self.assertNotIn("summary.md=", out)   # junit was the only promise
 
 
+
+
+class RetrySemanticsTests(TempDirTest):
+    """Spec 3.4 / default decision 8.4: which verdicts may be retried, and how far.
+
+    `policy.retry_budget` was already unit-tested, but the loop that *applies* the
+    budget (`_execute_one`) had no test: the invariant "a red verdict is never
+    retried, an environment failure is retried exactly once" lived only in reading
+    the code. These cases count executor calls, which is the only observable that
+    distinguishes "retried" from "reported".
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.policy = policy.load(str(POLICY))
+        self.calls = []
+
+    def execute_with(self, verdicts):
+        """Drive _execute_one with a stubbed executor returning these verdicts."""
+        def fake_run_attempt(task, log_path, timeout_s, bash_path):
+            self.calls.append(task.id)
+            verdict = verdicts[min(len(self.calls) - 1, len(verdicts) - 1)]
+            rc = verdict.rc if verdict is not Verdict.ENV else 2
+            return Attempt(task.id, 1, verdict, rc, 0.01, "stub")
+
+        with mock.patch.object(cli, "run_attempt", side_effect=fake_run_attempt):
+            attempt = cli._execute_one(make_task(id="T-1"), self.policy,
+                                       "bash", self.tmp, 1)
+        return attempt
+
+    def test_verdict_vocabulary_matches_the_spec(self):
+        # 3.4: only env/timeout/launch may retry; a mismatch and a disk-shortfall
+        # unknown must not, or a red gate gets re-rolled until it looks green.
+        self.assertEqual([v for v in Verdict if v.retryable],
+                         [Verdict.ENV, Verdict.TIMEOUT, Verdict.LAUNCH])
+        self.assertFalse(Verdict.MISMATCH.retryable)
+        self.assertFalse(Verdict.UNKNOWN.retryable)
+
+    def test_mismatch_is_never_retried(self):
+        attempt = self.execute_with([Verdict.MISMATCH])
+        self.assertEqual(len(self.calls), 1, "a red verdict must not re-run")
+        self.assertIs(attempt.verdict, Verdict.MISMATCH)
+        self.assertEqual(attempt.n, 1)
+
+    def test_env_failure_is_retried_exactly_once(self):
+        attempt = self.execute_with([Verdict.ENV, Verdict.OK])
+        self.assertEqual(len(self.calls), 2)
+        self.assertIs(attempt.verdict, Verdict.OK)
+        self.assertEqual(attempt.n, 2, "the second attempt must be recorded as n=2")
+
+    def test_env_failure_exhausting_the_budget_stays_env(self):
+        attempt = self.execute_with([Verdict.ENV, Verdict.ENV])
+        self.assertEqual(len(self.calls), 2, "budget is one retry, not two")
+        self.assertIs(attempt.verdict, Verdict.ENV)
+        self.assertEqual(attempt.rc, 2)
+
+    def test_policy_refusal_never_reaches_the_executor(self):
+        """An executable outside the whitelist is decided before any subprocess."""
+        task = make_task(id="T-9", cmd="curl https://example.invalid/x")
+        with mock.patch.object(cli, "run_attempt",
+                               side_effect=AssertionError("must not run")):
+            attempt = cli._execute_one(task, self.policy, "bash", self.tmp, 1)
+        self.assertIs(attempt.verdict, Verdict.LAUNCH)
+        self.assertEqual(attempt.reason, "policy")
+
 if __name__ == "__main__":
     # F30 dialect: an uncaught crash must exit 2, never borrow the interpreter's 1
     # (which would read as "ran and judged red" to run_gate_manifest).
