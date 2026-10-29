@@ -74,13 +74,26 @@ R2（`C-57…C-141`）已收口。R3 的目标**不是复述结论**，而是：
 - **D3（门覆盖判据）**：判定「某红线是否有门」**不能只 grep 门的 `cmd` 串**——`G-48` 的 `cmd` 是 `test_fnlen_smoke.sh`，`audit_fnlen` 只出现在其 `note` 内。必须以 `gate_manifest.toml` 的 `note` + 被调脚本内部引用为准。
 - **D4（可追溯，强制）**：任何 `C-xxx` 单必须**双落**——提交消息含编号 **且** ADR 落地表有行；只满足其一的，按 `R3-F06` 方式补记。
 
+- **D5（冻结面范围，承 R3-T01）**：`ImmutableSurface` **只冻结安全类 Critical**；运维/观测类
+  （`ConsensusReached` / `SlowConsumerDropped` / `OrphanCallDetected`）**不入冻结面**。
+  判据：该 Critical 事件若被降级，是否会打开「攻击/违规无痕」的口子——是则冻结，否则不冻结。
+  现状 22 = 19 冻结 + 3 运维，**不是漏项**；本规则写入本节即为成文，后续新增 Critical 事件按此判据处理。
+- **D6（存储字段命名，承 R3-T02）**：三套字段**不统一**，按语义分工——
+  `schema_version` = 结构版本（反序列化兼容判据）；`payload_version` = 载荷/编码版本；
+  `content_hash` = 内容摘要（完整性/去重，非版本）。实测分布：`content_hash` 57 / `schema_version` 15 / `payload_version` 12。
+  统一命名会引入无意义迁移，且会掩盖三者语义差异。
+- **D7（错误类型分层边界，承 R3-T03）**：「库层用 `thiserror`」**不适用于纯契约/遥测层**。
+  豁免范围：`nexus-contracts`（含 6 兄弟）、`nexus-telemetry`、`nexus-hook` —— 它们以
+  `Result<_, &'static str>`、内联枚举或作用域错误表达，不引入 `thiserror` 依赖；
+  应用层（`nexus-app-server` 等）用 `anyhow`。实测：46 crate 中 **10 个**无 `src/error.rs`，与上述范围一致。
+
 ## 7. 待裁（R3-T）
 
 | 编号 | 议题 | 默认值 |
 |---|---|---|
-| `R3-T01` | 3 个运维类 Critical（`ConsensusReached`/`OrphanCallDetected`/`SlowConsumerDropped`）是否入冻结面 | **不入**，把「只冻结安全类 Critical」写成明文规则（零扩散；避免再触发 fuzz 计数链） |
-| `R3-T02` | `schema_version`/`payload_version`/`content_hash` 是否统一命名 | **不统一**，在文档写清三者适用面 |
-| `R3-T03` | 「库层 thiserror」对纯契约层的适用边界（10 个 crate 无 `src/error.rs`） | **纯契约层豁免**，写入 ADR |
+| `R3-T01` | 3 个运维类 Critical 是否入冻结面 | ✅ **已裁决 → D5**（不入面；「只冻结安全类」已成文规则） |
+| `R3-T02` | 三套版本/摘要字段是否统一命名 | ✅ **已裁决 → D6**（不统一，按语义分工并写明适用面） |
+| `R3-T03` | 「库层 thiserror」对纯契约层的边界 | ✅ **已裁决 → D7**（纯契约/遥测层豁免，范围 10 crate） |
 | `R3-T04` | fnlen 的 2 条生产债（467 / 215 行）是否本轮拆 | **不拆**，另立专项（拆 467 行函数需独立评审 + 回归面） |
 | `R3-T05` | 是否批准落 `R3-C01` + `R3-C02` | ✅ **已批准并执行**（2026-10-29，业主「授权执行」）：锚点 39→46 / 152→154、删 2 条 drift 注册、ADR-225 补 `C-138` 行；`check_doc_drift.sh` = **0 registered drift**，门集 `ok=129 mismatch=0`，四道文档门 rc=0 |
 
