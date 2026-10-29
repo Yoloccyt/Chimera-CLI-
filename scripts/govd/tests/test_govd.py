@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import xml.etree.ElementTree as ET
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -634,6 +635,76 @@ class TaskFamilySelectionTests(unittest.TestCase):
         release = self.ids("release")
         self.assertTrue(any(i.startswith("R-") for i in release), sorted(release))
         self.assertTrue(any(i.startswith("E-") for i in release), sorted(release))
+
+
+class CancellationTests(TempDirTest):
+    """Spec §3.4: Ctrl-C cancels honestly, and the journal stays resumable.
+
+    Three claims, none of which the unit-level tests covered: the run must exit 2
+    (never "all green"), finished attempts must already be on disk (not buffered
+    until the end), and `--resume` of that same run must carry the earlier verdict
+    and execute only what never ran.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.tasks = (make_task(id="T-1"), make_task(id="T-2"))
+        self.policy = policy.load(str(POLICY))
+
+    def run_args(self, extra=()):
+        return cli.build_parser().parse_args(["run", "--profile", "local", *extra])
+
+    def events(self, rid):
+        path = self.tmp / "tmp" / "govd" / "runs" / rid / "events.jsonl"
+        return [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines()]
+
+    def _interrupt_one_of_two(self):
+        """Run T-1 to completion, interrupt on T-2; return the run id."""
+        ok = Attempt("T-1", 1, Verdict.OK, 0, 0.05, "rc=0")
+        with mock.patch.object(cli, "ROOT", self.tmp), \
+             mock.patch.object(cli, "load_all", lambda profile="": (self.tasks, self.policy)), \
+             mock.patch.object(policy, "snapshot", lambda root: set()), \
+             mock.patch.object(cli, "_execute_one",
+                               side_effect=[ok, KeyboardInterrupt()]):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.cmd_run(self.run_args())
+        return rc, buf.getvalue()
+
+    def test_interrupt_keeps_journal_and_exits_undecidable(self):
+        rc, out = self._interrupt_one_of_two()
+        self.assertEqual(rc, 2, out)
+        self.assertIn("CANCELLED", out)
+        rid = store.read_latest(self.tmp)
+        kinds = [e["kind"] for e in self.events(rid)]
+        self.assertIn("cancelled", kinds)
+        # run_end still lands so the ledger is closed, but the cancelled event is
+        # what proves which gates genuinely ran.
+        self.assertIn("run_end", kinds)
+        cancelled = [e for e in self.events(rid) if e["kind"] == "cancelled"][0]
+        self.assertEqual(cancelled["payload"]["done"], ["T-1"])
+        report = json.loads((self.tmp / "tmp" / "govd" / "runs" / rid / "report.json")
+                            .read_text(encoding="utf-8"))
+        self.assertEqual([a["task_id"] for a in report["attempts"]], ["T-1"])
+        return rid
+
+    def test_resume_of_a_cancelled_run_only_fills_the_gap(self):
+        rid = self.test_interrupt_keeps_journal_and_exits_undecidable()
+        ok2 = Attempt("T-2", 1, Verdict.OK, 0, 0.05, "rc=0")
+        with mock.patch.object(cli, "ROOT", self.tmp), \
+             mock.patch.object(cli, "load_all", lambda profile="": (self.tasks, self.policy)), \
+             mock.patch.object(policy, "snapshot", lambda root: set()), \
+             mock.patch.object(cli, "_execute_one", return_value=ok2):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.cmd_run(self.run_args(["--resume", rid]))
+        out = buf.getvalue()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("T-1 ok (resumed, not re-run)", out)
+        # One attempt event for T-1 in the first run, one for T-2 in the second:
+        # the resume must not re-execute the finished gate.
+        self.assertEqual(len([e for e in self.events(rid)
+                              if e["kind"] == "attempt"]), 2)
 
 
 if __name__ == "__main__":
