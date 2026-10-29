@@ -110,6 +110,10 @@ AMBIGUOUS_ENV_SIGS = (
     "No such file or directory",  # 脚本自身缺失 or 门报"某证据文件不存在"
     "SyntaxError",                # 被调脚本没编译过
     "Traceback (most recent call last)",  # 子进程崩溃
+    # 与 govd.classify 保持同步（2026-10-29 实测）：`cargo fmt --all` 在本机长路径下未执行任何
+    # 检查即中断并退 1，而 1 正是"发现差异"的红码。回滚面若默认分类不同，紧急切回 legacy
+    # 就会把环境问题当成仓库缺陷（或反之）；两分类器的一致性由单测逐条验证。
+    "os error 206",
 )
 ENV_FAILURE_SIGNATURES = UNCONDITIONAL_ENV_SIGS + AMBIGUOUS_ENV_SIGS
 # shell 解释器报错的形态（`<path>: line <N>: ...`）；用于把 `.sh` 判据的误判风险压到零。
@@ -236,6 +240,12 @@ def mode_selftest():
          "[FAIL] three-way reconciliation found gaps\n", "bash s.sh", False),
         ("shell-sig-without-error-shape",
          "note: invalid option name is not accepted by this tool\n[FAIL] 2 gaps\n", "bash s.sh", False),
+        # 实测形状（release 任务 R-01）：cargo 因 Windows 长路径中断并打印 usage 横幅，退 1。
+        ("cargo-longpath-usage-banner",
+         "(os error 206)\nThis utility formats all bin and lib files of the current crate.\n"
+         "Usage: cargo fmt [OPTIONS]\n", "cargo fmt --all -- --check", True),
+        ("shell-quoting-longpath-mid-body",
+         "scripts/x.sh: cannot stat: os error 206\n[FAIL] real finding\n", "bash s.sh", False),
         ("empty-log", "\n\n", "bash s.sh", False),
     ]
     fails = 0

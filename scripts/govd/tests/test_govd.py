@@ -110,6 +110,23 @@ class ClassifyTests(unittest.TestCase):
                 got = classify.classify(rc, exp, text, "{python} x.py")[0]
                 self.assertIs(got, want)
 
+    def test_legacy_and_govd_classifiers_agree_on_every_env_fixture(self):
+        """The rollback surface must not disagree with the default surface.
+
+        Both engines keep their own classifier on purpose (a fallback that imports
+        the thing it replaces is not a fallback), but then "pinned by the same
+        fixtures" has to be *checked*, not asserted: this run drives every fixture
+        through both implementations and compares the outcome.
+        """
+        from scripts import run_gate_manifest as legacy
+        for name, text, cmd, want in self.ENV_CASES:
+            with self.subTest(name=name):
+                self.assertEqual(legacy.env_failure_reason(text, cmd) is not None, want)
+        for sig in classify.AMBIGUOUS_ENV_SIGS:
+            self.assertIn(sig, legacy.AMBIGUOUS_ENV_SIGS, "legacy missing signature")
+        for sig in classify.UNCONDITIONAL_ENV_SIGS:
+            self.assertIn(sig, legacy.UNCONDITIONAL_ENV_SIGS, "legacy missing signature")
+
     def test_attempt_precedence(self):
         launch = classify.classify_attempt(0, 0, "", "x", launch_error="OSError")
         self.assertIs(launch[0], Verdict.LAUNCH)
