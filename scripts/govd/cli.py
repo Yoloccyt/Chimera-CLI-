@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import shutil
@@ -247,8 +248,11 @@ def cmd_run(args):
              if getattr(args, "reuse_ok", False) else {})
 
 
-    journal.append("run_start", {"run_id": rid, "profile": args.profile,
-                                 "head": meta.head, "dirty": meta.dirty,
+    # The journal is the declared authority (ADR-228 §2.4), so provenance has to
+    # live *in it*, not only in the derived report.json: "who ran which HEAD, under
+    # which role, with which digest" must survive even if every derived artefact is
+    # deleted. Hence the whole meta, not a hand-picked subset.
+    journal.append("run_start", {**dataclasses.asdict(meta),
                                  "shard": shard_note,
                                  "selected": len(ordered), "skipped": len(skipped)})
 

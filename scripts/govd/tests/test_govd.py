@@ -824,6 +824,45 @@ class RetrySemanticsTests(TempDirTest):
         self.assertIs(attempt.verdict, Verdict.LAUNCH)
         self.assertEqual(attempt.reason, "policy")
 
+
+AUDIT_FIELDS = ("run_id", "profile", "started_at", "head", "dirty", "actor",
+                "host", "python", "manifest_digest", "env_fingerprint", "role")
+
+
+class AuditFieldTests(TempDirTest):
+    """Spec 3.5: the authoritative journal must carry provenance itself.
+
+    The audit fields used to exist only in report.json -- the artefact that is
+    *derived* from the journal. If every derived file were deleted, events.jsonl
+    could not answer "who ran which HEAD under which role with which digest",
+    which is precisely what an append-only authority is supposed to remember.
+    """
+
+    def test_run_start_event_carries_the_full_audit_field_set(self):
+        tasks, pol = (make_task(id="T-1"),), policy.load(str(POLICY))
+        ok = Attempt("T-1", 1, Verdict.OK, 0, 0.01, "rc=0")
+        with mock.patch.object(cli, "ROOT", self.tmp), \
+             mock.patch.object(cli, "load_all", lambda profile="": (tasks, pol)), \
+             mock.patch.object(policy, "snapshot", lambda root: set()), \
+             mock.patch.object(cli, "_execute_one", return_value=ok):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.cmd_run(cli.build_parser().parse_args(["run", "--profile", "local"]))
+        self.assertEqual(rc, 0, buf.getvalue())
+
+        rid = store.read_latest(self.tmp)
+        run = self.tmp / "tmp" / "govd" / "runs" / rid
+        events = [json.loads(line) for line in
+                  (run / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+        start = [e for e in events if e["kind"] == "run_start"][0]["payload"]
+        self.assertEqual([f for f in AUDIT_FIELDS if f not in start], [], sorted(start))
+        self.assertEqual(start["manifest_digest"],
+                         json.loads((run / "report.json").read_text(
+                             encoding="utf-8"))["run"]["manifest_digest"])
+        # selection is recorded too, so a later reader can tell what was planned
+        self.assertEqual(start["selected"], 1)
+
+
 if __name__ == "__main__":
     # F30 dialect: an uncaught crash must exit 2, never borrow the interpreter's 1
     # (which would read as "ran and judged red" to run_gate_manifest).
