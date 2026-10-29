@@ -183,8 +183,12 @@ def main(argv: list[str] | None = None) -> int:
     try:
         text = lock.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
-        print(f"FAIL  cannot read {lock}: {exc}")
-        return 1
+        # H7/F33 dialect: an unreadable input means the gate reached no verdict.
+        # Returning 1 here would put a missing lockfile in the same box as a real
+        # acceleration-exclusion finding, and run_gate_manifest judges by
+        # `ok = rc == expect`, so a borrowed 1 is how an env failure becomes a red.
+        print(f"[UNDECIDABLE] cannot read {lock}: {exc}")
+        return 2
 
     hits, _ = evaluate(text)
 

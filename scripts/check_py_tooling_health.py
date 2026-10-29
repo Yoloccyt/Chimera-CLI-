@@ -50,6 +50,14 @@ exemptions -- the cleanest possible admission state)
                  defect in lru_facts.py / lru_reachability.py: an environment
                  failure recorded as a red verdict is the false-green channel
                  gate_rc's F33 note documents.
+  H8 EXCEPTRED   an `except` block must not end in a red verdict either. Same
+                 class as H7, arrived through the exception path: four registered
+                 gates (check_accel_exclusion, check_gate_predicates_parity,
+                 check_layer_map_parity, audit_phaseR_spec) printed FAIL and
+                 returned 1 when they could not read or parse their input. On a
+                 gate with expect=1 that is a silent false green; on expect=0 it
+                 files a broken gate as a repository defect. Bool returns are not
+                 red codes (True == 1) -- see the fixture below.
 
 Stdlib only, on purpose: the pinned CI interpreter has no site-packages, so a
 `import yaml` here would pass locally (dev boxes usually have PyYAML) and fail in
@@ -365,6 +373,47 @@ def envfail_exit1(py_files):
     return bad
 
 
+def except_handler_red(py_files):
+    """H8: an `except` block that ends in a red verdict is a swallowed non-verdict.
+
+    H7 covers the hand-written `returncode != 0` shape; this is the other half of
+    the same class -- the gate could not read or parse its input, printed FAIL and
+    returned 1. Under `ok = rc == expect` that is booked as "ran and judged red"
+    (and on a gate with expect=1 it becomes a silent false green), so a broken
+    gate is chased as a repository defect. Measured 2026-10-29: four registered
+    gates did exactly this; all of them now exit 2.
+    """
+    bad = []
+    for p in py_files:
+        tree = _parse(p)
+        if tree is None:
+            continue
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.ExceptHandler):
+                continue
+            for s in ast.walk(n):
+                # `not isinstance(..., bool)`: in Python `True == 1`, and the repo's
+                # gates carry `_raises(fn)` selftest probes that return True from an
+                # except block. The first draft of H8 flagged those two probes as
+                # red-exits -- a gate that cries wolf gets its findings ignored.
+                def _is_red_const(node_value):
+                    return (isinstance(node_value, ast.Constant)
+                            and node_value.value == 1
+                            and not isinstance(node_value.value, bool))
+                red_return = isinstance(s, ast.Return) and _is_red_const(s.value)
+                red_exit = (isinstance(s, ast.Call)
+                            and getattr(s.func, "attr", None) == "exit"
+                            and getattr(getattr(s.func, "value", None), "id", None) == "sys"
+                            and s.args and _is_red_const(s.args[0]))
+                if red_return or red_exit:
+                    bad.append((os.path.basename(p), "EXCEPTRED",
+                                "line %d: exception handler exits 1 -- no verdict was "
+                                "reached, this must be exit 2 (undecidable)"
+                                % getattr(s, "lineno", n.lineno)))
+                    break
+    return bad
+
+
 def judge(py_files, workflow_dir, sub_path="scripts"):
     out = []
     fails = 0
@@ -386,9 +435,11 @@ def judge(py_files, workflow_dir, sub_path="scripts"):
         return 2, out
     bad5 = abs_module_paths(py_files)
     bad6 = envfail_exit1(py_files)
+    bad7 = except_handler_red(py_files)
     for group, kind in ((bad1, "COMPILE"), (bad2, "DEADIMPORT"),
                         (bad3, "REPOEOL"), (bad4, "PINPARITY"),
-                        (bad5, "ABSPATH"), (bad6, "ENVFAIL")):
+                        (bad5, "ABSPATH"), (bad6, "ENVFAIL"),
+                        (bad7, "EXCEPTRED")):
         for f, k, msg in group:
             out.append("[GAP][%s] %s: %s" % (k, f, msg))
         fails += len(group)
@@ -480,6 +531,17 @@ ENVFIX = ('import subprocess, sys\nr = subprocess.run(["cargo", "metadata"])\n'
           'if r.returncode != 0:\n    sys.exit(1)\nprint("ok")\n')
 ENVOk = ('import subprocess, sys\nr = subprocess.run(["cargo", "metadata"])\n'
          'if r.returncode != 0:\n    sys.exit(2)\nprint("ok")\n')
+EXCFIX = ('import sys\ndef main():\n    try:\n        open("x")\n'
+          '    except OSError:\n        print("[FAIL] cannot read")\n        return 1\n'
+          '    return 0\n')
+EXCOK = ('import sys\ndef main():\n    try:\n        open("x")\n'
+         '    except OSError:\n        print("[UNDECIDABLE] cannot read")\n        return 2\n'
+         '    return 0\n')
+# `True == 1` in Python: a selftest probe that returns a bool from an except block
+# is not a red exit. Without this negative fixture H8 would flag two live gates
+# (their `_raises()` helpers) and the axis would be ignored within a week.
+EXCBOOL = ('def _raises(fn):\n    try:\n        fn()\n    except ValueError:\n'
+           '        return True\n    return False\n')
 
 
 def _mkdir(root, name, files):
@@ -613,6 +675,20 @@ def selftest():
         add("H6/H7 are green on the live tree (zero-violation baseline, %d files)"
             % len(live_py),
             not abs_module_paths(live_py) and not envfail_exit1(live_py))
+
+        # H8 gets its own directory so its fixtures cannot perturb the counts above.
+        h8 = _mkdir(tmp, "h8", {"exc.py": EXCFIX, "excok.py": EXCOK,
+                               "excbool.py": EXCBOOL})
+        x_bad = except_handler_red(sorted(os.path.join(h8, f) for f in os.listdir(h8)))
+        add("H8 planted positive: except -> print([FAIL]) -> return 1 is caught",
+            [x[0] for x in x_bad] == ["exc.py"])
+        add("H8 planted negative: the same handler exiting 2 is clean",
+            not any(x[0] == "excok.py" for x in x_bad))
+        add("H8 planted negative: a bool-returning except probe is not a red exit "
+            "(True == 1 was a real false positive of the first draft)",
+            not any(x[0] == "excbool.py" for x in x_bad))
+        add("H8 is green on the live tree (%d files) -- the four gates that failed "
+            "it were moved to exit 2" % len(live_py), not except_handler_red(live_py))
 
         # Floors must be satisfiable on reality but not trivially true.
         real_py = live_py

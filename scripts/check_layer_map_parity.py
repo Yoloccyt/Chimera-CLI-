@@ -492,9 +492,13 @@ def main(argv):
         dep_rows = parse_dep_groups(manifest_text)
         with open(DOC_PATH, encoding="utf-8") as fh:
             doc_rows = parse_doc_block(fh.read())
-    except Exception as exc:  # parse failure = gate cannot judge -> red, never silent
-        print("[FAIL] parse error: %s" % exc)
-        return 1
+    except Exception as exc:  # parse failure = gate cannot judge -> undecidable, never silent
+        # H7/F33: "cannot parse the inputs" is not a parity finding. rc=1 would
+        # file a broken/renamed document under "the twins disagree", so a reader
+        # would go fix the repo instead of the gate. rc=2 still fails the runner
+        # (expect=0), just under the honest label.
+        print("[UNDECIDABLE] parse error: %s" % exc)
+        return 2
     fails = run_checks(sh_case, sh_list, sh_exp, ps_map, ps_exp, members)
     fails = fails + check_dep_groups(sh_case, dep_rows) + check_doc_block(sh_case, doc_rows)
     for f in fails:
