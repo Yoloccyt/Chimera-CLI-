@@ -103,9 +103,26 @@ def _module_imports(tree):
     return names
 
 
-def _third_party(imports, local):
+def _is_local_module(name, path):
+    """True if `name` resolves to something inside this repo.
+
+    WHY not "stems in the same directory" (the first version): the census reported
+    `gate_rc` and `scripts` as **third-party** because the importer lives one level
+    below the module (`scripts/govd/__main__.py` importing `gate_rc`, and
+    `scripts` as a namespace package). A claim of "stdlib-only" that depends on a
+    broken detector is worse than no claim: it launders a real dependency in.
+    """
+    dirs = [os.path.dirname(path), SCRIPTS, ROOT]
+    for d in dirs:
+        if os.path.isfile(os.path.join(d, name + ".py")) or os.path.isdir(os.path.join(d, name)):
+            return True
+    return False
+
+
+def _third_party(imports, path):
     stdlib = set(sys.stdlib_module_names) | {"__future__"}
-    return sorted(n for n in imports if n not in stdlib and n not in local)
+    return sorted(n for n in imports
+                  if n not in stdlib and not _is_local_module(n, path))
 
 
 def _subprocess_calls(tree):
@@ -134,7 +151,6 @@ def _py_facts(path, rel):
         pass
     imports = _module_imports(tree) if tree is not None else set()
     calls, timed = _subprocess_calls(tree) if tree is not None else (0, 0)
-    local = {f[:-3] for f in os.listdir(os.path.dirname(path)) if f.endswith(".py")}
     return {
         "path": rel,
         "kind": "py",
@@ -146,7 +162,7 @@ def _py_facts(path, rel):
         "uses_argparse": "import argparse" in src or "from argparse" in src,
         "selftest_token": SELFTEST_TOKEN in src,
         "imports": sorted(imports),
-        "third_party": _third_party(imports, local),
+        "third_party": _third_party(imports, path),
         "subprocess_calls": calls,
         "subprocess_with_timeout": timed,
         "write_hints": len(WRITE_HINT.findall(src)),
@@ -252,20 +268,38 @@ def _aegis_facts():
                 if name.endswith((".py", ".ps1", ".sh")):
                     tracked.append(os.path.relpath(os.path.join(base, name), AEGIS).replace(os.sep, "/"))
     rows, groups, third = [], {}, set()
+    ci_text = _read(os.path.join(AEGIS, ".github", "workflows", "ci.yml"))
     for rel in tracked:
         path = os.path.join(AEGIS, rel)
         ext = os.path.splitext(rel)[1]
         top = rel.split("/")[0]
         groups[top] = groups.get(top, 0) + 1
         if ext != ".py":
-            rows.append({"path": rel, "kind": ext.lstrip("."), "lines": _read(path).count("\n") + 1})
+            rows.append({"path": rel, "kind": ext.lstrip("."),
+                         "lines": _read(path).count("\n") + 1,
+                         "doc": "", "has_main": False, "uses_argparse": False,
+                         "selftest_token": False, "third_party": [],
+                         "subprocess_calls": 0, "refs": {"ci": False},
+                         "status_suggestion": "aegis-" + top})
             continue
         facts = _py_facts(path, rel)
         third.update(facts["third_party"])
+        base = os.path.basename(rel)
+        if base.startswith("test_"):
+            suggested = "aegis-test"
+        else:
+            suggested = {"scripts": "aegis-script", "extensions": "aegis-extension",
+                         "hooks": "aegis-hook", "skills": "aegis-skill",
+                         "tests": "aegis-fixture"}.get(top, "aegis-" + top)
         rows.append({
             "path": rel, "kind": "py", "lines": facts["lines"],
-            "has_main": facts["has_main"], "third_party": facts["third_party"],
+            "doc": facts["doc"], "has_main": facts["has_main"],
+            "uses_argparse": facts["uses_argparse"],
+            "selftest_token": facts["selftest_token"],
+            "third_party": facts["third_party"],
             "subprocess_calls": facts["subprocess_calls"],
+            "refs": {"ci": base in ci_text},
+            "status_suggestion": suggested,
         })
     ok, head = _git(["rev-parse", "--short", "HEAD"], AEGIS)
     return {"head": head.strip() if ok else None, "files": len(rows),
@@ -364,6 +398,79 @@ def build():
     return payload, None
 
 
+def _cell(text, limit=58):
+    """Markdown-safe cell: pipes become slashes, newlines collapse, long text clips."""
+    s = str(text).replace("|", "/").replace("\n", " ").strip()
+    return s if len(s) <= limit else s[:limit - 1] + "…"
+
+
+HEADER = ("| 路径 | 行数 | 用途（docstring 首行） | 入口 | 第三方依赖 | 自检 "
+          "| 引用(M=门/C=CI/D=文档) | 建议状态 |\n|---|---|---|---|---|---|---|---|")
+
+
+def _rows_table(rows):
+    out = [HEADER]
+    for r in rows:
+        refs = r.get("refs", {})
+        flags = "".join(t for t, ok in (("M", refs.get("manifest")),
+                                       ("C", refs.get("ci")),
+                                       ("D", refs.get("docs"))) if ok)
+        entry = ("-" if r.get("kind") != "py"
+                 else ("argparse" if r.get("uses_argparse")
+                       else ("__main__" if r.get("has_main") else "库/无入口")))
+        out.append("| %s | %s | %s | %s | %s | %s | %s | %s |" % (
+            _cell(r["path"], 60), r.get("lines", ""), _cell(r.get("doc", "")),
+            entry, _cell(",".join(r.get("third_party", [])) or "-", 20),
+            "有" if r.get("selftest_token") else "无",
+            flags or "-", _cell(r.get("status_suggestion", ""), 24)))
+    return out
+
+
+def render_markdown(payload):
+    """Full per-file census (Spec §4 P1.1: 路径/用途/入口/依赖/调用方/测试/引用/状态).
+
+    The point of emitting this from the tool instead of typing it: every row is a
+    measurement with a sample size, and the next run regenerates it. A hand-kept
+    inventory is exactly the artefact that rots first.
+    """
+    aegis = payload.get("aegis") or {}
+    lines = [
+        "# 01b 全量脚本清单（工具生成，勿手改）",
+        "",
+        "- 生成器：`py -3.11 scripts/audit_python_surface.py --markdown-out <本文件路径>`"
+        "（`--markdown` 同内容写 stdout；本文件即其输出，手改会被下次生成覆盖）",
+        "- 取数时点：%s；父仓 HEAD `%s`（分支 `%s`）；解释器 %s；D 盘空闲 %s GiB" % (
+            payload["generated_at"], payload["git"]["head"], payload["git"]["branch"],
+            payload["python"], payload["disk_free_gb"]),
+        "- 样本量：仓库脚本 %d 个（py %d / ps1 %d / sh %d），Aegis 文件 %d 个，门 %d 条，"
+        "文档 %d 份（引用脚本名 %d 个）" % (
+            payload["counts"]["repo_scripts"], payload["counts"]["repo_py"],
+            payload["counts"]["repo_ps1"], payload["counts"]["repo_sh"],
+            aegis.get("files", 0), payload["gates"]["total"],
+            payload["docs"]["files"], payload["docs"]["referenced_scripts"]),
+        "- 说明：`建议状态` 是**机械推论**（manifest/CI/文档引用三个信号），不是最终裁决；"
+        "最终归属以 `scripts/tool_registry.toml` 与 `gate_manifest.toml` 为准。",
+        "",
+        "## 1. 仓库 Python（%d）" % payload["counts"]["repo_py"],
+        "",
+    ] + _rows_table([r for r in payload["files"] if r["kind"] == "py"]) + [
+        "",
+        "## 2. 仓库 shell / PowerShell（py 之外 %d）" % (
+            payload["counts"]["repo_ps1"] + payload["counts"]["repo_sh"]),
+        "",
+    ] + _rows_table([r for r in payload["files"] if r["kind"] != "py"]) + [
+        "",
+        "## 3. Aegis 子仓（%d 个文件，其中 py %d）" % (
+            aegis.get("files", 0),
+            sum(1 for r in aegis.get("rows", []) if r["kind"] == "py")),
+        "",
+        "- gitlink head：`%s`；第三方依赖集合：%s" % (
+            aegis.get("head"), ", ".join(aegis.get("third_party") or []) or "无"),
+        "",
+    ] + _rows_table(aegis.get("rows", [])) + [""]
+    return "\n".join(lines) + "\n"
+
+
 def print_summary(payload):
     c, g, w, d = payload["counts"], payload["gates"], payload["workflows"], payload["docs"]
     print("[surface] py=%d ps1=%d sh=%d (repo) | aegis_py=%d"
@@ -396,12 +503,29 @@ def main(argv):
     parser.add_argument("--out", default=DEFAULT_OUT, help="JSON payload path")
     parser.add_argument("--json", action="store_true", help="also print the payload")
     parser.add_argument("--no-write", action="store_true", help="do not write the payload")
+    parser.add_argument("--markdown", action="store_true",
+                        help="print the full per-file census as markdown instead of the summary")
+    parser.add_argument("--markdown-out", default="",
+                        help="write the census to this path (UTF-8, LF) instead of stdout")
     args = parser.parse_args(argv)
 
     payload, err = build()
     if payload is None:
         print("[UNDECIDABLE] %s" % err)
         return 2
+    if args.markdown_out:
+        # Writing from inside the process, not via shell redirection: a PowerShell
+        # pipeline decodes native stdout with the console codepage first, which on a
+        # GBK host turns CJK cells into mojibake before anything is written.
+        with open(args.markdown_out, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(render_markdown(payload))
+        print("[out] %s" % os.path.relpath(args.markdown_out, ROOT))
+        return 0
+    if args.markdown:
+        # Census mode is a pure render: no summary noise, no payload file, so the
+        # output can be redirected straight into the report directory.
+        sys.stdout.write(render_markdown(payload))
+        return 0
     print_summary(payload)
     if not args.no_write:
         folder = os.path.dirname(os.path.abspath(args.out))
