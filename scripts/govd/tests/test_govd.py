@@ -991,6 +991,76 @@ class DependencyFreedomTests(unittest.TestCase):
                     offenders.append((path.name, "socket." + node.attr))
         self.assertEqual(offenders, [])
 
+
+class MutatingGuardTests(TempDirTest):
+    """Spec 3.5 at the CLI seam: the mutating gate must both refuse and allow-run.
+
+    The policy-layer selection and the snapshot helpers were tested, but nothing
+    proved cmd_run's own behaviour in either direction -- and it turned out the
+    flag check could never fire: planner.plan() drops mutating rows first, so the
+    "refusal" had become a silent skip. These cases pin the loud version plus the
+    two directions a guard usually gets wrong (runs when allowed, still fails when
+    the tree changed outside the whitelisted prefixes).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.ok = Attempt("M-1", 1, Verdict.OK, 0, 0.01, "rc=0")
+        self.pol = policy.load(str(POLICY))
+
+    def drive(self, tasks, snapshots, flags, profile="release"):
+        """cmd_run over `tasks` with stubs; return (rc, stdout, executed ids)."""
+        calls = []
+
+        def execute(task, _policy, bash_path, logs, n):
+            calls.append(task.id)
+            return self.ok
+
+        args = cli.build_parser().parse_args(["run", "--profile", profile] + flags)
+        with mock.patch.object(cli, "ROOT", self.tmp), \
+             mock.patch.object(cli, "load_all", lambda name="": (tasks, self.pol)), \
+             mock.patch.object(policy, "snapshot", side_effect=snapshots), \
+             mock.patch.object(cli, "_execute_one", side_effect=execute):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.cmd_run(args)
+        return rc, buf.getvalue(), calls
+
+    def test_mutating_without_flag_refuses_before_any_execution(self):
+        rc, out, calls = self.drive((make_task(id="M-1", mutating=True),), [set()], [])
+        self.assertEqual(rc, 2)
+        self.assertIn("M-1 need --allow-mutating", out)
+        self.assertEqual(calls, [], "the guard must fire before the executor")
+
+    def test_mutating_on_dirty_tree_refuses_even_with_the_flag(self):
+        tasks = (make_task(id="M-1", mutating=True),)
+        rc, out, calls = self.drive(tasks, [{"M Cargo.lock"}], ["--allow-mutating"])
+        self.assertEqual(rc, 2)
+        self.assertIn("dirty tree", out)
+        self.assertEqual(calls, [])
+
+    def test_mutating_with_flag_on_clean_tree_runs(self):
+        tasks = (make_task(id="M-1", mutating=True),)
+        rc, out, calls = self.drive(tasks, [set(), set()], ["--allow-mutating"])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(calls, ["M-1"], "the allowed path must actually execute")
+
+    def test_change_outside_the_prefixes_overrides_a_green_ledger(self):
+        """tmp/ and target/ are whitelisted; anything else the task touched is not."""
+        tasks = (make_task(id="M-1", mutating=True),)
+        rc, out, calls = self.drive(tasks, [set(), {"scripts/sneaky.py"}], ["--allow-mutating"])
+        self.assertEqual(calls, ["M-1"], "the task did run")
+        self.assertIn("POLICY-VIOLATION scripts/sneaky.py", out)
+        self.assertEqual(rc, 2, "a violated guard cannot be reported as a pass")
+
+    def test_row_not_selected_by_this_profile_does_not_force_a_refusal(self):
+        """A mutating row scoped to release must not block the pr lane."""
+        tasks = (make_task(id="M-1", mutating=True, profiles=("release",)),)
+        rc, out, calls = self.drive(tasks, [set(), set()], [], profile="pr")
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("UNDECIDABLE", out)
+        self.assertEqual(calls, [])
+
 if __name__ == "__main__":
     # F30 dialect: an uncaught crash must exit 2, never borrow the interpreter's 1
     # (which would read as "ran and judged red" to run_gate_manifest).

@@ -207,6 +207,18 @@ def cmd_run(args):
         print("UNDECIDABLE " + refuse)
         return 2
     profile = policy.profiles[args.profile]
+    # A mutating task that this profile would select must not be dropped quietly.
+    # `planner.plan()` filters mutating rows out via selected_by(), which made the
+    # flag check a silent skip: the guard stopped being a guard without anything
+    # ever going red. Decide here, before planning, so refusing stays loud.
+    blocked = [t.id for t in tasks
+               if t.mutating and not args.allow_mutating
+               and (not t.profiles or args.profile in t.profiles)
+               and (profile.include_heavy or t.kind != "heavy")]
+    if blocked:
+        print("UNDECIDABLE mutating task(s) %s need --allow-mutating"
+              % ",".join(sorted(blocked)))
+        return 2
     ordered, skipped = planner.plan(tasks, profile, args.allow_mutating)
     try:
         ordered, shard_note = planner.apply_shard(ordered, args.shard)
@@ -220,13 +232,10 @@ def cmd_run(args):
     reported_skipped = skipped if owns_skipped else []
 
 
+    # Only reachable when --allow-mutating was given (the case above already refused
+    # everything else), so this check is about tree cleanliness, not about the flag.
     mutating = [t for t in ordered if t.mutating]
     before = pol.snapshot(ROOT)
-    if mutating and not args.allow_mutating:
-        print("UNDECIDABLE mutating tasks need allow-mutating")
-        return 2
-
-
     if mutating and before:
         print("UNDECIDABLE dirty tree; mutating tasks need a clean tree")
         return 2
