@@ -8,7 +8,7 @@ import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
@@ -491,6 +491,60 @@ class ReuseTests(TempDirTest):
         xml = report.to_junit([att], [])
         self.assertIn('skipped message="reused-ok from r1"', xml)
         self.assertEqual(ET.fromstring(xml).get("skipped"), "1")
+
+
+class ReportCliTests(TempDirTest):
+    """`govd report --format` must really surface the artefacts it advertises."""
+
+    def make_run(self, rid="r1"):
+        run = self.tmp / "tmp" / "govd" / "runs" / rid
+        store.Journal(self.tmp, rid).append("run_start", {"run_id": rid})   # run/ + logs/ + events.jsonl
+        (run / "report.json").write_text(json.dumps(
+            {"run": {"run_id": rid}, "attempts": [], "skipped": [], "counts": {}}),
+            encoding="utf-8")
+        (run / "junit.xml").write_text("<testsuite/>", encoding="utf-8")
+        (run / "summary.md").write_text("summary-for-" + rid + chr(10), encoding="utf-8")
+        return run
+
+    def run_report(self, argv, fmt="text"):
+        args = cli.build_parser().parse_args(argv + ["--format", fmt])
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = cli.cmd_report(args, root=self.tmp)
+        return rc, buf.getvalue()
+
+    def test_report_formats_pick_their_own_artefact(self):
+        run = self.make_run("r1")
+        rc, out = self.run_report(["report", "r1"], "text")
+        self.assertEqual(rc, 0)
+        self.assertIn("summary-for-r1", out)
+        rc, out = self.run_report(["report", "r1"], "json")
+        self.assertEqual(rc, 0)
+        self.assertEqual(json.loads(out)["run"]["run_id"], "r1")
+        rc, out = self.run_report(["report", "r1"], "junit")
+        self.assertEqual(rc, 0)
+        self.assertIn("<testsuite/>", out)
+        rc, out = self.run_report(["report", "--run-id", "r1"], "all")
+        self.assertEqual(rc, 0)
+        self.assertIn("summary-for-r1", out)
+        self.assertIn("<testsuite/>", out)
+
+    def test_report_refuses_missing_journal_and_missing_artefact(self):
+        self.make_run("r1")
+        rc, out = self.run_report(["report", "nope"], "text")
+        self.assertEqual(rc, 2)
+        self.assertIn("UNDECIDABLE", out)
+        (self.tmp / "tmp" / "govd" / "runs" / "r1" / "report.json").unlink()
+        rc, out = self.run_report(["report", "r1"], "json")
+        self.assertEqual(rc, 2)
+        self.assertIn("missing artefact", out)
+
+    def test_report_subparser_rejects_unknown_format(self):
+        buf, err = io.StringIO(), io.StringIO()
+        with self.assertRaises(SystemExit) as cm, redirect_stdout(buf), redirect_stderr(err):
+            cli.build_parser().parse_args(["report", "r1", "--format", "yaml"])
+        self.assertEqual(cm.exception.code, 2)
+        self.assertIn("invalid choice", err.getvalue())
 
 
 if __name__ == "__main__":

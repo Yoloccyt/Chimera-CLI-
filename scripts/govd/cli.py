@@ -267,9 +267,14 @@ def cmd_verify_journal(args):
     return 0 if ok else 2
 
 
-def cmd_report(args):
-    base = ROOT / "tmp" / "govd" / "runs"
-    rid = args.run_id or store.read_latest(ROOT)
+def cmd_report(args, root=None):
+    """Print a past run's artefacts; `--format` picks which, default text.
+
+    `root` is a parameter (not just the module ROOT) so the format selection is
+    testable without touching the repository's real journal directory.
+    """
+    base = (Path(root) if root else ROOT) / "tmp" / "govd" / "runs"
+    rid = getattr(args, "run_id_pos", "") or args.run_id or store.read_latest(root or ROOT)
     if not rid:
         print("UNDECIDABLE no run id")
         return 2
@@ -277,11 +282,21 @@ def cmd_report(args):
     if not path.exists():
         print("UNDECIDABLE journal missing")
         return 2
+    fmt = getattr(args, "format", "text")
 
 
-    rows = store.rebuild_index(ROOT)
-    print("indexed=" + str(rows) + " run=" + rid)
-    print((base / rid / "summary.md").read_text(encoding="utf-8"))
+    rows = store.rebuild_index(root or ROOT)
+    if fmt in ("text", "all"):
+        print("indexed=" + str(rows) + " run=" + rid)
+        print((base / rid / "summary.md").read_text(encoding="utf-8"))
+    for kind, name in (("json", "report.json"), ("junit", "junit.xml")):
+        if fmt not in (kind, "all"):
+            continue
+        artefact = base / rid / name
+        if not artefact.exists():
+            print("UNDECIDABLE missing artefact: " + name)
+            return 2
+        sys.stdout.write(artefact.read_text(encoding="utf-8"))
     return 0
 
 
@@ -306,7 +321,10 @@ def build_parser():
     sub.choices["run"].add_argument("--reuse-ok", action="store_true",
                                     help="skip gates already ok under the same manifest/cmd/env fingerprint")
     r = sub.add_parser("report")
+    r.add_argument("run_id_pos", nargs="?", default="")
     r.add_argument("--run-id", default="")
+    r.add_argument("--format", choices=("text", "json", "junit", "all"), default="text",
+                   help="which artefact of the run to print")
     return p
 
 
