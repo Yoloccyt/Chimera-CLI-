@@ -100,7 +100,10 @@ R2（`C-57…C-141`）已收口。R3 的目标**不是复述结论**，而是：
 | 格式 | 47 包逐包 `fmt --check` bad=[] |
 | **未跑（如实）** | heavy 7 门（G-12/13/14/15/19/49/50）、真全量 `cargo test --workspace`、release `--ignored` 档、`cargo audit`、coverage 实测 ⇒ **交 CI 载体**（磁盘 free 0.29 GB） |
 
-## 9. 回滚
+## 9. 回滚与入库边界
 
-- 本 ADR 与其索引行为同批；回滚 = 删本文件 + 删 `adr_index.md` 对应行（两文件同批）。
+- **入库面 = 本文件单文件**（`.gitignore:71 !docs/architecture/ADR-*.md` 反白使 ADR 可入库）。
+- **`adr_index.md` 是本地派生索引**：实测 `git check-ignore -v` 命中 `.gitignore:68 (*.md)`、`git ls-files --error-unmatch` 报未跟踪
+  ⇒ 本轮为其新增的 `| ADR-227 |` 行**不入库**（与 R2 的 A-7「索引行本地」同一政策，非缺陷）。
+- 回滚 = `git revert` 本文件所在提交；若需一并清理本地索引，再手动删 `adr_index.md` 对应行。
 - R3 未改任何代码或既有文档，**无代码回滚面**；`R3-C01/C02` 若获批再按其单独立提交与回滚。
