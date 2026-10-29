@@ -95,6 +95,30 @@ def _completed(journal_path):
     return done
 
 
+def _prior_verdicts(journal_path):
+    """task_id -> verdict recorded in an existing journal (for `--resume`).
+
+    WHY the verdict and not just the id: a resumed run must stay as red as the
+    run it resumed. Counting only "it was attempted" would let a prior
+    `mismatch` silently drop out of the ledger and flip a resumed run to green.
+    """
+    out = {}
+    p = Path(journal_path)
+    if not p.exists():
+        return out
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        ev = json.loads(line)
+        if ev.get("kind") != "attempt":
+            continue
+        payload = ev.get("payload", {})
+        tid = payload.get("task_id")
+        if tid:
+            out[tid] = payload.get("verdict", Verdict.UNKNOWN.value)
+    return out
+
+
 def _execute_one(task, policy, bash_path, logs, n):
     reason = pol.whitelist_check(policy, task.cmd)
 
@@ -173,6 +197,7 @@ def cmd_run(args):
     digest_value = mf.digest(tasks)
     meta = meta_for(rid, args.profile, digest_value, args.role)
     done = _completed(journal.events) if args.resume else set()
+    prior = _prior_verdicts(journal.events) if args.resume else {}
     # Reuse is opt-in per run and keyed on the whole manifest digest, so an edit
     # anywhere in gate_manifest.toml invalidates every cached verdict at once.
     reuse = (store.reusable_ok_runs(ROOT, digest_value, meta.env_fingerprint,
@@ -215,6 +240,14 @@ def cmd_run(args):
         print("  " + att.task_id + " " + att.verdict.value + " rc=" + str(att.rc) + marker)
 
     pending = [t for t in ordered if t.id not in done]
+    # Carried-forward verdicts: without these a resumed run would under-report
+    # its own ledger (140 gates planned, N attempted, N-k "seen") and -- worse --
+    # a prior mismatch would vanish. Only ids still present in this plan count.
+    for task in ordered:
+        if task.id in done and task.id in prior:
+            attempts.append(Attempt(task.id, 0, Verdict(prior[task.id]), None, 0.0,
+                                    "resumed from journal", cmd_digest=task.cmd_digest()))
+            print("  " + task.id + " " + prior[task.id] + " (resumed, not re-run)")
     futs = []
     cancelled = False
     try:
@@ -321,6 +354,25 @@ def cmd_report(args, root=None):
     return 0
 
 
+def cmd_resume(args):
+    """Thin surface over `run --resume`; one behaviour, one entry point.
+
+    The profile is read back from the resumed run's report.json when the caller
+    does not pass one, so a nightly run cannot be "resumed" under pr semantics
+    (which would silently drop the heavy gates from the plan).
+    """
+    if not args.profile:
+        report = ROOT / "tmp" / "govd" / "runs" / args.resume_id / "report.json"
+        try:
+            args.profile = json.loads(report.read_text(encoding="utf-8"))["run"]["profile"]
+        except (OSError, ValueError, KeyError):
+            print("UNDECIDABLE cannot read profile of run %s from report.json"
+                  % args.resume_id)
+            return 2
+    args.resume = args.resume_id
+    return cmd_run(args)
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="govd")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -339,6 +391,14 @@ def build_parser():
                        default="all", help="CI shadow compatibility")
     v = sub.add_parser("verify-journal")
     v.add_argument("run_id", nargs="?", default="")
+    res = sub.add_parser("resume")
+    res.add_argument("resume_id")
+    res.add_argument("--profile", choices=PROFILE_NAMES, default="")
+    res.add_argument("--role", default="local-dev")
+    res.add_argument("--allow-mutating", action="store_true")
+    res.add_argument("--jobs", type=int, default=0)
+    res.add_argument("--shard", default="")
+    res.add_argument("--report", choices=("text", "json", "junit", "all"), default="all")
     # --reuse-ok belongs to `run` only: `list` must not silently accept a flag it
     # ignores (the F24/F29 silent-default family that check_entry_contract C3 judges).
     sub.choices["run"].add_argument("--reuse-ok", action="store_true",
@@ -359,5 +419,7 @@ def main(argv):
         return cmd_run(args)
     if args.cmd == "verify-journal":
         return cmd_verify_journal(args)
+    if args.cmd == "resume":
+        return cmd_resume(args)
     return cmd_report(args)
 

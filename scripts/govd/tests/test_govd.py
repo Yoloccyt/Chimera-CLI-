@@ -587,6 +587,31 @@ class ShardTests(unittest.TestCase):
         self.assertEqual(args.shard, "1/4")
 
 
+class ResumeLedgerTests(TempDirTest):
+    """A resumed run must carry the prior verdicts, not just the prior ids."""
+
+    def test_prior_verdicts_reads_verdict_not_just_id(self):
+        journal = store.Journal(self.tmp, "r9")
+        journal.attempt(Attempt("T-1", 1, Verdict.OK, 0, 0.1, "rc=0"))
+        journal.attempt(Attempt("T-2", 1, Verdict.MISMATCH, 1, 0.1, "rc=1!=0"))
+        self.assertEqual(cli._prior_verdicts(journal.events),
+                         {"T-1": "ok", "T-2": "mismatch"})
+        self.assertEqual(cli._prior_verdicts(self.tmp / "missing.jsonl"), {})
+
+    def test_resume_carried_verdicts_keep_the_run_red(self):
+        journal = store.Journal(self.tmp, "r10")
+        journal.attempt(Attempt("T-1", 1, Verdict.MISMATCH, 1, 0.1, "rc=1!=0"))
+        carried = Attempt("T-1", 0, Verdict(cli._prior_verdicts(journal.events)["T-1"]),
+                         None, 0.0, "resumed from journal")
+        self.assertEqual(report.exit_code([carried], [], 1), 1)
+
+    def test_resume_subparser_defers_profile_to_the_journal(self):
+        args = cli.build_parser().parse_args(["resume", "r1"])
+        self.assertEqual(args.cmd, "resume")
+        self.assertEqual(args.resume_id, "r1")
+        self.assertEqual(args.profile, "")   # "" = read it back from report.json
+
+
 if __name__ == "__main__":
     # F30 dialect: an uncaught crash must exit 2, never borrow the interpreter's 1
     # (which would read as "ran and judged red" to run_gate_manifest).
