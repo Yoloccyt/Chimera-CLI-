@@ -615,7 +615,7 @@ jobs:
       # 掩盖零守门。本步把 fuzz/ 纳入同一 PR 快轨；本地已逐文件验证
       # `rustfmt --check --edition 2021` 对 fuzz 下 9 个 .rs 零违规（本机
       # `cargo fmt --all` 在 windows 宿主上报 os error 206，故只能逐文件验）。
-      - name: Format check (isolated workspace: fuzz)
+      - name: "Format check (isolated workspace: fuzz)"
         run: cd fuzz && cargo fmt --all -- --check
 
       # WHY 删除独立 `cargo check`（T1.7）：clippy 使用 clippy-driver 重编全部
