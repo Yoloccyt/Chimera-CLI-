@@ -6,7 +6,7 @@ is still the repository dialect 0/1/2. Nothing here touches the filesystem.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 PROFILE_NAMES = ("pr", "nightly", "release", "local")
@@ -130,4 +130,7 @@ class RunMeta:
     env_fingerprint: str = ""
     role: str = "local-dev"
     status: str = "running"
-    extra: dict = field(default_factory=dict)
+    # No free-form `extra` bag: it was never written and never read, yet it
+    # appeared in every run_start event and report.json as `{}`. A field that
+    # promises extensibility while nothing fills it is decorative surface -- the
+    # same category this batch removed for parsed-but-unread CLI flags.
