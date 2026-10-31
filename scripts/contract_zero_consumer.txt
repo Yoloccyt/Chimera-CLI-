@@ -22,8 +22,7 @@
 # Why there is no minimum: `zero` is the debt -- wiring types up drives it to
 # 0, and a floor there would make this gate's green depend on the defect.
 #
-# CLAIM defs=236 zero=74 one=87 ge2=75 gap=161 baseline=161 rows=74 sum=OK
-AffinityOverrides | consumers=0 | declared_in=mca/affinity
+# CLAIM defs=236 zero=72 one=71 ge2=93 gap=143 baseline=143 rows=72 sum=OK
 AgreementTrendPoint | consumers=0 | declared_in=safety/calibration
 BadCaseConversion | consumers=0 | declared_in=safety/calibration
 CalibrationSample | consumers=0 | declared_in=safety/calibration
@@ -82,7 +81,6 @@ Recoverable | consumers=0 | declared_in=safety/errors
 RecoveryStrategy | consumers=0 | declared_in=safety/errors
 RetentionPolicy | consumers=0 | declared_in=spec/harness_dimensions
 RewardLayer | consumers=0 | declared_in=seams/reward
-SamplingParams | consumers=0 | declared_in=mca/affinity
 ScanHit | consumers=0 | declared_in=safety/sensitive
 ScanVerdict | consumers=0 | declared_in=safety/sensitive
 SegmentCreationReason | consumers=0 | declared_in=memory/token_evidence

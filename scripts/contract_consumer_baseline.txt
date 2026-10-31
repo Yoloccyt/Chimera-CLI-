@@ -8,10 +8,7 @@
 #     GAP by editing this file without that review
 #   * consumer counting dialect + disclosed boundaries: see the gate header
 # Format: NAME  [# reason]
-AffinityMessage
 AffinityOverrides
-AffinityRequest
-AffinityResponse
 AgreementTrendPoint
 AppTokenUsage
 ApprovalDecision
@@ -30,13 +27,11 @@ ClaimPayload
 CommandValidationError
 Compressibility
 CompressionStrategy
-ContentBlock
 ContextAssemblyContract
 ContractCheckOutcome
 ContractContext
 ContractExample
 ContractSpec
-CostEstimate
 Currency
 DeclaimPayload
 EmptyFormalProvider
@@ -54,7 +49,6 @@ ExtractionFormat
 FailureFixStatus
 FailureRecord
 FallbackStrategy
-FinishReason
 FormalProperty
 FormalResultProvider
 FusedItem
@@ -83,10 +77,8 @@ Lease
 MemPiAction
 MemoryManagementContract
 MemoryPyramidLevel
-MessageRole
 MetadataBridge
 ModalityKind
-ModelAffinitySpec
 ModelConfig
 ModelPrice
 MonthlyEvalReport
@@ -97,7 +89,6 @@ NormalizedThreeFactor
 OmniMessage
 OmniSparseMasks
 OutputBudget
-OutputFormat
 OutputProcessingContract
 PeakPeriod
 PersonaSummary
@@ -111,10 +102,7 @@ PricingSpec
 ProceduralBlueprint
 ProjectedMatrix
 PropertyCategory
-ProtocolDialect
-ProviderReceipt
 QuirkRule
-Quota
 QuotaLimits
 RLAction
 RLExperience
@@ -124,7 +112,6 @@ RecallQuota
 RecallQuotaPolicy
 Recoverable
 RecoveryStrategy
-RenewOutcome
 ReqId
 RetentionPolicy
 RetryPolicy
@@ -141,24 +128,19 @@ SensitiveKind
 SerializedPolicy
 ServiceTier
 ShouldRunVerdict
-SideEffectDecl
 SinkhornParams
 SkillLifecycleContract
 SkillLifecycleState
 SparseMask
 StopStrategyConfig
 TaskOrchestrationContract
-ThinkingPreference
 Thread
 ToolCallRecord
-ToolDecl
 ToolFailure
 ToolInteractionContract
 ToolNode
 ToolOp
-ToolPlan
 TurnId
-UsageReport
 ValidationRule
 VariantContract
 VectorBackend
