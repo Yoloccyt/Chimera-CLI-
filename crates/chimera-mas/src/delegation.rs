@@ -25,6 +25,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
 /// 任务复杂度枚举 — 用于评估任务难度并映射到 ThinkingMode
@@ -384,6 +385,8 @@ pub struct DelegationExecutor {
     default_timeout: Duration,
     /// 任务执行闭包(注入实际执行逻辑,默认总是成功)
     task_runner: TaskRunner,
+    /// 批次最大在飞子任务数（Phase 5；默认 8，钳到 ≥1）
+    max_concurrency: usize,
     /// GEA 门控激活器句柄(M12 / ADR-185 D1;None = 未接线,回填跳过)
     ///
     /// WHY Option:DelegationExecutor 可独立使用(不经 orchestrator 委托路径),
@@ -408,6 +411,7 @@ impl DelegationExecutor {
             event_bus,
             default_timeout,
             task_runner: default_task_runner(),
+            max_concurrency: 8,
             gea: None,
         }
     }
@@ -433,8 +437,16 @@ impl DelegationExecutor {
             event_bus,
             default_timeout,
             task_runner,
+            max_concurrency: 8,
             gea: None,
         }
+    }
+
+    /// 设置批次最大在飞子任务数（Phase 5）— 0 视为 1。
+    #[must_use]
+    pub fn with_max_concurrency(mut self, max_concurrency: usize) -> Self {
+        self.max_concurrency = max_concurrency.max(1);
+        self
     }
 
     /// 接线 GEA 门控激活器(builder 模式,M12 / ADR-185 D1)
@@ -585,48 +597,49 @@ impl DelegationExecutor {
         let quest_id = tasks.iter().find_map(|t| t.quest_id.clone());
         let sub_task_count = tasks.len() as u32;
 
-        // 并行 spawn 每个子任务,用 FuturesUnordered 收集 JoinHandle
-        // WHY FuturesUnordered:§4.1 规范,优于 join_all,支持流式结果收集
-        let mut futures: FuturesUnordered<tokio::task::JoinHandle<TaskResult>> =
-            FuturesUnordered::new();
+        // Phase 5:有界 spawn（Semaphore）+ JoinError 隔离。
+        // WHY 先取 permit 再 spawn：峰值在飞 = max_concurrency，而非任务总数；
+        // WHY 携带 task_id/agent_id：JoinError 也能合成一条失败结果，不丢批次。
+        let semaphore = Arc::new(Semaphore::new(self.max_concurrency.max(1)));
+        let mut futures = FuturesUnordered::new();
 
         for task in tasks {
-            // 每个 spawn 的子任务 Arc::clone 一份 task_runner + EventBus
-            // WHY Arc::clone:§4.4 反模式 5,async 任务共享状态必须用 Arc::clone 而非 clone
             let runner = Arc::clone(&self.task_runner);
             let bus = self.event_bus.clone();
-            // gea 句柄同样 Arc::clone 共享(接线时),供子任务完成后回填能力画像
             let gea = self.gea.clone();
-            // effective_timeout 在 spawn 之前同步调用(借用 task),之后 task 被 move
             let timeout = effective_timeout(&task, self.default_timeout);
-            let agent_id = format!("{parent_id}::{agent_id_infix}::{}", task.inner.task_id);
+            let task_id = task.inner.task_id.clone();
+            let agent_id = format!("{parent_id}::{agent_id_infix}::{task_id}");
             let parent_id_owned = parent_id.to_string();
-
-            let handle = tokio::spawn(execute_single_task(
-                task,
-                runner,
-                bus,
-                gea,
-                timeout,
-                agent_id,
-                parent_id_owned,
-            ));
-            futures.push(handle);
+            let permit = Arc::clone(&semaphore).acquire_owned().await.map_err(|_| {
+                MasError::DelegationFailed {
+                    reason: format!("{err_label}并发信号量已关闭"),
+                }
+            })?;
+            let join_agent_id = agent_id.clone();
+            let handle = tokio::spawn(async move {
+                let _permit = permit;
+                execute_single_task(task, runner, bus, gea, timeout, agent_id, parent_id_owned)
+                    .await
+            });
+            futures.push(async move {
+                let join_result = handle.await;
+                (task_id, join_agent_id, join_result)
+            });
         }
 
-        // 流式收集所有子任务结果
-        // WHY while + next():任意子任务完成即取出,避免等待最慢任务才开始处理
+        // 流式收集所有子任务结果（单个 JoinError 不丢弃其余已完成结果）。
         let mut results = Vec::with_capacity(futures.len());
-        while let Some(join_result) = futures.next().await {
+        while let Some((task_id, agent_id, join_result)) = futures.next().await {
             match join_result {
                 Ok(task_result) => results.push(task_result),
                 Err(join_err) => {
-                    // JoinError 仅在 spawn 的 task panic 或被 cancel 时出现
-                    // 返回框架错误,因为无法关联具体 task_id
-                    warn!(error = %join_err, "{err_label}子任务 JoinHandle 异常");
-                    return Err(MasError::DelegationFailed {
-                        reason: format!("{err_label} spawn 异常: {join_err}"),
-                    });
+                    warn!(error = %join_err, task_id = %task_id, "{err_label}子任务 JoinHandle 异常");
+                    results.push(TaskResult::failure(
+                        task_id,
+                        agent_id,
+                        format!("{err_label} spawn 异常: {join_err}"),
+                    ));
                 }
             }
         }

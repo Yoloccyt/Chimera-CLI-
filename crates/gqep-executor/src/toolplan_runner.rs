@@ -23,6 +23,7 @@ use async_trait::async_trait;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use nexus_contracts::tool_plan::{guards, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan};
+use tokio_util::sync::CancellationToken;
 
 /// 工具执行器 — 接入方注入（execpolicy 审批/沙箱/超时/审计流水线挂载点）
 ///
@@ -52,6 +53,8 @@ pub struct PlanGuards {
     pub budget_bytes: usize,
     /// 只读模式（true = 拒绝 Write 节点——Plan 模式投影）
     pub readonly_only: bool,
+    /// 层内最大并发（默认 8；1 = 串行）
+    pub max_parallel: usize,
 }
 
 impl Default for PlanGuards {
@@ -61,8 +64,69 @@ impl Default for PlanGuards {
             timeout_ms: guards::MAX_TIMEOUT_MS,
             budget_bytes: guards::MAX_BUDGET_BYTES,
             readonly_only: false,
+            max_parallel: 8,
         }
     }
+}
+
+/// 新执行入口的运行选项（与旧 `run` 解耦，便于渐进接线）。
+#[derive(Debug, Clone, Default)]
+pub struct PlanRunOptions {
+    /// 层内最大并发（0 = 使用 `PlanGuards::max_parallel`；最终钳到 ≥1）
+    pub max_parallel: usize,
+    /// 计划级绝对 deadline（ms；0 = 使用 `PlanGuards::timeout_ms`）
+    pub timeout_ms: u64,
+    /// true = 任一节点失败立即返回 `NodeFailed`；false = 错误作为节点结果继续（旧语义）
+    pub fail_fast: bool,
+    /// true = 放行 Write 节点（仅在 `PlanGuards::readonly_only=true` 时有意义：
+    /// 只读投影下 Write 默认被拒，本旗是显式覆盖；`false` 保持 fail-closed）
+    pub approve_writes: bool,
+    /// 外部取消令牌
+    pub cancel: Option<CancellationToken>,
+}
+
+/// `run_with` 的失败类型。
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum PlanRunError {
+    /// 计划校验失败（环/超步数/悬空边/不完整调用）。
+    #[error("invalid plan: {0}")]
+    Invalid(PlanError),
+    /// 计划级 deadline 到期。
+    #[error("plan timed out after {completed} completed nodes")]
+    TimedOut {
+        /// 已完成节点数。
+        completed: usize,
+    },
+    /// 外部取消。
+    #[error("plan cancelled after {completed} completed nodes")]
+    Cancelled {
+        /// 已完成节点数。
+        completed: usize,
+    },
+    /// `fail_fast=true` 时某节点失败。
+    #[error("node {node_id} failed after {completed} completed nodes: {error}")]
+    NodeFailed {
+        /// 失败节点 ID。
+        node_id: String,
+        /// 失败原因（纯文本）。
+        error: String,
+        /// 失败前已完成的节点数。
+        completed: usize,
+    },
+}
+
+impl From<PlanError> for PlanRunError {
+    fn from(value: PlanError) -> Self {
+        Self::Invalid(value)
+    }
+}
+
+/// 内部节点失败分类（不暴露给调用方）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NodeFailure {
+    Failed(String),
+    Timeout,
+    Cancelled,
 }
 
 /// 计划执行结果 — 聚合回填（模型视图）
@@ -147,7 +211,11 @@ impl PlanRunner {
                 let input = self.inputs_of(plan, &env, &node.id);
                 let node_ref = node.clone();
                 tasks.push(async move {
-                    let out = self.exec_node(&node_ref, &input).await;
+                    // 旧 run 保持 fail-soft：工具错误包装为 {"error":...} 节点结果。
+                    let out = match self.exec_node(&node_ref, &input).await {
+                        Ok(value) => value,
+                        Err(error) => format!(r#"{{"error":{error:?}}}"#),
+                    };
                     (node_ref, out)
                 });
             }
@@ -183,38 +251,187 @@ impl PlanRunner {
         })
     }
 
+    /// 新执行入口：层内有界并发 + 绝对 deadline + 取消 + fail-fast + 增量预算。
+    ///
+    /// 与旧 [`run`](Self::run) 的差异：
+    /// - 层内并发受 `PlanRunOptions::max_parallel`（或 `PlanGuards::max_parallel`）约束；
+    /// - 超时是**绝对 deadline**（`timeout_at`），不是每层重置；
+    /// - 支持 `CancellationToken`；
+    /// - 预算按增量累加（旧 `run` 仍是 O(n²) 全量求和，保持旧行为不变）；
+    /// - 多终端节点返回 `{"terminals":{...}}`；单终端保持旧语义。
+    pub async fn run_with(
+        &self,
+        plan: &ToolPlan,
+        opts: &PlanRunOptions,
+    ) -> Result<PlanSummary, PlanRunError> {
+        let started = Instant::now();
+        plan.validate(self.guards.max_steps)?;
+
+        // Write 节点默认由 readonly_only 拒绝；approve_writes 是显式覆盖。
+        if self.guards.readonly_only && !opts.approve_writes {
+            for node in &plan.nodes {
+                if node.side_effect == Some(SideEffectDecl::Write) {
+                    return Err(PlanRunError::Invalid(PlanError::IncompleteToolCall(
+                        node.id.clone(),
+                    )));
+                }
+            }
+        }
+
+        let layers = compute_layers(plan)?;
+        let preds = predecessor_map(plan);
+        let timeout_ms = if opts.timeout_ms == 0 {
+            self.guards.timeout_ms
+        } else {
+            opts.timeout_ms
+        };
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let max_parallel = if opts.max_parallel == 0 {
+            self.guards.max_parallel
+        } else {
+            opts.max_parallel
+        }
+        .max(1);
+        let cancel = opts.cancel.as_ref();
+
+        let mut env: HashMap<String, String> = HashMap::new();
+        let mut used_bytes = 0usize;
+        let mut tool_calls = 0usize;
+        let mut nodes_executed = 0usize;
+        let mut truncated = false;
+
+        'layers: for layer in &layers {
+            if cancel.is_some_and(CancellationToken::is_cancelled) {
+                return Err(PlanRunError::Cancelled {
+                    completed: nodes_executed,
+                });
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(PlanRunError::TimedOut {
+                    completed: nodes_executed,
+                });
+            }
+
+            let mut in_flight = FuturesUnordered::new();
+            let mut pending = layer.iter();
+            for _ in 0..max_parallel {
+                let Some(node) = pending.next() else {
+                    break;
+                };
+                let input = inputs_of_precomputed(&preds, &env, &node.id);
+                in_flight.push(self.node_future(node, input, deadline, cancel));
+            }
+
+            while let Some((node, result)) = in_flight.next().await {
+                nodes_executed += 1;
+                if node.op == ToolOp::ToolCall {
+                    tool_calls += 1;
+                }
+                match result {
+                    Ok(value) => {
+                        let remaining = self.guards.budget_bytes.saturating_sub(used_bytes);
+                        let (value, cut) = truncate_to_budget(value, remaining);
+                        if cut {
+                            truncated = true;
+                        }
+                        used_bytes += value.len();
+                        env.insert(node.id.clone(), value);
+                        if used_bytes >= self.guards.budget_bytes {
+                            truncated = true;
+                            break 'layers;
+                        }
+                    }
+                    Err(NodeFailure::Failed(error)) => {
+                        if opts.fail_fast {
+                            return Err(PlanRunError::NodeFailed {
+                                node_id: node.id.clone(),
+                                error,
+                                completed: nodes_executed - 1,
+                            });
+                        }
+                        // 非 fail-fast：错误作为节点结果，下游可见并自行处理。
+                        env.insert(node.id.clone(), format!(r#"{{"error":{error:?}}}"#));
+                    }
+                    Err(NodeFailure::Timeout) => {
+                        return Err(PlanRunError::TimedOut {
+                            completed: nodes_executed - 1,
+                        });
+                    }
+                    Err(NodeFailure::Cancelled) => {
+                        return Err(PlanRunError::Cancelled {
+                            completed: nodes_executed - 1,
+                        });
+                    }
+                }
+
+                if let Some(next) = pending.next() {
+                    let input = inputs_of_precomputed(&preds, &env, &next.id);
+                    in_flight.push(self.node_future(next, input, deadline, cancel));
+                }
+            }
+        }
+
+        Ok(PlanSummary {
+            plan_id: plan.id.clone(),
+            summary: terminal_summary(plan, &env),
+            tool_calls,
+            nodes_executed,
+            duration_ms: started.elapsed().as_millis() as u64,
+            truncated,
+        })
+    }
+
+    /// 单节点 future：绝对 deadline + 取消，返回节点引用与结果。
+    async fn node_future<'a>(
+        &'a self,
+        node: &'a ToolNode,
+        input: String,
+        deadline: tokio::time::Instant,
+        cancel: Option<&'a CancellationToken>,
+    ) -> (&'a ToolNode, Result<String, NodeFailure>) {
+        let result = tokio::select! {
+            result = tokio::time::timeout_at(deadline, self.exec_node(node, &input)) => result,
+            _ = wait_cancel(cancel) => return (node, Err(NodeFailure::Cancelled)),
+        };
+        match result {
+            Ok(Ok(value)) => (node, Ok(value)),
+            Ok(Err(error)) => (node, Err(NodeFailure::Failed(error))),
+            Err(_) => (node, Err(NodeFailure::Timeout)),
+        }
+    }
+
     /// 执行单个节点（数据算子 / 工具调用）
-    async fn exec_node(&self, node: &ToolNode, input: &str) -> String {
+    ///
+    /// 返回 `Err` 表示工具调用失败；旧 `run` 会把它包装成
+    /// `{"error":...}` 节点结果（保持 fail-soft），新 `run_with` 由
+    /// `PlanRunOptions::fail_fast` 决定是终止还是继续。
+    async fn exec_node(&self, node: &ToolNode, input: &str) -> Result<String, String> {
         match node.op {
             ToolOp::ToolCall => {
                 // validate 已保证二者齐备;但缺字段不再靠 expect 不变量——
                 // 与下方执行失败同型 fail-soft(错误文本进节点结果，可审计不 panic)。
                 let Some(tool) = node.tool_name.as_deref() else {
-                    return r#"{"error":"missing tool_name"}"#.to_string();
+                    return Err("missing tool_name".to_string());
                 };
                 let Some(args) = node.args_json.as_deref() else {
-                    return r#"{"error":"missing args_json"}"#.to_string();
+                    return Err("missing args_json".to_string());
                 };
-                // 工具失败不 panic:错误文本作为节点结果（调用方审计）
-                match self.executor.execute(tool, args).await {
-                    Ok(s) => s,
-                    Err(e) => format!(r#"{{"error":{e:?}}}"#),
-                }
+                self.executor.execute(tool, args).await
             }
             ToolOp::Map => {
                 let field = node.field.as_deref().unwrap_or("");
-                map_field(input, field)
+                Ok(map_field(input, field))
             }
             ToolOp::Filter => {
                 let pred = node.predicate.as_deref().unwrap_or("");
-                filter_by_predicate(input, pred)
+                Ok(filter_by_predicate(input, pred))
             }
             ToolOp::Aggregate => {
                 let field = node.field.as_deref().unwrap_or("");
-                aggregate_field(input, field)
+                Ok(aggregate_field(input, field))
             }
-            ToolOp::Limit => limit_input(input),
-            ToolOp::Sort => sort_by_field(input, node.field.as_deref().unwrap_or("")),
+            ToolOp::Limit => Ok(limit_input(input)),
+            ToolOp::Sort => Ok(sort_by_field(input, node.field.as_deref().unwrap_or(""))),
         }
     }
 
@@ -234,6 +451,82 @@ impl PlanRunner {
             "[]".to_string()
         } else {
             format!("[{}]", parts.join(","))
+        }
+    }
+}
+
+/// 前驱表 — 一次构建替代 `run_with` 每个节点全边扫描。
+fn predecessor_map(plan: &ToolPlan) -> HashMap<&str, Vec<&str>> {
+    let mut preds: HashMap<&str, Vec<&str>> = HashMap::new();
+    for edge in &plan.edges {
+        preds
+            .entry(edge.to.as_str())
+            .or_default()
+            .push(edge.from.as_str());
+    }
+    preds
+}
+
+/// 用前驱表拼节点输入（与 `PlanRunner::inputs_of` 同语义）。
+fn inputs_of_precomputed(
+    preds: &HashMap<&str, Vec<&str>>,
+    env: &HashMap<String, String>,
+    node_id: &str,
+) -> String {
+    let Some(parents) = preds.get(node_id) else {
+        return "[]".to_string();
+    };
+    let parts: Vec<&str> = parents
+        .iter()
+        .filter_map(|parent| env.get(*parent).map(String::as_str))
+        .collect();
+    if parts.is_empty() {
+        "[]".to_string()
+    } else {
+        format!("[{}]", parts.join(","))
+    }
+}
+
+/// 取消分支：无 token 时永不就绪。
+async fn wait_cancel(cancel: Option<&CancellationToken>) {
+    match cancel {
+        Some(token) => token.cancelled().await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// 回填预算截断（UTF-8 字符边界）。
+fn truncate_to_budget(mut value: String, remaining: usize) -> (String, bool) {
+    if value.len() <= remaining {
+        return (value, false);
+    }
+    let mut end = remaining;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    (value, true)
+}
+
+/// 终端节点汇总：单终端保持旧语义；多终端返回 `{"terminals":{...}}`。
+fn terminal_summary(plan: &ToolPlan, env: &HashMap<String, String>) -> String {
+    let terminals: Vec<&str> = plan
+        .nodes
+        .iter()
+        .filter(|node| !plan.edges.iter().any(|edge| edge.from == node.id))
+        .map(|node| node.id.as_str())
+        .collect();
+    match terminals.as_slice() {
+        [] => "{}".to_string(),
+        [only] => env.get(*only).cloned().unwrap_or_else(|| "{}".to_string()),
+        many => {
+            let mut entries: Vec<String> = Vec::with_capacity(many.len());
+            for id in many {
+                let value = env.get(*id).cloned().unwrap_or_else(|| "{}".to_string());
+                let key = serde_json::to_string(id).unwrap_or_else(|_| "\"\"".to_string());
+                entries.push(format!("{key}:{value}"));
+            }
+            format!("{{\"terminals\":{{{}}}}}", entries.join(","))
         }
     }
 }

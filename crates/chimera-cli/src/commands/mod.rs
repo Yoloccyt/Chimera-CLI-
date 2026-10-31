@@ -55,6 +55,8 @@ pub mod quest;
 pub mod run;
 /// WI-01: 协议宿主服务（serve 形态,JSON-RPC v1 over stdio）
 pub mod serve;
+/// 工具执行面子命令（Phase 3：tool list/call/plan）
+pub mod tool;
 /// TUI 交互界面子命令
 pub mod tui;
 /// Wiki 查询子命令
@@ -98,8 +100,13 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         // Task 5 of spec: EXAMPLES 一级入口 — 顶级命令位置(Run 之前)
         // 不消费 json/perm(纯字符串输出)
         Some(Commands::Help { command }) => help::execute(command.as_deref(), cli).await,
-        Some(Commands::Run { prompt }) => {
-            run::execute_with_ctx(ctx_ref(&ctx)?, prompt, cli.json, &perm).await
+        Some(Commands::Run { prompt, llm }) => {
+            // Phase 7：`--llm` 走 LLM 工具循环，不传则旧路径逐位不变
+            if *llm {
+                run::execute_llm_with_ctx(ctx_ref(&ctx)?, prompt, cli.json, &perm).await
+            } else {
+                run::execute_with_ctx(ctx_ref(&ctx)?, prompt, cli.json, &perm).await
+            }
         }
         // WI-02: exec 非交互契约 — 独立退出码语义（0/2/3/4）经 exec::exec_exit_code 映射；
         // std::process::exit 立即终止（exec 为 CI 管道场景，析构无业务依赖）
@@ -163,6 +170,10 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         // Task 1.8: MCP 量子网格管理 — 全局 --json 传递;perm 供 mcp call 使用;dry_run 供 mcp call 预览
         Some(Commands::Mcp { action }) => {
             mcp::execute(action, cfg, cli.json, &perm, cli.dry_run).await
+        }
+        // Phase 3: 工具执行面 — 默认 off；observe 预演，apply 执行
+        Some(Commands::Tool { action }) => {
+            tool::execute(action, cfg, cli.json, &perm, cli.dry_run).await
         }
         // Task 1.9: 红队安全审计 — 全局 --json 优先,子命令级 --json 兼容保留
         Some(Commands::Audit { json, severity }) => {

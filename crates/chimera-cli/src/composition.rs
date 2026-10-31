@@ -22,6 +22,7 @@
 use crate::config::ChimeraConfig;
 use anyhow::{Context, Result};
 use event_bus::{logging::BusLogger, EventBus};
+use gqep_executor::tool_plane::ToolProvider as _;
 use nexus_app_server::{AppServer, AppServerConfig, QuestBackend};
 use quest_engine::QuestEngine;
 use std::sync::Arc;
@@ -282,6 +283,120 @@ pub fn build_with_sharding(
         #[cfg(not(feature = "r2_unfreeze"))]
         _evolution_orchestrator_placeholder: std::marker::PhantomData,
     })
+}
+
+/// 装配工具执行面（Phase 3 / ADR-229）— 仅供 `chimera tool` 与 LLM/Quest 入口使用。
+///
+/// WHY 不塞进 [`AppContext`]：one-shot 命令不应为工具执行面付装配税。
+/// WHY 不收 `EventBus` 参数：执行面的可观测承诺是 `ToolMetrics` 快照 + tracing
+/// 结构化日志（ADR-229 D5，事件面零新增变体），它一条事件也不发。上一版留着
+/// `_bus: EventBus` 这个"当前仅保留句柄"的参数，结果三处 `chimera tool` 调用点
+/// 各自 `EventBus::new()` 造出三条无人订阅的隐形总线，既触发
+/// `check_composition_root.py` 的 R2 旁路告警，又会让读代码的人以为"传了总线就会有事件"。
+/// 需要发事件的层（LLM 循环的 `BudgetExceeded`）自己持有总线。
+pub fn build_tool_runtime(
+    _config: &ChimeraConfig,
+) -> Result<Arc<gqep_executor::tool_plane::ToolRuntime>> {
+    let plane = crate::tool_plane::ToolPlaneConfig::from_env();
+    let mut registry = gqep_executor::tool_plane::ToolRegistry::new();
+    registry.register(Arc::new(crate::tool_plane::EchoToolProvider::new()))?;
+    registry.register(Arc::new(crate::tool_plane::ProcessToolProvider::new(
+        plane.max_payload_bytes,
+    )))?;
+    // MCP provider is registered only when the mesh has servers; an empty
+    // provider would be rejected by the registry (all-or-nothing).
+    let mcp_mesh = Arc::new(mcp_mesh::McpMesh::new(mcp_mesh::MeshConfig::default()));
+    let mcp_provider = Arc::new(crate::tool_plane::McpToolProvider::new(mcp_mesh));
+    if !mcp_provider.descriptors().is_empty() {
+        registry.register(mcp_provider)?;
+    }
+    let scheduler = Arc::new(gqep_executor::tool_plane::BoundedToolScheduler::new(
+        plane.max_inflight,
+        plane.max_inflight,
+        256,
+        plane.max_inflight,
+    ));
+    let runtime_config = gqep_executor::tool_plane::ToolRuntimeConfig {
+        interactive_inflight: plane.max_inflight,
+        background_inflight: plane.max_inflight,
+        max_waiters: 256,
+        max_provider_inflight: plane.max_inflight,
+        default_timeout_ms: plane.default_timeout_ms,
+        max_payload_bytes: plane.max_payload_bytes,
+        max_batch: 1024,
+    };
+    Ok(Arc::new(gqep_executor::tool_plane::ToolRuntime::new(
+        Arc::new(registry),
+        None,
+        scheduler,
+        runtime_config,
+    )))
+}
+
+/// 装配 Quest 引擎（Phase 5 / ADR-231 D1）—— 唯一 sanctioned 的 `QuestEngine` 构造点。
+///
+/// WHY 必须由组合根出引擎：`check_composition_root.py` R2 把 `QuestEngine::with_*`
+/// 视为装配构造点，命令侧直接调用就是"一个进程里有几台引擎"不可数的那笔结构债
+/// （v2.30 §3 实测 9 条总线里只有 1 条享有 Critical 投递保证，同一病理）。
+/// `dag_mode` 是**参数**而不是第二装配点：`Linear` 与 `MultiRoot` 只差一个配置字段，
+/// 装配语义一致；把它做成入参才能让 ADR-231 D3 的"多根并行需显式开"仍然只有一处定义。
+#[must_use]
+pub fn build_quest_engine(bus: EventBus, dag_mode: quest_engine::DagMode) -> Arc<QuestEngine> {
+    Arc::new(QuestEngine::with_config(
+        bus,
+        quest_engine::QuestConfig {
+            dag_mode,
+            ..quest_engine::QuestConfig::default()
+        },
+    ))
+}
+
+/// 构造 LLM 客户端（Phase 7 / ADR-232）—— 三态，默认不可用
+///
+/// 1. `CHIMERA_LLM_PROVIDER=mock` ⇒ 离线回声客户端（CI 与无 key 试跑；永不出 ToolUse，
+///    单轮即收敛，输出前缀 `mock-echo:` 明示其非真实模型）；
+/// 2. `--features mca` ⇒ [`crate::llm::mca_client::McaLlmClient`]，从
+///    `config.model_router.providers[0]` 装配（只装配，不发网络）；
+/// 3. 其余 ⇒ `ConfigError` 带可执行提示。
+///
+/// WHY 不静默回落到 mock：把"没配 provider"伪装成"模型答得很好"会让用户以为
+/// 闭环已通；宁可退出码 1 让用户显式选择 mock。
+pub fn build_llm_client(config: &ChimeraConfig) -> Result<Arc<dyn crate::llm::client::LlmClient>> {
+    if std::env::var("CHIMERA_LLM_PROVIDER")
+        .map(|value| value.eq_ignore_ascii_case("mock"))
+        .unwrap_or(false)
+    {
+        return Ok(Arc::new(crate::llm::mock::EchoLlmClient));
+    }
+    build_llm_client_from_config(config)
+}
+
+/// 非 mock 档：feature `mca` 时经 mca-gateway 装配，否则给可执行提示
+///
+/// WHY 拆成两个同名 cfg 函数而非在函数体里挂 `#[cfg]` 块：语句位上的属性块
+/// 不参与条件编译（会被照常编译，非 `mca` 构建里直接编译失败）。
+#[cfg(feature = "mca")]
+fn build_llm_client_from_config(
+    config: &ChimeraConfig,
+) -> Result<Arc<dyn crate::llm::client::LlmClient>> {
+    crate::llm::mca_client::McaLlmClient::from_config(config)
+        .map(|client| Arc::new(client) as Arc<dyn crate::llm::client::LlmClient>)
+        .map_err(|error| {
+            crate::error::ChimeraCliError::ConfigError(format!("LLM provider 不可用: {error}"))
+                .into()
+        })
+}
+
+#[cfg(not(feature = "mca"))]
+fn build_llm_client_from_config(
+    _config: &ChimeraConfig,
+) -> Result<Arc<dyn crate::llm::client::LlmClient>> {
+    Err(crate::error::ChimeraCliError::ConfigError(
+        "未启用 LLM provider：重新编译加 `--features mca`，\
+或设 CHIMERA_LLM_PROVIDER=mock 走离线回声档"
+            .to_string(),
+    )
+    .into())
 }
 
 /// 会话持久化数据目录：`~/.chimera/sessions/`（C-63）

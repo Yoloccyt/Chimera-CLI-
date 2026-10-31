@@ -44,10 +44,14 @@ impl TrustLevel {
         }
     }
 
-    /// 是否允许执行（Untrusted 一律拒绝）
+    /// 是否允许执行（fail-closed：只有 Trusted 放行）。
+    ///
+    /// WHY `Ask` 不再放行：`trigger` 没有审批回调，把"未确认"当成可执行会让
+    /// 默认配置静默运行 hook。需要 Ask 语义的调用方必须先拿到显式批准，
+    /// 再以 `Trusted` 配置触发；这比"默认执行后补审计"安全。
     #[must_use]
     pub const fn allows_execution(self) -> bool {
-        matches!(self, Self::Trusted | Self::Ask)
+        matches!(self, Self::Trusted)
     }
 }
 

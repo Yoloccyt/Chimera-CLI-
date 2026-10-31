@@ -94,7 +94,8 @@ pub fn plan(cmd: Option<&Commands>) -> CommandPlan {
             | Grep { .. }
             | Audit { .. }
             | Llm { .. }
-            | Mcp { .. },
+            | Mcp { .. }
+            | Tool { .. },
         ) => CommandPlan::NoContext,
     }
 }
@@ -129,7 +130,7 @@ pub fn needs_full_config(cmd: Option<&Commands>) -> bool {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::cli::{AgentAction, ConfigAction, LlmAction, McpAction, QuestAction};
+    use crate::cli::{AgentAction, ConfigAction, LlmAction, McpAction, QuestAction, ToolAction};
 
     /// 构造全部 19 个子命令 + None，逐一断言分类。
     ///
@@ -191,7 +192,16 @@ mod tests {
                 CommandClass::NoContext,
             ),
             (
-                Some(Commands::Run { prompt: "x".into() }),
+                Some(Commands::Tool {
+                    action: ToolAction::List,
+                }),
+                CommandClass::NoContext,
+            ),
+            (
+                Some(Commands::Run {
+                    prompt: "x".into(),
+                    llm: false,
+                }),
                 CommandClass::FullContext,
             ),
             (
@@ -276,7 +286,10 @@ mod tests {
         }
         // one-shot → Off
         let off_cases: Vec<Option<Commands>> = vec![
-            Some(Commands::Run { prompt: "x".into() }),
+            Some(Commands::Run {
+                prompt: "x".into(),
+                llm: false,
+            }),
             Some(Commands::Exec { prompt: "x".into() }),
             Some(Commands::Quest {
                 action: QuestAction::List,
@@ -318,7 +331,10 @@ mod tests {
             None,
             Some(Commands::Help { command: None }),
             Some(Commands::Cost),
-            Some(Commands::Run { prompt: "x".into() }),
+            Some(Commands::Run {
+                prompt: "x".into(),
+                llm: false,
+            }),
             Some(Commands::Chat),
             Some(Commands::Serve),
         ];

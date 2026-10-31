@@ -35,7 +35,7 @@ use uuid::Uuid;
 
 use crate::config::MeshConfig;
 use crate::error::McpError;
-use crate::quantum::participant_client::{InProcessClient, ParticipantClient};
+use crate::quantum::participant_client::{InProcessClient, ParticipantClient, ToolInvokeRequest};
 use crate::quantum::superposition::{execute_superposition_query, QueryResult, SuperpositionQuery};
 use crate::quantum::transaction::{QuantumTransaction, TransactionState, WalEntry};
 use crate::quantum::wal::WalStore;
@@ -703,6 +703,54 @@ impl McpMesh {
             .await;
 
         execute_superposition_query(&query, &self.registry, self.config.heartbeat_timeout_ms).await
+    }
+
+    /// 单服务器工具调用（Phase 4 / ADR-230）— 显式 args、返回 payload。
+    ///
+    /// 与 [`execute_transaction`](Self::execute_transaction) 的边界：
+    /// - 单服务器、无分布式原子性要求 → 本方法（一次请求一次响应）；
+    /// - 多服务器需要 Prepare/Commit/Rollback → 仍走 2PC。
+    ///
+    /// 校验注册与心跳后，经 `ParticipantClient::invoke_tool` 发送；
+    /// 超时统一映射为 `NetworkError`（不新增错误变体，保持错误面稳定）。
+    pub async fn invoke_tool(
+        &self,
+        server_id: &str,
+        tool: &str,
+        args_json: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<String, McpError> {
+        let server = self
+            .registry
+            .get(server_id)
+            .ok_or_else(|| McpError::ServerNotFound {
+                server_id: server_id.to_string(),
+            })?;
+        if !server.is_alive(self.config.heartbeat_timeout_ms) {
+            return Err(McpError::ServerUnreachable {
+                server_id: server_id.to_string(),
+            });
+        }
+
+        let request = ToolInvokeRequest {
+            call_id: Uuid::now_v7().to_string(),
+            tool: tool.to_string(),
+            args_json: args_json.to_string(),
+        };
+        let effective_timeout = timeout_ms.unwrap_or(self.config.transaction_timeout_ms);
+        let outcome = tokio::time::timeout(
+            Duration::from_millis(effective_timeout),
+            self.participant_client.invoke_tool(&server, request),
+        )
+        .await;
+        match outcome {
+            Ok(result) => result,
+            Err(_) => Err(McpError::NetworkError {
+                server_id: server_id.to_string(),
+                endpoint: server.endpoint.clone(),
+                reason: format!("工具调用超时({effective_timeout}ms)"),
+            }),
+        }
     }
 
     /// 发布 `McpMessageReceived` 事件(best-effort,失败仅告警)

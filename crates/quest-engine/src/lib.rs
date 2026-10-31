@@ -78,7 +78,7 @@ pub use ambient_mode::{
     MemoryTidyHook, NoopTidyHook,
 };
 pub use checkpoint::CheckpointManager;
-pub use config::QuestConfig;
+pub use config::{DagMode, QuestConfig};
 // P2-1: 协调成本/推理增益比值度量(三重悖论推理悖论红线)
 pub use control::{
     handle_control_event, spawn_control_subscriber, spawn_control_subscriber_with_receiver,

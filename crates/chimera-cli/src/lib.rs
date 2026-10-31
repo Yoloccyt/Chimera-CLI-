@@ -2,9 +2,9 @@
 //! LAYER:    L10
 //! ROLE:     Chimera CLI — NEXUS-OMEGA AI 编码代理的命令行入口
 //! BACKEND:  fs
-//! PRODUCERS: 13 ClaimIssued,ClaimRetracted,OperationTimedOut,ParentSelected,StopRulingIssued…
+//! PRODUCERS: 14 BudgetExceeded,ClaimIssued,ClaimRetracted,OperationTimedOut,ParentSelected…
 //! CONSUMERS: 0 -
-//! MATURITY: NOT-IMPL-CN|PLACEHOLDER-EN
+//! MATURITY: NOT-IMPL-CN|PLACEHOLDER-EN|SIMPLIFIED-CN
 //! CRATE-CONTRACT END
 //! Chimera CLI — NEXUS-OMEGA AI 编码代理的命令行入口
 //!
@@ -69,6 +69,8 @@ pub mod commands;
 pub mod composition;
 /// Figment 多源配置加载
 pub mod config;
+/// 同步 DB 打开的统一出口(Phase 6A/§4.4 红线 2:rusqlite open 必走 blocking 池)
+pub mod db_open;
 /// CLI 错误类型(结构化错误码,Task 0.2 将据此映射 ExitCode 矩阵)
 pub mod error;
 /// §16.1 经验卡片闭环组合根接线(Phase 10 审计修复 Wave 1:
@@ -76,6 +78,8 @@ pub mod error;
 pub mod experience_loop;
 /// TUI ↔ 编排器协议握手服务端(Concord W10,ADR-082:TuiHello 应答 + SEC-4 一次性)
 pub mod handshake;
+/// LLM 工具循环(Phase 7,ADR-232:模型 ↔ 工具多轮闭环,默认关闭)
+pub mod llm;
 /// Quest 分解编排器(消费 TuiChatSubmitted,经 QuestEngine 真实分解并流式回发)
 pub mod orchestrator;
 /// P1 候选③（ADR-211 Accepted）：`agent spawn` 前 mas-sched claim 准入
@@ -89,6 +93,8 @@ pub mod overwindow_bridge;
 pub mod output;
 /// Permission prompt 机制(Task 1.11)
 pub mod permission;
+/// Quest 执行面(Phase 5/ADR-231):任务级租约 + DAG 就绪队列 + 工具计划执行
+pub mod quest_exec;
 /// Quest 生命周期组件桥(Phase 10 审计修复 Wave 2:
 /// LongTaskMap/SearchTreeManager/LongTermCreditAssigner 事件桥接装配)
 pub mod quest_loop;
@@ -97,6 +103,8 @@ pub mod rl_client;
 pub mod selector_orchestrator;
 /// 命令装配分类(编译期穷尽,决定是否装配 AppContext)
 pub mod spec;
+/// Tool execution plane 的 L10 provider 适配器 + env 配置（Phase 3）
+pub mod tool_plane;
 
 // === 公开 API 重导出 ===
 pub use cli::{Cli, Commands, ConfigAction, QuestAction};

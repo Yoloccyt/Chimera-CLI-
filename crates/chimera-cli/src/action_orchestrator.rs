@@ -153,6 +153,20 @@ async fn route_action(
             let query = payload_str(payload, "query")
                 .filter(|q| !q.is_empty())
                 .ok_or_else(|| format!("{action_id} 需在 Chat 输入内容(i 进入 Insert 模式)"))?;
+            // Phase 7（ADR-232）：`agent.chat` 在 CHIMERA_LLM_LOOP=apply 时走 LLM 工具循环。
+            // WHY 审批取 DenyWrites：TUI 持有终端控制权，后台任务不能去读 stdin 问人；
+            // 写工具的 TUI 弹窗审批属后续波次，此档下只读工具自动放行、写调用被拒并
+            // 以 ask_required 回填模型（fail-closed，不静默执行副作用）。
+            if action_id == "agent.chat" && crate::commands::run::llm_loop_enabled() {
+                let outcome = crate::commands::run::llm_answer_with(
+                    bus,
+                    &query,
+                    &crate::llm::approval::DenyWrites,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
+                return Ok(outcome.text);
+            }
             let intent = UserIntent {
                 intent_id: format!("action-{action_id}"),
                 raw_text: query.clone(),

@@ -18,7 +18,7 @@
 //!   必须调用 `permission::confirm` 获取用户确认(除非 `--yes` / `--no-permission`)。
 
 use anyhow::Result;
-use mcp_mesh::{McpMesh, MeshConfig};
+use mcp_mesh::{McpMesh, MeshConfig, MeshServer};
 use serde::Serialize;
 
 use crate::cli::McpAction;
@@ -47,8 +47,23 @@ pub async fn execute(
     match action {
         McpAction::List => list_servers(&mesh, json).await,
         McpAction::Serve => serve_server().await,
-        McpAction::Call { server, tool, args } => {
-            call_tool(&mesh, server, tool, args, perm, json, dry_run).await
+        McpAction::Call {
+            server,
+            tool,
+            args,
+            endpoint,
+        } => {
+            call_tool(
+                &mesh,
+                server,
+                tool,
+                args,
+                endpoint.as_deref(),
+                perm,
+                json,
+                dry_run,
+            )
+            .await
         }
         McpAction::Inspect { server } => inspect_server(&mesh, server, json).await,
     }
@@ -123,7 +138,8 @@ async fn serve_server() -> Result<()> {
 #[derive(Debug, Serialize)]
 struct McpCallResult<'a> {
     success: bool,
-    transaction_id: &'a str,
+    transaction_id: Option<&'a str>,
+    payload: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -141,11 +157,13 @@ struct McpCallPayload<'a> {
 /// 进程内 ephemeral mesh 无注册服务器,调用必返回 EngineError(ServerNotFound)。
 ///
 /// `dry_run=true`(Task 2.2):permission 确认后只输出预览,不调用 execute_transaction。
+#[allow(clippy::too_many_arguments)] // CLI adapter: mirrors clap args 1:1
 async fn call_tool(
     mesh: &McpMesh,
     server: &str,
     tool: &str,
     args: &[String],
+    endpoint: Option<&str>,
     perm: &PermissionCtx,
     json: bool,
     dry_run: bool,
@@ -169,27 +187,60 @@ async fn call_tool(
         return Ok(());
     }
 
-    // 真实调用 McpMesh::execute_transaction
-    // WHY 返回 EngineError:进程内 ephemeral mesh 无注册服务器,
-    // execute_transaction 对未注册 server_id 返回 ServerNotFound
+    // Phase 4 / ADR-230：v2 单调用（显式 args + payload），默认关闭。
+    if std::env::var("CHIMERA_MCP_CALL_V2").ok().as_deref() == Some("on") {
+        let Some(endpoint) = endpoint else {
+            return Err(ChimeraCliError::ConfigError(
+                "mcp call v2 需要 --endpoint <host:port>".into(),
+            )
+            .into());
+        };
+        let server_record = MeshServer::new(server, endpoint, vec![tool.to_string()]);
+        mesh.register_server(server_record).map_err(|error| {
+            ChimeraCliError::EngineError(format!("MCP 服务器注册失败: {error}"))
+        })?;
+        let args_json = args.join(" ");
+        let payload_text = mesh
+            .invoke_tool(server, tool, &args_json, None)
+            .await
+            .map_err(|error| ChimeraCliError::EngineError(format!("MCP 工具调用失败: {error}")))?;
+        let payload = McpCallPayload {
+            server,
+            tool,
+            args,
+            result: McpCallResult {
+                success: true,
+                transaction_id: None,
+                payload: Some(&payload_text),
+            },
+        };
+        return output::emit(json, &payload, || {
+            output::print_success(&format!(
+                "MCP 工具调用完成: {server}/{tool} -> {payload_text}"
+            ));
+            Ok(())
+        });
+    }
+
+    // 旧路径（默认）：2PC 事务语义，逐位保留。
     let result = mesh
         .execute_transaction(vec![server.to_string()], tool.to_string())
         .await
         .map_err(|e| ChimeraCliError::EngineError(format!("MCP 工具调用失败: {e}")))?;
-
+    let transaction_id = result.transaction_id.clone();
     let payload = McpCallPayload {
         server,
         tool,
         args,
         result: McpCallResult {
             success: result.success,
-            transaction_id: &result.transaction_id,
+            transaction_id: Some(&transaction_id),
+            payload: None,
         },
     };
     output::emit(json, &payload, || {
         output::print_success(&format!(
-            "MCP 工具调用完成: {server}/{tool}(transaction: {})",
-            result.transaction_id
+            "MCP 工具调用完成: {server}/{tool}(transaction: {transaction_id})"
         ));
         Ok(())
     })

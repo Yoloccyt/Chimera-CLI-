@@ -58,8 +58,10 @@ fn test_no_subcommand() {
 fn test_run_subcommand() {
     let cli = Cli::try_parse_from(["chimera", "run", "hello world"]).unwrap();
     match cli.command {
-        Some(chimera_cli::cli::Commands::Run { prompt }) => {
+        Some(chimera_cli::cli::Commands::Run { prompt, llm }) => {
             assert_eq!(prompt, "hello world");
+            // Phase 7：不传 --llm 必须是 false（旧路径默认不变）
+            assert!(!llm, "run 默认不得走 LLM 工具循环");
         }
         _ => panic!("应解析为 Run 命令"),
     }
@@ -1706,8 +1708,8 @@ fn help_text_has_no_stale_references() {
         .expect("执行 chimera 二进制失败");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("6 个 slash"),
-        "chat --help 应写 \"6 个 slash 命令\", 实际: {}",
+        stdout.contains("9 个 slash"),
+        "chat --help 应写 \"9 个 slash 命令\", 实际: {}",
         stdout
     );
 }

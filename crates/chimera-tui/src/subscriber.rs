@@ -187,6 +187,24 @@ impl EventSubscriber {
         buf.pop_front()
     }
 
+    /// 一次锁取走缓冲区里的全部事件（FIFO 序）；空缓冲区返回空 `Vec`
+    ///
+    /// WHY 与 [`try_recv`](Self::try_recv) 并存而不替换它：`try_recv` 是"一条一锁"
+    /// 语义，逐条消费的调用方需要它；而 `DataPipeline` 每个 tick 都要清空缓冲区，
+    /// 用 `while try_recv()` 循环等于 N 次 lock/unlock（N = 本 tick 到达数，突发时数十），
+    /// 且每次放锁都给转发任务插队 push 的机会，"同一 tick 的批次边界"因此不确定。
+    /// 本方法把批次压成一次临界区：`std::mem::take` 后原样交出，顺序与入队严格一致。
+    ///
+    /// WHY 返回 `Vec` 而非 `Option`：无事件不是错误，调用方不必为此多写一层分支。
+    pub fn drain_all(&mut self) -> Vec<NexusEvent> {
+        let mut buf = self.buffer.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("TUI event subscriber buffer mutex was poisoned; recovering state");
+            poisoned.into_inner()
+        });
+        // take 后缓冲区回到空 deque；迭代顺序 = VecDeque 的前到后 = FIFO
+        std::mem::take(&mut *buf).into_iter().collect()
+    }
+
     /// 关闭订阅者,中止并等待后台任务结束
     ///
     /// 幂等:重复调用会立即返回,不会 panic。
@@ -262,6 +280,113 @@ mod tests {
             sleep(Duration::from_millis(5)).await;
         }
         subscriber.try_recv()
+    }
+
+    /// 累计 drain 直到取满 `expect` 条（转发任务是异步 push,不能假设一次取全）
+    ///
+    /// WHY 累计而非单次断言：`drain_all` 的批次边界取决于转发进度,但 **FIFO 顺序
+    /// 与总数是确定的** —— 把不确定的"何时到齐"挡在 helper 里,断言只谈确定性。
+    async fn drain_until(sub: &mut EventSubscriber, expect: usize) -> Vec<NexusEvent> {
+        let mut acc: Vec<NexusEvent> = Vec::new();
+        for _ in 0..40 {
+            acc.extend(sub.drain_all());
+            if acc.len() >= expect {
+                return acc;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+        acc
+    }
+
+    /// `drain_all` 一次取走整批,且取后缓冲区为空
+    #[tokio::test]
+    async fn drain_all_takes_whole_batch_and_leaves_buffer_empty() {
+        let bus = EventBus::new();
+        let mut sub = EventSubscriber::new(bus.clone());
+        for i in 0..5u32 {
+            bus.publish_blocking(osa_event(0.1 * (i as f32), vec!["a.rs"]))
+                .expect("publish");
+        }
+
+        let batch = drain_until(&mut sub, 5).await;
+        assert_eq!(batch.len(), 5, "5 条发布必须一次或累计取满 5 条");
+        let sparsities: Vec<f32> = batch
+            .iter()
+            .map(|e| match e {
+                NexusEvent::OmniSparseMasksComputed { sparsity, .. } => *sparsity,
+                other => panic!("unexpected event: {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            sparsities,
+            vec![0.0, 0.1, 0.2, 0.3, 0.4],
+            "drain_all 必须保持入队顺序"
+        );
+        assert!(sub.drain_all().is_empty(), "取走后缓冲区必须为空");
+
+        sub.shutdown().await;
+    }
+
+    /// 批次语义等价：`drain_all` 与逐条 `try_recv` 必须给出同一 FIFO 序列
+    ///
+    /// WHY 这条是"无行为回归"的证据：pipeline 从 try_recv 循环切到 drain_all,
+    /// 面板看到的事件顺序不得变。
+    #[tokio::test]
+    async fn drain_all_matches_try_recv_sequence() {
+        let names = ["x.rs", "y.rs", "z.rs"];
+
+        let bus_a = EventBus::new();
+        let mut sub_a = EventSubscriber::new(bus_a.clone());
+        for name in &names {
+            bus_a
+                .publish_blocking(osa_event(0.5, vec![*name]))
+                .expect("publish");
+        }
+        let via_drain = drain_until(&mut sub_a, names.len()).await;
+
+        let bus_b = EventBus::new();
+        let mut sub_b = EventSubscriber::new(bus_b.clone());
+        for name in &names {
+            bus_b
+                .publish_blocking(osa_event(0.5, vec![*name]))
+                .expect("publish");
+        }
+        let mut via_recv: Vec<NexusEvent> = Vec::new();
+        while via_recv.len() < names.len() {
+            match recv_with_retry(&mut sub_b).await {
+                Some(event) => via_recv.push(event),
+                None => break,
+            }
+        }
+
+        let mask_of = |events: &[NexusEvent]| -> Vec<Vec<String>> {
+            events
+                .iter()
+                .map(|e| match e {
+                    NexusEvent::OmniSparseMasksComputed { context_mask, .. } => {
+                        context_mask.clone()
+                    }
+                    other => panic!("unexpected event: {other:?}"),
+                })
+                .collect()
+        };
+        assert_eq!(
+            mask_of(&via_drain),
+            mask_of(&via_recv),
+            "两种取法必须给出同一序列"
+        );
+
+        sub_a.shutdown().await;
+        sub_b.shutdown().await;
+    }
+
+    /// 空缓冲区：返回空 Vec 而非 panic / 假事件
+    #[tokio::test]
+    async fn drain_all_on_empty_buffer_returns_empty() {
+        let bus = EventBus::new();
+        let mut sub = EventSubscriber::new(bus.clone());
+        assert!(sub.drain_all().is_empty());
+        sub.shutdown().await;
     }
 
     /// Notify 许可语义(感知延迟优化,2026-09-13):事件入缓冲后,唤醒句柄的

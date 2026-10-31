@@ -91,7 +91,7 @@ fn synthetic_snapshot(revision: u64, chat_n: usize) -> DataSnapshot {
     let mut snap = DataSnapshot::default();
     snap.revision = revision;
     snap.quest_list = quest_list();
-    snap.chat_messages = chat_msgs(chat_n);
+    snap.chat_messages = std::sync::Arc::new(chat_msgs(chat_n));
     snap.budget_history = (0..64).collect();
     snap.memory_history = (0..64).collect();
     snap.event_rate_history = (0..64).collect();

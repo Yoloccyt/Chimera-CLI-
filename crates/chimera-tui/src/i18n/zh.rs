@@ -331,6 +331,9 @@ pub const SEED_KEYS: &[&str] = &[
     "status.export_csv_prompt",
     "status.export_failed",
     "status.export_blocked",
+    // Phase 6B/T6B.5:导出转异步后的"进行中"态(终态在后续帧落状态栏)
+    "status.export_pending",
+    "status.export_interrupted",
     // B4-I(F-65 补口):导出成功 + 窗格技术标签(focus_pane 提示)
     "status.exported",
     "status.pane.none",
@@ -714,6 +717,9 @@ fn lookup_table_2(key: &str) -> Option<&'static str> {
         "status.export_csv_prompt" => "导出为 CSV?",
         "status.export_failed" => "导出失败: {}",
         "status.export_blocked" => "无法导出: {}",
+        // Phase 6B/T6B.5:写盘离开 UI 线程,先显"正在导出"
+        "status.export_pending" => "正在导出: {}",
+        "status.export_interrupted" => "导出任务已终止(未收到回执)",
         // B4-I(F-65 补口):导出成功提示(单词级英文硬编码收口)
         "status.exported" => "已导出: {}",
         // B4-I:窗格技术标签(focus_pane 状态提示)

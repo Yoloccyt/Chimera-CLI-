@@ -27,9 +27,11 @@
 //! 注:该清单与 `NexusEvent::severity()` 的显式 Critical 分支(15 个)不完全重合
 //! (审计清单另含 CapabilityFrozen/SandboxViolation/AgentContextOverflow/
 //! ResourceRecovered/RewardSignalReported),本测试以审计清单为准;
-//! mpsc 旁路触发集(`bus.rs is_critical_mpsc_event`)与审计 19 清单的交集为 9 个:
+//! mpsc 旁路触发集(`bus.rs is_critical_mpsc_event`,当前 18 类)与审计 19 清单的交集
+//! 为 11 个(2026-10-31 对齐 C-64b:SandboxViolation 入旁路后 10→11):
 //! BudgetExceeded / SkepticVeto / RedTeamAudit / AsaIntervention / AgentTaskFailed /
-//! AffinityQuotaExhausted / R2FreezeViolation / R2FreezeRollbackFailed / FormalViolation。
+//! AffinityQuotaExhausted / R2FreezeViolation / R2FreezeRollbackFailed / FormalViolation /
+//! VetoOverridden / SandboxViolation。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
@@ -170,12 +172,13 @@ fn audit_critical_events() -> Vec<NexusEvent> {
     ]
 }
 
-/// 审计 19 清单 ∩ mpsc 旁路触发集(bus.rs `is_critical_mpsc_event`)= 10 个
+/// 审计 19 清单 ∩ mpsc 旁路触发集(bus.rs `is_critical_mpsc_event`)= 11 个
 ///
-/// 旁路触发集(Phase 10 Wave 5 对齐后 13 类):SkepticVeto/RedTeamAudit/
-/// BudgetExceeded/AgentTaskFailed/AsaIntervention/AffinityQuotaExhausted/
-/// R2FreezeViolation/R2FreezeRollbackFailed/FormalViolation/VetoOverridden/
-/// R1ShadowRollbackFailed/StopRulingIssued/ErrorSignatureMatched。
+/// 旁路触发集(当前权威 18 类):SkepticVeto/RedTeamAudit/BudgetExceeded/
+/// AgentTaskFailed/AsaIntervention/AffinityQuotaExhausted/R2FreezeViolation/
+/// R2FreezeRollbackFailed/FormalViolation/VetoOverridden/R1ShadowRollbackFailed/
+/// StopRulingIssued/ErrorSignatureMatched/FormalVerificationFailed/CertifyIssued/
+/// FailureRegistered/ShadowBreakerTripped/SandboxViolation。
 /// 此集合与 `severity()` 是两张独立清单(双清单同步红线),
 /// 本测试仅锁定审计清单 ∩ 旁路集的交集。
 fn is_audit_bypass_event(event: &NexusEvent) -> bool {
@@ -192,6 +195,8 @@ fn is_audit_bypass_event(event: &NexusEvent) -> bool {
             | NexusEvent::FormalViolation { .. }
             // Phase 10 Wave 5:否决覆盖审计纳入旁路(审计清单内,交集 +1)
             | NexusEvent::VetoOverridden { .. }
+            // C-64b(2026-10-25):沙箱违规升入 mpsc 旁路(交集 10→11)
+            | NexusEvent::SandboxViolation { .. }
     )
 }
 
@@ -217,8 +222,8 @@ async fn recv_critical(
 
 /// 测试 1(容量内投递):注入 20 个事件(19 Critical + 1 Normal),
 /// 断言全部投递成功 —— broadcast 保序收到全部 20 个,mpsc 旁路收到且仅收到
-/// 旁路触发集以权威清单为准(现 CRITICAL_MPSC_VARIANTS=13,2026-09-04;
-/// 本测试登记时为 10,Phase 10 Wave 5:9→10),
+/// 旁路触发集以权威清单为准(现 CRITICAL_MPSC_VARIANTS=18;
+/// 本测试登记时为 9,Phase 10 Wave 5:9→10,C-64b:10→11),
 /// 全程 `critical_dropped_count == 0`。
 #[tokio::test]
 async fn critical_events_within_capacity_all_delivered() {
@@ -259,15 +264,15 @@ async fn critical_events_within_capacity_all_delivered() {
     let extra = tokio::time::timeout(Duration::from_millis(100), broadcast_rx.recv()).await;
     assert!(extra.is_err(), "broadcast 不应有多余事件");
 
-    // mpsc 旁路侧:收到且仅收到旁路触发集 ∩ 审计清单的 10 个事件
-    // (Phase 10 Wave 5:VetoOverridden 纳入旁路,交集 9→10)
+    // mpsc 旁路侧:收到且仅收到旁路触发集 ∩ 审计清单的 11 个事件
+    // (C-64b:SandboxViolation 纳入旁路,交集 10→11)
     let mut bypass_received: HashSet<String> = HashSet::new();
-    for _ in 0..10 {
+    for _ in 0..11 {
         match recv_critical(&mut critical_rx, Duration::from_secs(2)).await {
             Some(event) => {
                 bypass_received.insert(event.type_name().to_string());
             }
-            None => panic!("旁路应收到 10 个 mpsc Critical 事件"),
+            None => panic!("旁路应收到 11 个 mpsc Critical 事件"),
         }
     }
     let expected_bypass: HashSet<String> = [
@@ -281,6 +286,7 @@ async fn critical_events_within_capacity_all_delivered() {
         "R2FreezeRollbackFailed",
         "FormalViolation",
         "VetoOverridden",
+        "SandboxViolation",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -363,7 +369,7 @@ async fn overflow_fails_explicitly_not_silently_dropped() {
 }
 
 /// 测试 3(逐个投递验证,加分):19 个 `[Critical]` 事件逐个发布,
-/// 确认每一个都经 broadcast 送达、旁路触发集内的 9 个经 mpsc 旁路送达,
+/// 确认每一个都经 broadcast 送达、旁路触发集内的 11 个经 mpsc 旁路送达,
 /// 全程 `critical_dropped_count == 0` —— 无一被静默丢弃。
 #[tokio::test]
 async fn each_critical_variant_delivered_individually() {

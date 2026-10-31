@@ -10,6 +10,17 @@
 
 use serde::{Deserialize, Serialize};
 
+/// 任务图生成模式（Phase 5 / ADR-231）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DagMode {
+    /// 规则分解器旧行为：句子间线性依赖链（默认，向后兼容）。
+    #[default]
+    Linear,
+    /// 句子间无依赖：多根 DAG，允许 QuestExecutor 并行执行。
+    MultiRoot,
+}
+
 /// Quest Engine 配置 — 控制任务分解上限与检查点频率
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuestConfig {
@@ -22,6 +33,10 @@ pub struct QuestConfig {
     ///
     /// WHY:0 表示禁用自动检查点;Week 2 阶段仅配置,实际持久化在后续阶段实现
     pub checkpoint_interval: u32,
+
+    /// 任务图生成模式（默认 Linear；MultiRoot 需显式 opt-in）。
+    #[serde(default)]
+    pub dag_mode: DagMode,
 }
 
 impl Default for QuestConfig {
@@ -29,16 +44,18 @@ impl Default for QuestConfig {
         Self {
             max_tasks_per_quest: 16,
             checkpoint_interval: 3,
+            dag_mode: DagMode::Linear,
         }
     }
 }
 
 impl QuestConfig {
-    /// 创建自定义配置
+    /// 创建自定义配置（`dag_mode = Linear`，保持旧签名语义）。
     pub fn new(max_tasks_per_quest: u32, checkpoint_interval: u32) -> Self {
         Self {
             max_tasks_per_quest,
             checkpoint_interval,
+            dag_mode: DagMode::Linear,
         }
     }
 }

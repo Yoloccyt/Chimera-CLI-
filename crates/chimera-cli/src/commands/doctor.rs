@@ -35,6 +35,7 @@ use seccore::command_validator::SecCoreCommandValidator;
 use seccore::Sandbox;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::config::{self, ChimeraConfig};
 use crate::output;
@@ -132,6 +133,14 @@ pub async fn execute_with_ctx(
 /// 删除探针内两次全量配置加载(debug ≈7.5ms),并修复
 /// `doctor --config X` 实际校验默认路径的缺陷。路径解析失败仅使探针 0 报 Fail
 /// (不 panic);`main` 侧的坏配置已在 dispatch 前以 exit 1 拦截。
+/// 探针共享的配置句柄 —— 一次深拷，各探针按引用计数取用
+///
+/// WHY 抽成函数而非在调用点内联 `Arc::new(cfg.clone())`：这样"两个探针看的是同一分配"
+/// 可被单元测试直接断言（手抄夹具测不到生产码），且未来加探针只需再 `Arc::clone`。
+fn shared_config(cfg: &ChimeraConfig) -> Arc<ChimeraConfig> {
+    Arc::new(cfg.clone())
+}
+
 async fn run_probes_parallel(
     ctx: &crate::composition::AppContext,
     cfg: &ChimeraConfig,
@@ -140,13 +149,15 @@ async fn run_probes_parallel(
 ) -> Vec<HealthCheck> {
     const PROBE_COUNT: usize = 11;
 
-    // cfg 以 owned clone 移入 future('static 约束);Clone 代价 = 一次配置结构拷贝,
-    // 远小于 LLM 探针 238ms 睡眠——并行净收益不受影响。
+    // cfg 以 owned 句柄移入 future('static 约束)。Phase 6A/T6A.3:此前两个探针各
+    // `cfg.clone()` 一次 = 两次整树深拷（ChimeraConfig 是 14 段的厚结构）；改为
+    // 一次深拷 + 按探针 `Arc::clone`（只动引用计数）。
     // scc 句柄同理(SccCache Clone = Arc 引用计数,廉价):M13 第 9 探针消费
     // 组合根装配的共享缓存实例,而非探针内自建 ephemeral(那是装配态空转)。
-    let cfg_owned = cfg.clone();
+    let cfg_shared = shared_config(cfg);
     // W3-2 探针 2（sqlite_path）直接消费已加载配置,不再自建全量加载。
-    let cfg_for_sqlite = cfg.clone();
+    let cfg_for_sqlite = Arc::clone(&cfg_shared);
+    let cfg_for_llm = Arc::clone(&cfg_shared);
     let bus_owned = ctx.bus.clone();
     let scc_owned = ctx.scc.clone();
     // WI-G12 第 10 探针需要第二份 scc 句柄(Clone = Arc 引用计数,廉价)
@@ -174,7 +185,7 @@ async fn run_probes_parallel(
         Box::pin(async move { Ok((2, check_sqlite_path(&cfg_for_sqlite).await)) }),
         Box::pin(async move { Ok((3, check_mcp_mesh().await)) }),
         Box::pin(async move { Ok((4, check_event_bus(&bus_owned).await)) }),
-        Box::pin(async move { Ok((5, check_llm_provider(&cfg_owned).await)) }),
+        Box::pin(async move { Ok((5, check_llm_provider(&cfg_for_llm).await)) }),
         Box::pin(async move { Ok((6, check_auth_keys())) }),
         Box::pin(async move { Ok((7, check_seccore())) }),
         Box::pin(async move { Ok((8, check_scc_cache(&scc_owned))) }),
@@ -215,6 +226,22 @@ use probes::*;
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Phase 6A/T6A.3：探针共享同一份配置分配（一次深拷 + 引用计数克隆）
+    #[test]
+    fn doctor_probes_share_one_config_allocation() {
+        let base = ChimeraConfig::default();
+        let shared = shared_config(&base);
+        let for_sqlite = Arc::clone(&shared);
+        let for_llm = Arc::clone(&shared);
+        assert!(
+            Arc::ptr_eq(&for_sqlite, &for_llm),
+            "sqlite 与 llm 探针必须看到同一分配（旧写法是两次 cfg.clone()）"
+        );
+        assert_eq!(Arc::strong_count(&shared), 3, "本体 + 两个探针句柄");
+        drop((for_sqlite, for_llm));
+        assert_eq!(Arc::strong_count(&shared), 1, "探针句柄全部释放");
+    }
 
     /// 验证 `execute` 触发第 6 维 LLM Provider 检查,且输出含 `LLM:` 行(Wave 2 Task 4)。
     ///

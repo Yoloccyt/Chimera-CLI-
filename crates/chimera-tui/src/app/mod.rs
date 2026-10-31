@@ -114,6 +114,20 @@ pub struct TuiApp {
     ///
     /// WHY 集中:`chat_session_id` + `palette` 聚合,便于扩展多会话/命令历史。
     pub(crate) chat_session: ChatSession,
+    /// 异步导出回执(Phase 6B/T6B.5)
+    ///
+    /// `/export` 的敏感数据扫描 + 序列化 + 写盘全部离开 UI 线程；本字段持有
+    /// oneshot 接收端与目标路径,由 `step()` 在后续帧轮询并落状态栏。
+    /// `None` = 无在飞导出。
+    pub(crate) pending_export: Option<(
+        tokio::sync::oneshot::Receiver<Result<(), String>>,
+        std::path::PathBuf,
+    )>,
+    /// 导出目录覆盖(Phase 6B/T6B.5):`None` = `~/.chimera/exports`
+    ///
+    /// WHY 做成可注入字段而非读环境变量:测试需要确定性地指定落盘位置,而
+    /// `env::set_var` 是进程级共享态,同一二进制的并发测试会互相污染。
+    pub(crate) export_dir: Option<std::path::PathBuf>,
     /// 上一次 Chat 视图 Esc 的毫秒时间戳(Concord W4 T4.5 Esc Esc rewind)
     ///
     /// WHY 不持久化:双击窗口是瞬时交互状态,跨会话无意义。
@@ -325,11 +339,22 @@ impl TuiApp {
             action_registry: crate::actions::ActionRegistry::with_builtin_domains(),
             // F-08:斜杠注册表构造期一次,四处消费点(补全/提交/导航/渲染)零重建
             slash_registry: crate::actions::SlashCommandRegistry::with_builtin_commands(),
+            // Phase 6B/T6B.5:导出改异步后,构造期无在飞任务、无目录覆盖
+            pending_export: None,
+            export_dir: None,
         };
         // F-37:主题强调色装配期注入 —— 面板层仅持 &TuiState 不可达 TuiApp 主题
         // (见 Panel::set_accent),切主题时亦经此广播(cycle_theme_action)。
         app.broadcast_accent();
         Ok(app)
+    }
+
+    /// 覆盖导出目录(Phase 6B/T6B.5)
+    ///
+    /// WHY 公开:导出路径此前只能落在 `~/.chimera/exports`,测试无法断言落盘结果
+    /// 而不污染真实用户目录;本 setter 同时给用户自定义位置的能力。
+    pub fn set_export_dir(&mut self, dir: std::path::PathBuf) {
+        self.export_dir = Some(dir);
     }
 
     /// 将主题强调色广播到全部面板(F-37)

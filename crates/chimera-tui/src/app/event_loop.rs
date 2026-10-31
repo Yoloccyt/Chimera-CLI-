@@ -1252,49 +1252,117 @@ impl TuiApp {
         });
     }
 
-    /// 执行导出操作
+    /// 执行导出操作（Phase 6B/T6B.5：敏感扫描 + 序列化 + 写盘离开 UI 线程）
+    ///
+    /// WHY 异步：`export_quests_to` 要对整段会话/轨迹做敏感数据正则扫描再写盘，
+    /// 过去同步跑在 UI 线程上 —— 一次 `/export` 期间界面冻结，这是帧预算
+    /// (`MIN_FRAME_MS`)之外唯一的长阻塞点。改为 `spawn_blocking` + oneshot 回执，
+    /// 状态栏先显示"进行中"，回执到达的那一帧再落终态。
+    ///
+    /// WHY 保留同步降级：`spawn_blocking` 在无 runtime 的调用点会 panic，
+    /// 而纯单元测试路径正是这样调 `step()`/命令处理的；此时没有冻结风险，直接同步执行。
     fn perform_export(&mut self, format: ExportFormat) {
-        let data_source = &self.data_source;
-        match data_source.snapshot() {
-            Ok(snapshot) => {
-                let now = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
-                let home = std::env::var("USERPROFILE")
-                    .or_else(|_| std::env::var("HOME"))
-                    .unwrap_or_else(|_| ".".to_string());
-                let export_dir = std::path::PathBuf::from(home)
-                    .join(".chimera")
-                    .join("exports");
-                let filename = format!("quests_{}.{}", now, format.extension());
-                let path = export_dir.join(&filename);
-                match snapshot.export_quests_to(format, &path) {
-                    Ok(()) => {
-                        // B4-I(F-65 补口):导出成功提示与 export_failed/export_blocked
-                        // 同属 export 特征路径,走 status.exported 键表——单词级英文
-                        // 硬编码逃过 english_token_count>=2 门禁,此处收口
-                        self.state.status_message = Some((
-                            crate::t!("status.exported").replacen(
-                                "{}",
-                                &path.display().to_string(),
-                                1,
-                            ),
-                            Severity::Info,
-                        ));
-                    }
-                    Err(e) => {
-                        self.state.status_message = Some((
-                            crate::t!("status.export_failed").replacen("{}", &e.to_string(), 1),
-                            Severity::Error,
-                        ));
-                    }
-                }
-            }
+        let snapshot = match self.data_source.snapshot() {
+            Ok(snapshot) => snapshot,
             Err(e) => {
                 self.state.status_message = Some((
                     crate::t!("status.export_blocked").replacen("{}", &e.to_string(), 1),
                     Severity::Error,
                 ));
+                return;
+            }
+        };
+        let path = self.export_path(format);
+
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            self.apply_export_outcome(
+                &path,
+                snapshot
+                    .export_quests_to(format, &path)
+                    .map_err(|e| e.to_string()),
+            );
+            return;
+        };
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let path_for_task = path.clone();
+        handle.spawn_blocking(move || {
+            let result = snapshot
+                .export_quests_to(format, &path_for_task)
+                .map_err(|e| e.to_string());
+            // 接收端可能已随 TuiApp 一起退出而 drop —— 忽略发送失败,不留 panic
+            let _ = tx.send(result);
+        });
+        self.pending_export = Some((rx, path.clone()));
+        self.state.status_message = Some((
+            crate::t!("status.export_pending").replacen("{}", &path.display().to_string(), 1),
+            Severity::Info,
+        ));
+    }
+
+    /// 导出目录：`export_dir` 覆盖优先，否则 `~/.chimera/exports`
+    fn export_dir_path(&self) -> std::path::PathBuf {
+        if let Some(dir) = &self.export_dir {
+            return dir.clone();
+        }
+        let home = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .unwrap_or_else(|_| ".".to_string());
+        std::path::PathBuf::from(home)
+            .join(".chimera")
+            .join("exports")
+    }
+
+    /// 本次导出的目标路径（时间戳文件名，格式扩展名由 `ExportFormat` 决定）
+    fn export_path(&self, format: ExportFormat) -> std::path::PathBuf {
+        let now = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+        self.export_dir_path()
+            .join(format!("quests_{}.{}", now, format.extension()))
+    }
+
+    /// 把导出结果落成状态栏消息（同步路径与异步回执共用，保证文案一致）
+    fn apply_export_outcome(&mut self, path: &std::path::Path, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                // B4-I(F-65 补口):导出成功提示与 export_failed/export_blocked
+                // 同属 export 特征路径,走 status.exported 键表——单词级英文
+                // 硬编码逃过 english_token_count>=2 门禁,此处收口
+                self.state.status_message = Some((
+                    crate::t!("status.exported").replacen("{}", &path.display().to_string(), 1),
+                    Severity::Info,
+                ));
+            }
+            Err(e) => {
+                self.state.status_message = Some((
+                    crate::t!("status.export_failed").replacen("{}", &e.to_string(), 1),
+                    Severity::Error,
+                ));
             }
         }
+    }
+
+    /// 轮询异步导出回执 —— 由 `step()` 每帧调用（Phase 6B/T6B.5）
+    ///
+    /// WHY 在帧循环里轮询而非 await：TUI 主循环是同步 `step()` 驱动的，
+    /// 任何 await 点都会牵动整条事件循环的取消/超时语义；oneshot 的 `try_recv`
+    /// 给出"有就取、没有就下一帧再来"的非阻塞等价物。
+    /// Disconnected（写盘任务被 drop/panic）必须落失败态，**不得静默显示成功**。
+    fn poll_export_completion(&mut self) {
+        let received = {
+            let Some((rx, _)) = self.pending_export.as_mut() else {
+                return;
+            };
+            match rx.try_recv() {
+                Ok(result) => Some(result),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty) => None,
+                Err(_) => Some(Err(crate::t!("status.export_interrupted").to_string())),
+            }
+        };
+        let Some(result) = received else { return };
+        let Some((_, path)) = self.pending_export.take() else {
+            return;
+        };
+        self.apply_export_outcome(&path, result);
     }
 
     /// 发布 Quest 暂停请求
@@ -1745,6 +1813,8 @@ impl TuiApp {
     /// (见 `step` 内注释)。
     #[cfg(feature = "v3-engine")]
     pub(crate) fn step(&mut self, ev: Option<crossterm::event::Event>) -> Result<(), TuiError> {
+        // Phase 6B/T6B.5:先收异步导出的回执,再刷状态 —— 同一帧内把"进行中"换成终态。
+        self.poll_export_completion();
         // 渲染前刷新状态,确保面板显示最新快照(与事件循环同序)。
         // WHY 节流跳过渲染但不跳过 update:数据必须每轮拉取,否则下一次
         // 渲染会呈现滞后快照,面板指标出现"一拍延迟"。
@@ -2108,4 +2178,146 @@ pub(crate) fn tick_preset_next(current: u16) -> u16 {
         .map(|(i, _)| i)
         .unwrap_or(0);
     PRESETS[(nearest + 1) % PRESETS.len()]
+}
+
+#[cfg(test)]
+/// Phase 6B/T6B.5 —— `/export` 异步化契约
+///
+/// WHY 落在本模块内而非 `tests/`：被验证的 `apply_confirm_command`/`step` 是
+/// `pub(crate)`，导出内部件是模块私有函数；把它们为测试升成公开 API 会无谓扩大
+/// crate 表面（本仓可达性纪律反对这种做法）。
+mod export_async_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)] // 测试码惯用法
+
+    use super::*;
+    use crate::config::TuiConfig;
+    use crate::types::ViewMode;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// 唯一临时导出目录（不进 env：进程级共享态会污染并发测试）
+    fn temp_export_dir(tag: &str) -> std::path::PathBuf {
+        static SEQ: AtomicU32 = AtomicU32::new(1);
+        let n = SEQ.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!(
+            "chimera-export-{}-{tag}-{n}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.subsec_nanos())
+                .unwrap_or(0)
+        ))
+    }
+
+    fn app_exporting_to(dir: std::path::PathBuf) -> TuiApp {
+        let mut app = TuiApp::new(TuiConfig {
+            default_view_mode: ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .expect("TuiApp 构造");
+        app.set_export_dir(dir);
+        app
+    }
+
+    fn status_text(app: &TuiApp) -> String {
+        app.state
+            .status_message
+            .as_ref()
+            .map(|(msg, _)| msg.clone())
+            .unwrap_or_default()
+    }
+
+    /// 派发即返回：先显"正在导出"，回执落地前不得出现终态
+    ///
+    /// 判别力：改造前 `perform_export` 同步写盘，本断言的第一句就会看到"已导出"。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn export_dispatch_marks_pending_before_completion() {
+        let dir = temp_export_dir("pending");
+        let mut app = app_exporting_to(dir.clone());
+
+        app.apply_confirm_command("export:json");
+
+        assert!(
+            app.pending_export.is_some(),
+            "导出必须进入在飞状态,不得在 UI 线程同步写盘"
+        );
+        let dispatched = status_text(&app);
+        assert!(
+            dispatched.contains("正在导出") || dispatched.contains("Exporting"),
+            "派发帧的状态栏必须是进行中态,实际: {dispatched}"
+        );
+
+        // 轮询到终态（写盘在 blocking 池完成,不占本轮断言）
+        let mut settled = false;
+        for _ in 0..100 {
+            app.poll_export_completion();
+            if app.pending_export.is_none() {
+                settled = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(settled, "回执必须在有限帧内落地");
+        let final_status = status_text(&app);
+        assert!(
+            final_status.contains("已导出") || final_status.contains("Exported"),
+            "终态必须是已导出,实际: {final_status}"
+        );
+
+        let files: Vec<_> = std::fs::read_dir(&dir)
+            .expect("导出目录应已创建")
+            .filter_map(|entry| entry.ok())
+            .collect();
+        assert_eq!(files.len(), 1, "必须恰好落一份导出文件");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 失败必须显式落终态，不得静默显示成功
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn export_failure_surfaces_in_status() {
+        // 把"目录"指向一个普通文件：父目录创建失败 → 写盘失败
+        let blocker = temp_export_dir("blocker");
+        std::fs::write(&blocker, b"not a directory").expect("造占位文件");
+        let mut app = app_exporting_to(blocker);
+
+        app.apply_confirm_command("export:csv");
+        let mut settled = false;
+        for _ in 0..100 {
+            app.poll_export_completion();
+            if app.pending_export.is_none() {
+                settled = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(settled, "失败同样必须收到回执并清空在飞状态");
+        let status = status_text(&app);
+        assert!(
+            status.contains("导出失败") || status.contains("Export failed"),
+            "写盘失败必须显式报错,实际: {status}"
+        );
+    }
+
+    /// 无 runtime 的调用点走同步降级：不得 panic，也不得留在飞状态
+    ///
+    /// WHY 这条是必需的：`spawn_blocking` 在无 runtime 时会 panic，而库调用方与
+    /// 纯单测路径正处在这种上下文里。
+    #[test]
+    fn export_without_runtime_falls_back_to_sync() {
+        let dir = temp_export_dir("sync");
+        let mut app = app_exporting_to(dir.clone());
+
+        app.apply_confirm_command("export:json");
+
+        assert!(
+            app.pending_export.is_none(),
+            "无 runtime 时必须同步完成,不留悬挂回执"
+        );
+        let status = status_text(&app);
+        assert!(
+            status.contains("已导出") || status.contains("Exported"),
+            "同步路径必须直接落终态,实际: {status}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

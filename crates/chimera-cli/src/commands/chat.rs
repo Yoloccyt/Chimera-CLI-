@@ -12,8 +12,9 @@
 //!   WHY 解耦:TUI ActionDescriptor 持 i18n key(经 `i18n::tr` 解析)、依赖 TuiApp 上下文
 //!   (focus panel / requires_context),CLI 场景不需要这些,直接用 `&'static str` 中文
 //!   描述更轻量、更契合 CLI 用户阅读习惯。
-//! - **复用 orchestrator 纯函数**:`build_quest_reply` / `plan_chunks` 已在 TUI 编排器
-//!   实现,此处直接复用,保证 CLI run / chat / TUI 三入口的输出格式一致(单一真相源)。
+//! - **复用 orchestrator / run 纯函数**:`build_quest_reply`（回复文本构造）与
+//!   `run::stream_to`（流式写出，切分复用 `orchestrator::plan_chunks_batched`）
+//!   保证 CLI run / chat / TUI 三入口的输出格式一致(单一真相源)。
 //! - **tool 调用展示框架就绪**:订阅 `TuiActionProgressed` / `TuiActionCompleted` 事件,
 //!   输出 `[tool: <name>] args: <json>` + `[tool: <name>] result: <json>`。当前
 //!   QuestEngine 分解任务时不触发 TuiAction 事件(仅发布 QuestCreated / Chat* 事件),
@@ -47,7 +48,7 @@ use crate::cli::Cli;
 use crate::composition::AppContext;
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
-use crate::orchestrator::{build_error_reply, build_quest_reply, plan_chunks};
+use crate::orchestrator::{build_error_reply, build_quest_reply};
 use crate::permission::PermissionCtx;
 use tokio_util::sync::CancellationToken;
 
@@ -64,24 +65,19 @@ const CONTEXT_DISPLAY_INTERVAL: u32 = 5;
 ///
 /// WHY 独立于 run.rs 的 stream_to_stdout:run.rs 的版本从环境变量读 delay,
 /// 本函数接受 delay 参数,便于 REPL 上下文统一控制(未来可根据 token
-/// 密度动态调整)。两者底层都复用 `plan_chunks`,保证切分逻辑一致。
+/// 密度动态调整)。
+///
+/// Phase 6A/T6A.1:写入逻辑收口到 [`super::run::stream_to`]——两条路径此前各抄
+/// 一份逐字符循环,批量语义必须改两处;现在批宽同样经
+/// `CHIMERA_STREAM_BATCH_CHARS` 控制,默认 1 保持逐字节旧行为。
 async fn stream_to_stdout(reply: &str, delay: Duration) {
-    let stdout = io::stdout();
-    for delta in plan_chunks(reply) {
-        // WHY 锁作用域只包住单次写入:`StdoutLock` 是**进程级全局锁**，持它跨
-        // `sleep().await` 会让其他任务（tracing 输出、进度提示）在整段流式
-        // 节奏期间全部排队。写完即放，把 await 留在锁外。
-        {
-            let mut lock = stdout.lock();
-            let _ = write!(lock, "{delta}");
-            let _ = lock.flush();
-        }
-        if !delay.is_zero() {
-            tokio::time::sleep(delay).await;
-        }
-    }
-    let mut lock = stdout.lock();
-    let _ = writeln!(lock);
+    let _ = super::run::stream_to(
+        reply,
+        delay,
+        super::run::stream_batch_chars_from_env(),
+        &mut io::stdout(),
+    )
+    .await;
 }
 
 /// 启动 chat REPL — 兼容层 thin wrapper（M4-P1）
@@ -169,9 +165,26 @@ async fn repl_loop(
                     continue;
                 }
 
-                // 自然语言 → QuestEngine 分解(SubTask 1.5.2)
+                // 自然语言 → 一轮回答。Phase 7：`CHIMERA_LLM_LOOP=apply` 走 LLM 工具
+                // 循环（chat 无 `--llm` 旗，只能经环境档），否则旧 QuestEngine 分解
+                // 路径逐位不变。
                 turn += 1;
-                let reply = stream_quest_response(engine, _bus, input, chunk_delay).await;
+                let reply = if super::run::llm_loop_enabled() {
+                    match super::run::llm_answer(_bus, input, _perm).await {
+                        Ok(outcome) => {
+                            stream_to_stdout(&outcome.text, chunk_delay).await;
+                            outcome.text
+                        }
+                        // WHY 不退出 REPL：一轮失败不该杀掉整个会话；错误经 stderr
+                        // 可见，该轮回复记为空（不污染 token 估算）
+                        Err(error) => {
+                            eprintln!("[llm 本轮失败: {error}]");
+                            String::new()
+                        }
+                    }
+                } else {
+                    stream_quest_response(engine, _bus, input, chunk_delay).await
+                };
 
                 // 累计 token 使用量(粗略估计:输入 + 输出字符数 / 4)
                 // WHY / 4:经验估算 token ≈ chars/4(CJK 约 1 char/token,英文约 4 chars/token,
@@ -255,8 +268,8 @@ fn chunk_delay_from_env() -> Duration {
 
 /// 执行一轮 Quest 分解并流式输出到 stdout(SubTask 1.5.2)
 ///
-/// 复用 `orchestrator::build_quest_reply` + `plan_chunks` 纯函数,
-/// 保证 CLI run / chat / TUI 三入口输出格式一致(单一真相源)。
+/// 复用 `orchestrator::build_quest_reply` + `run::stream_to`（批宽经
+/// `CHIMERA_STREAM_BATCH_CHARS` 控制）,保证 CLI run / chat / TUI 三入口输出格式一致。
 ///
 /// M2:`create_quest` 经 `call_with_budget` 注入本层超时(120s,对齐
 /// mca-gateway per-endpoint 口径)+ CancellationToken。超时/取消不 panic、

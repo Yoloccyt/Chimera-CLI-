@@ -26,7 +26,6 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use repo_wiki::WikiStore;
 
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
@@ -45,11 +44,11 @@ pub async fn execute(query: &str, config: &ChimeraConfig, json: bool, limit: usi
     // 1. 解析数据库路径(展开 ~ 为 home 目录)
     let db_path = expand_db_path(&config.repo_wiki.db_path)?;
 
-    // 2. 打开 WikiStore(自动创建文件与 schema,启用 WAL)
-    //    WHY spawn_blocking 不需要:WikiStore::open 是同步但快速(仅打开连接 + 建表),
-    //    hybrid_query 内部已用 with_read_conn + spawn_blocking 包装异步执行。
-    let store = WikiStore::open(&db_path)
-        .map_err(|e| ChimeraCliError::EngineError(format!("WikiStore 打开失败: {e}")))?;
+    // 2. 打开 WikiStore(连接池 + WAL + FTS5 建表)
+    //    WHY 走 blocking 池(Phase 6A/T6A.2):旧注释称"同步但快速故不需要
+    //    spawn_blocking"——判据不是快慢,而是它会不会占住 runtime 工作线程;
+    //    冷启动/磁盘竞争下同一句调用可达几十 ms,期间该线程上所有任务被挂住。
+    let store = crate::db_open::open_wiki_store(db_path).await?;
 
     // 3. 执行混合检索(P1-2:CLI 无编码器,sparse-only 退化模式)
     let results = store

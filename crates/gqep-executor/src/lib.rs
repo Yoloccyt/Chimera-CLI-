@@ -80,6 +80,8 @@ pub mod gatherer;
 /// P3-T7: 流式期间启动工具（v4.0 WI-17,增量解析 + 闭合即启动）
 pub mod streaming_dispatch;
 pub mod timeout;
+/// Tool execution plane（L7）：统一 ToolRuntime / Provider / Scheduler / Registry。
+pub mod tool_plane;
 /// P3-T8: 声明式 ToolPlan 解释执行（v4.0 WI-16,PTC 计划批编排）
 pub mod toolplan_runner;
 pub mod types;
@@ -93,9 +95,17 @@ pub use timeout::with_timeout;
 // P3-T7: 流式派发公开 API（WI-17）
 pub use streaming_dispatch::{DispatchOutcome, DispatchedCall, SideEffect, StreamingDispatcher};
 // P3-T8: PTC 计划批编排公开 API（WI-16）
-pub use toolplan_runner::{PlanGuards, PlanRunner, PlanSummary, ToolExecutor};
+pub use toolplan_runner::{
+    PlanGuards, PlanRunError, PlanRunOptions, PlanRunner, PlanSummary, ToolExecutor,
+};
 // P4-T3: execpolicy 接线公开 API
 pub use exec_tool_executor::ExecPolicyToolExecutor;
+// Tool execution plane（L7）公开 API
+pub use tool_plane::{
+    BoundedToolScheduler, SchedSnapshot, ToolDescriptor, ToolError, ToolInvocation, ToolMetrics,
+    ToolMetricsSnapshot, ToolOrigin, ToolOutcome, ToolPriority, ToolProvider, ToolRegistry,
+    ToolRuntime, ToolRuntimeConfig, ToolScheduler, ToolStatus,
+};
 pub use types::{GatherCollected, GatherResult, GqepFuture, OperationId};
 
 /// 双层超时防护统计快照（Task 3.7:L10 → L7 向下依赖）

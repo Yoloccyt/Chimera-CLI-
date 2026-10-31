@@ -15,8 +15,10 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::stream::{FuturesUnordered, StreamExt};
+
 use crate::audit::{make_entry, AuditSink, HookAudit, NoopAuditSink};
-use crate::config::HookConfig;
+use crate::config::{HookConfig, HookSpec};
 use crate::lifecycle::LifecycleEvent;
 use seccore::os_backend::{ProcessFence, SandboxMode};
 use thiserror::Error;
@@ -32,6 +34,30 @@ pub struct HookResult {
     pub interrupted: bool,
     /// 是否被沙箱拒绝
     pub sandbox_denied: bool,
+}
+
+/// 触发选项 — Phase 5 的并行/总预算开关。
+///
+/// 默认 `parallel_post=false`，保持旧串行语义；Pre 类事件始终串行（保序 +
+/// fail-closed），只有 PostToolUse 允许在显式 opt-in 后并行。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HookTriggerOpts {
+    /// 是否允许 PostToolUse 并行（默认 false）。
+    pub parallel_post: bool,
+    /// Post 并行上限（默认 4；钳到 ≥1）。
+    pub max_parallel: usize,
+    /// 整批总预算（默认 30s；超时 Pre fail-closed / Post 只记录）。
+    pub total_timeout_ms: u64,
+}
+
+impl Default for HookTriggerOpts {
+    fn default() -> Self {
+        Self {
+            parallel_post: false,
+            max_parallel: 4,
+            total_timeout_ms: 30_000,
+        }
+    }
 }
 
 /// 执行错误 — 库层 thiserror（§4.1）
@@ -114,28 +140,148 @@ impl HookExecutor {
         session_id: Option<&str>,
         goal_id: Option<&str>,
     ) -> Vec<HookResult> {
-        // 信任检查（fail-closed:Untrusted 一律拒否,不执行不审计）
+        self.trigger_with(
+            event,
+            tool_name,
+            session_id,
+            goal_id,
+            HookTriggerOpts::default(),
+        )
+        .await
+    }
+
+    /// 带选项的触发入口（Phase 5）：Pre 串行、Post 可并行、整批总预算。
+    pub async fn trigger_with(
+        &self,
+        event: LifecycleEvent,
+        tool_name: Option<&str>,
+        session_id: Option<&str>,
+        goal_id: Option<&str>,
+        opts: HookTriggerOpts,
+    ) -> Vec<HookResult> {
+        let specs = self.config.specs_for(event);
+        // 信任检查（fail-closed:非 Trusted 一律拒否,不执行不审计）
         if !self.config.trust.allows_execution() {
-            return self
-                .config
-                .specs_for(event)
+            return specs
                 .iter()
-                .map(|s| HookResult {
-                    command: s.command.clone(),
+                .map(|spec| HookResult {
+                    command: spec.command.clone(),
                     exit_code: None,
                     interrupted: false,
                     sandbox_denied: true,
                 })
                 .collect();
         }
-        let mut results = Vec::new();
-        for spec in self.config.specs_for(event) {
-            results.push(
-                self.run_one(event, spec, tool_name, session_id, goal_id)
-                    .await,
-            );
+        if opts.parallel_post && matches!(event, LifecycleEvent::PostToolUse) && specs.len() > 1 {
+            return self
+                .run_post_parallel(event, specs, tool_name, session_id, goal_id, opts)
+                .await;
+        }
+        self.run_serial(event, specs, tool_name, session_id, goal_id, opts)
+            .await
+    }
+
+    async fn run_serial(
+        &self,
+        event: LifecycleEvent,
+        specs: &[HookSpec],
+        tool_name: Option<&str>,
+        session_id: Option<&str>,
+        goal_id: Option<&str>,
+        opts: HookTriggerOpts,
+    ) -> Vec<HookResult> {
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_millis(opts.total_timeout_ms.max(1));
+        let mut results = Vec::with_capacity(specs.len());
+        for spec in specs {
+            match tokio::time::timeout_at(
+                deadline,
+                self.run_one(event, spec, tool_name, session_id, goal_id),
+            )
+            .await
+            {
+                Ok(result) => results.push(result),
+                Err(_) => results.push(HookResult {
+                    command: spec.command.clone(),
+                    exit_code: None,
+                    // Pre 类超时 fail-closed；Post/观测类只记录。
+                    interrupted: event.interruptible(),
+                    sandbox_denied: false,
+                }),
+            }
         }
         results
+    }
+
+    async fn run_post_parallel(
+        &self,
+        event: LifecycleEvent,
+        specs: &[HookSpec],
+        tool_name: Option<&str>,
+        session_id: Option<&str>,
+        goal_id: Option<&str>,
+        opts: HookTriggerOpts,
+    ) -> Vec<HookResult> {
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_millis(opts.total_timeout_ms.max(1));
+        let max_parallel = opts.max_parallel.max(1);
+        // WHY 走 run_indexed 而非就地 async block:no two async blocks have the same type
+        // (E0308) —— 窗口内补位与初始填充必须共用同一个 Future 类型
+        let mut futures = FuturesUnordered::new();
+        let mut pending = specs.iter().enumerate();
+        for _ in 0..max_parallel {
+            let Some((index, spec)) = pending.next() else {
+                break;
+            };
+            futures.push(self.run_indexed(event, index, spec, tool_name, session_id, goal_id));
+        }
+
+        let mut results: Vec<Option<HookResult>> = (0..specs.len()).map(|_| None).collect();
+        while !futures.is_empty() {
+            match tokio::time::timeout_at(deadline, futures.next()).await {
+                Ok(Some((index, result))) => {
+                    results[index] = Some(result);
+                    if let Some((next_index, spec)) = pending.next() {
+                        futures.push(
+                            self.run_indexed(
+                                event, next_index, spec, tool_name, session_id, goal_id,
+                            ),
+                        );
+                    }
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+
+        results
+            .into_iter()
+            .enumerate()
+            .map(|(index, result)| {
+                result.unwrap_or_else(|| HookResult {
+                    command: specs[index].command.clone(),
+                    exit_code: None,
+                    interrupted: false,
+                    sandbox_denied: false,
+                })
+            })
+            .collect()
+    }
+
+    /// 并行窗口专用:结果绑定挂载下标,保证回读顺序与 specs 一致
+    async fn run_indexed(
+        &self,
+        event: LifecycleEvent,
+        index: usize,
+        spec: &HookSpec,
+        tool_name: Option<&str>,
+        session_id: Option<&str>,
+        goal_id: Option<&str>,
+    ) -> (usize, HookResult) {
+        (
+            index,
+            self.run_one(event, spec, tool_name, session_id, goal_id)
+                .await,
+        )
     }
 
     /// 执行单条 hook（管线:沙箱 → 执行 → 中断判定 → 审计）
@@ -179,6 +325,7 @@ impl HookExecutor {
         let timeout = Duration::from_millis(spec.timeout_ms);
         let mut cmd = tokio::process::Command::new(program);
         cmd.args(&args)
+            .kill_on_drop(true)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
         // 环境变量注入（WI-24:$TOOL_NAME/$SESSION_ID/$GOAL_ID）
@@ -514,5 +661,173 @@ mod tests {
         let _ = ex3
             .trigger(LifecycleEvent::PostToolUse, None, None, None)
             .await;
+    }
+
+    /// Ask 信任级 fail-closed — 「未确认」不等于「可执行」(Phase 5 安全修复)
+    ///
+    /// WHY:配置默认 trust=Ask 而 `trigger` 没有审批回调,旧实现把 Ask 放行,
+    /// 等于默认挂载即静默运行 hook（子进程任意代码）。现在 Ask 与 Untrusted
+    /// 同样拒否且不审计（未执行无审计对象）。
+    #[tokio::test]
+    async fn ask_is_fail_closed() {
+        let mut cfg = HookConfig::default();
+        cfg.trust = TrustLevel::Ask;
+        cfg.hooks.insert(
+            LifecycleEvent::PostToolUse,
+            vec![HookSpec {
+                command: resolve("true"),
+                timeout_ms: 1000,
+            }],
+        );
+        let ex = test_executor(cfg, &["true"]);
+        let results = ex
+            .trigger(LifecycleEvent::PostToolUse, None, None, None)
+            .await;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].sandbox_denied, "Ask 必须 fail-closed 拒否");
+        assert!(ex.audit().is_empty(), "未执行不审计");
+    }
+
+    /// PostToolUse 有界并行 — 8 条 0.5s hook,cap=4 ⇒ 两波而非八波
+    ///
+    /// 断言口径:墙钟只做「串行 ≫ 并行」的方向判定（串行理论 4.0s,阈值 2.5s,
+    /// 需 1.6× 劣化才假红）;结构性保证交给下标对齐 + 全量审计（并行不得丢结果、
+    /// 不得打乱与 specs 的对应关系）。
+    #[tokio::test]
+    async fn post_hooks_bounded_parallel() {
+        let mut cfg = HookConfig::default();
+        cfg.trust = TrustLevel::Trusted;
+        let cmd = format!("{} 0.5", resolve("sleep"));
+        cfg.hooks.insert(
+            LifecycleEvent::PostToolUse,
+            (0..8)
+                .map(|_| HookSpec {
+                    command: cmd.clone(),
+                    timeout_ms: 4_000,
+                })
+                .collect(),
+        );
+        let ex = test_executor(cfg, &["sleep"]);
+        let started = std::time::Instant::now();
+        let results = ex
+            .trigger_with(
+                LifecycleEvent::PostToolUse,
+                None,
+                None,
+                None,
+                HookTriggerOpts {
+                    parallel_post: true,
+                    max_parallel: 4,
+                    total_timeout_ms: 20_000,
+                },
+            )
+            .await;
+        let elapsed = started.elapsed();
+        assert_eq!(results.len(), 8, "并行窗口必须补齐全部 8 条");
+        assert!(
+            results.iter().all(|r| r.exit_code == Some(0)),
+            "并行不得丢弃或改写结果"
+        );
+        assert!(
+            results.iter().all(|r| r.command == cmd),
+            "结果须与 specs 下标对齐"
+        );
+        assert_eq!(ex.audit().len(), 8, "每条各审计一次");
+        assert!(
+            elapsed < std::time::Duration::from_millis(2_500),
+            "串行需 ≥4s,cap=4 两波应远低于此;实测 {elapsed:?}"
+        );
+    }
+
+    /// Pre 类始终串行保序 — parallel_post 旗不得影响 PreToolUse
+    ///
+    /// WHY:Pre 的语义是「按挂载顺序逐条把关,任一中断即拒否」;若并行则完成顺序
+    /// 倒置,调用方会看到与配置不一致的拒否点。三条命令耗时刻意递减错位
+    /// （0.3s / 即时 / 0.1s）,一旦并行,下标必然被打乱。
+    #[tokio::test]
+    async fn pre_hooks_keep_order() {
+        let mut cfg = HookConfig::default();
+        cfg.trust = TrustLevel::Trusted;
+        let slow = format!("{} 0.3", resolve("sleep"));
+        let fast = format!("{} 0.1", resolve("sleep"));
+        let ok = resolve("true");
+        let expected: [String; 3] = [slow.clone(), ok.clone(), fast.clone()];
+        cfg.hooks.insert(
+            LifecycleEvent::PreToolUse,
+            vec![
+                HookSpec {
+                    command: slow,
+                    timeout_ms: 2_000,
+                },
+                HookSpec {
+                    command: ok,
+                    timeout_ms: 2_000,
+                },
+                HookSpec {
+                    command: fast,
+                    timeout_ms: 2_000,
+                },
+            ],
+        );
+        let ex = test_executor(cfg, &["sleep", "true"]);
+        let results = ex
+            .trigger_with(
+                LifecycleEvent::PreToolUse,
+                None,
+                None,
+                None,
+                HookTriggerOpts {
+                    parallel_post: true,
+                    ..HookTriggerOpts::default()
+                },
+            )
+            .await;
+        let got: Vec<&str> = results.iter().map(|r| r.command.as_str()).collect();
+        assert_eq!(
+            got,
+            expected.iter().map(String::as_str).collect::<Vec<_>>(),
+            "Pre 类必须按挂载顺序返回,parallel_post 不得生效"
+        );
+    }
+
+    /// 整批总预算 — Pre 超时即 fail-closed 拒否（不逐条等到底）
+    ///
+    /// 单条 timeout_ms 刻意放大到 5s,让熔断只能来自 total_timeout_ms;
+    /// Pre 属可中断事件 ⇒ 超时必须置 interrupted（调用方据此拒绝工具调用）。
+    #[tokio::test]
+    async fn pre_total_timeout_denies() {
+        let mut cfg = HookConfig::default();
+        cfg.trust = TrustLevel::Trusted;
+        cfg.hooks.insert(
+            LifecycleEvent::PreToolUse,
+            vec![HookSpec {
+                command: format!("{} 2", resolve("sleep")),
+                timeout_ms: 5_000,
+            }],
+        );
+        let ex = test_executor(cfg, &["sleep"]);
+        let started = std::time::Instant::now();
+        let results = ex
+            .trigger_with(
+                LifecycleEvent::PreToolUse,
+                None,
+                None,
+                None,
+                HookTriggerOpts {
+                    total_timeout_ms: 200,
+                    ..HookTriggerOpts::default()
+                },
+            )
+            .await;
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(1_500),
+            "总预算到点必须立刻返回"
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].exit_code, None, "超时未取到退出码");
+        assert!(
+            results[0].interrupted,
+            "Pre 类总预算超时必须 fail-closed 置 interrupted"
+        );
     }
 }

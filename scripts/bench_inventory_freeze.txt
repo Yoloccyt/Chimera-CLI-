@@ -27,6 +27,8 @@
 chimera-cli|overwindow_bridge|dev-only|overwindow 桥接开发探针,无 SLO
 chimera-cli|quest_orchestrator_bench|dev-only|Quest 编排黑盒探索基准
 chimera-cli|composition_root_bench|dev-only|C12 组合根装配延迟基线(build/build_app_server),启动路径探针,不入四表阈值
+gqep-executor|tool_plan|dev-only|Phase 2/T2 PlanRunner 有界并发方向性基线(ADR-229),同计划串行 vs 窗口对照,首跑无对照值故不入四表阈值
+chimera-cli|llm_tool_loop_bench|dev-only|Phase 7/T7.8 LLM 工具循环延迟基线(ADR-232),脚本化客户端零网络,首跑无对照值故不入四表阈值
 chimera-tui|data_pipeline_bench|dev-only|数据管线开发基准,已由 writer/v3 覆盖主链
 chimera-tui|panels_scale_bench|dev-only|面板规模压力探索基准
 chimera-tui|v3_output_bench|dev-only|v3 输出渲染补充基准,主链已注册 v3_pipeline

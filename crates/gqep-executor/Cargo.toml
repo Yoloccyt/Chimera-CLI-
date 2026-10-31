@@ -16,6 +16,8 @@ event-bus = { workspace = true }
 qeep-protocol = { workspace = true }
 # 异步运行时:tokio::time::timeout 包装单操作超时
 tokio = { workspace = true }
+# Tool execution plane: CancellationToken 注入（与 chimera-cli call_budget 同源）
+tokio-util = { workspace = true }
 # 配置与结果类型序列化(#[derive(Serialize, Deserialize)])
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -43,6 +45,10 @@ serde_json = { workspace = true }
 # 性能基准配置:harness=false 以使用 criterion 自定义 main
 [[bench]]
 name = "gather"
+harness = false
+
+[[bench]]
+name = "tool_plan"
 harness = false
 
 # E-5 第五例 opt-in：生产码唯二 expect(“validate 已保证”不变量)已改 fail-soft

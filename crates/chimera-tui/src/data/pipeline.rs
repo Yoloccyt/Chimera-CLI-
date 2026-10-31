@@ -900,17 +900,17 @@ impl DataPipeline {
     /// WHY 单独成函数：与 [`Self::take_locked`] 同款理由——guard 的生命周期止于本函数
     /// 返回，且本函数非 async，调用点拿到的已是 owned `Vec`，词法门与编译器都能直接
     /// 判定「不持锁跳 await」。毒化恢复语义与原逐处写法逐字一致（日志文本不变）。
+    ///
+    /// Phase 6B/T6B.4：整批经 `EventSubscriber::drain_all` 一次锁取走。旧写法是
+    /// `while let Some(e) = sub.try_recv()` —— 每事件一次 lock/unlock，且每次放锁都给
+    /// 转发任务插队 push 的机会，同一 tick 的批次边界因此不确定。
     fn drain_events(slot: &Mutex<Option<EventSubscriber>>) -> Option<Vec<NexusEvent>> {
         let mut guard = slot.lock().unwrap_or_else(|poisoned| {
             tracing::warn!("TUI data pipeline subscriber mutex was poisoned; recovering state");
             poisoned.into_inner()
         });
         let sub = guard.as_mut()?;
-        let mut events = Vec::new();
-        while let Some(event) = sub.try_recv() {
-            events.push(event);
-        }
-        Some(events)
+        Some(sub.drain_all())
     }
 
     /// 求同一 tick 内「最后一次」Quest/Budget 批量更新事件的下标（去重依据）。

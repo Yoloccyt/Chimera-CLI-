@@ -429,11 +429,12 @@ impl QuestEngine {
         let mut tasks = Vec::with_capacity(sentences.len());
         for (idx, sentence) in sentences.iter().enumerate() {
             let task_id = format!("task-{idx}");
-            // 线性依赖链:第一个无依赖,其余依赖前一个
-            let dependencies = if idx == 0 {
-                vec![]
-            } else {
-                vec![format!("task-{}", idx - 1)]
+            // Linear(默认)保留旧伪链；MultiRoot 显式 opt-in 后才去掉合成边。
+            let dependencies = match self.config.dag_mode {
+                crate::config::DagMode::Linear if idx > 0 => {
+                    vec![format!("task-{}", idx - 1)]
+                }
+                _ => vec![],
             };
             tasks.push(Task {
                 task_id,
@@ -915,11 +916,16 @@ fn is_valid_transition(from: TaskStatus, to: TaskStatus) -> bool {
         (Pending, Running)
             | (Running, Completed)
             | (Running, Failed)
+            // Phase 5 / ADR-231:调度器可在任务启动前失败/取消，也可取消运行中任务。
+            | (Pending, Failed)
+            | (Pending, Cancelled)
+            | (Running, Cancelled)
             // 幂等转换:同状态视为合法(避免重复触发报错)
             | (Pending, Pending)
             | (Running, Running)
             | (Completed, Completed)
             | (Failed, Failed)
+            | (Cancelled, Cancelled)
     )
 }
 
@@ -1017,7 +1023,9 @@ mod tests {
         assert!(!is_valid_transition(Completed, Running));
         assert!(!is_valid_transition(Failed, Running));
         assert!(!is_valid_transition(Pending, Completed));
-        assert!(!is_valid_transition(Pending, Failed));
+        // Phase 5: Pending→Failed 已合法（调度器可在启动前失败）；
+        // Completed→Failed 仍非法（终态不可改写）。
+        assert!(!is_valid_transition(Completed, Failed));
     }
 
     #[test]
@@ -1452,5 +1460,45 @@ mod tests {
         let engine = QuestEngine::new(bus);
         let result = engine.adjust_priority("nonexistent", 200, "operator").await;
         assert!(matches!(result, Err(QuestError::QuestNotFound(_))));
+    }
+
+    #[tokio::test]
+    async fn decompose_multi_root_has_no_synthetic_edges() {
+        let config = QuestConfig {
+            dag_mode: crate::config::DagMode::MultiRoot,
+            ..Default::default()
+        };
+        let engine = QuestEngine::with_config(EventBus::new(), config);
+        let quest = engine
+            .create_quest(make_intent("一。二。三。"))
+            .await
+            .expect("quest");
+        assert_eq!(quest.tasks.len(), 3);
+        assert!(
+            quest.tasks.iter().all(|task| task.dependencies.is_empty()),
+            "multi-root must not synthesize linear edges: {:?}",
+            quest.tasks
+        );
+    }
+
+    #[tokio::test]
+    async fn decompose_linear_default_unchanged() {
+        let engine = QuestEngine::new(EventBus::new());
+        let quest = engine
+            .create_quest(make_intent("一。二。三。"))
+            .await
+            .expect("quest");
+        assert_eq!(quest.tasks[1].dependencies, vec!["task-0".to_string()]);
+        assert_eq!(quest.tasks[2].dependencies, vec!["task-1".to_string()]);
+    }
+
+    #[test]
+    fn phase5_status_transitions_are_valid() {
+        use TaskStatus::*;
+        assert!(is_valid_transition(Pending, Failed));
+        assert!(is_valid_transition(Pending, Cancelled));
+        assert!(is_valid_transition(Running, Cancelled));
+        assert!(is_valid_transition(Cancelled, Cancelled));
+        assert!(!is_valid_transition(Completed, Running));
     }
 }

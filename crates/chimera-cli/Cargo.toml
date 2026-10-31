@@ -147,6 +147,11 @@ clap_complete = { workspace = true }
 # human-panic:友好的 panic 报告库(Task 2.3 panic hook)
 # WHY workspace 级声明:main.rs 在 release 模式输出用户友好 panic 提示,debug 模式退化为默认 handler
 human-panic = { workspace = true }
+# async-trait: ToolProvider 实现（与 gqep-executor 的 ToolProvider trait 同宏）
+async-trait = { workspace = true }
+# futures(Phase 5): `FuturesUnordered` 流式收集任务结果 —— §4.1 口径（优于 join_all），
+# 与 gqep-executor/chimera-mas 同一 crate 版本，Cargo.lock 无新增传递面。
+futures = { workspace = true }
 
 [dev-dependencies]
 # tempfile:集成测试中生成临时配置文件
@@ -156,9 +161,6 @@ proptest = { workspace = true }
 # criterion:性能基准框架,用于 OnceLock 并发压测(SubTask S1)
 criterion = { workspace = true }
 insta = "1.48.0"
-# async-trait(dev-only):测试内实现 nexus-app-server 的 AppTransport trait(MockTransport)，
-# 以在无真 stdio 下驱动 serve_loop/acp_loop（生产代码不需，仅 #[cfg(test)] 用）。
-async-trait = { workspace = true }
 
 # 显式声明二进制目标,确保 main.rs 被识别为 chimera 可执行文件
 [[bin]]
@@ -189,6 +191,12 @@ harness = false
 # C12 组合根装配延迟基线（build / build_app_server）——dev-only 登记，不占四表阈值
 [[bench]]
 name = "composition_root_bench"
+harness = false
+
+# Phase 7/T7.8 LLM 工具循环延迟基线（脚本化客户端 + 进程内探针 provider，零网络）
+# dev-only 登记见 scripts/bench_inventory_freeze.txt；首跑无对照值，定阈值会把噪声钉成规格
+[[bench]]
+name = "llm_tool_loop_bench"
 harness = false
 
 # E-5 lint ratchet opt-in (docs/reports/arch-quality-deep-review-2026-09-25.md)

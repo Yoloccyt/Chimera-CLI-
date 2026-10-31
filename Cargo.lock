@@ -566,6 +566,7 @@ dependencies = [
  "event-bus",
  "faae-router",
  "figment",
+ "futures",
  "gea-activator",
  "gqep-executor",
  "gsoe-evolution",
@@ -1756,6 +1757,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "tracing-test",
  "uuid",
 ]
@@ -2164,6 +2166,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tokio-test",
+ "tokio-util",
  "tracing",
 ]
 
@@ -3609,6 +3612,7 @@ name = "nexus-hook"
 version = "2.29.0-omega"
 dependencies = [
  "event-bus",
+ "futures",
  "nexus-contracts",
  "seccore",
  "serde",

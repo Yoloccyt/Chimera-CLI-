@@ -118,6 +118,28 @@ pub struct QueryResponse {
     pub payload: String,
 }
 
+/// 单服务器工具调用请求 — 非事务、显式携带 args（Phase 4 / ADR-230）
+///
+/// WHY 不复用 2PC：`TwoPcResponse` 只有 Ack/Nack，没有结果载荷；把 args 与
+/// payload 塞进事务协议会污染 2PC 语义。工具调用是"一次请求一次响应"，
+/// 2PC 仍是多服务器原子提交的唯一通道。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolInvokeRequest {
+    /// 调用关联 id（LLM 循环/CLI 用于回填）
+    pub call_id: String,
+    /// 工具名（MCP 服务器解释）
+    pub tool: String,
+    /// 原始 JSON 参数
+    pub args_json: String,
+}
+
+/// 单服务器工具调用响应 — 携带结果载荷。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolInvokeResponse {
+    /// 工具产出（原始文本/JSON）
+    pub payload: String,
+}
+
 // ============================================================
 // ParticipantClient trait
 // ============================================================
@@ -207,6 +229,23 @@ pub trait ParticipantClient: Send + Sync {
         query_id: &'a str,
         query: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>>;
+
+    /// 单服务器工具调用（Phase 4 / ADR-230）— 非事务、显式 args、返回 payload。
+    ///
+    /// 默认实现返回 `ProtocolError`（旧 mock/第三方实现无需改动即可编译）；
+    /// `InProcessClient`/`MockParticipantClient` 与 `TcpParticipantClient` 覆写。
+    fn invoke_tool<'a>(
+        &'a self,
+        server: &'a MeshServer,
+        _request: ToolInvokeRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(McpError::ProtocolError {
+                server_id: server.server_id.clone(),
+                reason: "invoke_tool unsupported by this participant client".into(),
+            })
+        })
+    }
 }
 
 // ============================================================
@@ -298,6 +337,21 @@ impl ParticipantClient for InProcessClient {
             tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             // 模拟查询响应(与 superposition.rs 原 in-process mock 一致的格式)
             Ok(format!("result@{query}@{query_id}@{}", server.server_id))
+        })
+    }
+
+    fn invoke_tool<'a>(
+        &'a self,
+        server: &'a MeshServer,
+        request: ToolInvokeRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+        let delay_ms = Self::simulated_delay_ms(&server.server_id);
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            Ok(format!(
+                "echo@{}@{}@{}",
+                request.tool, request.args_json, server.server_id
+            ))
         })
     }
 }
@@ -531,6 +585,45 @@ impl TcpParticipantClient {
                 reason: format!("查询响应反序列化失败: {e}"),
             })?;
 
+        Ok(response.payload)
+    }
+
+    /// 发送工具调用请求并等待响应(带单阶段超时)。
+    async fn send_tool_invoke(
+        &self,
+        server: &MeshServer,
+        request: ToolInvokeRequest,
+    ) -> Result<String, McpError> {
+        let deadline = Duration::from_millis(self.phase_timeout_ms);
+        let result = timeout(deadline, self.send_tool_invoke_inner(server, &request)).await;
+        match result {
+            Ok(inner) => inner,
+            Err(_) => Err(McpError::NetworkError {
+                server_id: server.server_id.clone(),
+                endpoint: server.endpoint.clone(),
+                reason: format!("工具调用单阶段超时({}ms)", self.phase_timeout_ms),
+            }),
+        }
+    }
+
+    /// `send_tool_invoke` 内部实现（无超时包装）。
+    async fn send_tool_invoke_inner(
+        &self,
+        server: &MeshServer,
+        request: &ToolInvokeRequest,
+    ) -> Result<String, McpError> {
+        self.validate_endpoint_dns(&server.server_id, &server.endpoint)
+            .await?;
+        let payload = serde_json::to_vec(request).map_err(|e| McpError::ProtocolError {
+            server_id: server.server_id.clone(),
+            reason: format!("工具调用请求序列化失败: {e}"),
+        })?;
+        let resp_data = self.send_frame_and_recv(server, &payload).await?;
+        let response: ToolInvokeResponse =
+            serde_json::from_slice(&resp_data).map_err(|e| McpError::ProtocolError {
+                server_id: server.server_id.clone(),
+                reason: format!("工具调用响应反序列化失败: {e}"),
+            })?;
         Ok(response.payload)
     }
 
@@ -769,6 +862,14 @@ impl ParticipantClient for TcpParticipantClient {
         };
         Box::pin(async move { self.send_query(server, request).await })
     }
+
+    fn invoke_tool<'a>(
+        &'a self,
+        server: &'a MeshServer,
+        request: ToolInvokeRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+        Box::pin(async move { self.send_tool_invoke(server, request).await })
+    }
 }
 
 // ============================================================
@@ -970,6 +1071,19 @@ impl ParticipantClient for MockParticipantClient {
             Ok(format!(
                 "mock_result@{query}@{query_id}@{}",
                 server.server_id
+            ))
+        })
+    }
+
+    fn invoke_tool<'a>(
+        &'a self,
+        server: &'a MeshServer,
+        request: ToolInvokeRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+        Box::pin(async move {
+            Ok(format!(
+                "mock_invoke@{}@{}@{}",
+                request.tool, request.args_json, server.server_id
             ))
         })
     }

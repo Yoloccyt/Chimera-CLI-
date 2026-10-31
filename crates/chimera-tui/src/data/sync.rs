@@ -7,6 +7,7 @@
 //! 对应架构层:L10 Interface
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use event_bus::{ChatStatus, NexusEvent};
 use nexus_contracts::app::AppEvent;
@@ -935,7 +936,15 @@ impl ClvSync {
 /// 避免 app.rs 直写 TuiState 被 snapshot 覆盖的双所有权冲突。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ChatSync {
-    messages: Vec<ChatMessage>,
+    /// 会话历史（Phase 6B/T6B.2 改 `Arc<Vec<_>>`）
+    ///
+    /// WHY 不是裸 `Vec`：快照每 tick 都要带上整段历史（可达 500 条含 String 的
+    /// `ChatMessage`）。裸 Vec 意味着每 tick 一次深拷；Arc 后"读"只是指针计数 +1，
+    /// 只有真正写入历史时才经 `Arc::make_mut` 复制一次（写时复制）。
+    /// WHY `Arc<Vec<_>>` 而非 `Arc<[_]>`/`Arc<Mutex<Vec<_>>>`：ChatSync 是快照循环
+    /// 里的单写者（§4.4 无跨 await 持锁），`make_mut` 已给出所需的独占写语义，加
+    /// Mutex 只会引入持锁路径而无额外保证。
+    messages: Arc<Vec<ChatMessage>>,
     status: ChatStatus,
     streaming: bool,
     max_messages: usize,
@@ -950,7 +959,7 @@ impl ChatSync {
     /// 创建 Chat 同步器
     pub fn new(max_messages: usize) -> Self {
         Self {
-            messages: Vec::new(),
+            messages: Arc::new(Vec::new()),
             status: ChatStatus::Idle,
             streaming: false,
             max_messages,
@@ -962,7 +971,7 @@ impl ChatSync {
     pub fn apply_event(&mut self, event: &NexusEvent) {
         match event {
             NexusEvent::TuiChatSubmitted { query, .. } => {
-                self.messages.push(ChatMessage {
+                Arc::make_mut(&mut self.messages).push(ChatMessage {
                     role: ChatRole::User,
                     content: query.clone(),
                 });
@@ -973,7 +982,7 @@ impl ChatSync {
             }
             NexusEvent::TuiChatResponseChunk { delta, .. } => {
                 if !self.streaming {
-                    self.messages.push(ChatMessage {
+                    Arc::make_mut(&mut self.messages).push(ChatMessage {
                         role: ChatRole::Assistant,
                         content: String::new(),
                     });
@@ -984,7 +993,7 @@ impl ChatSync {
                 // 半行/未闭合 fence 块留存闸门,避免半行闪烁(内容守恒)
                 let committed = self.gate.feed(delta);
                 if !committed.is_empty() {
-                    if let Some(last) = self.messages.last_mut() {
+                    if let Some(last) = Arc::make_mut(&mut self.messages).last_mut() {
                         for line in committed {
                             last.content.push_str(&line);
                         }
@@ -994,7 +1003,7 @@ impl ChatSync {
             NexusEvent::TuiChatCompleted { .. } => {
                 // 流结束:冲刷闸门残段(含未闭合 fence 块),不丢内容
                 if let Some(rest) = self.gate.flush() {
-                    if let Some(last) = self.messages.last_mut() {
+                    if let Some(last) = Arc::make_mut(&mut self.messages).last_mut() {
                         last.content.push_str(&rest);
                     }
                 }
@@ -1008,20 +1017,24 @@ impl ChatSync {
             // 本事件是发给所有者的控制指令,保持单一所有权设计不破;
             // 替换后重置流式状态与行闸门(旧轮次的未闭合残段不再续接)。
             NexusEvent::TuiChatHistoryReplaced { messages, .. } => {
-                self.messages = messages
-                    .iter()
-                    .map(|m| ChatMessage {
-                        // 角色以字符串编码(L1 不感知 ChatRole 枚举):
-                        // 仅 "assistant" 映射 Assistant,其余(含未知值)
-                        // 保守映射 User —— 策展 Pinned 段按 User 轮次保护
-                        role: if m.role == "assistant" {
-                            ChatRole::Assistant
-                        } else {
-                            ChatRole::User
-                        },
-                        content: m.content.clone(),
-                    })
-                    .collect();
+                // 整体替换直接换一个新 Arc：旧快照仍持有它那份历史（不可变），
+                // 不需要 make_mut —— 写时复制只在"追加式增量写"时才需要
+                self.messages = Arc::new(
+                    messages
+                        .iter()
+                        .map(|m| ChatMessage {
+                            // 角色以字符串编码(L1 不感知 ChatRole 枚举):
+                            // 仅 "assistant" 映射 Assistant,其余(含未知值)
+                            // 保守映射 User —— 策展 Pinned 段按 User 轮次保护
+                            role: if m.role == "assistant" {
+                                ChatRole::Assistant
+                            } else {
+                                ChatRole::User
+                            },
+                            content: m.content.clone(),
+                        })
+                        .collect::<Vec<_>>(),
+                );
                 self.streaming = false;
                 self.gate.flush();
                 self.enforce_cap();
@@ -1031,14 +1044,21 @@ impl ChatSync {
     }
 
     fn enforce_cap(&mut self) {
-        while self.messages.len() > self.max_messages {
-            self.messages.remove(0);
+        // WHY 一次 make_mut 再循环:容量裁剪是写操作,共享时才复制一次;
+        // 循环体内反复 make_mut 会在每次迭代重取句柄,读起来像"每轮都可能复制"
+        let msgs = Arc::make_mut(&mut self.messages);
+        while msgs.len() > self.max_messages {
+            msgs.remove(0);
         }
     }
 
-    /// 获取对话历史副本
-    pub fn messages(&self) -> Vec<ChatMessage> {
-        self.messages.clone()
+    /// 获取对话历史句柄
+    ///
+    /// Phase 6B/T6B.2：返回 `Arc`（指针计数 +1），快照每 tick 带上整段历史
+    /// 不再等于每 tick 深拷一遍 `ChatMessage`（含 String 载荷）。
+    #[must_use]
+    pub fn messages(&self) -> Arc<Vec<ChatMessage>> {
+        Arc::clone(&self.messages)
     }
 
     /// 获取当前会话状态

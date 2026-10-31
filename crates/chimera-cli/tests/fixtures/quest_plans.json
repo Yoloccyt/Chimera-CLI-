@@ -1,0 +1,41 @@
+{
+  "task-0": {
+    "id": "quest-plan-0",
+    "nodes": [
+      {
+        "id": "n0",
+        "op": "tool_call",
+        "tool_name": "echo.echo",
+        "args_json": "{\"step\":\"fetch\"}",
+        "side_effect": "read_only"
+      }
+    ],
+    "edges": []
+  },
+  "task-1": {
+    "id": "quest-plan-1",
+    "nodes": [
+      {
+        "id": "n0",
+        "op": "tool_call",
+        "tool_name": "echo.echo",
+        "args_json": "{\"step\":\"transform\"}",
+        "side_effect": "read_only"
+      }
+    ],
+    "edges": []
+  },
+  "task-2": {
+    "id": "quest-plan-2",
+    "nodes": [
+      {
+        "id": "n0",
+        "op": "tool_call",
+        "tool_name": "echo.echo",
+        "args_json": "{\"step\":\"persist\"}",
+        "side_effect": "read_only"
+      }
+    ],
+    "edges": []
+  }
+}

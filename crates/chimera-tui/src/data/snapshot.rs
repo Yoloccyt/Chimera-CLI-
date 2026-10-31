@@ -145,7 +145,11 @@ pub struct DataSnapshot {
     // === M3b Chat 面板字段 ===
     /// 对话历史(由 ChatSync 拥有,同步到 TuiState)
     #[serde(default)]
-    pub chat_messages: Vec<ChatMessage>,
+    /// 对话历史（Phase 6B/T6B.2：`Arc<Vec<_>>`，快照重建只加引用计数）
+    ///
+    /// WHY 不裸 Vec：本字段每次快照重建都会被带上，500 条上限 × String 载荷的
+    /// 深拷是每 tick 的固定税；ChatSync 用 `Arc::make_mut` 保证写时才复制。
+    pub chat_messages: Arc<Vec<ChatMessage>>,
     /// 对话会话状态(思考中/工具执行中/空闲)
     #[serde(default)]
     pub chat_status: ChatStatus,
