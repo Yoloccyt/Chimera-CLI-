@@ -160,6 +160,20 @@ jobs:
           python3 scripts/check_ci_manifest_parity.py --selftest
           python3 scripts/check_ci_manifest_parity.py
 
+      # WHY: ADR-229 的三层倒置与 ADR-232 的四条默认值承诺,都是编译期与既有测试
+      # 看不见的那类约束——给 L7 加一条 chimera-cli 依赖照样编译,把 max_turns 从 8
+      # 改成 800、给 LlmLoopOutcome 加 #[derive(Default)]、把启用面扩成 `_ => true`
+      # 全都照样绿。G-08/G-45 读的是 cargo metadata 解析后的依赖图,optional 与
+      # feature-gated 边在那里的形态与本组的 manifest/源码文本判据不同,属第二方法
+      # 而非重复登记。先 --selftest 证门有牙,再跑真实裁决;不设 continue-on-error
+      # ——expect=0 的门在 CI 被吞会被 audit_gate_parity(G-25)记成 GAP。
+      - name: Tool plane and LLM loop contract gates (G-143..G-146)
+        run: |
+          python3 scripts/check_tool_plane_contract.py --selftest
+          python3 scripts/check_tool_plane_contract.py
+          python3 scripts/check_llm_loop_defaults.py --selftest
+          python3 scripts/check_llm_loop_defaults.py
+
       # WHY: PowerShell 5.1 parity 守门(ADR-198 G-85)——本仓将 .ps1 定位为
       # “Windows 权威执行体”，但 CI 与 gate_manifest 均以 pwsh（默认 UTF-8）调用，
       # 而无 BOM 且含非 ASCII 的文件在 5.1 下会按 ANSI 解码。2026-10-02 实测：

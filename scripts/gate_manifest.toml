@@ -1568,3 +1568,46 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "G-138 夹具：一个合法夹具 + 每类失败各一（重复 id、缺 note、expect=3、kind=slow、timeout=0、retry=4、mutating 非 bool、未知 profile、mutating 列入 pr、needs 未知、needs 成环、disk_gb<0、首 token 非白名单、未知键、id 非 G-、空清单、expect=True、source 越词表、tasks 行缺 source）+ TOML 往返 + 畸形 TOML 必抛。任一断言不成立 ⇒ 退 1。"
+
+# ============================================================
+# G-143..G-146 —— 工具执行面契约 + LLM 循环默认值（ADR-229 / ADR-232）
+# 两门各配 --selftest（G-144/G-146）：先证有牙，再跑真实裁决（沿 G-135..G-140 先例）。
+# 断言数以 --selftest 自报为准，本块不抄数。
+# 定位：本组是**第二方法**——G-08/G-45/G-46 读 cargo metadata 解析后的依赖图，
+# optional / feature-gated 边在那里的形态与本组读的 manifest 文本、源码文本不同。
+# ============================================================
+[[gate]]
+id = "G-143"
+spec_ref = "ADR-229 D2/D4/D5"
+cmd = "{python} scripts/check_tool_plane_contract.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "执行面四条编译期抓不到的判据：C1 L10 tool_plane 的 provider_id 字面量互异、非空且不低于门内地板（递归扫描含子目录；0 命中判红不判绿）；C2 crates/gqep-executor/Cargo.toml 的 [dependencies] 不得出现 L8-L10 成员（依赖铁律的第二方法，与读 cargo metadata 的 G-08/G-45 形态不同）；C3 crates/gqep-executor/src/tool_plane 内不得出现 NexusEvent:: 构造点（ADR-229 D5：可观测性走 ToolMetrics+tracing，新变体须走七点位同批）；C4 ToolPlaneMode 的 #[default] 必贴 Off 且 from_env 兜底为 _ => ToolPlaneMode::Off（ADR-229 D4：非法 env 不得当成启用）。缺目录/缺 manifest/[dependencies] 解析出 0 条 ⇒ 退 2 判不可判定，不判绿；tool_plane 递归文件数低于地板亦判红（防误删致盲）。"
+
+[[gate]]
+id = "G-144"
+spec_ref = "G-143 配套（门自身有牙）"
+cmd = "{python} scripts/check_tool_plane_contract.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "夹具在 tempdir 复制真树文件并走与生产同一个 run_all：未改动夹具必须判绿；植入缺陷分别使 C1（注册名与 echo 撞车 / provider_id 全部改名致 0 命中 / **子目录 providers/dup.rs 撞名**）、C2（L7 加 chimera-cli 依赖）、C3（构造 NexusEvent）、C4（#[default] 移到 Apply / 非法 env 兜底改成 Apply）判红；反向边界：只有 use event_bus::NexusEvent 而无构造点不得判红（否则门在无关改动上狼来了）；整目录缺失必须退 2。子目录夹具是递归扫描的回归锁——把枚举改回 os.listdir 即红（已用非递归探针实测该断言失败）。任一断言不成立 ⇒ 退 1。"
+
+[[gate]]
+id = "G-145"
+spec_ref = "ADR-232 D2/D4/D5/D7"
+cmd = "{python} scripts/check_llm_loop_defaults.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "LLM 工具循环的四条默认值承诺——改宽后编译与既有测试都不会红（llm_off_legacy 只证「未开开关时旧路径不变」，证不了开关本身仍是白名单），故只能静态判据。L1 commands/run.rs::llm_loop_enabled 必须是 Some(\"apply\") | Some(\"on\") 白名单且不得出现 _ => true 兜底（D7 默认关闭）；L2 max_turns/max_tool_calls/max_repeat_tool_calls/max_total_tokens 在 LlmToolLoopConfig::default() 里齐备且非零，四个 CHIMERA_LLM_MAX_* 以带引号完整字面量匹配（裸子串会把改名后的同前缀常量也算命中，该漏抓已固化成夹具）；L3 pub struct LlmLoopOutcome 的 derive 行不得含 Default（D4：漏落 stop 必须编译不过，而非静默等于 Final）；L4 src/llm 递归扫描的生产码零 unwrap/expect（cfg(test) 尾除外，与 E-5 同口径）且非 mca 档 build_llm_client_from_config 返回 ConfigError（D2：不 panic、不空回）；L5 src/llm 构造的事件集合必须属于 {BudgetExceeded}（D5）。default() 体解析为空 ⇒ 退 2，不当绿。"
+
+[[gate]]
+id = "G-146"
+spec_ref = "G-145 配套（门自身有牙）"
+cmd = "{python} scripts/check_llm_loop_defaults.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "夹具文件集 =「必需单文件 + llm/ 目录实况（递归）」：必需集缺失响亮报错、目录里多出的 .rs 自动进扫描面（硬枚举会把夹具覆盖率钉死在抄写那一刻）。未改动夹具判绿；植入缺陷分别使 L1（白名单扩成 _ => true）、L2（上限默认改 0 / 删掉一个 env 读取点）、L3（outcome 派生 Default）、L4（生产码 unwrap、**子目录 llm/inner/leak.rs 里的 unwrap**）、L5（构造白名单外事件）判红；反向边界：cfg(test) 段里的 unwrap 不得判红；输入目录缺失必须退 2。任一断言不成立 ⇒ 退 1。"
