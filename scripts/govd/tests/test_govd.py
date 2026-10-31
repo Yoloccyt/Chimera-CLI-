@@ -22,6 +22,14 @@ from scripts.govd.model import Attempt, Profile, RunMeta, Task, Verdict
 MANIFEST = ROOT / "scripts" / "gate_manifest.toml"
 POLICY = ROOT / "scripts" / "govd" / "policy.toml"
 
+# Single pinned census of gate_manifest.toml. Adding or removing a gate must
+# update these three numbers in the same commit (G-143..G-146 wiring: 144 =
+# 137 light + 7 heavy). Every other assertion in this file derives from here
+# instead of repeating the literals -- on the wiring day three separate
+# assertions failed for what is one fact, which is the cost of duplicating it.
+CENSUS_TOTAL, CENSUS_LIGHT, CENSUS_HEAVY = 144, 137, 7
+PR_SUM_LINE = f"selected={CENSUS_LIGHT} total={CENSUS_TOTAL} skipped={CENSUS_HEAVY}"
+
 def make_task(**kw):
     base = {"id": "T-1", "cmd": "{python} -c pass", "expect": 0,
             "kind": "light", "spec_ref": "test", "note": "test"}
@@ -160,10 +168,10 @@ class ManifestTests(TempDirTest):
     def test_real_census(self):
         tasks = manifest.load(MANIFEST)
         ids = [t.id for t in tasks]
-        self.assertEqual(len(tasks), 140)
-        self.assertEqual(len(set(ids)), 140)
-        self.assertEqual(sum(1 for t in tasks if t.kind == "light"), 133)
-        self.assertEqual(sum(1 for t in tasks if t.kind == "heavy"), 7)
+        self.assertEqual(len(tasks), CENSUS_TOTAL)
+        self.assertEqual(len(set(ids)), CENSUS_TOTAL)
+        self.assertEqual(sum(1 for t in tasks if t.kind == "light"), CENSUS_LIGHT)
+        self.assertEqual(sum(1 for t in tasks if t.kind == "heavy"), CENSUS_HEAVY)
 
     def test_digest_is_order_independent_and_sensitive(self):
         tasks = manifest.load(MANIFEST)
@@ -440,7 +448,7 @@ class CliTests(TempDirTest):
             rc = cli.main(["list", "--profile", "pr"])
         out = buf.getvalue()
         self.assertEqual(rc, 0)
-        self.assertIn("selected=133 total=140 skipped=7", out)
+        self.assertIn(PR_SUM_LINE, out)
 
     def test_list_rejects_role_profile_pair(self):
         buf = io.StringIO()
@@ -454,7 +462,7 @@ class CliTests(TempDirTest):
                                "--profile", "pr"], cwd=str(ROOT), capture_output=True,
                               text=True, encoding="utf-8", errors="replace", timeout=120)
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
-        self.assertIn("selected=133 total=140 skipped=7", proc.stdout)
+        self.assertIn(PR_SUM_LINE, proc.stdout)
 
 
 class SelectionTests(unittest.TestCase):
@@ -667,7 +675,7 @@ class TaskFamilySelectionTests(unittest.TestCase):
 
     def test_pr_lane_sees_no_task_families(self):
         pr_ids = self.ids("pr")
-        self.assertEqual(pr_ids, set(), "pr must stay 133 light + 7 heavy gates only")
+        self.assertEqual(pr_ids, set(), "pr must stay gate-only (no task families)")
 
     def test_nightly_gets_external_rows_only(self):
         nightly = self.ids("nightly")
