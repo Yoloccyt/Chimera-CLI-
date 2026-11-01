@@ -33,7 +33,9 @@ use chimera_tui::data::resource_history::MetricSample;
 use chimera_tui::types::{ChatMessage, ChatRole, TimelineSnapshot};
 use chimera_tui::{DataSnapshot, TuiApp, TuiConfig};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use event_bus::{BudgetMetricsPayload, EventMetadata, NexusEvent};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -81,14 +83,48 @@ fn chat_msgs(n: usize) -> Vec<ChatMessage> {
         .collect()
 }
 
+/// 事件流夹具：一次构造、多 poll **共享同一份 Arc**。
+///
+/// WHY 必须共享而不是每 poll 新建：真实管道在"本 tick 无新事件"时复用上份 `Arc`
+/// （判据见 `data::pipeline::should_replace_event_snapshot`），只有真有变化才换新的。
+/// 若夹具每次 poll 都造一个新 Arc，`state.rs` 的指针快路径在这条 bench 上永远命中不了
+/// —— 那就等于给被测对象搭了一个它走不到的舞台。
+fn shared_events(n: usize) -> Arc<VecDeque<NexusEvent>> {
+    Arc::new(
+        (0..n)
+            .map(|_| NexusEvent::BudgetMetricsUpdated {
+                metadata: EventMetadata::new("bench-tui-update"),
+                metrics: BudgetMetricsPayload {
+                    total_consumption: 7500.0,
+                    remaining_budget: 2500.0,
+                    utilization_rate: 0.75,
+                    current_tier: "Medium".into(),
+                    coefficient: 0.9,
+                    is_exceeded: false,
+                    alert: None,
+                },
+            })
+            .collect(),
+    )
+}
+
 /// 构造稳态满额的合成快照(revision 可指定)
 ///
 /// WHY 渐进构造而非巨型字面量:DataSnapshot 字段 40+,合成基准只覆盖
 /// 与成本相关的子集,其余保持 Default——`field_reassign_with_default`
 /// 在此为可读性权衡(显式允许)。
 #[allow(clippy::field_reassign_with_default)]
-fn synthetic_snapshot(revision: u64, chat_n: usize) -> DataSnapshot {
+///
+/// `latest_events` 也一并填：**此前这个夹具从不填该字段**，于是"全量对齐"那组读数
+/// 一直在漏测事件流的对齐成本（面板里 Parliament / Log / EventStream 三块都由它驱动）。
+/// 不填的比较器测的是不存在的形状，所以 ADR-233 W2 的 Step 1 先补这个洞再谈优化。
+fn synthetic_snapshot(
+    revision: u64,
+    chat_n: usize,
+    events: &Arc<VecDeque<NexusEvent>>,
+) -> DataSnapshot {
     let mut snap = DataSnapshot::default();
+    snap.latest_events = Arc::clone(events);
     snap.revision = revision;
     snap.quest_list = quest_list();
     snap.chat_messages = std::sync::Arc::new(chat_msgs(chat_n));
@@ -124,6 +160,7 @@ struct SeqSource {
     fixed: Option<Arc<DataSnapshot>>,
     seq: AtomicU64,
     cfg: chimera_tui::DataSourceConfig,
+    events: Arc<VecDeque<NexusEvent>>,
 }
 
 impl chimera_tui::data::TuiDataSource for SeqSource {
@@ -135,6 +172,7 @@ impl chimera_tui::data::TuiDataSource for SeqSource {
         Ok(Arc::new(synthetic_snapshot(
             rev,
             ((rev as usize) % (CHAT_MSG_COUNT + 1)).max(1),
+            &self.events,
         )))
     }
 
@@ -157,10 +195,12 @@ fn make_app(source: SeqSource) -> TuiApp {
 fn update_short_circuit(c: &mut Criterion) {
     let mut group = c.benchmark_group("tui_update_cost");
     group.bench_function("short_circuit_revision_unchanged", |b| {
+        let events = shared_events(256);
         let mut app = make_app(SeqSource {
-            fixed: Some(Arc::new(synthetic_snapshot(1, 40))),
+            fixed: Some(Arc::new(synthetic_snapshot(1, 40, &events))),
             seq: AtomicU64::new(0),
             cfg: chimera_tui::DataSourceConfig::default(),
+            events,
         });
         app.update(); // 首次全量对齐,之后每 iter 命中短路
         b.iter(|| {
@@ -179,6 +219,7 @@ fn update_full_align(c: &mut Criterion) {
             fixed: None,
             seq: AtomicU64::new(0),
             cfg: chimera_tui::DataSourceConfig::default(),
+            events: shared_events(256),
         });
         app.update(); // 首次对齐
         b.iter(|| {
@@ -189,5 +230,33 @@ fn update_full_align(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, update_short_circuit, update_full_align);
+/// 场景 C:全量对齐 × 事件流长度 —— 把 `latest_events` 的对齐成本单独摊开看。
+///
+/// 1 条与 256 条之差就是"每 poll 最多愿意为事件流对齐付多少"。快路径（同一 Arc）
+/// 在这里**故意不命中**吗？不：夹具共享 Arc，所以 `state` 与 `snapshot` 两侧指向同一
+/// 份 ⇒ 指针相等直接跳过内容比较。这一组因此同时是"补数后的真实成本"与
+/// "快路径命中时的成本"两条读数——把 `shared_events` 换成每次新建就退化成后者。
+fn update_full_align_events(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tui_update_cost_events");
+    for n in [1usize, 64, 256] {
+        let mut app = make_app(SeqSource {
+            fixed: None,
+            seq: AtomicU64::new(0),
+            cfg: chimera_tui::DataSourceConfig::default(),
+            events: shared_events(n),
+        });
+        app.update();
+        group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
+            b.iter(|| app.update());
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    update_short_circuit,
+    update_full_align,
+    update_full_align_events
+);
 criterion_main!(benches);

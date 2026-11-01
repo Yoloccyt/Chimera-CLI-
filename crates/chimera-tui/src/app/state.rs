@@ -305,7 +305,15 @@ impl TuiApp {
         // 任一变化都需标记这三个面板,避免事件流面板错过新事件。
         // WHY Arc 直接比较(P-A):state 与 snapshot 两侧均为 Arc<VecDeque>,
         // Arc 的 PartialEq 透传内部 VecDeque 逐条比较,语义与此前解引用比较一致。
-        if self.state.latest_events != snapshot.latest_events {
+        // 指针快路径:`Arc: PartialEq` **不做**指针短路(实测
+        // `snapshot_swap_segment/compare_equal_content/256` = 2.99 µs,即两侧内容
+        // 相同但分配不同时也要走完 256 条),而"revision 变了但事件流没变"是常见形态
+        // (例如只有 chat 增长)。先比指针,同一份 Arc 直接跳过整段深比较。
+        // 这与 :89-92 的 revision 短路不重复:那条在 revision *相同* 时跳过全部对齐,
+        // 这一条在 revision *不同* 而事件流未变时只跳过本项。
+        if !Arc::ptr_eq(&self.state.latest_events, &snapshot.latest_events)
+            && self.state.latest_events != snapshot.latest_events
+        {
             self.state.mark_dirty(PanelId::Parliament);
             self.state.mark_dirty(PanelId::Log);
             self.state.mark_dirty(PanelId::EventStream);

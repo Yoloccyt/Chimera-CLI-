@@ -290,12 +290,55 @@ fn history_backfill_latency(c: &mut Criterion) {
     group.finish();
 }
 
+/// bench 6:tick 内"deque → 快照替换"那一段的净成本，外加 `app/state.rs` 的等值比较。
+///
+/// WHY 必须单独有这一组：`data_pipeline_snapshot_latency` 每 iter 还包含管道构造、
+/// 300 ms 等待与 shutdown —— 256 次 `NexusEvent` 深拷摊在那个量纲里根本不可分辨。
+/// 不可分辨的比较器等于没有比较器（ADR-233 W2 的 Step 1 就是为此而存在）。
+///
+/// WHY "复现该段"而不是"跑一次生产 tick"：生产 tick 由 250 ms interval 驱动，bench
+/// 无法只调它一次；这里在**与被检对象相同的类型**上做同一次操作（`deque.clone()` +
+/// `Arc::new` 包裹，以及两个快照之间的 `!=`），端到端那一组继续当"不削减"的守卫。
+/// 迁移元素类型时这组必须同步改类型 —— 它就是那笔改动的温度计。
+fn snapshot_swap_segment(c: &mut Criterion) {
+    let mut group = c.benchmark_group("snapshot_swap_segment");
+    for n in [1usize, 64, 256] {
+        let deque: VecDeque<NexusEvent> = (0..n).map(|_| make_budget_event()).collect();
+        group.bench_with_input(BenchmarkId::from_parameter(n), &deque, |b, deque| {
+            b.iter(|| {
+                let swapped = std::sync::Arc::new(black_box(deque).clone());
+                black_box(swapped).len()
+            });
+        });
+        // 比较侧：生产里 `self.state.latest_events != snapshot.latest_events` 就是这个
+        // 表达式（两侧是不同分配的 Arc，内容相同 ⇒ 必须比到元素层）。
+        let left = std::sync::Arc::new(deque.clone());
+        let right = std::sync::Arc::new(deque.clone());
+        group.bench_with_input(
+            BenchmarkId::new("compare_equal_content", n),
+            &(&left, &right),
+            |b, (left, right)| b.iter(|| black_box(*left != *right)),
+        );
+        // 同 Arc 对照：如果 std 的 `Arc: PartialEq` 带指针快路径，这一条会落在十几 ns；
+        // 若它与 `compare_equal_content` 同量级，就说明**没有**快路径 —— 那才是
+        // ADR-233 W2 Step 3 想加的那条快路径的真实上限（先量，再决定加不加）。
+        let same = std::sync::Arc::clone(&left);
+        group.bench_with_input(
+            BenchmarkId::new("compare_same_arc", n),
+            &(&left, &same),
+            |b, (left, same)| b.iter(|| black_box(**left != **same)),
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     data_pipeline_snapshot_latency,
     data_pipeline_throughput,
     snapshot_read_latency,
     push_history_scale,
-    history_backfill_latency
+    history_backfill_latency,
+    snapshot_swap_segment
 );
 criterion_main!(benches);

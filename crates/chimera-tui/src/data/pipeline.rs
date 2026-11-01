@@ -361,15 +361,21 @@ impl TuiDataSource for StubDataSource {
 
 /// 本 tick 是否需要用最新 deque 重建 `latest_events` 快照（性能重构 D6）。
 ///
-/// 仅在有新事件时重建：无新事件的 tick，`latest_event_deque` 内容与上一
-/// 次替换时完全一致（长度只在 push 后增长、trim 只在有新事件入队后才可能触发），
-/// 直接复用上份 `Arc` 即可——避免注释承诺、但旧实现 `!deque.is_empty()`
-/// 失效（首次事件后 deque 永不为空 → 每 tick 全量 clone）的 O(N) 深拷贝。
+/// 谓词覆盖**两类会让 deque 内容变化的动作**：push（`events_this_tick`）与
+/// trim（`trimmed_this_tick`）。今天 trim 只在有新事件入队后才可达（长度只在
+/// push 后增长），所以两个条件在现网等价；但"只有新事件才重建"若写死成单一
+/// 条件，任何后来加入的**非 push 型淘汰**（时间窗、按字节裁剪）都会让快照静默
+/// 停留在旧内容上——面板显示的是上一批事件，而且没有任何测试会红。
+/// 把等价关系显式写成两个入参，等于把这个坑从"注释里的未来"变成判据。
+///
+/// 无变化时复用上份 `Arc`，避免旧实现 `!deque.is_empty()` 那种失效（首次事件后
+/// deque 永不为空 ⇒ 每 tick 全量 clone，实测 256 条 = 24.36 µs，见
+/// `benches/data_pipeline_bench.rs` 的 `snapshot_swap_segment/256`）。
 ///
 /// WHY 抽为纯函数：`pipeline.rs` 的后台循环难以直接单测，把守卫条件下沉为可
 /// 表驱动断言的纯函数（事件驱动快照的**唯一判定入口**）。
-fn should_replace_event_snapshot(events_this_tick: usize) -> bool {
-    events_this_tick > 0
+fn should_replace_event_snapshot(events_this_tick: usize, trimmed_this_tick: usize) -> bool {
+    events_this_tick > 0 || trimmed_this_tick > 0
 }
 
 /// 数据管道 — 后台聚合事件并生成统一快照
@@ -589,19 +595,17 @@ impl DataPipeline {
                     latest_event_deque.push_back(event);
                 }
 
-                while latest_event_deque.len() > max_event_history {
-                    latest_event_deque.pop_front();
-                }
+                // 与 `while len > max { pop_front }` 等价；顺带把淘汰条数算出来当判据入参
+                let trimmed_this_tick = latest_event_deque.len().saturating_sub(max_event_history);
+                latest_event_deque.drain(..trimmed_this_tick);
                 // 事件累积窗口语义(事件驱动分批,2026-09-13):此前 deque 每批
                 // 替换 latest_events 后清空——事件唤醒使突发被分批消费,批间
                 // 替换会吞掉前批事件(突发完整性破坏)。改为 deque **累积**
                 // (max_event_history 有界截断)+ 克隆替换:latest_events 始终
                 // =「最近 max_event_history 条事件」,与 EventStream 面板语义一致。
                 // WHY clone 而非 move:deque 残留继续累积(跨 tick 合并)。
-                // 重建守卫：仅当本 tick 有新事件时替换快照（复用旧 Arc 避免 O(N)
-                // 深拷贝）；无新事件时 deque 不变。若未来引入时间淘汰（非仅随 push），
-                // 需改为 `events_this_tick > 0 || trimmed_this_tick`。
-                if should_replace_event_snapshot(events_this_tick) {
+                // 守卫的两个入参理由见 `should_replace_event_snapshot`
+                if should_replace_event_snapshot(events_this_tick, trimmed_this_tick) {
                     latest_events = Arc::new(latest_event_deque.clone());
                 }
 
@@ -1128,18 +1132,30 @@ pub fn eco_transition(
 mod tests {
     use super::should_replace_event_snapshot;
 
-    /// 性能重构 D6：仅当本 tick 有新事件时才重建快照；无新事件复用旧 Arc。
+    /// 性能重构 D6 + W2：deque 本 tick 变过（push **或** trim）才重建快照，否则复用旧 Arc。
     ///
-    /// WHY 锁住纯函数：后台循环难直接单测，而守卫的零拷贝语义完全由该判定决
-    /// 定——`events_this_tick==0` 必须为 false（不重建），否则为 true。
+    /// WHY 锁住纯函数：后台循环难直接单测，而守卫的零拷贝语义完全由该判定决定。
+    /// 两个入参各测正反：`(0,0)` 假 ⇒ 不重建；`(0,1)` 真 ⇒ 只有淘汰也要重建
+    /// （今天 trim 只在 push 后可达，两者等价，但把等价写死会让未来的非 push 型
+    /// 淘汰静默留旧快照——那条 case 就是这条判据的牙）。
     #[test]
     fn snapshot_replaced_only_on_new_events() {
         assert!(
-            !should_replace_event_snapshot(0),
+            !should_replace_event_snapshot(0, 0),
             "无新事件的 tick 不应重建快照（否则退化为每 tick 全量 clone）"
         );
-        assert!(should_replace_event_snapshot(1));
-        assert!(should_replace_event_snapshot(256));
+        assert!(should_replace_event_snapshot(1, 0));
+        assert!(should_replace_event_snapshot(256, 0));
+        // trim 单独也必须触发替换：今天它只在有 push 时可达，但判据不能把
+        // "未来任何非 push 型淘汰会静默留旧快照"这件事留给注释。
+        assert!(
+            should_replace_event_snapshot(0, 1),
+            "只发生淘汰（无新事件）时快照仍必须重建"
+        );
+        assert!(
+            !should_replace_event_snapshot(0, 0),
+            "两者皆零 ⇒ 复用旧 Arc"
+        );
     }
 
     /// 性能重构 W2：采集器构造不再 `System::new_all()`（枚举全进程表）；CPU/内存仍可用。

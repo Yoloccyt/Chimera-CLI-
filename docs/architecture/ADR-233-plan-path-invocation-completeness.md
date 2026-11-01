@@ -285,3 +285,49 @@ selftest 加两条植入（env 读取点改名 / 窗口默认改 0），断言�
 
 `check_llm_loop_defaults.py --selftest` 12/12 + 真树 rc=0；`check_manifest_schema.py`（144 门）、`run_gate_manifest.py --list`（`selected=137 total=144 skipped=7`）、`audit_gate_parity.py`（no parity gap）三者 rc=0；`chimera-cli --lib` 210 例（含新增 5 例归位测试）+ `llm_tool_loop` 15 例 + `llm_off_legacy` 6 例全绿；`gqep-executor + chimera-cli` 全 target 无失败；`clippy --all-targets -D warnings` rc=0（本批 `&mut Vec` → `&mut [_]` 的 `ptr_arg` 与测试面 `expect_used` 已按要求改掉）；`fmt --check` rc=0。
 回滚 `git revert` 本批 ⇒ 归位回到逐位 + 门回到四上限判据；`tool_plane` 侧不受影响（L7 的保序契约与槽位写法在 W1b-1 批里，两批各自独立可 revert）。
+
+---
+
+## 追加节五（2026-11-01）— W2：tick 内的事件流成本（做了三条、按数据否决一条）
+
+### 读数（`--profile bench-lite`，mean）
+
+| 组 | 读数 | 含义 |
+|---|---|---|
+| `snapshot_swap_segment/256` | **24.360 µs** | 一次 tick 的 256 条 `NexusEvent` 深拷（+`Arc::new` 包裹）——本批要评估的那笔成本 |
+| `snapshot_swap_segment/64` | 6.045 µs | 同一操作 ×64 ⇒ 约 94 ns/条，线性 |
+| `snapshot_swap_segment/1` | 151.59 ns | 下界（`VecDeque` 骨架 + 一次事件） |
+| `snapshot_swap_segment/compare_equal_content/256` | 2.987 µs | 两份内容相同、分配不同的快照之间 `!=` 的元素级代价 |
+| `tui_update_cost_events/1 → /256`（**快路径关掉**） | 32.84 → 35.99 / 35.59 µs | 关掉快路径后，事件流长度开始进入对齐成本 |
+| `tui_update_cost_events/1 → /256`（**快路径在**） | 33.00 / 32.75 / 32.96 µs | 加上后三个规模回到同一条水平线 ⇒ 省下的正是那 ~2.9 µs |
+
+### 做了什么
+
+**D25 — 先补比较器，并且先承认既有比较器有个洞。**
+`tui_update_cost_bench.rs` 的 `synthetic_snapshot` **此前从不填 `latest_events`**——所以"全量对齐"那两组一直在漏测由 Parliament / Log / EventStream 三块面板共同消费的那个字段。填上之外还做了一处形状修正：事件流的 `Arc` 在多次 poll 之间**共享**，因为真实管道在本 tick 无新事件时就是复用旧 `Arc`（`should_replace_event_snapshot`）；不共享的话，夹具给被测对象搭的是一个它永远走不到的舞台，快路径在这条 bench 上必然测不出来。
+另新增 `data_pipeline_bench.rs` 的 `snapshot_swap_segment` 组：现存的端到端组把构造、300 ms 等待与 shutdown 全算进每 iter，深拷在其中不可分辨——**不可分辨的比较器等于没有比较器**。
+
+**D26 — `state.rs` 的事件流比较加指针快路径。**
+`!Arc::ptr_eq(...) && self.state.latest_events != snapshot.latest_events`。
+实测 `Arc: PartialEq` **不做**指针短路（`compare_equal_content/256` = 2.99 µs 就是两侧不同分配、内容相同的情形），而"revision 变了但事件流没变"是常见形态（只有 chat 在增长）。它与 `:89-92` 的 revision 短路不重复：后者在 revision **相同**时跳过全部字段对齐，这条在 revision **不同**而事件流未变时只跳过本项。
+**为什么这条不需要新测试**：指针相等 ⇒ 内容必然相等（同一个对象），这是逻辑恒等而不是经验性质；加一条"验证它跳过"的测试只会重复断言同一个同语反复。它的价值由 A/B 读数承担（35.99/35.59 → 32.75/32.96）。
+
+**D27 — 把"未来若引入时间淘汰需改判据"从注释债变成判据。**
+`should_replace_event_snapshot(events_this_tick, trimmed_this_tick)` = `events_this_tick > 0 || trimmed_this_tick > 0`；trim 条数由 `drain(..len-max)` 直接算出（与 `while len > max { pop_front }` 逐位等价，并让已登记的超长函数 `new_internal` 少一行 ⇒ 棘轮基线随批 `--emit` 从 467 **降到** 466）。
+今天 trim 只在 push 后可达，两个条件在现网等价；写死单一条件的话，任何后来的**非 push 型淘汰**（时间窗、按字节裁剪）都会让快照静默停在旧内容上——面板显示上一批事件，而没有任何测试会红。
+牙实测：把判据退回 `events_this_tick > 0` ⇒ `snapshot_replaced_only_on_new_events` 红（消息点名"只发生淘汰（无新事件）时快照仍必须重建"）。
+**这条牙差点是假的**：第一次反事实用 `--should_replace` 作过滤词，跑的是**零条测试**却报 GREEN——选择器命中 0 条与判据通过长得一模一样。测试名 `snapshot_replaced_only_on_new_events` 与被调函数名不同名，过滤词必须选后者之外的前者。
+
+### 按数据否决的一条（与本波批准计划的 W2 Step 2/5 相左，理由与翻转条件都在此）
+
+**不做 `latest_events: Arc<VecDeque<Arc<NexusEvent>>>` 的逐元素 Arc 化。**
+
+- 收益上界：一次深拷 256 条 = **24.36 µs**，而这只在"本 tick 有新事件"时发生（≤4 次/秒）⇒ 稳态 ≤**98 µs/秒**，约一个核的 0.01%；同一进程一次全量对齐是 33 µs/次。
+- 代价实测面：`grep -rc latest_events crates/chimera-tui` 得 **222 处引用 / 约 40 个文件**（`panels/event_stream.rs` 23、`app/tests.rs` 20、`panels/log.rs` 14、`types.rs` 13、`panels/filter_cache.rs` 11…），且 `DataPipelineSnapshot` 是**公开类型**——`match NexusEvent::X{..}` 在 `&Arc<NexusEvent>` 上不成立，面板侧逐点要改成 `&**ev`。批准计划把它估成"5 处 + 夹具"，那是错的（本波计划里的 seam 清单只覆盖了当时查到的消费点，未穷举 bench/panel/test 面）。
+- 结论：用 40 文件的类型迁移换 ≤0.01% 的 CPU，与本仓"避免过度工程化 / 禁止无数据的推荐"两条同时相悖。
+- **翻转条件（写死在这里，便于日后重开）**：`max_event_history` 上调、tick 间隔下调、或事件流之外还有别的字段共用同一 deque（使一次替换变成多次深拷）三者任一发生 ⇒ `snapshot_swap_segment` 这条组已在盘上，重跑即可判定，无需再建比较器。Step 5 的"共有元素 `Arc::ptr_eq`"结构断言随本条一起不做——它是为一次未发生的迁移准备的锁。
+
+### 验证与回滚
+
+`cargo test -p chimera-tui --no-fail-fast --jobs 2` 无失败；`clippy --all-targets -D warnings` rc=0；`fmt --check` rc=0；`test_fnlen_smoke.sh` rc=0 且**棘轮基线由 467 降到 466**（`--emit` 同批刷新；`ADR-227` 里那句"467 / 215 行"是 2026-10 的时点引文，不回写）。
+回滚：三条各自独立可 revert——判据那条会连带要求把 `fnlen_baseline.txt` 的 466 退回 467；快路径与判据都不改任何公开类型；bench 侧只扩组，未增删文件 ⇒ `bench_inventory_freeze.txt` 无需新行。
