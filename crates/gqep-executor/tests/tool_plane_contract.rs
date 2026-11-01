@@ -190,6 +190,49 @@ fn registry_lists_descriptors() {
     assert_eq!(descriptors[0].provider, "echo");
 }
 
+/// Resolution must hand back **the same descriptor allocation**, not a fresh
+/// clone per call.
+///
+/// WHY "same heap buffer for `name`" instead of `Arc::ptr_eq(&a, &b)`: the point
+/// is "no new heap work per call", and buffer identity is exactly that — it
+/// compiles and means the same thing whether `resolve` returns
+/// `ToolDescriptor` or `Arc<ToolDescriptor>`, so the lock survives the very API
+/// change it is here to police (`Arc::ptr_eq` would not have compiled against
+/// the clone-returning version at all, so there would have been no red reading
+/// to record). `String::clone` always allocates, so a shared `name` buffer can
+/// only mean a shared descriptor.
+///
+/// The provider assertion is the **control**: it already held before this
+/// change (the `Arc<dyn ToolProvider>` was cloned, not the descriptor), so it
+/// proves the fixture resolves at all and that the test is not vacuously red.
+#[test]
+fn resolve_returns_the_same_descriptor_allocation() {
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(Arc::new(EchoProvider::new("echo.echo", "echo", 0)))
+        .expect("register");
+
+    let (provider_a, desc_a) = registry.resolve("echo.echo").expect("resolve a");
+    let (provider_b, desc_b) = registry.resolve("echo.echo").expect("resolve b");
+
+    assert!(
+        Arc::ptr_eq(&provider_a, &provider_b),
+        "control: the provider must be the same allocation"
+    );
+    assert_eq!(
+        desc_a.name.as_ptr(),
+        desc_b.name.as_ptr(),
+        "resolve re-allocated the descriptor's `name` (4 Strings per call); it \
+         must hand back the registered one — this is the hot-path cost W1b-1 \
+         removes"
+    );
+    assert_eq!(
+        desc_a.description.as_ptr(),
+        desc_b.description.as_ptr(),
+        "descriptor `description` was re-allocated per resolve"
+    );
+}
+
 #[test]
 fn duplicate_registration_rejected() {
     let mut registry = ToolRegistry::new();

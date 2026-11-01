@@ -11,7 +11,7 @@ use super::types::{ToolDescriptor, ToolError, ToolProvider};
 /// would require a provider-specific dump that adds no diagnostic value.
 #[derive(Default)]
 pub struct ToolRegistry {
-    tools: HashMap<String, (Arc<dyn ToolProvider>, ToolDescriptor)>,
+    tools: HashMap<String, (Arc<dyn ToolProvider>, Arc<ToolDescriptor>)>,
 }
 
 impl ToolRegistry {
@@ -60,25 +60,38 @@ impl ToolRegistry {
         }
 
         for descriptor in descriptors {
+            let name = descriptor.name.clone();
             self.tools
-                .insert(descriptor.name.clone(), (Arc::clone(&provider), descriptor));
+                .insert(name, (Arc::clone(&provider), Arc::new(descriptor)));
         }
         Ok(())
     }
 
     /// Resolve a tool name to its provider + descriptor.
+    ///
+    /// WHY the descriptor is shared behind an `Arc` rather than returned by
+    /// value: `resolve` sits on every tool call's hot path, and `ToolDescriptor`
+    /// owns four `String`s — a by-value return allocated all four again per
+    /// call (measured `llm_diag_resolve_hit` 134.29 ns vs a `miss` at 14.72 ns,
+    /// i.e. ~120 ns of pure allocator work per call). Registration is composition
+    /// time, so moving the copy there costs nothing on the hot path.
+    /// `resolve` 返回的 `Arc` 一律指向 `register` 时那一个描述符，永不重建。
     #[must_use]
-    pub fn resolve(&self, tool: &str) -> Option<(Arc<dyn ToolProvider>, ToolDescriptor)> {
+    pub fn resolve(&self, tool: &str) -> Option<(Arc<dyn ToolProvider>, Arc<ToolDescriptor>)> {
         self.tools.get(tool).cloned()
     }
 
     /// All descriptors, sorted by name for deterministic listing/tests.
+    ///
+    /// Deliberately still owned: this is the cold listing path (`chimera tool
+    /// list`, tests, benches), and handing out `Arc` here would push the
+    /// sharing decision onto every caller that only wants to print a table.
     #[must_use]
     pub fn descriptors(&self) -> Vec<ToolDescriptor> {
         let mut out: Vec<ToolDescriptor> = self
             .tools
             .values()
-            .map(|(_, descriptor)| descriptor.clone())
+            .map(|(_, descriptor)| descriptor.as_ref().clone())
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out

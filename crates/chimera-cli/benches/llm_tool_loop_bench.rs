@@ -427,6 +427,38 @@ fn bench_sched_and_provider(c: &mut Criterion) {
     });
 }
 
+/// ⑨ 诊断：单次 `registry.resolve` —— 每调用堆分配的比较器。
+///
+/// WHY 单独量这一段：`ToolRuntime::invoke` 的热路径上，resolve 是唯一每次都要把
+/// 整个描述符（`name`/`provider`/`description`/`input_schema` 四个 String）clone
+/// 一遍的地方。
+/// WHY 用 `.map(|(_, d)| d.name.len())` 消费：`Arc<ToolDescriptor>` 与按值的
+/// `ToolDescriptor` 都能 `.name` 取到同一字段，所以这一组在"返回克隆"与"返回 Arc"
+/// 两种实现下都编译得起来 —— 比较器必须比它所衡量的改动更稳定，否则改完就没法对照。
+fn bench_resolve_only(c: &mut Criterion) {
+    let provider = Arc::new(BenchProvider {
+        tool_count: 16,
+        invokes: Arc::new(AtomicUsize::new(0)),
+    });
+    let mut registry = ToolRegistry::new();
+    registry
+        .register(provider)
+        .expect("bench provider registers");
+
+    c.bench_function("llm_diag_resolve_hit", |b| {
+        b.iter(|| {
+            black_box(
+                registry
+                    .resolve("bench.t0")
+                    .map(|(_, desc)| desc.name.len()),
+            )
+        })
+    });
+    c.bench_function("llm_diag_resolve_miss", |b| {
+        b.iter(|| black_box(registry.resolve("bench.absent").is_some()))
+    });
+}
+
 criterion_group!(
     benches,
     bench_tool_decls,
@@ -436,6 +468,7 @@ criterion_group!(
     bench_bus_new,
     bench_invoke_batch_direct,
     bench_invoke_batch_mt,
-    bench_sched_and_provider
+    bench_sched_and_provider,
+    bench_resolve_only
 );
 criterion_main!(benches);

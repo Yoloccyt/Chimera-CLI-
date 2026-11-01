@@ -220,19 +220,27 @@ impl ToolRuntime {
         };
 
         let mut futures = FuturesUnordered::new();
+        let total = invocations.len();
         for (index, invocation) in invocations.into_iter().enumerate() {
             let cancel = cancel.clone();
             futures.push(async move { (index, self.invoke(invocation, &cancel).await) });
         }
 
-        let mut collected: Vec<(usize, ToolOutcome)> = Vec::with_capacity(futures.len());
-        while let Some(item) = futures.next().await {
-            collected.push(item);
+        // 保序 = 按派发下标写槽位，O(n) 且没有第二次 collect（旧写法是
+        // push 进 Vec<(usize, _)> 再 sort_by_key，O(n log n) + 一次额外搬运）。
+        // WHY 这样替换是安全的：契约由 `prop_batch_order_survives_reversed_completions`
+        // 守着，那条属性测试已实证"把排序键改坏 ⇒ 例证面 14 项全绿、属性面红"，
+        // 所以换实现并不削弱保证。
+        let mut slots: Vec<Option<ToolOutcome>> = (0..total).map(|_| None).collect();
+        while let Some((index, outcome)) = futures.next().await {
+            slots[index] = Some(outcome);
         }
-        collected.sort_by_key(|(index, _)| *index);
-
-        let mut outcomes: Vec<ToolOutcome> =
-            collected.into_iter().map(|(_, outcome)| outcome).collect();
+        let mut outcomes: Vec<ToolOutcome> = slots.into_iter().flatten().collect();
+        debug_assert_eq!(
+            outcomes.len(),
+            total,
+            "a dispatched call returned no outcome — the batch lost a result"
+        );
         for invocation in overflow {
             outcomes.push(ToolOutcome::failed(
                 &invocation,

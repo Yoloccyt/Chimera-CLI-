@@ -99,6 +99,15 @@ impl BoundedToolScheduler {
             .per_provider
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // WHY `get` before `entry`: `entry` needs an owned key, so the plain
+        // `entry(...).or_insert_with(...)` form allocated a `String` and hashed
+        // it twice on **every** acquire — including the common case where the
+        // lane already exists. `get` answers the hit in one hash lookup with zero
+        // allocation; the `to_string()` now only happens when a provider lane is
+        // created for the first time.
+        if let Some(existing) = map.get(provider) {
+            return Arc::clone(existing);
+        }
         Arc::clone(
             map.entry(provider.to_string())
                 .or_insert_with(|| Arc::new(Semaphore::new(self.max_provider_inflight))),

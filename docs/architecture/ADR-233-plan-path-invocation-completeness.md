@@ -163,3 +163,41 @@ test result: FAILED. 1 passed; 1 failed
 ### 回滚
 
 `git revert` 本批即回到层屏障版：`run`/`compute_layers` 未动，legacy 路径不受影响；`plan_runner_eager.rs` 与 bench 的 `tool_plan_edges` 组随批回滚（bench 只扩组、未加文件 ⇒ `bench_inventory_freeze.txt` 无需改动）。回滚后 `dependent_starts_…` 与 `fast_chain_finishes_…` 转红，那是指向本决策的哨兵。
+
+---
+
+## 追加节二（2026-11-01）— W1b-1：每次调用的堆分配（描述符、许可、保序）
+
+### 读数（同一份 bench 文件，只差 `tool_plane/{registry,scheduler,runtime}.rs` 两个版本；`--profile bench-lite`，mean）
+
+| 组 | 改前 | 改后 | 差 |
+|---|---|---|---|
+| `llm_diag_resolve_hit` | 134.80 ns | **21.48 ns** | **−84.1%** |
+| `llm_diag_resolve_miss` | 14.70 ns | 13.39 ns | 噪声内（未改语义，用作标定） |
+| `llm_diag_scheduler_acquire` | 509.17 ns | **474.06 ns** | −6.9% |
+| `llm_diag_invoke_batch_8` | 11.815 µs | **10.730 µs** | −9.2%（三项改动叠加后的整批面） |
+
+改前 `hit`（134.80）与 `miss`（14.70）之差 ≈ 120 ns 就是那四次 `String` 分配本身；改后 `hit` 落到 21.48 ns，与 `miss` 只差一次 `Arc` 计数——**描述符分配已被消掉，不是被挪走**。读数文件：`tmp/w1b1-bench-before-full.log` / `tmp/w1b1-bench-after.log`。
+
+### 决策
+
+**D13 — `ToolRegistry` 内部存 `Arc<ToolDescriptor>`，`resolve` 返回 `Arc<ToolDescriptor>`；`descriptors()` 仍返回 `Vec<ToolDescriptor>`。**
+把唯一的拷贝从"每次调用"移到"注册时"（注册是装配期，一次一工具）。`descriptors()` 保持按值返回，是因为它的消费方（`chimera tool list`、`run.rs` 的启动打印、契约测试）只想打印表格——在那里返回 `Arc` 会把"是否共享"这个决定推给每个调用方。
+**WHY 只改 `resolve` 不改 `descriptors()`**：两个函数的调用频度差 3~4 个数量级，把它们捆在一起改会让冷路径背上热路径的抽象。
+
+**D14 — 回归锁用"缓冲区指针同一"而不是 `Arc::ptr_eq`。**
+`resolve_returns_the_same_descriptor_allocation` 断言 `desc_a.name.as_ptr() == desc_b.name.as_ptr()`（外加 `description` 一处），并以 `Arc::ptr_eq(&provider_a, &provider_b)` 作**对照**（这条改动前就成立，用来证明测试并非空洞地红）。
+**WHY 不用 `Arc::ptr_eq(&a.1, &b.1)`**：计划原本这么写，但它在按值返回的实现上**根本编译不过**——那就拿不到"先红"读数，只能拿到一条编译错误。缓冲区身份这条写法在改前改后都编译、含义等价（`String::clone` 必分配，故共享 `name` 缓冲区只能意味着共享描述符），且**能在它所要监督的那次 API 变更两侧都存活**。先红读数（两个不同地址）：`tmp/w1b1-red.log`，`left: 0x2528a0205a0 / right: 0x2528a020980`。
+
+**D15 — `provider_semaphore` 先 `get` 命中即返回，未命中才 `entry(provider.to_string())`。**
+`entry` 需要 owned key ⇒ 旧写法在**每一次** acquire 上都分配一个 `String` 并做两次哈希，即使该 provider 道次早已存在。键类型不动（仍 `String`），避免为此引入第二套 provider id 体系。锁内仍只做 map 操作，不跨 `.await`（§4.4 #1）。
+
+**D16 — `invoke_batch` 保序改为"按派发下标写槽位"，并加一条"结果不得丢"的 debug 断言。**
+`push Vec<(usize, _)> + sort_by_key + map().collect()` 是 O(n log n) 加一次额外搬运；`slots[index] = Some(outcome)` 是 O(n) 且只一次 `flatten().collect()`。
+**WHY 替换是安全的**：保序契约由 `prop_batch_order_survives_reversed_completions` 守着，该属性测试在第一波已实证"把排序键改坏 ⇒ 例证面 14 项全绿、属性面红"（ADR-229 §4 那行机证记的就是这条分界）。换实现不动保证。
+**顺带堵一个静默失败面**：槽位写法若因 bug 漏掉某个 index，`flatten()` 会**缩短**结果而不报错——那正是本项目红线"结果丢了？5.4% 孤儿调用"的形状。故加 `debug_assert_eq!(outcomes.len(), total)`：宁可当场中止，不可少一条还判绿。
+
+### 验证与回滚
+
+`cargo test -p gqep-executor -p chimera-cli --no-fail-fast --jobs 2` 全绿（31 target，含 `tool_plane_proptest` 3/3——它是本批"不削减"的正面证据）；`clippy --all-targets -D warnings`、`fmt --check`、`test_fnlen_smoke.sh`（无新超标）、`check_tool_plane_contract.py` 与 `check_perf_redlines.py --static-only` 均 rc=0。bench 文件只**扩组**（`llm_diag_resolve_hit`/`_miss`），未增删文件 ⇒ `bench_inventory_freeze.txt` 无需新行（按文件分类）。
+回滚 `git revert` 本批：`resolve` 返回类型回到按值，D14 的断言随之转红（指向本决策的哨兵）；`commands/tool.rs` 与 `runtime.rs` 的调用点只做字段访问，`Arc<ToolDescriptor>` 自动 deref，故回滚不牵连别处。
