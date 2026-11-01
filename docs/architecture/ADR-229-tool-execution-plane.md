@@ -109,6 +109,7 @@ pub struct ToolInvocation { call_id, tool, args_json, timeout_ms, priority, orig
 | CLI 端到端 | `crates/chimera-cli/tests/tool_plane_e2e.rs` | off 拒绝并提示；observe 不执行；apply 执行；`proc.exec` 无确认即拒 |
 | 阻塞面 | `crates/chimera-cli/tests/blocking_open_off_runtime.rs` | 正例 + 负对照（见 D7） |
 | 下游闭环 | `crates/chimera-cli/tests/llm_tool_loop.rs`、`quest_execute_e2e.rs` | 复用本执行面，未另立配额 |
+| 计划路径调用面 | `crates/gqep-executor/tests/run_plan_invocation.rs` | `run_plan` 必须把**完整** invocation 交给 provider：`approved` 由节点副作用 + `approve_writes` 决定（缺省 fail-closed）、`call_id` 逐节点唯一、取消令牌是调用方令牌的**血缘**（用"跑完后取消 caller 令牌、看 provider 手里的令牌是否随之翻转"证，不赛跑 mid-flight 取消）。CLI 侧 `tests/tool_plane_e2e.rs` 的判据是**拒绝原因本身变化**（`ask_required` → `denied`），因为退出码在 fail-soft 计划下不区分这两者 |
 | 延迟基线 | `crates/gqep-executor/benches/tool_plan.rs`（dev-only 登记） | 趋势基线，不入四表阈值 |
 | 依赖铁律 | `bash scripts/check_dependency_rules.sh` | L7 无 L9/L10 边 |
 

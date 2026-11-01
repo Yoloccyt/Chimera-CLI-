@@ -12,14 +12,14 @@ use futures::StreamExt;
 use seccore::execpolicy::{ExecPolicy, PolicyAction};
 use tokio_util::sync::CancellationToken;
 
-use nexus_contracts::tool_plan::ToolPlan;
+use nexus_contracts::tool_plan::{SideEffectDecl, ToolPlan};
 
 use super::metrics::{ToolMetrics, ToolMetricsSnapshot};
 use super::registry::ToolRegistry;
 use super::scheduler::{SchedSnapshot, ToolScheduler};
 use super::types::{ToolError, ToolInvocation, ToolOutcome, ToolPriority, ToolStatus};
 use crate::toolplan_runner::{
-    PlanGuards, PlanRunError, PlanRunOptions, PlanRunner, PlanSummary, ToolExecutor,
+    NodeExecCtx, PlanGuards, PlanRunError, PlanRunOptions, PlanRunner, PlanSummary, ToolExecutor,
 };
 
 /// Runtime limits and defaults. All bounds are explicit; no unbounded spawn.
@@ -268,6 +268,7 @@ impl ToolRuntime {
         let runner = PlanRunner::new(
             Box::new(RuntimeExecutor {
                 runtime: Arc::clone(self),
+                root_cancel: CancellationToken::new(),
             }),
             PlanGuards {
                 max_parallel,
@@ -340,14 +341,88 @@ impl ToolRuntime {
 }
 
 /// Adapter for `PlanRunner`; delegates each node to `ToolRuntime::invoke`.
+///
+/// `root_cancel` exists so the no-caller-token case does not allocate a fresh
+/// cancellation root per node: `child_token()` of this one root is cheap and the
+/// runner's `Drop` semantics are unchanged.
 struct RuntimeExecutor {
     runtime: Arc<ToolRuntime>,
+    root_cancel: CancellationToken,
 }
 
 #[async_trait::async_trait]
 impl ToolExecutor for RuntimeExecutor {
+    /// No-context entry (legacy `run` with this executor, or a direct call):
+    /// nothing is known about the node, so nothing is approved. Kept exactly as
+    /// it behaved before the context-aware path existed.
     async fn execute(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
-        ToolExecutor::execute(&*self.runtime, tool_name, args_json).await
+        let invocation = ToolInvocation {
+            call_id: format!("compat-{tool_name}"),
+            tool: tool_name.to_string(),
+            args_json: args_json.to_string(),
+            timeout_ms: None,
+            priority: ToolPriority::Normal,
+            origin: super::types::ToolOrigin::Cli,
+            quest_id: None,
+            task_id: None,
+            approved: false,
+        };
+        self.invoke_with(invocation, &self.root_cancel).await
+    }
+
+    /// Plan path: the node context decides approval, and the call id carries the
+    /// node so two nodes on the same tool stay distinguishable.
+    ///
+    /// WHY approval is derived here instead of hardcoded `false`: a `Write` node
+    /// must be放行 by an explicit `approve_writes` (CLI `--yes`), while a
+    /// read-only node simply does not need approval. Fabricating `false` for both
+    /// made every side-effecting tool unreachable through `chimera tool plan`
+    /// while looking like a policy denial.
+    async fn execute_node(
+        &self,
+        ctx: &NodeExecCtx<'_>,
+        tool_name: &str,
+        args_json: &str,
+    ) -> Result<String, String> {
+        let approved = ctx.plan.approve_writes || ctx.side_effect != Some(SideEffectDecl::Write);
+        let invocation = ToolInvocation {
+            call_id: format!("{}-{}", ctx.plan.plan_id, ctx.node_id),
+            tool: tool_name.to_string(),
+            args_json: args_json.to_string(),
+            timeout_ms: None,
+            priority: ToolPriority::Normal,
+            origin: super::types::ToolOrigin::Cli,
+            quest_id: None,
+            task_id: None,
+            approved,
+        };
+        // The caller's token must be the provider's token or an ancestor of it;
+        // inventing a fresh root per node made plan-level cancel unreachable.
+        let cancel = match ctx.plan.cancel {
+            Some(parent) => parent.child_token(),
+            None => self.root_cancel.clone(),
+        };
+        self.invoke_with(invocation, &cancel).await
+    }
+}
+
+impl RuntimeExecutor {
+    /// Shared tail: run one fully-built invocation and flatten the outcome into
+    /// the `Result<String, String>` shape `PlanRunner` expects. Takes the
+    /// invocation by value — `invoke` consumes it, so cloning here would be
+    /// pure waste on every node.
+    async fn invoke_with(
+        &self,
+        invocation: ToolInvocation,
+        cancel: &CancellationToken,
+    ) -> Result<String, String> {
+        let outcome = self.runtime.invoke(invocation, cancel).await;
+        match outcome.status {
+            ToolStatus::Ok => Ok(outcome.payload.unwrap_or_default()),
+            _ => Err(outcome
+                .error
+                .unwrap_or_else(|| format!("{:?}", outcome.status))),
+        }
     }
 }
 

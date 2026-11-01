@@ -39,7 +39,7 @@ pub async fn execute(
             timeout_ms,
         } => call(cfg, json, perm, dry_run, plane, tool, args, *timeout_ms).await,
         ToolAction::Plan { file, max_parallel } => {
-            plan(cfg, json, dry_run, plane, file, *max_parallel).await
+            plan(cfg, json, perm, dry_run, plane, file, *max_parallel).await
         }
     }
 }
@@ -233,6 +233,7 @@ struct PlanOutput<'a> {
 async fn plan(
     cfg: &ChimeraConfig,
     json: bool,
+    perm: &PermissionCtx,
     dry_run: bool,
     plane: ToolPlaneConfig,
     file: &str,
@@ -265,11 +266,14 @@ async fn plan(
     }
 
     let runtime = composition::build_tool_runtime(cfg)?;
+    // WHY 用 should_skip_prompt:计划路径逐节点问人尚未接线（ADR-232 D6），所以
+    // `--yes`/`--no-permission` 是这里唯一的显式放行口；不带旗标时 Write 节点
+    // 保持 fail-closed（provider 因 `approved=false` 而拒），与 `tool call` 一致。
     let options = PlanRunOptions {
         max_parallel: max_parallel.unwrap_or(plane.max_parallel_plan),
         timeout_ms: 0,
         fail_fast: false,
-        approve_writes: false,
+        approve_writes: perm.should_skip_prompt(),
         cancel: None,
     };
     let summary = runtime

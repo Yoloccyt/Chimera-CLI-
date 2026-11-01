@@ -359,3 +359,67 @@ fn mcp_call_v1_unchanged() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+fn write_plan_fixture() -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/tool_plan_write_proc.json")
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// The *reason* a write node is refused is what proves approval travelled:
+/// without `--yes` the provider must refuse for lack of approval (`ask_required`),
+/// and with `--yes` the same node must get past that gate and be refused by the
+/// process policy instead (`denied`). Before the plan path carried a real
+/// invocation, the second case was unreachable — every node arrived with
+/// `approved: false` no matter what the user passed.
+#[test]
+fn tool_plan_write_node_refuses_for_missing_approval() {
+    let file = write_plan_fixture();
+    let output = run(
+        &[
+            "--no-banner",
+            "--no-color",
+            "--json",
+            "tool",
+            "plan",
+            "--file",
+            &file,
+        ],
+        &[("CHIMERA_TOOL_PLANE", "apply")],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        stdout.contains("ask_required"),
+        "expected an approval-required refusal, got stdout={stdout} stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn tool_plan_write_node_with_yes_reaches_process_policy() {
+    let file = write_plan_fixture();
+    let output = run(
+        &[
+            "--no-banner",
+            "--no-color",
+            "--yes",
+            "--json",
+            "tool",
+            "plan",
+            "--file",
+            &file,
+        ],
+        &[("CHIMERA_TOOL_PLANE", "apply")],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        !stdout.contains("ask_required"),
+        "--yes must clear the approval gate; stdout={stdout}"
+    );
+    assert!(
+        stdout.contains("denied"),
+        "expected the process policy to refuse `rm -rf /`, got stdout={stdout} stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

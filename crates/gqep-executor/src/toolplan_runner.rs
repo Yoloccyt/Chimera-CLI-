@@ -25,6 +25,31 @@ use futures::StreamExt;
 use nexus_contracts::tool_plan::{guards, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan};
 use tokio_util::sync::CancellationToken;
 
+/// 计划级执行上下文 —— 一次 `run`/`run_with` 内恒定不变的部分。
+///
+/// WHY 不是把 5 个参数逐个传给执行器:上下文属于**同一次运行**，逐参数透传会让
+/// trait 签名随每个新需求增长；用一个借用结构体，新增字段不破坏既有实现。
+#[derive(Debug, Clone, Copy)]
+pub struct PlanExecCtx<'a> {
+    /// 计划 ID（用于构造可追溯的 call_id）
+    pub plan_id: &'a str,
+    /// 运行选项里的显式写放行位（`PlanRunOptions::approve_writes`）
+    pub approve_writes: bool,
+    /// 调用方的取消令牌（`None` = 无外部取消，执行器自决）
+    pub cancel: Option<&'a CancellationToken>,
+}
+
+/// 节点级执行上下文 —— 执行器要据此判断"该不该已获批准"。
+#[derive(Debug, Clone, Copy)]
+pub struct NodeExecCtx<'a> {
+    /// 所属计划的上下文
+    pub plan: PlanExecCtx<'a>,
+    /// 节点 ID（计划内唯一）
+    pub node_id: &'a str,
+    /// 节点自己声明的副作用（`None` = 未声明，按不需要批准处理）
+    pub side_effect: Option<SideEffectDecl>,
+}
+
 /// 工具执行器 — 接入方注入（execpolicy 审批/沙箱/超时/审计流水线挂载点）
 ///
 /// WHY trait 注入而非内置执行:工具执行依赖 L4 审批与沙箱（seccore）,
@@ -40,6 +65,23 @@ pub trait ToolExecutor: Send + Sync {
     /// # 返回
     /// 执行结果字符串（JSON 形态;失败返回 Err,由调用方按节点错误处理）
     async fn execute(&self, tool_name: &str, args_json: &str) -> Result<String, String>;
+
+    /// 带节点上下文的执行入口。
+    ///
+    /// 默认实现**丢弃上下文**并退回 [`execute`](Self::execute)，因此 legacy 执行器
+    /// （测试夹具与旧的无上下文调用方）行为逐位不变；只有需要把 `approved` /
+    /// `call_id` / 取消令牌装配进真实调用的适配器才覆盖它。
+    ///
+    /// WHY 默认实现而不是直接改 `execute` 签名:`execute` 有 10 个实现（含全部
+    /// 测试夹具），扩签名会把一次编排层修复扩散成 10 处无关改动。
+    async fn execute_node(
+        &self,
+        _ctx: &NodeExecCtx<'_>,
+        tool_name: &str,
+        args_json: &str,
+    ) -> Result<String, String> {
+        self.execute(tool_name, args_json).await
+    }
 }
 
 /// 计划守卫 — WI-16 硬约束（可覆盖默认值）
@@ -210,9 +252,17 @@ impl PlanRunner {
             for node in layer {
                 let input = self.inputs_of(plan, &env, &node.id);
                 let node_ref = node.clone();
+                // 旧 `run` 没有运行选项：显式写成"不放行写、无外部取消"，
+                // 与它此前的隐式行为逐位一致（那时执行器根本看不到这两个字段）。
+                let plan_id = plan.id.clone();
                 tasks.push(async move {
+                    let plan_ctx = PlanExecCtx {
+                        plan_id: &plan_id,
+                        approve_writes: false,
+                        cancel: None,
+                    };
                     // 旧 run 保持 fail-soft：工具错误包装为 {"error":...} 节点结果。
-                    let out = match self.exec_node(&node_ref, &input).await {
+                    let out = match self.exec_node(&node_ref, &input, plan_ctx).await {
                         Ok(value) => value,
                         Err(error) => format!(r#"{{"error":{error:?}}}"#),
                     };
@@ -299,6 +349,12 @@ impl PlanRunner {
         let mut tool_calls = 0usize;
         let mut nodes_executed = 0usize;
         let mut truncated = false;
+        // 每次运行的计划级上下文：执行器据此构造可追溯、可取消、审批语义显式的调用。
+        let plan_ctx = PlanExecCtx {
+            plan_id: &plan.id,
+            approve_writes: opts.approve_writes,
+            cancel,
+        };
 
         'layers: for layer in &layers {
             if cancel.is_some_and(CancellationToken::is_cancelled) {
@@ -319,7 +375,7 @@ impl PlanRunner {
                     break;
                 };
                 let input = inputs_of_precomputed(&preds, &env, &node.id);
-                in_flight.push(self.node_future(node, input, deadline, cancel));
+                in_flight.push(self.node_future(node, input, deadline, cancel, plan_ctx));
             }
 
             while let Some((node, result)) = in_flight.next().await {
@@ -366,7 +422,7 @@ impl PlanRunner {
 
                 if let Some(next) = pending.next() {
                     let input = inputs_of_precomputed(&preds, &env, &next.id);
-                    in_flight.push(self.node_future(next, input, deadline, cancel));
+                    in_flight.push(self.node_future(next, input, deadline, cancel, plan_ctx));
                 }
             }
         }
@@ -388,9 +444,10 @@ impl PlanRunner {
         input: String,
         deadline: tokio::time::Instant,
         cancel: Option<&'a CancellationToken>,
+        plan_ctx: PlanExecCtx<'a>,
     ) -> (&'a ToolNode, Result<String, NodeFailure>) {
         let result = tokio::select! {
-            result = tokio::time::timeout_at(deadline, self.exec_node(node, &input)) => result,
+            result = tokio::time::timeout_at(deadline, self.exec_node(node, &input, plan_ctx)) => result,
             _ = wait_cancel(cancel) => return (node, Err(NodeFailure::Cancelled)),
         };
         match result {
@@ -405,7 +462,12 @@ impl PlanRunner {
     /// 返回 `Err` 表示工具调用失败；旧 `run` 会把它包装成
     /// `{"error":...}` 节点结果（保持 fail-soft），新 `run_with` 由
     /// `PlanRunOptions::fail_fast` 决定是终止还是继续。
-    async fn exec_node(&self, node: &ToolNode, input: &str) -> Result<String, String> {
+    async fn exec_node(
+        &self,
+        node: &ToolNode,
+        input: &str,
+        plan_ctx: PlanExecCtx<'_>,
+    ) -> Result<String, String> {
         match node.op {
             ToolOp::ToolCall => {
                 // validate 已保证二者齐备;但缺字段不再靠 expect 不变量——
@@ -416,7 +478,12 @@ impl PlanRunner {
                 let Some(args) = node.args_json.as_deref() else {
                     return Err("missing args_json".to_string());
                 };
-                self.executor.execute(tool, args).await
+                let ctx = NodeExecCtx {
+                    plan: plan_ctx,
+                    node_id: &node.id,
+                    side_effect: node.side_effect,
+                };
+                self.executor.execute_node(&ctx, tool, args).await
             }
             ToolOp::Map => {
                 let field = node.field.as_deref().unwrap_or("");
