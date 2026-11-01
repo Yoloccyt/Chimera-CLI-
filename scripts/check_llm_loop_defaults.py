@@ -12,9 +12,11 @@
 #   L1 默认 off（白名单式启用）
 #      `commands/run.rs::llm_loop_enabled` 必须是 `matches!(... Some("apply") | Some("on"))`
 #      且**不得**出现 `_ =>` 兜底为 true 的写法。
-#   L2 四重上限同时存在且默认非零
-#      max_turns / max_tool_calls / max_repeat_tool_calls / max_total_tokens 四字段
-#      在 LlmToolLoopConfig::default() 里都有非零值，且各自有 CHIMERA_LLM_MAX_* 读取点。
+#   L2 上限同时存在且默认非零
+#      max_turns / max_tool_calls / max_repeat_tool_calls / max_total_tokens 四重上限，
+#      外加 max_parallel_tools（并发窗口）：五个字段在 LlmToolLoopConfig::default() 里
+#      都有非零值，且各自有 CHIMERA_LLM_MAX_* 读取点。把窗口也算进来是因为"为并行度
+#      删掉 chunking"这条改动既不红编译也不红既有测试——只有这条判据拦得住。
 #   L3 停止原因不可伪装
 #      `pub struct LlmLoopOutcome` 的 derive 行不得含 Default（漏落 stop 必须编译不过，
 #      而不是静默等于 Final）。
@@ -53,12 +55,17 @@ LIMIT_FIELDS = (
     "max_tool_calls",
     "max_repeat_tool_calls",
     "max_total_tokens",
+    # 并发窗口也是上限：删掉 chunking 不会编译失败，只会让并行度变成无界——而
+    # `tests/llm_tool_loop.rs` 在 L7 配 16/16/16 时断言 peak<=8，绑定的界正是这个
+    # 窗口，所以它必须与其余四个同权（W1c 补钉，理由见 ADR-233 追加节四）。
+    "max_parallel_tools",
 )
 LIMIT_ENVS = (
     "CHIMERA_LLM_MAX_TURNS",
     "CHIMERA_LLM_MAX_TOOL_CALLS",
     "CHIMERA_LLM_MAX_REPEAT",
     "CHIMERA_LLM_MAX_TOTAL_TOKENS",
+    "CHIMERA_LLM_MAX_PARALLEL_TOOLS",
 )
 ALLOWED_EVENTS = {"BudgetExceeded"}
 
@@ -141,7 +148,7 @@ def _field_defaults(root):
 
 
 def check_limits(root):
-    """L2：四重上限存在、非零、且有 env 读取点。"""
+    """L2：上限字段存在、非零、且每个都有 env 读取点（四重上限 + 并发窗口）。"""
     text, defaults = _field_defaults(root)
     if text is None:
         return 2, ["[UNDECIDABLE] llm/tool_loop.rs 读不到"], []
@@ -367,6 +374,17 @@ def selftest():
         _case(checks, tmp, "limit-gone", "L2 植入: 删掉一个 env 读取点 -> 红",
               {"check_limits"}, lambda b: _patch(
                   b, TOOL_LOOP_RS, '"CHIMERA_LLM_MAX_REPEAT",', '"CHIMERA_LLM_MAX_REPEAT_X",'))
+
+        _case(checks, tmp, "limit-parallel-gone",
+              "L2 植入: 并发窗口 env 读取点改名 -> 红（补钉的牙）",
+              {"check_limits"}, lambda b: _patch(
+                  b, TOOL_LOOP_RS, '"CHIMERA_LLM_MAX_PARALLEL_TOOLS",',
+                  '"CHIMERA_LLM_MAX_PARALLEL_TOOLS_X",'))
+
+        _case(checks, tmp, "limit-parallel-zero",
+              "L2 植入: max_parallel_tools 默认改 0 -> 红（窗口在上限面内）",
+              {"check_limits"}, lambda b: _patch(
+                  b, TOOL_LOOP_RS, "max_parallel_tools: 8,", "max_parallel_tools: 0,"))
 
         _case(checks, tmp, "derive-default", "L3 植入: outcome 派生 Default -> 红",
               {"check_stop_not_maskable"}, lambda b: _patch(

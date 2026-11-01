@@ -1601,7 +1601,7 @@ cmd = "{python} scripts/check_llm_loop_defaults.py"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "LLM 工具循环的四条默认值承诺——改宽后编译与既有测试都不会红（llm_off_legacy 只证「未开开关时旧路径不变」，证不了开关本身仍是白名单），故只能静态判据。L1 commands/run.rs::llm_loop_enabled 必须是 Some(\"apply\") | Some(\"on\") 白名单且不得出现 _ => true 兜底（D7 默认关闭）；L2 max_turns/max_tool_calls/max_repeat_tool_calls/max_total_tokens 在 LlmToolLoopConfig::default() 里齐备且非零，四个 CHIMERA_LLM_MAX_* 以带引号完整字面量匹配（裸子串会把改名后的同前缀常量也算命中，该漏抓已固化成夹具）；L3 pub struct LlmLoopOutcome 的 derive 行不得含 Default（D4：漏落 stop 必须编译不过，而非静默等于 Final）；L4 src/llm 递归扫描的生产码零 unwrap/expect（cfg(test) 尾除外，与 E-5 同口径）且非 mca 档 build_llm_client_from_config 返回 ConfigError（D2：不 panic、不空回）；L5 src/llm 构造的事件集合必须属于 {BudgetExceeded}（D5）。default() 体解析为空 ⇒ 退 2，不当绿。"
+note = "LLM 工具循环的四条默认值承诺——改宽后编译与既有测试都不会红（llm_off_legacy 只证「未开开关时旧路径不变」，证不了开关本身仍是白名单），故只能静态判据。L1 commands/run.rs::llm_loop_enabled 必须是 Some(\"apply\") | Some(\"on\") 白名单且不得出现 _ => true 兜底（D7 默认关闭）；L2 max_turns/max_tool_calls/max_repeat_tool_calls/max_total_tokens 四重上限**外加 max_parallel_tools（并发窗口）**在 LlmToolLoopConfig::default() 里齐备且非零，五个 CHIMERA_LLM_MAX_* 以带引号完整字面量匹配（窗口也在上限面内：删掉 chunking 既不红编译也不红既有测试，只让并行度变无界，而 tests/llm_tool_loop.rs 断言的 peak<=8 绑的就是这个窗口）（裸子串会把改名后的同前缀常量也算命中，该漏抓已固化成夹具）；L3 pub struct LlmLoopOutcome 的 derive 行不得含 Default（D4：漏落 stop 必须编译不过，而非静默等于 Final）；L4 src/llm 递归扫描的生产码零 unwrap/expect（cfg(test) 尾除外，与 E-5 同口径）且非 mca 档 build_llm_client_from_config 返回 ConfigError（D2：不 panic、不空回）；L5 src/llm 构造的事件集合必须属于 {BudgetExceeded}（D5）。default() 体解析为空 ⇒ 退 2，不当绿。"
 
 [[gate]]
 id = "G-146"
@@ -1610,4 +1610,4 @@ cmd = "{python} scripts/check_llm_loop_defaults.py --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
-note = "夹具文件集 =「必需单文件 + llm/ 目录实况（递归）」：必需集缺失响亮报错、目录里多出的 .rs 自动进扫描面（硬枚举会把夹具覆盖率钉死在抄写那一刻）。未改动夹具判绿；植入缺陷分别使 L1（白名单扩成 _ => true）、L2（上限默认改 0 / 删掉一个 env 读取点）、L3（outcome 派生 Default）、L4（生产码 unwrap、**子目录 llm/inner/leak.rs 里的 unwrap**）、L5（构造白名单外事件）判红；反向边界：cfg(test) 段里的 unwrap 不得判红；输入目录缺失必须退 2。任一断言不成立 ⇒ 退 1。"
+note = "夹具文件集 =「必需单文件 + llm/ 目录实况（递归）」：必需集缺失响亮报错、目录里多出的 .rs 自动进扫描面（硬枚举会把夹具覆盖率钉死在抄写那一刻）。未改动夹具判绿；植入缺陷分别使 L1（白名单扩成 _ => true）、L2（上限默认改 0 / 删掉一个 env 读取点 / 并发窗口 env 读取点改名 / 并发窗口默认改 0）、L3（outcome 派生 Default）、L4（生产码 unwrap、**子目录 llm/inner/leak.rs 里的 unwrap**）、L5（构造白名单外事件）判红；反向边界：cfg(test) 段里的 unwrap 不得判红；输入目录缺失必须退 2。任一断言不成立 ⇒ 退 1。"

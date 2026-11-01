@@ -40,6 +40,14 @@ use super::tools::tool_decls;
 /// 被拒调用回填给模型的固定标记（模型据此知道"这步不被允许"而非"工具坏了"）
 pub const ASK_REQUIRED_MARKER: &str = "ask_required";
 
+/// 结果无法按 `call_id` 归位时的标记（L7 少回/错回 call_id 的情形）。
+///
+/// WHY 单独一个标记而不是复用 `ask_required`：语义不同——那不是审批决策而是执行面
+/// 契约破口，混在一起会让"被拒了几次"与"归位坏了几次"读成同一件事。
+/// WHY 不 panic：`debug_assert` 在 release 档被编译掉，而 release 正是发布与
+/// `bench_check`/`slo` 的档位；把可见性押在 debug 上等于在最需要它的构建里失明。
+const ATTRIBUTION_MISMATCH_MARKER: &str = "attribution_mismatch";
+
 /// 循环配置
 #[derive(Debug, Clone)]
 pub struct LlmToolLoopConfig {
@@ -304,16 +312,7 @@ impl LlmToolLoop {
                 group.len(),
                 "invoke_batch 返回的结果数与派发数不等 ⇒ 有调用没有结果（本仓红线：结果不许丢）"
             );
-            for (slot, result) in group.iter().zip(executed) {
-                // invoke_batch 保序 ⇒ 逐位对应；不一致即为 L7 契约破口。
-                // 比对基准是**原始 tool_use id**（`calls[slot].0`），不是 invocation
-                // 里的副本——invocation 已被 move 进 batch，正好省掉一次拷贝。
-                debug_assert_eq!(
-                    result.call_id, calls[*slot].0,
-                    "invoke_batch 必须按入参顺序回填 call_id"
-                );
-                slots[*slot] = Some(result_block(&result));
-            }
+            attribute_results(&executed, group, calls, &mut slots);
         }
 
         Ok(slots.into_iter().flatten().collect())
@@ -482,5 +481,237 @@ fn result_block(executed: &ToolOutcome) -> ContentBlock {
         tool_use_id: executed.call_id.clone().into_boxed_str(),
         content: content.into_boxed_str(),
         is_error: !ok,
+    }
+}
+
+/// 把一批执行结果按 **`call_id`** 写回各自的槽位。
+///
+/// WHY 键化而不是逐位 `zip`：逐位对应的前提是"两侧同序"，而它原先唯一的防线是
+/// `debug_assert_eq!(result.call_id, invocation.call_id)`。`debug_assertions` 在
+/// release 档是关闭的（`bench_check.yml` / `slo.yml` 与发布构建都在那一档），于是
+/// 一次 L7 保序破口在 release 下静默变成"把 A 的结果写进 B 的槽位"，块里的
+/// `tool_use_id` 也跟着错——模型读到的是一个从未发起过的配对。少回一条时更糟：
+/// `zip` 截断 ⇒ 那个槽位干脆没有结果，回填给模型的历史里 tool_use 与 tool_result
+/// 数量不齐（本仓红线：结果不许丢）。
+///
+/// 键化后错配既**可见**（`warn!` + 显式标记块）又**不炸批**：不 panic、不 unwrap，
+/// 每个槽位都拿到一个属于自己 `tool_use_id` 的结果。同 id 的多条结果逐条取用
+/// （`pop` 从尾开始，而同 id 的结果彼此不可区分，故取用次序无关语义），一条都不丢。
+fn attribute_results(
+    executed: &[ToolOutcome],
+    group: &[usize],
+    calls: &[(String, String, String)],
+    slots: &mut [Option<ContentBlock>],
+) {
+    let mut by_call_id: HashMap<&str, Vec<&ToolOutcome>> = HashMap::with_capacity(group.len());
+    for result in executed {
+        by_call_id
+            .entry(result.call_id.as_str())
+            .or_default()
+            .push(result);
+    }
+
+    let mut consumed = 0usize;
+    for &slot in group {
+        let id = calls[slot].0.as_str();
+        match by_call_id.get_mut(id).and_then(Vec::pop) {
+            Some(result) => {
+                consumed += 1;
+                slots[slot] = Some(result_block(result));
+            }
+            None => {
+                warn!(
+                    call_id = id,
+                    "工具结果无法按 call_id 归位（批内缺条或 L7 回错了 id）"
+                );
+                slots[slot] = Some(error_result(id, ATTRIBUTION_MISMATCH_MARKER));
+            }
+        }
+    }
+
+    if consumed != executed.len() {
+        // 有结果不属于本批任何派发 ⇒ 无处可归。不假装塞得下，只把事实说清楚。
+        warn!(
+            consumed,
+            returned = executed.len(),
+            "invoke_batch 返回了本批之外的 call_id，多余结果无槽位可归"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! 归位逻辑的单元面。
+    //!
+    //! WHY 单元面而不是集成面：`LlmToolLoop` 持有的 `runtime` 是具体的
+    //! `Arc<ToolRuntime>`（不是 trait），外部测试无法让 `invoke_batch` 返回乱序或
+    //! 缺条 —— 而"乱序/缺条时不静默错配"正是这里要钉的契约。被测对象就是被替换的
+    //! 那段逻辑本身，不是它的替身。
+    //!
+    //! WHY 这些断言不依赖 debug 档：归位是**运行时分支**，不是 `debug_assert`。
+    //! 旧实现里唯一的防线是 `debug_assert_eq!(result.call_id, invocation.call_id)`，
+    //! 而 `debug_assertions` 在 release 档（CI 的 `bench_check.yml` / `slo.yml`、
+    //! 以及发布构建）是关闭的 —— 于是一次 L7 保序破口在 release 下静默变成
+    //! "把 A 调用的结果写进 B 的槽位"，模型收到的 tool_result 还带着另一个调用的 id。
+
+    use super::*;
+
+    fn outcome(call_id: &str, payload: &str) -> ToolOutcome {
+        ToolOutcome {
+            call_id: call_id.to_string(),
+            tool: "bench.t0".to_string(),
+            provider: "bench".to_string(),
+            status: ToolStatus::Ok,
+            payload: Some(payload.to_string()),
+            error: None,
+            duration_ms: 0,
+            attempts: 1,
+            truncated: false,
+        }
+    }
+
+    fn call(id: &str, name: &str) -> (String, String, String) {
+        (id.to_string(), name.to_string(), "{}".to_string())
+    }
+
+    /// 槽位里的结果块 → (`tool_use_id`, 文本)。空槽位直接 panic：那正是"这个槽位
+    /// 没被归位"的失败形状，不需要再额外写一层 `expect`（crate 面 `expect_used`
+    /// 是 deny，测试面也不该靠 unwrap/expect 才能表达断言）。
+    fn parts(slot: Option<&ContentBlock>) -> (String, String) {
+        match slot {
+            Some(ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                ..
+            }) => (tool_use_id.to_string(), content.to_string()),
+            other => panic!("expected a tool result block in the slot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn results_are_keyed_by_call_id_not_by_position() {
+        let calls = vec![
+            call("a", "bench.t0"),
+            call("b", "bench.t1"),
+            call("c", "bench.t2"),
+        ];
+        let group = vec![0usize, 1, 2];
+        let mut slots: Vec<Option<ContentBlock>> = vec![None; 3];
+        // 测试侧把返回序整个倒过来 —— 这正是 L7 保序一旦破裂时的形状。
+        let executed = vec![
+            outcome("c", "third"),
+            outcome("b", "second"),
+            outcome("a", "first"),
+        ];
+
+        attribute_results(&executed, &group, &calls, &mut slots);
+
+        let got: Vec<(String, String)> = slots.iter().map(|slot| parts(slot.as_ref())).collect();
+        assert_eq!(
+            got,
+            vec![
+                ("a".to_string(), "first".to_string()),
+                ("b".to_string(), "second".to_string()),
+                ("c".to_string(), "third".to_string()),
+            ],
+            "归位必须按 call_id：每个槽位拿到的结果内容与其 tool_use_id 同源"
+        );
+    }
+
+    #[test]
+    fn missing_result_becomes_visible_error_not_a_silent_hole() {
+        let calls = vec![call("a", "bench.t0"), call("b", "bench.t1")];
+        let group = vec![0usize, 1];
+        let mut slots: Vec<Option<ContentBlock>> = vec![None; 2];
+        // 只回来 a ⇒ b 没有结果（缺条，不是错序）。
+        let executed = vec![outcome("a", "first")];
+
+        attribute_results(&executed, &group, &calls, &mut slots);
+
+        let (id_a, text_a) = parts(slots[0].as_ref());
+        assert_eq!((id_a.as_str(), text_a.as_str()), ("a", "first"));
+        let (id_b, text_b) = parts(slots[1].as_ref());
+        assert_eq!(id_b, "b", "缺失结果的槽位仍要带自己的 tool_use_id");
+        assert_eq!(
+            text_b, ATTRIBUTION_MISMATCH_MARKER,
+            "b 必须显式可见为归位失败，而不是把 a 的结果写进来或被静默丢弃"
+        );
+    }
+
+    #[test]
+    fn result_with_unknown_call_id_is_not_placed_anywhere() {
+        let calls = vec![call("a", "bench.t0"), call("b", "bench.t1")];
+        let group = vec![0usize, 1];
+        let mut slots: Vec<Option<ContentBlock>> = vec![None; 2];
+        // 两条结果都带着批外的 id（L7 若把 call_id 写错到这里）。
+        let executed = vec![outcome("x", "stray-1"), outcome("y", "stray-2")];
+
+        attribute_results(&executed, &group, &calls, &mut slots);
+
+        for (index, slot) in slots.iter().enumerate() {
+            let (id, text) = parts(slot.as_ref());
+            assert_eq!(id, calls[index].0, "槽位 {index} 的 id 必须是自己那条");
+            assert_eq!(
+                text, ATTRIBUTION_MISMATCH_MARKER,
+                "批外 id 的结果不许被塞进任何槽位"
+            );
+        }
+    }
+
+    /// 归位不依赖 `debug_assertions`——这条是**机制层面**的锁。
+    ///
+    /// WHY 需要这一条：本文件里 `dispatch` 确实还留着 `debug_assert_eq!`（结果数与
+    /// 派发数不等时中止测试构建），而 release 档（`bench_check.yml` / `slo.yml` /
+    /// 发布构建）会把它编译掉。若归位行为也押在那类断言上，"测试全绿"就只在 debug
+    /// 档成立 —— 那正是"假绿"的形状。
+    /// WHY 用源码扫描而不是"在 release 档再跑一次"：release 跑一遍只能证明"没失败"，
+    /// 不能说明**为什么**不依赖档位；而"helper 体内没有 debug_assert"是可直接机检的
+    /// 结构性事实，且有人在归位路径上加回 debug_assert 时这条会立刻红。
+    #[test]
+    fn attribution_behavior_is_not_debug_only() {
+        const SRC: &str = include_str!("tool_loop.rs");
+        let Some(start) = SRC.find("fn attribute_results(") else {
+            panic!("attribute_results 不在了——这条结构断言的锚点需要先更新");
+        };
+        let Some(end) = SRC[start..].find(
+            "
+}
+",
+        ) else {
+            panic!("找不到 attribute_results 的函数体结尾");
+        };
+        let body = &SRC[start..start + end];
+        assert!(
+            !body.contains("debug_assert"),
+            "归位函数体内出现了 debug_assert ⇒ 该行为在 release 档会被编译掉:
+{body}"
+        );
+        assert!(
+            body.contains("ATTRIBUTION_MISMATCH_MARKER"),
+            "归位失败必须有运行时可见性，而不是只在中止时可见"
+        );
+    }
+
+    #[test]
+    fn duplicate_tool_use_ids_keep_every_result() {
+        // 模型侧用同一个 tool_use_id 发两次调用是可能发生的（本层不替它去重）。
+        // 逐位实现会把两条结果按位置分给两个槽；键化实现必须**一条都不丢**。
+        let calls = vec![call("dup", "bench.t0"), call("dup", "bench.t0")];
+        let group = vec![0usize, 1];
+        let mut slots: Vec<Option<ContentBlock>> = vec![None; 2];
+        let executed = vec![outcome("dup", "one"), outcome("dup", "two")];
+
+        attribute_results(&executed, &group, &calls, &mut slots);
+
+        let texts: Vec<String> = slots.iter().map(|slot| parts(slot.as_ref()).1).collect();
+        assert!(
+            texts.iter().all(|text| text != ATTRIBUTION_MISMATCH_MARKER),
+            "同 id 的多条结果不该被判成归位失败: {texts:?}"
+        );
+        assert_eq!(texts.len(), 2);
+        assert_ne!(
+            texts[0], texts[1],
+            "两条结果都必须进入历史，不能一条覆盖另一条: {texts:?}"
+        );
     }
 }

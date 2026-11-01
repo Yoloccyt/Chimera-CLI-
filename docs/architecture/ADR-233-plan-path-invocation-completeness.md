@@ -242,3 +242,46 @@ test result: FAILED. 1 passed; 1 failed
 `llm_tool_loop` 15 例 + `llm_off_legacy` 6 例全绿（未开开关时旧路径逐位不变这条前提仍成立）；`gqep-executor + chimera-cli` 31 target 全绿；`check_llm_loop_defaults.py` 真树 rc=0（四个上限 env 仍钉、事件集仍 ⊆ `{BudgetExceeded}`、`src/llm/**` 仍零 `unwrap/expect`）；`clippy --all-targets -D warnings` rc=0；`fmt --check` rc=0。
 `chunks(window)` **保留**：窗口是绑定的界（`llm_tool_loop.rs` 在 L7 配 16/16/16 时断言 `peak ≤ 8` 且 `peak ≥ 2`），删它等于削能力，理由见本 ADR「W5 明确不做」。
 回滚 `git revert` 本批：`dispatch` 的槽位改回 `(usize, ToolInvocation)` vec 即可，两处 `debug_assert` 随批消失；请求体回到每轮新建，`llm_diag_*` 读数回到 13.3/27.2/4.4 µs 一档。
+
+---
+
+## 追加节四（2026-11-01）— W1c：工具结果按 `call_id` 归位 + 门补钉并发窗口
+
+### 缺陷形状（改前）
+
+`dispatch` 用 `group.iter().zip(executed)` **逐位**回填，唯一防线是 `debug_assert_eq!(result.call_id, invocation.call_id)`。`debug_assertions` 在 release 档是关闭的——而 release 恰是 `bench_check.yml`、`slo.yml` 与发布构建所在的档位。于是在最需要它的构建里，一次 L7 保序破口会静默变成"把 A 的结果写进 B 的槽位"，回填给模型的 `tool_result` 还带着另一个调用的 `tool_use_id`：模型收到的是一个从未发起过的配对。少回一条时更糟，`zip` 直接截断，那个槽位**根本没有结果**，历史里 `tool_use` 与 `tool_result` 数量不齐。
+
+先红读数（把归位实现退回逐位版、同一组测试，`tmp/w1c-red.log`）：
+
+```
+results_are_keyed_by_call_id_not_by_position ... FAILED
+  left: [("c","third"), ("b","second"), ("a","first")]
+ right: [("a","first"), ("b","second"), ("c","third")]
+missing_result_becomes_visible_error_not_a_silent_hole ... FAILED   （槽位为空）
+result_with_unknown_call_id_is_not_placed_anywhere ... FAILED
+  left: "x"  right: "a"
+```
+
+### 决策
+
+**D21 — 归位改键化：`HashMap<&str, Vec<&ToolOutcome>>`，每槽位从自己的 `tool_use_id` 取一条。**
+不匹配 ⇒ `warn!` + 合成 `error_result(id, "attribution_mismatch")`：**不 panic、不 unwrap**（`src/llm/**` 的零 panic 面是 G-145 L4 的判据，用 `expect` 会直接把门做红），失败可见而批次不炸。多余结果（批外 id）另有 `consumed != executed.len()` 的 `warn!`，不假装塞得下。
+同一 `call_id` 的多条结果逐条取用 ⇒ 一条都不丢（模型侧用同一个 `tool_use_id` 发两次调用是本层不去重的真实情形）。
+
+**D22 — 新增标记 `attribution_mismatch`，不复用 `ask_required`。**
+两者语义不同：一个是审批决策，一个是执行面契约破口。混用会把"被拒了几次"和"归位坏了几次"读成同一件事。
+
+**D23 — 档位依赖用结构断言锁，而不是"在 release 档再跑一次"。**
+`attribution_behavior_is_not_debug_only` 用 `include_str!` 读自身源码，断言 `attribute_results` 函数体内**不含** `debug_assert`，且含运行时的 `ATTRIBUTION_MISMATCH_MARKER`。
+**WHY 不选 release 跑一遍**：那只能证明"没失败"，证明不了**为什么**与档位无关；而"体内没有 debug_assert"是可直接机检的结构事实，且谁在归位路径上加回 `debug_assert` 会立刻红。实测有牙：植入一条 `debug_assert!(true)` ⇒ 仅此例转红（已还原并字节比对）。
+`dispatch` 里保留的 `debug_assert_eq!(executed.len(), group.len())` 是**另一件事**：那是"结果数与派发数不等"的响亮中止（debug 档），运行时可见性由 D21 承担，两者不互相替代。
+
+**D24 — 门 G-145 的 L2 判据把并发窗口算进上限面，并配两条会红的植入。**
+`LIMIT_FIELDS`/`LIMIT_ENVS` 各加一项（`max_parallel_tools` / `CHIMERA_LLM_MAX_PARALLEL_TOOLS`）。理由：为"并行度"删掉 `chunks(window)` 既不红编译也不红既有测试，而 `tests/llm_tool_loop.rs` 在 L7 配 16/16/16 时断言的 `peak <= 8` 绑定的正是这个窗口——不钉住它，删界的能力削减机器看不见。
+selftest 加两条植入（env 读取点改名 / 窗口默认改 0），断言数由 10/10 增至 **12/12**（数以门自报为准，`gate_manifest.toml` 的 note 不抄数，只同步判据描述——G-145/G-146 两条 note 已同步）。
+**改既有门判据不需四件同批**（`audit_gate_parity` MISSING/GAP 与 `G-07` 管的是"新增门的半接线"），但新判据必须自带会红的夹具，否则等于没加。
+
+### 验证与回滚
+
+`check_llm_loop_defaults.py --selftest` 12/12 + 真树 rc=0；`check_manifest_schema.py`（144 门）、`run_gate_manifest.py --list`（`selected=137 total=144 skipped=7`）、`audit_gate_parity.py`（no parity gap）三者 rc=0；`chimera-cli --lib` 210 例（含新增 5 例归位测试）+ `llm_tool_loop` 15 例 + `llm_off_legacy` 6 例全绿；`gqep-executor + chimera-cli` 全 target 无失败；`clippy --all-targets -D warnings` rc=0（本批 `&mut Vec` → `&mut [_]` 的 `ptr_arg` 与测试面 `expect_used` 已按要求改掉）；`fmt --check` rc=0。
+回滚 `git revert` 本批 ⇒ 归位回到逐位 + 门回到四上限判据；`tool_plane` 侧不受影响（L7 的保序契约与槽位写法在 W1b-1 批里，两批各自独立可 revert）。
