@@ -104,6 +104,7 @@ pub struct ToolInvocation { call_id, tool, args_json, timeout_ms, priority, orig
 | 面 | 测试 / 门 | 断言要点 |
 |---|---|---|
 | 注册表契约 | `crates/gqep-executor/tests/tool_plane_contract.rs` | 注册名唯一、全有或全无、descriptors 与 invoke 一致、`Overloaded` 可达 |
+| 不变量属性 | `crates/gqep-executor/tests/tool_plane_proptest.rs` | 属性测试锁三条规则本身（用例数以该文件自报为准，不抄进本表）：截断必须是**不超预算的最长字符边界前缀**；`invoke_batch` 在完成序**被夹具反转**时仍按请求序返回；被拒批次不得留下任何部分注册。**牙口是植入验证的**：把排序键改坏（等价于"按完成序收集"）后本组红，而上一行的例证套件**全绿**——因它用 `sleep_ms=0`，完成序恰等于请求序，对保序无判别力 |
 | 有界执行 | `crates/gqep-executor/tests/plan_runner_bounded.rs`、`crates/chimera-mas/tests/delegation_bounded.rs` | **结构式**证明：峰值在飞 ≤ 上限（计数器/Barrier），不用墙钟推断 |
 | CLI 端到端 | `crates/chimera-cli/tests/tool_plane_e2e.rs` | off 拒绝并提示；observe 不执行；apply 执行；`proc.exec` 无确认即拒 |
 | 阻塞面 | `crates/chimera-cli/tests/blocking_open_off_runtime.rs` | 正例 + 负对照（见 D7） |
