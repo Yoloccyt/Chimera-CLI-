@@ -136,16 +136,37 @@ impl LlmToolLoop {
             .map(|descriptor| (descriptor.name.as_str(), descriptor.side_effect))
             .collect();
 
-        let mut messages = vec![
-            AffinityMessage {
-                role: MessageRole::System,
-                blocks: vec![text_block(&self.cfg.system_prompt)],
-            },
-            AffinityMessage {
-                role: MessageRole::User,
-                blocks: vec![text_block(prompt)],
-            },
-        ];
+        // 请求体常驻：`intent_id` / `tools` / 静态档位一次填好，每轮只往
+        // `request.messages` 原地追加历史。
+        //
+        // WHY 不每轮新建 request：`LlmClient::complete` 收的是 `&AffinityRequest`
+        // （借用，不是成本源），所以"每轮造一个新 request"唯一的产出就是把整段历史
+        // 和整张声明表各深拷一遍。实测这一段在 26 条历史上要 4.4998 µs
+        // （`llm_diag_request_rebuild/history_26`），而一条只发 Final 的整轮读数是
+        // 4.4205 µs（`llm_loop_16_tools_notools`）——同一量级，说明每轮固定成本几乎
+        // 全在这一处。改的只是"每轮交出一份新历史"变成"同一份历史留在原地追加"，
+        // 请求的形状、字段与所有权语义都不变。
+        let mut request = AffinityRequest {
+            // WHY 常量:本层不拥有 intent 生命周期（上层 run/chat 才有),
+            // 需要跨层追踪时由调用方传入,而不是在此伪造 UUID
+            intent_id: "llm-tool-loop".to_string().into_boxed_str(),
+            messages: vec![
+                AffinityMessage {
+                    role: MessageRole::System,
+                    blocks: vec![text_block(&self.cfg.system_prompt)],
+                },
+                AffinityMessage {
+                    role: MessageRole::User,
+                    blocks: vec![text_block(prompt)],
+                },
+            ],
+            tools: decls,
+            thinking_pref: self.cfg.thinking_pref,
+            budget_hint_micro: self.cfg.budget_hint_micro,
+            overrides: AffinityOverrides::default(),
+            sampling: SamplingParams::default(),
+            output_format: OutputFormat::default(),
+        };
 
         // WHY 初值给 MaxTurns 而非派生 Default:每条 return 路径都显式落 stop,
         // 万一有路径漏落,MaxTurns 是"耗尽轮数没收敛"的真实语义,
@@ -167,19 +188,6 @@ impl LlmToolLoop {
             }
             outcome.turns = turn;
 
-            let request = AffinityRequest {
-                // WHY 常量:本层不拥有 intent 生命周期（上层 run/chat 才有),
-                // 需要跨层追踪时由调用方传入,而不是在此伪造 UUID
-                intent_id: "llm-tool-loop".to_string().into_boxed_str(),
-                messages: messages.clone(),
-                tools: decls.clone(),
-                thinking_pref: self.cfg.thinking_pref,
-                budget_hint_micro: self.cfg.budget_hint_micro,
-                overrides: AffinityOverrides::default(),
-                sampling: SamplingParams::default(),
-                output_format: OutputFormat::default(),
-            };
-
             let response = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(cancelled(&outcome)),
@@ -195,7 +203,9 @@ impl LlmToolLoop {
             }
 
             // 守恒:assistant 消息整体入历史(Thinking / ToolUse 块逐字保留)
-            messages.push(AffinityMessage {
+            // 这里 `response.blocks.clone()` 是响应侧的一次拷贝（response 之后还要
+            // 交给 `step_of` 判定），不是"整段历史重拷"——本批消掉的是后者。
+            request.messages.push(AffinityMessage {
                 role: MessageRole::Assistant,
                 blocks: response.blocks.clone(),
             });
@@ -216,7 +226,7 @@ impl LlmToolLoop {
                     let results = self
                         .dispatch(&calls, &side_effects, cancel, approval, &mut outcome)
                         .await?;
-                    messages.push(AffinityMessage {
+                    request.messages.push(AffinityMessage {
                         role: MessageRole::Tool,
                         blocks: results,
                     });
@@ -242,7 +252,13 @@ impl LlmToolLoop {
         outcome: &mut LlmLoopOutcome,
     ) -> Result<Vec<ContentBlock>, LlmLoopError> {
         let mut slots: Vec<Option<ContentBlock>> = vec![None; calls.len()];
-        let mut approved: Vec<(usize, ToolInvocation)> = Vec::new();
+        // 审批阶段就把 invocation 留在它自己的槽位上，`approved` 只记"哪些槽过了审批"。
+        // WHY:旧写法把 `(usize, ToolInvocation)` 收进一个紧凑 vec，再对每个 chunk
+        // `group.iter().map(|(_, inv)| inv.clone())`——于是每个窗口都把整批调用又拷
+        // 一遍（每条 4 个 String）。留槽之后派发时是**交出所有权**，零拷贝，且槽位
+        // 天然带着结果该回填的下标。
+        let mut invocations: Vec<Option<ToolInvocation>> = (0..calls.len()).map(|_| None).collect();
+        let mut approved: Vec<usize> = Vec::with_capacity(calls.len());
 
         for (index, (id, name, input_json)) in calls.iter().enumerate() {
             outcome.tool_calls = outcome.tool_calls.saturating_add(1);
@@ -268,24 +284,35 @@ impl LlmToolLoop {
                 continue;
             }
             invocation.approved = true;
-            approved.push((index, invocation));
+            invocations[index] = Some(invocation);
+            approved.push(index);
         }
 
         let window = self.cfg.max_parallel_tools.max(1);
         for group in approved.chunks(window) {
-            let batch: Vec<ToolInvocation> = group.iter().map(|(_, inv)| inv.clone()).collect();
+            let batch: Vec<ToolInvocation> = group
+                .iter()
+                .filter_map(|&slot| invocations[slot].take())
+                .collect();
             let executed = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(cancelled(outcome)),
                 results = self.runtime.invoke_batch(batch, cancel) => results,
             };
-            for ((index, invocation), result) in group.iter().zip(executed.iter()) {
-                // invoke_batch 保序 ⇒ 逐位对应；不一致即为 L7 契约破口
+            debug_assert_eq!(
+                executed.len(),
+                group.len(),
+                "invoke_batch 返回的结果数与派发数不等 ⇒ 有调用没有结果（本仓红线：结果不许丢）"
+            );
+            for (slot, result) in group.iter().zip(executed) {
+                // invoke_batch 保序 ⇒ 逐位对应；不一致即为 L7 契约破口。
+                // 比对基准是**原始 tool_use id**（`calls[slot].0`），不是 invocation
+                // 里的副本——invocation 已被 move 进 batch，正好省掉一次拷贝。
                 debug_assert_eq!(
-                    result.call_id, invocation.call_id,
+                    result.call_id, calls[*slot].0,
                     "invoke_batch 必须按入参顺序回填 call_id"
                 );
-                slots[*index] = Some(result_block(result));
+                slots[*slot] = Some(result_block(&result));
             }
         }
 

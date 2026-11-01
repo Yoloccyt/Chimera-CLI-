@@ -30,7 +30,10 @@ use gqep_executor::tool_plane::{
     BoundedToolScheduler, ToolDescriptor, ToolError, ToolInvocation, ToolOrigin, ToolPriority,
     ToolProvider, ToolRegistry, ToolRuntime, ToolRuntimeConfig, ToolScheduler,
 };
-use nexus_contracts::affinity::{AffinityRequest, AffinityResponse};
+use nexus_contracts::affinity::{
+    AffinityMessage, AffinityOverrides, AffinityRequest, AffinityResponse, ContentBlock,
+    MessageRole, OutputFormat, SamplingParams,
+};
 use nexus_contracts::tool_plan::SideEffectDecl;
 use tokio::runtime::Runtime;
 use tokio_util::sync::CancellationToken;
@@ -459,6 +462,89 @@ fn bench_resolve_only(c: &mut Criterion) {
     });
 }
 
+/// 历史夹具：`len` 条消息，system + user 起头，其余按 assistant/tool 成对填。
+///
+/// WHY 成对：真实循环每轮追加的正是这两条（`tool_loop.rs` 把 assistant 与 tool
+/// 结果各 push 一次），历史长度的奇偶会影响 clone 的块构成。
+fn synthetic_history(len: usize) -> Vec<AffinityMessage> {
+    let text = |s: &str| ContentBlock::Text {
+        text: s.to_string().into_boxed_str(),
+    };
+    let mut out = Vec::with_capacity(len.max(2));
+    out.push(AffinityMessage {
+        role: MessageRole::System,
+        blocks: vec![text("system prompt for the benchmarked tool loop")],
+    });
+    out.push(AffinityMessage {
+        role: MessageRole::User,
+        blocks: vec![text("do the thing with the tools")],
+    });
+    while out.len() < len {
+        out.push(AffinityMessage {
+            role: MessageRole::Assistant,
+            blocks: vec![
+                text("reasoning out loud, then a call"),
+                ContentBlock::ToolUse {
+                    id: "call-1".to_string().into_boxed_str(),
+                    name: "bench.t0".to_string().into_boxed_str(),
+                    input_json: "{}".to_string().into_boxed_str(),
+                },
+            ],
+        });
+        if out.len() >= len {
+            break;
+        }
+        out.push(AffinityMessage {
+            role: MessageRole::Tool,
+            blocks: vec![ContentBlock::ToolResult {
+                tool_use_id: "call-1".to_string().into_boxed_str(),
+                content: "{\"ok\":true}".to_string().into_boxed_str(),
+                is_error: false,
+            }],
+        });
+    }
+    out.truncate(len);
+    out
+}
+
+/// ⑩ 诊断：每轮 `AffinityRequest` 重建 = 整段历史 clone + 整张声明表 clone。
+///
+/// WHY 单独量这一段：turn 循环每轮都新建一个 request，而 `client.complete` 收的是
+/// `&AffinityRequest`（借用，不是成本源）——所以循环自身的每轮固定成本几乎全在这
+/// 两次 clone 上。第一波实测它比整个 L7 批处理（`llm_diag_invoke_batch_8`）还贵，
+/// 故 W1b-2 的判据必须能把"这一段"单独读出来，而不是混在 loop 总读数里归不了因。
+fn bench_request_rebuild(c: &mut Criterion) {
+    let provider = BenchProvider {
+        tool_count: 16,
+        invokes: Arc::new(AtomicUsize::new(0)),
+    };
+    let decls = tool_decls(&provider.descriptors());
+    let cfg = loop_config(8);
+    let mut group = c.benchmark_group("llm_diag_request_rebuild");
+    // 2 = 首轮（system+user），10 ≈ 第 4 轮，26 ≈ 第 12 轮 —— 覆盖 `max_turns` 常见区间
+    for history in [2usize, 10, 26] {
+        let messages = synthetic_history(history);
+        let decls = decls.clone();
+        group.bench_function(format!("history_{history}"), move |b| {
+            b.iter(|| {
+                black_box(AffinityRequest {
+                    intent_id: "llm-tool-loop".to_string().into_boxed_str(),
+                    messages: messages.clone(),
+                    tools: decls.clone(),
+                    thinking_pref: cfg.thinking_pref,
+                    budget_hint_micro: cfg.budget_hint_micro,
+                    overrides: AffinityOverrides::default(),
+                    sampling: SamplingParams::default(),
+                    output_format: OutputFormat::default(),
+                })
+                .messages
+                .len()
+            })
+        });
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_tool_decls,
@@ -469,6 +555,7 @@ criterion_group!(
     bench_invoke_batch_direct,
     bench_invoke_batch_mt,
     bench_sched_and_provider,
-    bench_resolve_only
+    bench_resolve_only,
+    bench_request_rebuild
 );
 criterion_main!(benches);

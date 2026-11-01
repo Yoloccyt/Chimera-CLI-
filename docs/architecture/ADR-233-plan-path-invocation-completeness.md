@@ -201,3 +201,44 @@ test result: FAILED. 1 passed; 1 failed
 
 `cargo test -p gqep-executor -p chimera-cli --no-fail-fast --jobs 2` 全绿（31 target，含 `tool_plane_proptest` 3/3——它是本批"不削减"的正面证据）；`clippy --all-targets -D warnings`、`fmt --check`、`test_fnlen_smoke.sh`（无新超标）、`check_tool_plane_contract.py` 与 `check_perf_redlines.py --static-only` 均 rc=0。bench 文件只**扩组**（`llm_diag_resolve_hit`/`_miss`），未增删文件 ⇒ `bench_inventory_freeze.txt` 无需新行（按文件分类）。
 回滚 `git revert` 本批：`resolve` 返回类型回到按值，D14 的断言随之转红（指向本决策的哨兵）；`commands/tool.rs` 与 `runtime.rs` 的调用点只做字段访问，`Arc<ToolDescriptor>` 自动 deref，故回滚不牵连别处。
+
+---
+
+## 追加节三（2026-11-01）— W1b-2：请求体常驻，每轮不再深拷整段历史
+
+### 读数（每组两侧各两次采样，同一会话内交替取；`--profile bench-lite`，mean）
+
+| 组 | 改前两次 | 改后两次 | 判定 |
+|---|---|---|---|
+| `llm_loop_16_tools` | 13.277 / 13.943 µs | 9.423 / 9.112 µs | **−31.9%** |
+| `llm_loop_16_tools_window8` | 27.211 / 26.499 µs | 22.066 / 21.105 µs | **−19.6%** |
+| `llm_loop_16_tools_notools` | 4.4205 / 4.4148 µs | 2.4666 / 2.4498 µs | **−44.4%** |
+| `llm_diag_request_rebuild/history_26` | 4.4998 / 4.7582 µs | 4.8128 / 4.6138 µs | **噪声带：±7%（该组两侧量的是同一段代码）** |
+
+**为什么这张表必须带最后一行**：`llm_diag_request_rebuild` 在改前/改后**都没有被改动**（它是 bench 里显式写的一次 `messages.clone() + decls.clone()`），所以它两侧之差就是本会话的漂移地板——实测 4.50~4.81 µs，约 ±7%。上面三个 loop 组的降幅是 20~44%，落在漂移带的 3~6 倍处，且方向与改动预测一致。没有这一行，"−44%" 只是一个无法否证的数字。
+读数文件：`tmp/w1b2-bench-before.log`、`tmp/w1b2-bench-before2.log`、`tmp/w1b2-bench-after.log`、`tmp/w1b2-bench-after2.log`。
+
+### 决策
+
+**D17 — 请求体常驻 + 每轮原地追加历史，`LlmClient::complete` 签名一行不改。**
+计划初稿写的是"把 `complete(request)` 改成借用"。**那个前提是错的**：`client.rs:29` 早就是 `&AffinityRequest`，全部实现与调用点都是借用（这是设计代理的一条反驳，复测后采纳，见本波计划"更正 #4"）。真正的成本源不是签名，而是循环每轮构造一个新 request。故本批改的是**生命期**：`intent_id` / `tools` / 静态档位一次填好，每轮 `request.messages.push(...)`。
+`decls.clone()` 与 `messages.clone()` 两处由此从源码里消失（`grep -c 'messages: messages.clone()' = 0`），而不是被"优化掉"。
+
+**D18 — 响应侧仍拷一次，且这条守恒被测试钉住。**
+`request.messages.push(AffinityMessage { role: Assistant, blocks: response.blocks.clone() })` 的 clone **保留**：`response` 之后还要交给 `step_of` 判定，属"响应拥有者未变"的必要拷贝，不是本批的目标。
+反事实证明历史增长这件事没有因为改造而失去保护：
+- N1 不追加 tool 结果 ⇒ `loop_executes_tool_and_feeds_result_back`、`loop_denied_write_is_not_executed`、`loop_unknown_tool_feeds_error_to_model` **三条红**；
+- N2 不追加 assistant ⇒ `loop_preserves_thinking_blocks` **红**。
+
+**D19 — 不写"request 未被重建"的结构性断言。**
+指针身份类断言（如比对每轮 `&request` 或 `tools.as_ptr()`）在旧实现下**可能偶然成立**：上一轮的 request 在轮末析构，其分配被下一个 `clone()` 复用是 glibc/Windows heap 的常态行为。那样的断言是假绿锁（本项目已有教训：恒真/恒假的守卫条件比没有守卫更糟）。这条主张由**bench A/B + 漂移带**承担，而行为面由 D18 的两条反事实承担——两者合起来才是可否证的。
+
+**D20 — 每个 chunk 不再二次 clone invocation：审批阶段就把 invocation 留在自己的槽位上。**
+旧写法 `approved: Vec<(usize, ToolInvocation)>` + `group.iter().map(|(_, inv)| inv.clone())` 会为每个窗口把整批调用再拷一遍（每条 4 个 String）。改成 `invocations: Vec<Option<ToolInvocation>>` + `approved: Vec<usize>`，派发时 `take()` **交出所有权**。
+顺带把保序断言的比对基准从"invocation 里的 call_id 副本"换成**原始 `tool_use` id**（`calls[slot].0`）——invocation 已被 move，正好无拷可比，而且比的是更接近来源的那一份。另加 `debug_assert_eq!(executed.len(), group.len())`：槽位写法若少收一条结果，`zip` 会静默截断（"结果丢了 5.4%"那条红线的形状），宁可当场中止。
+
+### 验证与回滚
+
+`llm_tool_loop` 15 例 + `llm_off_legacy` 6 例全绿（未开开关时旧路径逐位不变这条前提仍成立）；`gqep-executor + chimera-cli` 31 target 全绿；`check_llm_loop_defaults.py` 真树 rc=0（四个上限 env 仍钉、事件集仍 ⊆ `{BudgetExceeded}`、`src/llm/**` 仍零 `unwrap/expect`）；`clippy --all-targets -D warnings` rc=0；`fmt --check` rc=0。
+`chunks(window)` **保留**：窗口是绑定的界（`llm_tool_loop.rs` 在 L7 配 16/16/16 时断言 `peak ≤ 8` 且 `peak ≥ 2`），删它等于削能力，理由见本 ADR「W5 明确不做」。
+回滚 `git revert` 本批：`dispatch` 的槽位改回 `(usize, ToolInvocation)` vec 即可，两处 `debug_assert` 随批消失；请求体回到每轮新建，`llm_diag_*` 读数回到 13.3/27.2/4.4 µs 一档。
