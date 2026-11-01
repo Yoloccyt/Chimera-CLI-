@@ -331,3 +331,59 @@ selftest 加两条植入（env 读取点改名 / 窗口默认改 0），断言�
 
 `cargo test -p chimera-tui --no-fail-fast --jobs 2` 无失败；`clippy --all-targets -D warnings` rc=0；`fmt --check` rc=0；`test_fnlen_smoke.sh` rc=0 且**棘轮基线由 467 降到 466**（`--emit` 同批刷新；`ADR-227` 里那句"467 / 215 行"是 2026-10 的时点引文，不回写）。
 回滚：三条各自独立可 revert——判据那条会连带要求把 `fnlen_baseline.txt` 的 466 退回 467；快路径与判据都不改任何公开类型；bench 侧只扩组，未增删文件 ⇒ `bench_inventory_freeze.txt` 无需新行。
+
+---
+
+## 追加节六（2026-11-02）— W4a 连接复用与 SSRF 复验证明；以及一条**前提不成立**的登记
+
+### 先记那条前提不成立（本波计划 W4 Steps 1/2/3/6）
+
+计划写的接线方式是"在 `McpMesh` 加 `discover_tools(server_id)`（经 participant client 发 `tools/list`），`build_tool_runtime` 遍历 `config.mcp.servers` 注册并发现能力"。复测结论：**这条路径在本仓不存在，且不是改线就能接上的**。逐条证据：
+
+| 查的东西 | 现取结果 |
+|---|---|
+| `ParticipantClient` trait 的方法面 | `prepare` / `commit` / `rollback` / `send_query` / `send_tool_invoke`——**无**任何能力列举方法；`grep -n "list_tools\|tools/list" crates/mcp-mesh/src/quantum/participant_client.rs` **0 命中** |
+| 线协议形状 | `TwoPcRequest{Prepare,Commit,Rollback}` + `QueryRequest` + `ToolInvokeRequest`，全是本仓自定义的 2PC/查询/调用消息（`participant_client.rs:70-140`）——不是 MCP |
+| 有没有 MCP JSON-RPC 编解码 | `grep -rn "jsonrpc\|JsonRpc\|JSON-RPC\|\"jsonrpc\"" crates/mcp-mesh/src/` **0 命中**（全 crate） |
+| `client_v2.rs`（名字像 MCP 客户端） | 其头注自陈：**2026-08-28 磁盘 ENOSPC 事故中数据丢失**，现按 WI-22/ADR-150 语义做"最小但真实的三项**骨架**重建"（`DiscoveryResult` / `SchemaCache` / `RouteRegistry` 三个数据结构），并明写"**未恢复**丢失前的完整连接器/协议握手逻辑" |
+| 配置侧 | `McpServerConfig{id, command, args, url, auth}` 无 capabilities；`MeshServer.capabilities: Vec<String>` 只是字符串列表（W0 更正 #2 的根因，与这里同源） |
+
+结论：真实 MCP 装配（`initialize` → `tools/list`，还要覆盖 stdio 与 HTTP/SSE 两种传输）是一个**新子系统**，需要自己的 ADR 与验证面，不属于"性能与可达性波次里补一根线"的规模。
+
+**为什么不给 `discover_tools` 加一个返回空的实现先把线接上**：那会让 `chimera tool list` 看上去"接了 MCP"而永远返回空，且 `build_tool_runtime` 的 `descriptors().is_empty()` 分支会静默不注册——一个零生产者的装饰面，比不做更糟（本仓同类红线：不得先加零生产者装饰变体）。因此本波**不做**该子集，把它连同上述证据一起登记为待立 ADR 的独立项。
+
+计划里另一条被本波实测否证的说法（W2 的"消费点 5 处 + 夹具"）见追加节五；两条合起来是本波对批准规格的**第 5、6 处更正**。
+
+### 做了什么（都在"真实存在的那条路径"上）
+
+**D28 — 连接池改成每 endpoint 一条队列。**
+原实现 `HashMap<String, TcpStream>` 每 endpoint 只存**一条**，且取出即独占（`pool.remove(endpoint)`）。后果是确定的：并发批次里第一个请求把唯一的槽取走，其余请求都看到"池是空的"⇒ 各自 `TcpStream::connect`；归还时又各自 `pool.insert(endpoint, ...)` **覆盖同一槽**，被覆盖的那条连接当场关闭。于是 (a) 并发下没有复用；(b) 连接被无谓地建立又丢弃（fd 抖动）；(c) 下一批仍只能复用至多一条。
+现在每 endpoint 存 `VecDeque<TcpStream>`，上限 `MAX_POOLED_STREAMS_PER_ENDPOINT = 8`（超出即随作用域结束关闭，**不让池无界增长**），取/还都是"锁内只做 pop/push、绝不跨 `.await`"（§4.4 #1），且空队列顺手从 map 里删掉（否则每个见过的 endpoint 永久占一行）。复用失败的那条连接不归还——半帧/对端已关的流会污染后续请求。
+
+**D29 — 逐消息 DNS 复验保持不动，并把它钉成结构判据。**
+`prepare/query/invoke` 三条路径每条都在 `send_frame_and_recv` **之前**调 `validate_endpoint_dns`（`participant_client.rs:517/569/615`），池复用不跳过它——本条**没有**改成"带 TTL 的缓存"（计划 Step 5 允许的可选项），因为省下的是一次 `lookup_host`，而牺牲的是"记录变了下一次必须拒绝"这个保证；收益与风险不对等。
+锁的形状：`every_frame_roundtrip_is_prefixed_by_dns_revalidation` 扫**生产区**源码，断言每个 `self.send_frame_and_recv(` 调用点之前同一函数体内出现 `validate_endpoint_dns(`。行为断言在这里不可得——本地无法让同一域名在两次解析之间从公网 IP 变成内网 IP（那要一个可控 DNS），而真实回归形状恰恰是"为了省 DNS 把复验挪出热路径"。
+**这条扫描器第一次跑抓到了它自己**：它把测试里那个被匹配的字符串字面量也算成一个调用点（报"第 4 处没有复验"，而那第 4 处就是本测试）。修法是把扫描范围截到 `#[cfg(test)]` 之前——写自造扫描器时，**扫描面必须排除扫描器自身**，这是本轮第二次踩同一类坑。
+
+**D30 — W3 装配组成钉。**
+新增 `crates/chimera-cli/tests/tool_plane_assembly.rs`：默认装配的 provider 集合**恰为** `{echo, proc}`，并钉住 MCP 命名规则 `mcp:<server>/<capability>`、能力默认副作用为 `Write`（fail-closed），以及"保留地址在 `register_server` 就被 `SsrfBlocked` 拒"这条界（实测：本波接不了真实发现，但"将来接的时候不能把内网端点放进来"现在就钉住）。
+测试文件头写明了接入真实发现后该怎么改期望（`{echo, proc} ∪ {mcp 当且仅当有可发现 server}`），以及为什么命名锁与在场性锁刻意分成两个 `#[test]`。
+
+### 读数与牙
+
+- `concurrent_batches_reuse_pooled_connections`：服务端在**同一条连接上循环处理多帧**（否则"复用"与"重连"行为同形，测的是不存在的东西），观测量是 `accept` 次数（不依赖计时）。第一批 4 并发 ⇒ 4 条新连接（池初值为空，允许）；第二批 4 并发 ⇒ **accept 不变**。
+  牙：把 `put` 退回"槽位只留一条"（旧实现语义）⇒ 该例红，消息点名"3 条并发会各自新建"。
+- `every_frame_roundtrip_is_prefixed_by_dns_revalidation`：把 tool-invoke 路径的复验删掉 ⇒ 该例红。
+- `mcp_tool_names_are_prefixed_and_server_scoped`：把命名格式改成 `<server>::<capability>` ⇒ 该例红。
+- 三次变异各自红一次，跑完即还原并字节比对（其中一次还原把 LF 文件写成了 CRLF，已改回；教训：**打补丁前读本文件自己的行尾，不要假设全仓一致**）。
+- 顺带：`fnlen_baseline.txt` 的 `new_internal` 由 467 → **465**（两次注释收拢 + `drain` 形式 + rustfmt 合并一行）。第一波次 `--emit` 跑在最后一次 `cargo fmt` **之前**，导致登记表比实测多 1 行 ⇒ 顺序规则：**行号/长度类基线必须在格式化工具之后重刷**。
+
+### 验证
+
+`cargo test -p mcp-mesh -p chimera-cli -p gqep-executor --no-fail-fast --jobs 2` 38 target 全绿、零失败；`clippy --all-targets -D warnings` rc=0；`fmt --check` rc=0；`check_dependency_rules.sh` rc=0；`check_composition_root.py` rc=0（本批未新增装配点）；`check_perf_redlines.py --static-only` rc=0；`check_tool_plane_contract.py --selftest` / `check_llm_loop_defaults.py --selftest` 各全绿；`test_fnlen_smoke.sh` rc=0（含 teeth proven）。
+
+### 遗留（不在本波做，逐条给条件）
+
+1. **MCP 真实装配与能力发现**：另立 ADR，范围 = JSON-RPC 编解码 + `initialize`/`tools/list` 握手 + stdio 与 HTTP/SSE 两传输 + `readOnlyHint → SideEffectDecl` 映射 + "server 不可达则跳过并 warn、不阻塞启动"。前置条件：先决定 `McpServerConfig` 是否加 capabilities 覆盖字段（那是 `nexus-core` L1 结构变更）。
+2. `mcp.rs:3-5` 头注里"capability 名不能证明只读 ⇒ 一律 Write"的说明**保持原样**（它仍然准确）；只有发现协议落地后才按 Step 6 改写。
+3. mesh 外层 200 ms 与内层 50 ms 的双层超时**未动**（计划 Step 7）：数值是运维契约，且本批没有改变任何请求的时序；"谁应当更小"这条裁决要随真实装配一起定——在没有真实链路可测的时候定数值口径，等于凭感觉改运维参数。
