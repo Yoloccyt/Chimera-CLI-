@@ -379,7 +379,10 @@ pub async fn execute_with_ctx(
 fn spawn_l9_sidecars(
     bus: &event_bus::EventBus,
     engine: &Arc<quest_engine::QuestEngine>,
-) -> (tokio::task::JoinHandle<()>, crate::quest_loop::QuestLoopHandles) {
+) -> (
+    tokio::task::JoinHandle<()>,
+    crate::quest_loop::QuestLoopHandles,
+) {
     let ambient = quest_engine::spawn_ambient_subscriber(
         bus.clone(),
         Arc::clone(engine),
