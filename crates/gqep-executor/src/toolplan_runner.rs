@@ -95,7 +95,7 @@ pub struct PlanGuards {
     pub budget_bytes: usize,
     /// 只读模式（true = 拒绝 Write 节点——Plan 模式投影）
     pub readonly_only: bool,
-    /// 层内最大并发（默认 8；1 = 串行）
+    /// 在飞节点上限（默认 8；1 = 串行）——`run_with` 的派发窗口，`run` 的层内窗口
     pub max_parallel: usize,
 }
 
@@ -114,7 +114,7 @@ impl Default for PlanGuards {
 /// 新执行入口的运行选项（与旧 `run` 解耦，便于渐进接线）。
 #[derive(Debug, Clone, Default)]
 pub struct PlanRunOptions {
-    /// 层内最大并发（0 = 使用 `PlanGuards::max_parallel`；最终钳到 ≥1）
+    /// 在飞节点上限（0 = 使用 `PlanGuards::max_parallel`；最终钳到 ≥1）
     pub max_parallel: usize,
     /// 计划级绝对 deadline（ms；0 = 使用 `PlanGuards::timeout_ms`）
     pub timeout_ms: u64,
@@ -301,14 +301,18 @@ impl PlanRunner {
         })
     }
 
-    /// 新执行入口：层内有界并发 + 绝对 deadline + 取消 + fail-fast + 增量预算。
+    /// 新执行入口：依赖就绪即派发 + 绝对 deadline + 取消 + fail-fast + 增量预算。
     ///
     /// 与旧 [`run`](Self::run) 的差异：
-    /// - 层内并发受 `PlanRunOptions::max_parallel`（或 `PlanGuards::max_parallel`）约束；
+    /// - 并发单位是**在飞节点窗口**（`max_parallel`），不是层：节点一旦全部前驱提交
+    ///   即可派发，不再等同层无关慢节点（旧层屏障见 ADR-233 W1a 一节）；
     /// - 超时是**绝对 deadline**（`timeout_at`），不是每层重置；
     /// - 支持 `CancellationToken`；
     /// - 预算按增量累加（旧 `run` 仍是 O(n²) 全量求和，保持旧行为不变）；
     /// - 多终端节点返回 `{"terminals":{...}}`；单终端保持旧语义。
+    ///
+    /// 提交序列是 DAG 偏序的一条线性化（提交只发生在 [`commit`](Self::commit)），
+    /// 因此线性化不变式可被 [`inputs_of_precomputed`] 的 debug 断言当场检查。
     pub async fn run_with(
         &self,
         plan: &ToolPlan,
@@ -328,7 +332,8 @@ impl PlanRunner {
             }
         }
 
-        let layers = compute_layers(plan)?;
+        // 一次性建图（O(V+E)）：调度只看依赖是否就绪，不再分批于"层"。
+        let mut graph = build_graph(plan)?;
         let preds = predecessor_map(plan);
         let timeout_ms = if opts.timeout_ms == 0 {
             self.guards.timeout_ms
@@ -345,10 +350,7 @@ impl PlanRunner {
         let cancel = opts.cancel.as_ref();
 
         let mut env: HashMap<String, String> = HashMap::new();
-        let mut used_bytes = 0usize;
-        let mut tool_calls = 0usize;
-        let mut nodes_executed = 0usize;
-        let mut truncated = false;
+        let mut counters = RunCounters::default();
         // 每次运行的计划级上下文：执行器据此构造可追溯、可取消、审批语义显式的调用。
         let plan_ctx = PlanExecCtx {
             plan_id: &plan.id,
@@ -356,85 +358,115 @@ impl PlanRunner {
             cancel,
         };
 
-        'layers: for layer in &layers {
+        let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
+        loop {
+            // 取消/deadline 的判定点从"层顶"移到"派发顶"：每提交一个节点就重新判一次，
+            // 返回的 completed 计数语义不变（已提交数）。
             if cancel.is_some_and(CancellationToken::is_cancelled) {
                 return Err(PlanRunError::Cancelled {
-                    completed: nodes_executed,
+                    completed: counters.nodes_executed,
                 });
             }
             if tokio::time::Instant::now() >= deadline {
                 return Err(PlanRunError::TimedOut {
-                    completed: nodes_executed,
+                    completed: counters.nodes_executed,
                 });
             }
 
-            let mut in_flight = FuturesUnordered::new();
-            let mut pending = layer.iter();
-            for _ in 0..max_parallel {
-                let Some(node) = pending.next() else {
+            // 窗口未满就把已就绪的节点发出去——不再等整层。
+            while in_flight.len() < max_parallel {
+                let Some(pos) = graph.ready.pop_front() else {
                     break;
                 };
+                let node = &plan.nodes[pos];
                 let input = inputs_of_precomputed(&preds, &env, &node.id);
                 in_flight.push(self.node_future(node, input, deadline, cancel, plan_ctx));
             }
 
-            while let Some((node, result)) = in_flight.next().await {
-                nodes_executed += 1;
-                if node.op == ToolOp::ToolCall {
-                    tool_calls += 1;
-                }
-                match result {
-                    Ok(value) => {
-                        let remaining = self.guards.budget_bytes.saturating_sub(used_bytes);
-                        let (value, cut) = truncate_to_budget(value, remaining);
-                        if cut {
-                            truncated = true;
-                        }
-                        used_bytes += value.len();
-                        env.insert(node.id.clone(), value);
-                        if used_bytes >= self.guards.budget_bytes {
-                            truncated = true;
-                            break 'layers;
-                        }
-                    }
-                    Err(NodeFailure::Failed(error)) => {
-                        if opts.fail_fast {
-                            return Err(PlanRunError::NodeFailed {
-                                node_id: node.id.clone(),
-                                error,
-                                completed: nodes_executed - 1,
-                            });
-                        }
-                        // 非 fail-fast：错误作为节点结果，下游可见并自行处理。
-                        env.insert(node.id.clone(), format!(r#"{{"error":{error:?}}}"#));
-                    }
-                    Err(NodeFailure::Timeout) => {
-                        return Err(PlanRunError::TimedOut {
-                            completed: nodes_executed - 1,
-                        });
-                    }
-                    Err(NodeFailure::Cancelled) => {
-                        return Err(PlanRunError::Cancelled {
-                            completed: nodes_executed - 1,
-                        });
-                    }
-                }
-
-                if let Some(next) = pending.next() {
-                    let input = inputs_of_precomputed(&preds, &env, &next.id);
-                    in_flight.push(self.node_future(next, input, deadline, cancel, plan_ctx));
-                }
+            // 排空即提交：提交只发生在这个单所有者循环里，所以提交序列是 DAG 偏序的一条线性化。
+            let Some((node, result)) = in_flight.next().await else {
+                break;
+            };
+            self.commit(
+                &mut graph,
+                &mut env,
+                &mut counters,
+                node,
+                result,
+                opts.fail_fast,
+            )?;
+            if counters.halted {
+                break;
             }
         }
 
         Ok(PlanSummary {
             plan_id: plan.id.clone(),
             summary: terminal_summary(plan, &env),
-            tool_calls,
-            nodes_executed,
+            tool_calls: counters.tool_calls,
+            nodes_executed: counters.nodes_executed,
             duration_ms: started.elapsed().as_millis() as u64,
-            truncated,
+            truncated: counters.truncated,
         })
+    }
+
+    /// 提交一次节点完成 —— 计数、预算、环境、后继就绪四件事都只在这里发生。
+    ///
+    /// WHY 单点提交:提交序列因此是 DAG 偏序的**一条线性化**，于是"派发某节点时
+    /// 其全部前驱已提交"可被 [`inputs_of_precomputed`] 的 debug 断言当场验证；
+    /// 若把提交分散到多处（如并发 join 分支），该不变式就无从检查。
+    ///
+    /// 返回 `Err` 表示本次运行立即终止（fail-fast 节点失败 / 超时 / 取消）；
+    /// 预算耗尽不是错误，置 `counters.halted` 由调用方收敛为 `Ok`。
+    fn commit(
+        &self,
+        graph: &mut Graph,
+        env: &mut HashMap<String, String>,
+        counters: &mut RunCounters,
+        node: &ToolNode,
+        result: Result<String, NodeFailure>,
+        fail_fast: bool,
+    ) -> Result<(), PlanRunError> {
+        counters.nodes_executed += 1;
+        if node.op == ToolOp::ToolCall {
+            counters.tool_calls += 1;
+        }
+        let value = match result {
+            Ok(value) => value,
+            Err(NodeFailure::Failed(error)) if fail_fast => {
+                return Err(PlanRunError::NodeFailed {
+                    node_id: node.id.clone(),
+                    error,
+                    completed: counters.nodes_executed - 1,
+                });
+            }
+            // 非 fail-fast：错误作为节点结果，下游可见并自行处理。
+            Err(NodeFailure::Failed(error)) => format!(r#"{{"error":{error:?}}}"#),
+            Err(NodeFailure::Timeout) => {
+                return Err(PlanRunError::TimedOut {
+                    completed: counters.nodes_executed - 1,
+                })
+            }
+            Err(NodeFailure::Cancelled) => {
+                return Err(PlanRunError::Cancelled {
+                    completed: counters.nodes_executed - 1,
+                })
+            }
+        };
+
+        let remaining = self.guards.budget_bytes.saturating_sub(counters.used_bytes);
+        let (value, cut) = truncate_to_budget(value, remaining);
+        if cut {
+            counters.truncated = true;
+        }
+        counters.used_bytes += value.len();
+        env.insert(node.id.clone(), value);
+        if counters.used_bytes >= self.guards.budget_bytes {
+            counters.truncated = true;
+            counters.halted = true;
+        }
+        graph.advance(&node.id);
+        Ok(())
     }
 
     /// 单节点 future：绝对 deadline + 取消，返回节点引用与结果。
@@ -522,6 +554,98 @@ impl PlanRunner {
     }
 }
 
+/// 一次运行的可变计数与预算状态（[`PlanRunner::commit`] 的唯一写入面）。
+#[derive(Default)]
+struct RunCounters {
+    tool_calls: usize,
+    nodes_executed: usize,
+    used_bytes: usize,
+    /// 有节点结果被预算截断（或预算已耗尽）——粘滞位，进 `PlanSummary`。
+    truncated: bool,
+    /// 预算耗尽：与 `truncated` 分开，因为截断只标记内容而仍继续执行。
+    halted: bool,
+}
+
+/// 依赖就绪调度用的图 —— 节点以 `plan.nodes` 下标索引。
+///
+/// WHY 下标而非 ID:层屏障版每层每节点都要 `plan.nodes.iter().find`（O(V)）并
+/// `clone` 整个 `ToolNode`；这里一次性建表，之后调度只碰 `usize`。
+///
+/// WHY `succ`/`remaining` 按**原始边表**建立（重复边计多次）:`predecessor_map`
+/// 对重复边给出重复前驱，节点输入的字节因此含重复父值；`remaining` 必须同样
+/// "每条边递减一次"才能在最后一次重复递减时归零 ⇒ 输入内容与今天逐位相同。
+struct Graph<'p> {
+    /// 节点 ID → `plan.nodes` 下标
+    idx: HashMap<&'p str, usize>,
+    /// 每条出边的目标下标（按原始边表序）
+    succ: Vec<Vec<usize>>,
+    /// 尚未满足的入边数；归零即就绪
+    remaining: Vec<usize>,
+    /// 就绪队列（播种按节点声明序，推进按边表序 ⇒ 同一计划可复现）
+    ready: VecDeque<usize>,
+}
+
+impl<'p> Graph<'p> {
+    /// 提交一个节点后推进它的每条出边；某后继首次归零即入队。
+    ///
+    /// WHY 判"从非零跨到零"而不是"当前为零":`remaining` 与 `succ` 同源于原始边表，
+    /// 正常情况下严格同步；一旦不同步（重复边少计一次），`saturating_sub` 会让同一
+    /// 后继在每条多余出边上再次满足"为零"而**二次入队**——副作用节点被执行两遍是最
+    /// 坏的一类错误，比少执行贵得多，所以入队条件带上"此前非零"。
+    fn advance(&mut self, from: &str) {
+        let Some(&pos) = self.idx.get(from) else {
+            return;
+        };
+        for edge in 0..self.succ[pos].len() {
+            let to = self.succ[pos][edge];
+            if let Some(left) = self.remaining.get_mut(to) {
+                let before = *left;
+                *left = before.saturating_sub(1);
+                if before > 0 && *left == 0 {
+                    self.ready.push_back(to);
+                }
+            }
+        }
+    }
+}
+
+/// 一次性建图 —— O(V+E)，取代每层重算的 `compute_layers`。
+///
+/// 依赖 [`ToolPlan::validate`] 已排除重复 ID 与悬空边；这里仍返回
+/// [`PlanError`] 而不是 `expect`：调用顺序是运行期的事实，不该用 panic 兜。
+fn build_graph(plan: &ToolPlan) -> Result<Graph<'_>, PlanError> {
+    let mut idx: HashMap<&str, usize> = HashMap::with_capacity(plan.nodes.len());
+    for (pos, node) in plan.nodes.iter().enumerate() {
+        if idx.insert(node.id.as_str(), pos).is_some() {
+            return Err(PlanError::DuplicateNodeId(node.id.clone()));
+        }
+    }
+    let mut succ: Vec<Vec<usize>> = vec![Vec::new(); plan.nodes.len()];
+    let mut remaining: Vec<usize> = vec![0; plan.nodes.len()];
+    for edge in &plan.edges {
+        let (Some(&from), Some(&to)) = (idx.get(edge.from.as_str()), idx.get(edge.to.as_str()))
+        else {
+            let unknown = if idx.contains_key(edge.from.as_str()) {
+                edge.to.as_str()
+            } else {
+                edge.from.as_str()
+            };
+            return Err(PlanError::UnknownNode(unknown.to_string()));
+        };
+        succ[from].push(to);
+        remaining[to] += 1;
+    }
+    let ready = (0..plan.nodes.len())
+        .filter(|&pos| remaining[pos] == 0)
+        .collect();
+    Ok(Graph {
+        idx,
+        succ,
+        remaining,
+        ready,
+    })
+}
+
 /// 前驱表 — 一次构建替代 `run_with` 每个节点全边扫描。
 fn predecessor_map(plan: &ToolPlan) -> HashMap<&str, Vec<&str>> {
     let mut preds: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -535,6 +659,10 @@ fn predecessor_map(plan: &ToolPlan) -> HashMap<&str, Vec<&str>> {
 }
 
 /// 用前驱表拼节点输入（与 `PlanRunner::inputs_of` 同语义）。
+///
+/// 依赖就绪即派发 ⇒ 每个前驱在派发时都已提交，故 parts 与 parents **等长**；
+/// 过去的静默 `filter_map` 会把缺失的前驱吃掉，节点于是拿到一个少了某段输入的
+/// 数组却毫无征兆。debug 档当场中止，release 档仍走原路径（不新增 panic 面）。
 fn inputs_of_precomputed(
     preds: &HashMap<&str, Vec<&str>>,
     env: &HashMap<String, String>,
@@ -547,6 +675,11 @@ fn inputs_of_precomputed(
         .iter()
         .filter_map(|parent| env.get(*parent).map(String::as_str))
         .collect();
+    debug_assert_eq!(
+        parts.len(),
+        parents.len(),
+        "node {node_id} dispatched before all its predecessors committed"
+    );
     if parts.is_empty() {
         "[]".to_string()
     } else {
