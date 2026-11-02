@@ -79,10 +79,10 @@ CLI 侧退出码映射固定：`Cancelled`→用户取消（`UserCancelled`）�
 |---|---|---|
 | `chimera run --llm` | `CliApproval` | 有人在终端 |
 | `chimera chat`（`CHIMERA_LLM_LOOP=apply`） | `CliApproval` | 同上 |
-| `action_orchestrator` 的 `agent.chat`（TUI 命令面板进循环的实际路径） | `DenyWrites` | 无人值守自动化 ⇒ 只允许只读工具；TUI 持终端控制权，后台任务不能去读 stdin 问人 |
-| TUI 弹窗审批 | 未接线（Phase 7B ⇒ 本波 B 批） | **默认 `CHIMERA_LLM_LOOP` off ⇒ TUI 不进循环**；开档（`=apply`）后 TUI 经上一行的编排器分支进循环（`action_orchestrator.rs:160-169`），此档下审批硬取 `DenyWrites`（写调用被拒并回填 `ask_required`）。缺的是"逐次弹窗问人"这一档——诚实登记而非默认放行。本表旧版在此另起一行写"当前 TUI 不走 LLM 循环"，与上一行自相矛盾（编排器就住在 TUI 进程里），已合并订正 |
+| `action_orchestrator` 的 `agent.chat`（TUI 命令面板进循环的实际路径，执行体 `route_chat_or_quest`） | 有闸门 ⇒ `TuiApproval`；无闸门 ⇒ `DenyWrites` | TUI 持终端控制权，后台任务不能读 stdin 问人 ⇒ 问人只能走弹窗。**默认 `CHIMERA_LLM_LOOP` off ⇒ TUI 根本不进循环**；开档后若本进程未装配闸门（CLI/headless/测试）即回落 `DenyWrites`：只读放行、写一律拒并回填 `ask_required` —— 新能力接线时不得多放行一个写调用（fail-closed）。"全拒的弹窗"与"不弹的直拒"四口径逐位相等由 `popup_answered_no_is_identical_to_deny_writes` 锁。**未验**＝真 tty 渲染与键回流、人在环时延、`--features mca` 端到端。本表旧版在此另起一行写"当前 TUI 不走 LLM 循环"，与上一行自相矛盾（编排器就住在 TUI 进程里），已合并订正 |
 
 **拒绝项 R3**：拒绝"批量审批一次通过后续全部写工具"。审批粒度必须是 per-invocation，否则第一次确认会为整条循环背书（与 ADR-231 D6 Pre 保序同源：把关不能合并）。
+**R3 的现势实现**：票据是 `(ApprovalRequest, oneshot::Sender<bool>)`，而 `oneshot::Sender::send(self)` 按值消费发送端 ⇒ "答一次、复用到后续写调用"在类型上写不出来，不只是纪律约束。行为侧双向守：`one_yes_never_approves_the_next_call`（同工具名、第二个 `call_id` 必须重新发票；应答端带超时出口，实现若记住"已批过"则判红而不是测试挂死）与 `one_yes_does_not_endorse_later_writes`（循环级：w1 答 Yes、w2 无人应答 ⇒ 只有 w1 进 provider，w2 仍按 `ask_required` 回填且位置在 w1 之后）。
 
 ### D7 默认关闭 + 旧路径逐位不变
 
@@ -94,9 +94,11 @@ CLI 侧退出码映射固定：`Cancelled`→用户取消（`UserCancelled`）�
 `McaLlmClient` 仅在 `--features mca` 下编译（`llm/mod.rs` 的 `#[cfg(feature = "mca")]`）；3 个用例只断言装配与错误映射（`mca_client_assembles_from_config` / `mca_client_missing_provider_is_unavailable` / `mca_provider_name_mapping_is_conservative`：未知名必须落 `ProviderId::Custom`，不得冒充已知通道）。
 **可达性诚实声明**：`mca-gateway` 经 ADR-177 是**长期 GATED**（optional 边 + `--features mca`）。因此"能连真模型的 LLM 循环"在默认构建里不可达，属预期而非缺陷；离线全链路由 `CHIMERA_LLM_PROVIDER=mock` ⇒ `EchoLlmClient` 承担（CI/演示用，无 ToolUse ⇒ 单轮收敛）。
 
-### D9 流式与 TUI 审批留待 Phase 7B（未实施）
+### D9 流式仍留 Phase 7B（未实施）；TUI 弹窗审批已于第三波 B 批接线
 
-本期输出为终态文本；`--json` 时给 `LlmPayload{text, turns, tool_calls, denied_tool_calls, stop}`。逐 token 流式（`VendorAdapter` 流式数据面按 ADR-065 决策 4 走 bounded mpsc、不进 event-bus）与 TUI 弹窗审批是 7B 的两项，**本 ADR 不为未做能力背书**。
+本期输出为终态文本；`--json` 时给 `LlmPayload{text, turns, tool_calls, denied_tool_calls, stop}`。逐 token 流式（`VendorAdapter` 流式数据面按 ADR-065 决策 4 走 bounded mpsc、不进 event-bus）仍是 7B 未实施项，**本 ADR 不为未做能力背书**。
+
+TUI 弹窗审批不再属于"未实施"：本波 B 批已接线（`TuiApproval` + `PopupKind::Approval` + 四路决策回流）。本行原文把它与流式并列为 7B 两项，现该半句已不成立；等价性判据、回滚单位与**未验范围**逐项见追加节。
 
 ## 3. 验证
 
@@ -105,6 +107,8 @@ CLI 侧退出码映射固定：`Cancelled`→用户取消（`UserCancelled`）�
 | 闭环 | `crates/chimera-cli/tests/llm_tool_loop.rs` | 一轮工具→结果喂回→第二轮收敛；`seen_requests` 里第 2 轮确实带 `Tool` 角色与对应 `tool_use_id`（**闭环唯一硬证据**） |
 | 上限/重复 | 同文件 | `MaxTurns`/`MaxToolCalls`/`MaxRepeatToolCalls` 各自可达；并行时**峰值在飞 ≤ `max_parallel_tools`**（结构断言） |
 | 审批 | 同文件 | 只读自动放行；被拒的写工具**未进 runtime**（provider `calls()` 为空）；`denied_tool_calls` 计数正确 |
+| 审批档等价（本波 B 批） | 同文件 | `popup_answered_no_is_identical_to_deny_writes`：`TuiApproval`（每条都问、人人答 No）与 `&DenyWrites` 四口径逐位相等（调用序/`tool_calls`/`denied`/回填有序三元组）；`one_yes_does_not_endorse_later_writes`：R3 的循环级表达 |
+| 审批通道（本波 B 批） | `crates/chimera-cli/tests/approval_gate_properties.rs` | proptest：随机 `call_id` 集合与到达序下，每个 id 至多一次决策、决策值只影响该 id、未获答恒拒（闸门关/回执断/无人应答三态各自固定例） |
 | 预算 | 同文件 | `BudgetExceeded` 被订阅者收到且 `stop=Budget` |
 | 取消 | 同文件 | 在飞工具被丢弃（`loop_cancel_drops_inflight_tools`：5s 工具在 <2s 内让路） |
 | 旧路径 | `crates/chimera-cli/tests/llm_off_legacy.rs` | 6 例：默认关闭时 `run`/`chat` 行为逐位不变 |
@@ -128,3 +132,28 @@ CLI 侧退出码映射固定：`Cancelled`→用户取消（`UserCancelled`）�
 | `max_repeat_tool_calls`（env 名未定） | `CHIMERA_LLM_MAX_REPEAT` | 与 `CHIMERA_LLM_MAX_*` 同族命名 |
 | `budget_hint_micro`（计划里由 loop 直发新事件） | 透传给 `AffinityRequest`；超 token 才发 `BudgetExceeded` | 避免装饰变体（D5） |
 | `LlmToolLoop` 直接 `Arc<ToolRuntime>` + `Vec<ToolDescriptor>` 构造 | 同上，另 `bus: EventBus` 由调用方注入 | 预算事件必须走调用方所在总线，而非循环自建总线 |
+
+## 追加节（2026-11-02）— 第三波 B 批：TUI 弹窗审批接线后本 ADR 的四处自纠
+
+本 ADR 早前把"TUI 弹窗审批"与"逐 token 流式"并列为 Phase 7B 未实施项，并把 `agent.chat` 的审批档
+写成单值 `DenyWrites`。B 批落地后这两处都成了**过期陈述**，逐条就地改掉而不是另立文档：
+
+1. **D6 入口分档表**：`agent.chat` 行的"审批档"由单值改为条件式（有闸门 ⇒ `TuiApproval`；无闸门 ⇒
+   `DenyWrites`），并删掉原"TUI 弹窗审批｜未接线"那一行——两行同指一条路径，留着会让读者以为存在
+   两个独立档位。表内旧锚 `action_orchestrator.rs:160-169` 已被本批的执行体抽取作废，改为符号锚
+   `route_chat_or_quest`（本仓反复登记"勿引行号，会漂移"，自己这条也是同一病灶）。
+2. **D9 半句失效**：流式仍未实施（保留原判据），TUI 审批已接线（撤回该半句）。改写为"一项未实施、
+   一项已落地"，不让"未实施"顺带替另一项作保。
+3. **R3 从纪律升为类型约束**：判据不是"我们约定逐条问"，而是 `oneshot::Sender::send(self)` 让
+   "答一次、复用到后续写调用"在类型上写不出来；另有单测与循环级测试双向守（见 §3 新增两行）。
+4. **§3 验证表补两行**：审批档等价、审批通道 proptest。
+
+**回滚单位（对 D7"旧路径逐位不变"的补充）**：`gate=None` 回落 `DenyWrites` 是"旧路径不变"的机器表达，
+由 `popup_answered_no_is_identical_to_deny_writes` 锁；因此 B 批的可回滚单位是 **B3，或 B2+B3 一并**，
+不是逐批倒带（单回 B1 断编译；单回 B2 令 B1 留下的 `approval_rx`/`pending_approvals` 成为 `dead_code`，
+在 `-D warnings` 下同样阻塞，只是红因不同）。
+
+**本 ADR 明确不为以下四项背书**（诚实登记，不得由测试绿覆盖）：真 tty 渲染与键回流（`TestBackend` 只验
+buffer 断言）；人在环时延，以及 `call_with_budget` 是否覆盖弹窗等待这一段；`--features mca` 下本路径
+端到端（零用例）；**入口分档表本身没有门守**——`check_llm_loop_defaults.py` 与
+`check_tool_plane_contract.py` 对审批档零命中，本波不擅自立门（新门需四件同批且要 CI 授权）。

@@ -417,3 +417,107 @@ selftest 加两条植入（env 读取点改名 / 窗口默认改 0），断言�
 | A3 | `d5ac09e` | G-53 | rc=1（`chimera-cli.SIMPLIFIED-CN = 1`，markers 84）→ rc=0（markers 83 = 主检出口径） | 原句种回 → rc=1、84、点名新行号 :354（第一次植入锚未命中而门仍 rc=0＝空跑与通过同形，assert 先 abort 才发现，重做） |
 | A3′ | `e2e93f8` | G-59 | 全量门跑出 `G-59 mismatch`（`MATURITY says …|SIMPLIFIED-CN, disk says …`）→ `--install` 后 rc=0（46/46 有效） | 该红由本会话 A3 造成、由门自己抓出；`--install` 只动 1 文件 1 行，其余 45 份逐字节相同（写入幂等） |
 | A4 | `268000d` | doc 三门 | `check_doc_drift` / `check_crate_reachability` / `check_doc_consistency` 各 rc=0；表格行 3 个转义 `\|` 逐字仍在 | 见报告 §5.1/§5.5 与 ADR-232 D6 的现取订正 |
+
+## 追加节八（2026-11-02）— 第三波 B 批：TUI 逐调用写工具弹窗审批（把 ADR-232 D6 的缺档落地）
+
+**前置实测**（任一不成立则本节结论不成立）：
+
+- 依赖面单向：`crates/chimera-cli/Cargo.toml` 声明 `chimera-tui = { workspace = true }` 且**非 optional**；
+  `crates/chimera-tui/Cargo.toml` 无 `chimera-cli` 依赖（其 `src` 内 5 处命中全在注释，注释不是边）。
+- 审批接缝唯一：`ToolApproval::approve(&ToolInvocation, SideEffectDecl) -> bool` 由 `tool_loop.rs` 在
+  **派发之前**逐条调用，通过后才写 `invocation.approved = true` 交 L7。
+- 未知工具按最严口径：`side_effects.get(name).copied().unwrap_or(SideEffectDecl::Write)`
+  ⇒ 不在工具表里的名字自动落入"要审批"，本批无需另设分支。
+- 本波之前 `agent.chat` 的审批档是**硬取** `DenyWrites`（编排器签名里没有闸门）。
+
+**D34 — 审批载荷落 `chimera-tui::approval_gate`，不落 L0。** 载荷三字段
+（`call_id`/`tool`/`args_preview`）要跨 UI 的弹窗栈（`PopupKind` 参与序列化）⇒ 只能是纯标量；
+下沉 L0 会踩 G-99 纯度门并要求同批翻 L0 台账，与本能力规模不成比。落 tui 侧的另一半理由是依赖方向：
+`cli → tui` 单边存在 ⇒ 载荷定义在 tui、channel 句柄只出现在 cli，是唯一不新增向上边的形状。
+
+**D35 — 零锁：`mpsc::UnboundedSender` + `oneshot::Sender`。** 实测 `UnboundedSender::send` 取 `&self`
+⇒ 发送端本身可并发共享，于是**一条锁都不引入**：§6.2 红线 #1（持锁跨 `.await`）的风险面是"归零"
+而不是"被规避"。`oneshot::Sender::send(self)` 按值消费，把"一张票只能答一次"变成类型级事实
+——ADR-232 拒绝项 R3 从此不靠纪律维持。unbounded 的理由：发问方阻塞与否不该改变审批语义，
+而背压已由"同一次循环串行 await 回执"天然给出（队列深度 ≤1）。
+
+**D36 — fail-closed 四出口，全部拒。** 闸门已关（`send` err）／回执通道断（弹窗未答即被 drop）／
+答 No／本档未附加（`gate=None` ⇒ 回落 `DenyWrites`）。与 `CliApproval` 对 stdin 错误的处理同律。
+
+**D37 — `gate=None` 等价性由参数化对照测试锁，不由"我看代码没动别的分支"论证。** 判据：
+把 `TuiApproval` 接到"每条都问、人人答 No"的接收端，与直接用 `&DenyWrites`，四口径必须逐位相等
+（provider 真实调用序、`tool_calls`、`denied_tool_calls`、第二轮回填 `(call_id, content, is_error)` 有序
+三元组），一次 `assert_eq!` 比整个 `RunObs` 结构体。**反事实**：`Ok(allowed)` ⇒ `Ok(allowed) => !allowed`
+后本条与 R3 用例同红，红字右值给出 A 侧绝对基线（`calls=["probe.echo"] / tool_calls=3 / denied=2 /
+w1、w2 均回填 ask_required）⇒ 不是"两侧都空所以相等"。复原以 sha256 逐字节自证，复原后 17/17 绿。
+**为什么断言押在"审批对象 × 循环"而非"编排器 × 环境"**：取档只是 `gate.map(...)` 二选一，选出的对象
+正是这里被测的两个实现；后者需要 `CHIMERA_LLM_LOOP=apply` 全局 env 注入与 provider 装配，用例会互相
+污染且覆盖不到决策语义。编排器自身的签名变更由 18 个既有用例承担（本批全绿）。
+
+**D38 — 与 `approval_mode` 正交，与 `ApprovalArbiter` 同名不同物。** `ApprovalMode`（Shift+Tab，ADR-074）
+是会话档"这个会话准备怎么干"；本批闸门是单次调用"这一步让不让干"，不复用、不互相降级。
+`nexus_app_server::ApprovalArbiter` 是宿主协议面的**多方投票**裁决器，与本模块的**单人 Yes/No 闸门**
+不同物；CODE_WIKI 曾把 `ApprovalGate` 记作它的旧设计称谓 ⇒ 见下面 G-41 条。
+
+### B 批抖出的三条门红（都是本波自造，均由门抓出，非门错）
+
+| 门 | 红因 | 处置与理由 |
+|---|---|---|
+| G-48 | `route_action` 实测 208 行 ⇒ 越 §6.1 的 200 行红线且未登记（`[NEW]`） | **拆函数而非登记新债**：抽出 `route_chat_or_quest`，分派器只留 5 行。登记＝把"没人能一次读完"合法化，而本仓已多次登记棘轮被这样喂大的病灶。实测 >200 行函数 5→4、基线 4 行不变 ⇒ `[OK] ratchet honoured`。连带：`execute_with_ctx` 因我新加的两行注释 200→201，压成一行回到 200 —— 红线卡行数时注释与代码同罪，本波第二次自撞（第一次是 B1 的 195→205） |
+| G-70 | 派生视图 `layer_contracts.txt` 的 chimera-cli 行仍带 `SIMPLIFIED-CN` | **真因是 A 批漏刷**：A3 删掉"简化实现"后，A3′ 只刷新了 `lib.rs` 的派生契约头（G-59），没刷新第二个派生面（G-70 的 6 份视图）⇒ 升格为规：**同一底层事实有多个派生面时，`--install` 类刷新必须枚举全部派生面**（本仓现知两处：crate 契约头、`docs/architecture/views/`）。`--write` 后 `--verify` rc=0，提交面恰好 1 行 |
+| G-41 | 在役类型 `chimera_tui::approval_gate::ApprovalGate` 与登记行记录的 nexus-app-server 旧设计称谓同名；而该门判据是"名字在 `crates/**` 任意处出现即闭合"（脚本自陈 Cross-crate mentions are NOT judged） | 裁决＝**保留本名 + 就地消歧**，不改名躲幽灵：删登记行（"零命中"前提已不成立，留着即门设计上的 STALE 红）；**同时把头注 "the 7 rows below" 改 6**（删的正是那 7 行之一，不改即制造新的假计数）；CODE_WIKI 改名披露句加"两名不同物"；模块文档加"与 `ApprovalArbiter` 勿混"节（沿用同文件"与 `approval_mode` 勿混"先例）。顺带把 `CODE_WIKI:711` 指针的实测现值（:773）记进头注 —— 该文件自己写过"指针不再落在 claim 行即装饰而非证据"，但此前只登记候选判据待授权，未补第二轮 rot 数值 |
+
+### B 批台账（红→绿均现取，日志落 `tmp/w3-b3-*.log`）
+
+| 批 | commit | 面 | 判据（命令现取） | 反事实 |
+|---|---|---|---|---|
+| B1 | `b6ce117` | `approval_gate` 模块 + setter + `Option<ApprovalGate>` 贯穿 | 新模块 4 例；`llm_off_legacy` 6 例仍绿；行为不变（审批档仍硬取） | 无：本批没有任何取档改动可反证 |
+| B2 | `f84a8a6` | `PopupKind::Approval` + `poll_approvals` + 四路键回流 | 7 条通道驱动用例；`render` 215→204，同批 `--emit` 刷新 only-decrease 基线；`test_fnlen_smoke.sh` rc=0 | 三条（Close 不 resolve／remove 改 retain／`Err` 路径改 true）各红其一对应断言；复原后 19/19，**复原须同时还原内容与 mtime**（`shutil.copy2` 保 mtime ⇒ cargo 复用变异体二进制，"复原后仍红"是假信号） |
+| B3 | `890e012` | `TuiApproval` + 取档 + `route_chat_or_quest` 抽取 | 四包 scope 127 target / 2484 passed / 0 failed / 4 ignored；chimera-cli 包 21 target / 398 passed；四包 clippy `--all-targets -D warnings` rc=0；`cargo check --workspace --all-targets` rc=0（47 单元 0 error 0 warning）；全量 light 门 `ok=131 mismatch=2 env-fail=4 unknown=0 skip=7`（total 144/144，非绿成员与 A 批收口**逐成员相同**）；`check_tool_plane_contract` 10/10 selftest + rc=0；`check_llm_loop_defaults` 12/12 selftest + rc=0 | 极性翻转 ⇒ 等价性用例与 R3 循环级用例同红，右值给出 A 侧绝对基线；`sha256sum -c` 自证复原后再 17/17 |
+
+### 回滚单位
+
+B1/B2 不可单独回滚（分别断 B3 编译 / 使 B1 留下的接收端字段成 `dead_code`）⇒ 合法单位 = **B3**，或 **B2+B3 一并**。
+"批间无编译环"只对 A 批成立。
+
+### 性能 A/B 的前提被实测否证（因此本波不产出"弹窗通道无退化"这个结论）
+
+计划的判据是"`tui_update_cost_events/*` 在 B 前后各测一次，证加弹窗通道没让帧循环成本进台阶"。
+实测两头都对不上：
+
+- 该 bench 驱动的是 `app.update()`（`crates/chimera-tui/benches/tui_update_cost_bench.rs` 的
+  `b.iter(|| app.update())`），而 `poll_approvals()` 挂在 `step()` 里 —— 两条路径不相交，
+  本批也没碰 `update()`。⇒ **该 bench 在构造上看不见被检物**，跑出的"两侧相等"不含信息量。
+- 控制组 `llm_diag_request_rebuild` 同理：它量的是请求体复用（W1b-2 的靶），与弹窗通道无关，
+  拿它当"弹窗成本"的对照是范畴错误。
+- 也补不了 bench：`step()` 是 `pub(crate)` 且 `#[cfg(feature = "v3-engine")]`，`benches/` 是外部
+  crate 调不到；要测帧路径得先给 crates/chimera-tui 暴露一个帧入口 —— 那是**为测量而扩公开面**，
+  且 bench 属受治面（`scripts/bench_inventory_freeze.txt` + `[[bench]]` + `check_perf_redlines.py`
+  同批），不属本波范围。⇒ 登记关闭前提，不硬凑一个数。
+
+顺手量到的同码漂移带（HEAD 侧 4 轮，µs 中位数，`--profile bench-lite --sample-size 10`）：
+
+| 组 | run1 | run2 | run3 | run4 | run2–4 带宽 |
+|---|---|---|---|---|---|
+| `/1` | 57.661 | 43.775 | 44.898 | 42.962 | 4.5% |
+| `/64` | 47.283 | 44.578 | 45.519 | 44.717 | 2.1% |
+| `/256` | 47.755 | 45.079 | 46.559 | 42.868 | 8.0% |
+
+run1 在 `/1` 上比后三轮高 29–33%——冷启动态足以伪造一个"台阶"。这条与既有记忆同律
+（µs 级 bench 门槛须静默态单跑取样、读数受内存压力显著影响）：**任何小于一个冷启动量的差值
+都不能当作回归**，而本批若要测的正是"每帧多一次 `try_recv`"这个远小于该量的成本。
+
+空闲路径的实现事实（不是测量结论，只作定位）：`poll_approvals()` 在 `approval_rx=Some` 且无待批时
+= 一次 `try_recv`（空⇒立即 Err）+ 两个空迭代器过一遍（`Vec::new()` 未 push 不分配）。
+"很小"是结构判断，**未经测量**，不得写进任何"无退化"结论。
+
+### 未验清单（不得被测试绿覆盖）
+
+1. 真 tty 渲染与键回流：`TestBackend` 只验 buffer 断言，不验视觉与真实终端事件源。
+2. 人在环时延：弹窗等待期间整条循环挂起；`call_with_budget` 是否覆盖这一段**未测**。
+3. 真 provider 端到端：`--features mca` 下本路径零用例（`mca-gateway` 长期 GATED + RL/网络闸门双约束）。
+4. 入口分档表无机器判据：两条定向门对审批档零命中 ⇒ 本 ADR 记为残余，不在本波擅自立门。
+5. 覆盖率 ≥85%：本地不可判（E0463 缺 `profiler_builtins`），见追加节七 D31。
+6. **帧路径成本**：`poll_approvals()` 每帧多做的量**未测**（上一节说明为何现有 bench 测不到、
+   以及为何不为测量而扩公开面）。关闭前提＝先决定"是否为帧驱动提供一个可 bench 的入口"，
+   与 `bench_inventory_freeze` 同批。

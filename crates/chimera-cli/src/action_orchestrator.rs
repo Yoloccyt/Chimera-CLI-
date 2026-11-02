@@ -79,8 +79,9 @@ pub type ChatMessagesProvider = Arc<dyn Fn() -> Vec<ChatMessage> + Send + Sync>;
 /// `route_action` 的交互面句柄包（第三波 B 批）
 ///
 /// WHY 打包而非加第 8 个参数：`route_action` 原本已 7 参，`clippy::too_many_arguments`
-/// 在超过 7 参时即警，而仓内没有 `clippy.toml` 可以放宽这个阈值 ⇒ 直接加 `gate`
-/// 会撞 `-D warnings`。打包后签名 5 参，且函数体经解构沿用既有局部名，零逻辑改动。
+/// 在超过 7 参时即警；仓内既无 `clippy.toml`，`[workspace.lints.clippy]`（根 `Cargo.toml`）
+/// 也只设 `unwrap_used`/`expect_used`，未放宽该阈值 ⇒ 直接加 `gate` 会撞 `-D warnings`。
+/// 打包后签名 5 参，且函数体经解构沿用既有局部名，零逻辑改动。
 ///
 /// `gate` = 写工具审批闸门；`None` 表示本进程没有可问人的 UI（CLI 档、headless、
 /// 测试），此时 `agent.chat` 回落到 `DenyWrites` —— 即"能力未接线"时行为与今天逐位相同。
