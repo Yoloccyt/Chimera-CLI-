@@ -15,10 +15,12 @@
 //! - **复用 orchestrator / run 纯函数**:`build_quest_reply`（回复文本构造）与
 //!   `run::stream_to`（流式写出，切分复用 `orchestrator::plan_chunks_batched`）
 //!   保证 CLI run / chat / TUI 三入口的输出格式一致(单一真相源)。
-//! - **tool 调用展示框架就绪**:订阅 `TuiActionProgressed` / `TuiActionCompleted` 事件,
-//!   输出 `[tool: <name>] args: <json>` + `[tool: <name>] result: <json>`。当前
-//!   QuestEngine 分解任务时不触发 TuiAction 事件(仅发布 QuestCreated / Chat* 事件),
-//!   故该展示路径在真实 tool 调用接入后自动生效,无需后续修改。
+//! - **tool 调用展示（在 chat 侧当前无生产者）**:订阅 `TuiActionProgressed` /
+//!   `TuiActionCompleted`,输出 `[tool: <name>] args: <json>` + `[tool: <name>] result:
+//!   <json>`。这两个事件的唯一发布点是 `crate::action_orchestrator`,而它只在 TUI 进程
+//!   起(`commands/tui.rs`),EventBus 又是进程内 broadcast ⇒ `chimera chat` 下该展示路径
+//!   静默。审批**不在本文件**：工具审批的唯一接缝是 `crate::llm::approval::ToolApproval`
+//!   (副作用发生之前判定)。
 //! - **Ctrl+C 优雅退出**:REPL 主循环用 `tokio::select!` 在 `ctrl_c()` 与 stdin 读取
 //!   之间竞争,Ctrl+C 先触发则返回 `UserCancelled`(退出码 4)。
 //!
@@ -109,9 +111,10 @@ pub async fn execute_with_ctx(ctx: &AppContext, cli: &Cli, config: &ChimeraConfi
     let engine = &ctx.engine;
 
     // 2. spawn 后台事件订阅 task:消费 TuiAction* 事件,输出 tool 调用展示(SubTask 1.5.4)
-    //    WHY spawn 独立 task:TuiAction 事件由 QuestEngine 在分解过程中发布,
-    //    若同步订阅会阻塞 REPL 主循环。独立 task + broadcast channel 保证实时展示。
-    let tool_display_handle = spawn_tool_event_subscriber(ctx.bus.clone(), perm);
+    //    WHY spawn 独立 task:展示是旁路输出,不该插进 REPL 读输入的主循环时序。
+    //    该 task 在当前装配下收不到任何事件(见 `spawn_tool_event_subscriber` 文档):
+    //    事件唯一发布点是编排器,而编排器只在 TUI 进程起。
+    let tool_display_handle = spawn_tool_event_subscriber(ctx.bus.clone());
 
     // 3. REPL 主循环
     let result = repl_loop(engine, &ctx.bus, cli, config, &perm, max_tokens).await;
@@ -320,9 +323,17 @@ async fn stream_quest_response(
 /// WHY `bus.subscribe()` 在 `tokio::spawn()` 之前同步调用:§4.4 反模式 #3,
 /// 避免启动瞬间错过事件。订阅者仅关注 TuiAction* 事件,其余事件忽略。
 ///
-/// 当前 QuestEngine 分解任务时不发布 TuiAction 事件(仅 QuestCreated / Chat*),
-/// 故该订阅者在真实 tool 调用接入后自动生效。预留框架避免后续返工。
-fn spawn_tool_event_subscriber(bus: EventBus, perm: PermissionCtx) -> tokio::task::JoinHandle<()> {
+/// 无生产者即无输出:`TuiAction*` 唯一的发布点在 `crate::action_orchestrator`,而
+/// `spawn_action_orchestrator` 只在 `commands/tui.rs` 起(另一处是 `cfg(test)`),
+/// EventBus 是进程内 broadcast、不跨进程 ⇒ 本订阅者在 `chimera chat` 下恒静默。
+///
+/// 这里**不做审批**,也不该做。本函数原先挂着一段 y/N 确认,已删除,两条理由:
+/// ① 顺序错——它挂在 `TuiActionCompleted` 上,即副作用**已经发生之后**才问人,
+///    拒绝分支只能 `continue` 跳过打印,不能回滚已执行的调用;
+/// ② 永不触发——见上段,该事件在本命令的装配下没有生产者。
+/// 真正的审批接缝是 [`crate::llm::approval::ToolApproval::approve`]——`tool_loop`
+/// 在执行每个工具调用**之前**判定,拒答时回填 `ask_required` 让模型知道被拒。
+fn spawn_tool_event_subscriber(bus: EventBus) -> tokio::task::JoinHandle<()> {
     let mut rx = bus.subscribe();
     tokio::spawn(async move {
         // WHY while let 而非 loop+match:clippy::while_let_loop 建议,
@@ -336,27 +347,10 @@ fn spawn_tool_event_subscriber(bus: EventBus, perm: PermissionCtx) -> tokio::tas
                     println!("[tool: {action_id}] args: {delta}");
                 }
                 // tool 调用完成:输出 result(JSON 编码或纯文本)
+                // 只做展示、不问人:此事件发布时副作用已发生,此刻拒绝只能拒绝打印。
                 NexusEvent::TuiActionCompleted {
                     action_id, result, ..
                 } => {
-                    // permission 模式(SubTask 1.5.6):tool 调用前确认
-                    // WHY 在 Completed 而非 Progressed 确认:Progressed 是调用中,
-                    // Completed 表示调用完成(结果已就绪)。实际 permission 应在
-                    // TuiActionRequested 阶段确认,但该事件当前由编排器消费,
-                    // 此处展示框架,真实接入后迁移到 Requested 阶段。
-                    if !perm.should_skip_prompt() {
-                        println!("[permission: {action_id}] allow? [y/N]");
-                        // 同步读取确认(简化实现,真实场景应用 permission::confirm)
-                        let mut input = String::new();
-                        if io::stdin().lock().read_line(&mut input).is_ok() {
-                            let confirmed =
-                                matches!(input.trim().to_lowercase().as_str(), "y" | "yes");
-                            if !confirmed {
-                                println!("[permission: {action_id}] 已拒绝");
-                                continue;
-                            }
-                        }
-                    }
                     println!("[tool: {action_id}] result: {result}");
                 }
                 _ => {} // 忽略其他事件
@@ -613,7 +607,8 @@ fn handle_model(parsed: &ParsedSlashCommand, config: &ChimeraConfig, perm: &Perm
         Some(strategy) => {
             // 有参:内存态切换(后续 Task 接入 omega.yaml 持久化)
             if !perm.should_skip_prompt() {
-                // y/N prompt(同 spawn_tool_event_subscriber 模式)
+                // y/N prompt:同步读一行 stdin,非 y/yes 即取消(本命令唯一的确认路径,
+                // 不与任何事件订阅共享——chat 侧的 tool 展示订阅器纯输出、不问人)
                 println!("[permission: model] 切换策略到 '{strategy}'? [y/N]");
                 let mut input = String::new();
                 if io::stdin().lock().read_line(&mut input).is_ok() {
@@ -863,19 +858,15 @@ mod tests {
     /// 测试 8:tool 调用展示 — spawn_tool_event_subscriber 处理 TuiAction 事件(SubTask 1.5.4 / 1.5.9)
     ///
     /// 验证:订阅者消费 TuiActionProgressed / TuiActionCompleted 事件后不 panic,
-    /// 且 `--no-permission` 模式下 TuiActionCompleted 不读 stdin(避免 CI hang)。
+    /// 且**不读 stdin**——展示路径若问人，无 TTY 的 CI 会直接 hang；这也是被删掉那段
+    /// y/N 装饰的第二条不可接受处（第一条是顺序：副作用已发生才问）。
     /// 订阅者在 EventBus drop 后通过 rx.recv() 返回 Err 干净退出。
     #[tokio::test]
     async fn test_tool_event_subscriber_processes_events_without_panic() {
         let bus = EventBus::new();
-        // --no-permission 跳过 stdin 读取,确保测试在无 TTY 环境不 hang
-        let perm = PermissionCtx {
-            yes: false,
-            no_permission: true,
-        };
 
-        // spawn 订阅者(--no-permission 跳过 stdin 读取)
-        let handle = spawn_tool_event_subscriber(bus.clone(), perm);
+        // spawn 订阅者:纯展示，无 permission 入参
+        let handle = spawn_tool_event_subscriber(bus.clone());
 
         // 发布 TuiActionProgressed 事件(模拟 tool 调用进度)
         let progressed = NexusEvent::TuiActionProgressed {
@@ -907,13 +898,19 @@ mod tests {
         handle.await.expect("订阅者任务不应 panic");
     }
 
-    /// 测试 9:permission 模式 — --no-permission 跳过 tool 调用确认(SubTask 1.5.6 / 1.5.7 / 1.5.9)
+    /// 测试 9:`PermissionCtx::should_skip_prompt` 的三档语义(SubTask 1.5.7 / 1.5.9)
     ///
-    /// 验证:PermissionCtx::default() 不跳过 prompt(需用户确认),
-    /// 而 PermissionCtx { no_permission: true } / { yes: true } 跳过 prompt(自动允许)。
+    /// 验证:`PermissionCtx::default()` 不跳过 prompt(需用户确认),而
+    /// `PermissionCtx { no_permission: true }` / `{ yes: true }` 跳过 prompt。
     /// 这保证 `chimera chat --no-permission` 在 CI 无 TTY 环境下不 hang。
+    ///
+    /// 名字不再写"tool 调用确认":chat 侧的 tool 展示订阅器已不问人,本例断言的是
+    /// `PermissionCtx` 自身的短路语义(消费者:`handle_model` 的 y/N 分支、
+    /// `run::llm_answer`、`commands/tool.rs` 的 `approve_writes`)。`permission.rs`
+    /// 的模块内测试断言同一组布尔,那里是归属地;本例留在 chat 侧是因为它守的是
+    /// "chat 这三个入口共用同一短路判据"这一条,删掉会丢掉该视角。
     #[test]
-    fn test_permission_mode_controls_tool_prompt() {
+    fn test_permission_ctx_should_skip_prompt_semantics() {
         // 默认 ctx:不跳过 prompt(交互式场景需用户确认每个 tool 调用)
         let interactive = PermissionCtx::default();
         assert!(!interactive.should_skip_prompt(), "默认 ctx 应需用户确认");
