@@ -22,7 +22,10 @@ use tokio_util::sync::CancellationToken;
 
 use chimera_cli::llm::client::LlmClient;
 use chimera_cli::llm::tool_loop::{LlmToolLoop, LlmToolLoopConfig, ASK_REQUIRED_MARKER};
-use chimera_cli::llm::{tool_decls, DenyWrites, LlmError, MockLlmClient};
+use chimera_cli::llm::{
+    tool_decls, DenyWrites, LlmError, MockLlmClient, ToolApproval, TuiApproval,
+};
+use chimera_tui::approval_gate::{ApprovalGate, ApprovalTicket};
 
 // ============================================================
 // 探针 provider
@@ -564,6 +567,146 @@ async fn loop_requires_approval_for_write_tools() {
         "同批里只读执行、写不执行"
     );
     assert_eq!(outcome.denied_tool_calls, 1);
+}
+
+// ============================================================
+// 第三波 B3 —— 弹窗档与 DenyWrites 的等价性 / R3 per-invocation
+// ============================================================
+
+/// 一轮「一读两写」的四条可对照口径（全部现取自同一趟执行，不事后重算）
+#[derive(Debug, PartialEq, Eq)]
+struct RunObs {
+    /// provider 侧真实调用序（顺序即派发序，能同时抓「多执行」和「换顺序」）
+    calls: Vec<String>,
+    tool_calls: usize,
+    denied: usize,
+    /// 第二轮请求里被回填的 (call_id, content, is_error)，有序
+    fed: Vec<(String, String, bool)>,
+}
+
+/// 用给定审批档跑一次「一读两写」。
+///
+/// 每次调用都新建 runtime/provider/client —— 两侧若共用计数面，等价性断言就成了
+/// 自我印证（第一侧的调用会混进第二侧的 `calls`）。
+async fn run_one_read_two_write(ask: &dyn ToolApproval) -> RunObs {
+    let (runtime, provider) = runtime();
+    let client = Arc::new(MockLlmClient::new([
+        MockLlmClient::tool_use(&[
+            ("r1", "probe.echo", "{}"),
+            ("w1", "probe.write", r#"{"path":"a"}"#),
+            ("w2", "probe.write", r#"{"path":"b"}"#),
+        ]),
+        MockLlmClient::final_text("收敛"),
+    ]));
+    let chain = LlmToolLoop::new(client.clone(), runtime, EventBus::new(), loop_config());
+
+    let outcome = chain
+        .run(
+            "一读两写",
+            &provider.descriptors(),
+            &CancellationToken::new(),
+            ask,
+        )
+        .await
+        .expect("被拒不等于失败");
+    RunObs {
+        calls: provider.calls(),
+        tool_calls: outcome.tool_calls,
+        denied: outcome.denied_tool_calls,
+        fed: fed_results(&client.seen_requests()[1]),
+    }
+}
+
+/// 起一个「按表应答」的弹窗接收端：`verdicts` 未列出的 call_id 一律答 No。
+///
+/// 返回闸门与任务句柄；任务在闸门的全部克隆 drop 后退出，并把**它实际被问到的
+/// call_id 序列**作为返回值交出 —— 这条序列就是「审批粒度」的直接证据，
+/// 不必再去读循环内部实现。
+fn popup_verdicts(
+    verdicts: &[(&'static str, bool)],
+) -> (ApprovalGate, tokio::task::JoinHandle<Vec<String>>) {
+    // 显式 `::<ApprovalTicket>`：`unbounded_channel` 的 `T` 只靠函数返回类型反推，
+    // 在 `let` 点尚未定型（rustc 会就地报 E0282 而非回溯别名）。
+    let (gate, mut rx) = tokio::sync::mpsc::unbounded_channel::<ApprovalTicket>();
+    let verdicts = verdicts.to_vec();
+    let task = tokio::spawn(async move {
+        let mut asked = Vec::new();
+        while let Some((request, reply)) = rx.recv().await {
+            let allowed = verdicts
+                .iter()
+                .find(|(id, _)| *id == request.call_id.as_str())
+                .is_some_and(|(_, verdict)| *verdict);
+            asked.push(request.call_id);
+            let _ = reply.send(allowed);
+        }
+        asked
+    });
+    (gate, task)
+}
+
+/// 计划 B3 硬判据：`gate=None`（`DenyWrites`）与「每条都弹窗、人人答 No」
+/// （`TuiApproval`）必须逐位等价。
+///
+/// WHY 这是 `gate=None` 回落路径的反向证明：编排器里 `None ⇒ DenyWrites`、
+/// `Some ⇒ TuiApproval`。若「全拒的弹窗」与「不弹的直拒」在这四条口径上不等，
+/// 说明接了 TUI 的进程多做（或少做）了某件本不该做的事 —— 那正是本批唯一的
+/// 行为改点破裂的位置，不是测试写松了。
+#[tokio::test]
+async fn popup_answered_no_is_identical_to_deny_writes() {
+    let without = run_one_read_two_write(&DenyWrites).await;
+
+    let (gate, answered) = popup_verdicts(&[]);
+    let asker = TuiApproval::new(gate.clone());
+    let with = run_one_read_two_write(&asker).await;
+    // 先交出全部克隆，接收端才会退出；否则 await 会永久等待
+    drop(gate);
+    drop(asker);
+    let asked = answered.await.expect("接收端不 panic");
+
+    assert_eq!(
+        asked,
+        vec!["w1".to_string(), "w2".to_string()],
+        "弹窗只该问写工具，且两条各问一次"
+    );
+    assert_eq!(
+        with, without,
+        "闸门档全拒时必须与不接闸门的现状逐位相同（不多放行、不改回填序）"
+    );
+}
+
+/// 拒绝项 R3（ADR-232 D6）：一次 Yes 不得为后续写调用背书。
+///
+/// 这条同时是本仓第一例「获批写调用真的穿过循环进 provider」的测试 ——
+/// 此前审批面只测过拒绝侧，执行侧的 `approved=true` 通路无人走过。
+#[tokio::test]
+async fn one_yes_does_not_endorse_later_writes() {
+    let (gate, answered) = popup_verdicts(&[("w1", true)]);
+    let asker = TuiApproval::new(gate.clone());
+    let obs = run_one_read_two_write(&asker).await;
+    drop(gate);
+    drop(asker);
+    let asked = answered.await.expect("接收端不 panic");
+
+    assert_eq!(
+        asked,
+        vec!["w1".to_string(), "w2".to_string()],
+        "同批两条写必须各问一次；只问一条即为批量背书（R3）"
+    );
+    assert_eq!(
+        obs.calls,
+        vec!["probe.echo".to_string(), "probe.write".to_string()],
+        "获批的写执行、未获批的写绝不进 provider"
+    );
+    assert_eq!(obs.tool_calls, 3, "三条都算派发");
+    assert_eq!(obs.denied, 1, "只有 w2 记拒");
+    assert_eq!(obs.fed.len(), 3, "三条都要有回执，一条都不能静默丢");
+    assert_eq!(obs.fed[1].0, "w1");
+    assert!(!obs.fed[1].2, "获批执行的调用不得以 is_error 回填");
+    assert_eq!(
+        obs.fed[2],
+        ("w2".to_string(), ASK_REQUIRED_MARKER.to_string(), true),
+        "未获批的 w2 按 ask_required 回填，且位置仍在 w1 之后"
+    );
 }
 
 // ============================================================

@@ -27,6 +27,12 @@
 //! 本模块是**单次调用**的请求-应答。前者表达"这个会话准备怎么干"，后者承载"这一步
 //! 到底让不让干"。二者正交，命名上刻意分开（mode = 档位，gate = 闸门）。
 //!
+//! # 与 `nexus_app_server::ApprovalArbiter` 的关系（勿混）
+//! 那是宿主协议面的**多方投票**裁决器（`VoteOutcome`），与本模块的**单人 Yes/No 闸门**
+//! 不是同一件事，也不共享类型。另注：CODE_WIKI 的 nexus-app-server 行把 `ApprovalGate`
+//! 记作该裁决器的旧设计称谓（已改名 `ApprovalArbiter`）——本模块的 `ApprovalGate` 是
+//! 在役的新类型，两者同名不同物，顺名检索前先看在役定义落在 `crates/chimera-tui`。
+//!
 //! # fail-closed
 //! 任何非"显式同意"的路径都必须返回拒：弹窗 Esc/关闭、`send` 失败、`recv` 得
 //! `Disconnected`、gate 未附加（headless/测试/CLI 档）。与本仓既有先例同律

@@ -76,6 +76,26 @@ impl OverWindowHandle {
 /// 但形状不同,分开注入避免相互绑架签名。
 pub type ChatMessagesProvider = Arc<dyn Fn() -> Vec<ChatMessage> + Send + Sync>;
 
+/// `route_action` 的交互面句柄包（第三波 B 批）
+///
+/// WHY 打包而非加第 8 个参数：`route_action` 原本已 7 参，`clippy::too_many_arguments`
+/// 在超过 7 参时即警，而仓内没有 `clippy.toml` 可以放宽这个阈值 ⇒ 直接加 `gate`
+/// 会撞 `-D warnings`。打包后签名 5 参，且函数体经解构沿用既有局部名，零逻辑改动。
+///
+/// `gate` = 写工具审批闸门；`None` 表示本进程没有可问人的 UI（CLI 档、headless、
+/// 测试），此时 `agent.chat` 回落到 `DenyWrites` —— 即"能力未接线"时行为与今天逐位相同。
+#[derive(Clone, Copy)]
+pub(crate) struct ActionHandles<'a> {
+    /// 超窗兜底桥（`overwindow.run` 分支）
+    pub(crate) overwindow: Option<&'a OverWindowHandle>,
+    /// `/compact` 的结构化会话语料提供者
+    pub(crate) chat: Option<&'a ChatMessagesProvider>,
+    /// `/compact` 策展配置
+    pub(crate) curation: &'a CurationConfig,
+    /// 写工具审批闸门（见上）
+    pub(crate) gate: Option<&'a chimera_tui::approval_gate::ApprovalGate>,
+}
+
 /// 处理单个事件:仅 `TuiActionRequested` 触发域路由,其余忽略。
 ///
 /// WHY 纯 async(不 spawn):测试可直接 `await` 并断言发布的 Completed/Failed。
@@ -88,6 +108,7 @@ pub async fn handle_action_event(
     overwindow: Option<&OverWindowHandle>,
     chat: Option<&ChatMessagesProvider>,
     curation: &CurationConfig,
+    gate: Option<&chimera_tui::approval_gate::ApprovalGate>,
     event: &NexusEvent,
 ) {
     let NexusEvent::TuiActionRequested {
@@ -100,7 +121,20 @@ pub async fn handle_action_event(
         return;
     };
 
-    match route_action(bus, engine, overwindow, chat, curation, action_id, payload).await {
+    match route_action(
+        bus,
+        engine,
+        &ActionHandles {
+            overwindow,
+            chat,
+            curation,
+            gate,
+        },
+        action_id,
+        payload,
+    )
+    .await
+    {
         Ok(result) => {
             let _ = bus
                 .publish(NexusEvent::TuiActionCompleted {
@@ -136,59 +170,26 @@ pub async fn handle_action_event(
 async fn route_action(
     bus: &EventBus,
     engine: &QuestEngine,
-    overwindow: Option<&OverWindowHandle>,
-    chat: Option<&ChatMessagesProvider>,
-    curation: &CurationConfig,
+    handles: &ActionHandles<'_>,
     action_id: &str,
     payload: &str,
 ) -> Result<String, String> {
+    // 解构回局部名：下面的所有分支沿用既有变量名，避免"为打包句柄而改写整函数体"
+    // 这种无谓 churn（打包只为满足 clippy 的参数上限，不是为了重排逻辑）。
+    let ActionHandles {
+        overwindow,
+        chat,
+        curation,
+        gate,
+    } = *handles;
     match action_id {
-        // agent.chat / quest.start:需 query 构造 UserIntent 交 create_quest 真实分解。
-        // 命令面板派发通常无 query(应经 Insert/Chat 输入),此时明确失败而非空跑。
-        // M2:create_quest 经 call_with_budget 注入本层超时(120s,对齐
-        // mca-gateway per-endpoint 口径)+ CancellationToken;超时发
-        // OperationTimedOut 事件(经 bus),错误文本回 TuiActionFailed(不静默)。
-        // token 为新建未触发令牌,预留 TUI 侧取消链路接线。
+        // agent.chat / quest.start:需 query(命令面板派发通常无 query，应经 Insert/Chat
+        // 输入)，缺失时明确失败而非空跑；执行体见 route_chat_or_quest。
         "agent.chat" | "quest.start" => {
             let query = payload_str(payload, "query")
                 .filter(|q| !q.is_empty())
                 .ok_or_else(|| format!("{action_id} 需在 Chat 输入内容(i 进入 Insert 模式)"))?;
-            // Phase 7（ADR-232）：`agent.chat` 在 CHIMERA_LLM_LOOP=apply 时走 LLM 工具循环。
-            // WHY 审批取 DenyWrites：TUI 持有终端控制权，后台任务不能去读 stdin 问人；
-            // 写工具的 TUI 弹窗审批属后续波次，此档下只读工具自动放行、写调用被拒并
-            // 以 ask_required 回填模型（fail-closed，不静默执行副作用）。
-            if action_id == "agent.chat" && crate::commands::run::llm_loop_enabled() {
-                let outcome = crate::commands::run::llm_answer_with(
-                    bus,
-                    &query,
-                    &crate::llm::approval::DenyWrites,
-                )
-                .await
-                .map_err(|e| e.to_string())?;
-                return Ok(outcome.text);
-            }
-            let intent = UserIntent {
-                intent_id: format!("action-{action_id}"),
-                raw_text: query.clone(),
-                multimodal_inputs: vec![MultimodalInput::Text(query)],
-                risk_level: 0,
-            };
-            let token = CancellationToken::new();
-            let quest = call_with_budget(
-                engine.create_quest(intent),
-                DEFAULT_CALL_BUDGET,
-                &token,
-                "action_orchestrator.create_quest",
-                bus,
-            )
-            .await
-            .map_err(|e| e.to_string())? // 外层:CallBudgetError(超时/取消)
-            .map_err(|e| e.to_string())?; // 内层:QuestEngine 分解错误
-            Ok(format!(
-                "已创建 Quest「{}」({} 个任务)",
-                quest.title,
-                quest.tasks.len()
-            ))
+            route_chat_or_quest(bus, engine, gate, action_id, &query).await
         }
         "quest.pause" => {
             let qid = resolve_quest_id(engine, payload)?;
@@ -332,6 +333,67 @@ async fn route_action(
     }
 }
 
+/// `agent.chat` / `quest.start` 的执行体（从 `route_action` 抽出，第三波 B3）。
+///
+/// WHY 抽出而非登记新债：本支在"进不进 LLM 工具循环"上还要再分一岔，两支叠进同一个
+/// match 臂实测 208 行 ⇒ 越 `agents.md` §6.1 的 200 行红线。红线的正确处置是拆函数
+/// （分派器只留 5 行），不是往 `scripts/fnlen_baseline.txt` 加一行 —— 后者等于把
+/// "没人能一次读完"合法化，而本仓已多次登记过棘轮被这样喂大的病灶。
+///
+/// 审批档（ADR-232 D6 入口分档，安全决策而非便利决策）：
+/// - 有闸门 ⇒ [`TuiApproval`](crate::llm::approval::TuiApproval)：写工具逐条弹窗问人，
+///   Yes/No/Esc/关闭四条退出口全部回流一个决策；
+/// - 无闸门 ⇒ [`DenyWrites`](crate::llm::approval::DenyWrites)：只读放行、写一律拒并
+///   回填 `ask_required`。取后者保证"本进程没有可问人的 UI"时行为与本能力接线前逐位
+///   相同 —— 新能力附加上来时不得多放行一个写调用（fail-closed）。
+///
+/// WHY 不走 `CliApproval`：TUI 持有终端控制权，后台任务去读 stdin 会与 REPL 抢输入。
+async fn route_chat_or_quest(
+    bus: &EventBus,
+    engine: &QuestEngine,
+    gate: Option<&chimera_tui::approval_gate::ApprovalGate>,
+    action_id: &str,
+    query: &str,
+) -> Result<String, String> {
+    if action_id == "agent.chat" && crate::commands::run::llm_loop_enabled() {
+        let denied = crate::llm::approval::DenyWrites;
+        let popup = gate.map(|g| crate::llm::approval::TuiApproval::new(g.clone()));
+        let approval: &dyn crate::llm::approval::ToolApproval = match &popup {
+            Some(asker) => asker,
+            None => &denied,
+        };
+        let outcome = crate::commands::run::llm_answer_with(bus, query, approval)
+            .await
+            .map_err(|e| e.to_string())?;
+        return Ok(outcome.text);
+    }
+    let intent = UserIntent {
+        intent_id: format!("action-{action_id}"),
+        raw_text: query.to_string(),
+        multimodal_inputs: vec![MultimodalInput::Text(query.to_string())],
+        risk_level: 0,
+    };
+    // M2:create_quest 经 call_with_budget 注入本层超时(120s,对齐 mca-gateway
+    // per-endpoint 口径)+ CancellationToken;超时发 OperationTimedOut 事件(经 bus),
+    // 错误文本回 TuiActionFailed(不静默)。token 为新建未触发令牌,预留 TUI 侧取消链路接线。
+    let token = CancellationToken::new();
+    let quest = call_with_budget(
+        engine.create_quest(intent),
+        DEFAULT_CALL_BUDGET,
+        &token,
+        "action_orchestrator.create_quest",
+        bus,
+    )
+    .await
+    .map_err(|e| e.to_string())? // 外层:CallBudgetError(超时/取消)
+    .map_err(|e| e.to_string())?; // 内层:QuestEngine 分解错误
+    Ok(format!(
+        "已创建 Quest「{}」({} 个任务)",
+        quest.title,
+        quest.tasks.len()
+    ))
+}
+
 /// 解析目标 quest_id:优先 `payload.quest_id`;缺失时回退唯一活跃 Quest。
 ///
 /// WHY 不猜测多 Quest:存在多个 Quest 且未指定时返回 Err 明确提示,避免误操作
@@ -368,17 +430,16 @@ fn payload_str(payload: &str, key: &str) -> Option<String> {
 /// - recv 错误:`SlowConsumerDropped`(Lagged)记录后继续;`ChannelClosed` 等退出。
 /// - 调用方负责在退出时 `abort()` 句柄,避免 orphan task。
 ///
-/// `gate` = 写工具审批闸门（第三波 B 批）。B1 只把它接进签名而**不取用**——审批档
-/// 仍硬取 `DenyWrites`，故本批行为逐位不变；B3 才改 `route_action` 的取档。
-/// `None` = 无 UI 可问（headless/测试）⇒ 永远只能取 `DenyWrites`，这正是 B 批
-/// 默认档的语义：新能力未接线时不得比今天多放行一个写调用。
+/// `gate` = 写工具审批闸门（第三波 B 批）。有闸门 ⇒ `agent.chat` 的写工具逐条经弹窗
+/// 问人（`TuiApproval`）；`None` ⇒ 回落 `DenyWrites`，即无 UI 可问的进程（CLI/headless/
+/// 测试）行为与本能力接线前逐位相同。新能力未附加时不得多放行一个写调用。
 pub fn spawn_action_orchestrator(
     bus: EventBus,
     engine: Arc<QuestEngine>,
     overwindow: Option<OverWindowHandle>,
     chat: Option<ChatMessagesProvider>,
     curation: CurationConfig,
-    _gate: Option<chimera_tui::approval_gate::ApprovalGate>,
+    gate: Option<chimera_tui::approval_gate::ApprovalGate>,
 ) -> JoinHandle<()> {
     let mut rx = bus.subscribe();
     tokio::spawn(async move {
@@ -392,6 +453,9 @@ pub fn spawn_action_orchestrator(
                         let overwindow = overwindow.clone();
                         let chat = chat.clone();
                         let curation = curation.clone();
+                        // 发送端可克隆共享（UnboundedSender::send 取 &self），每个
+                        // 动作任务一份，互不串行化
+                        let gate = gate.clone();
                         tokio::spawn(async move {
                             handle_action_event(
                                 &bus,
@@ -399,6 +463,7 @@ pub fn spawn_action_orchestrator(
                                 overwindow.as_ref(),
                                 chat.as_ref(),
                                 &curation,
+                                gate.as_ref(),
                                 &event,
                             )
                             .await;
@@ -484,6 +549,7 @@ mod tests {
             None,
             None,
             &CURATION,
+            None,
             &action("quest.pause", "{}"),
         )
         .await;
@@ -511,6 +577,7 @@ mod tests {
             None,
             None,
             &CURATION,
+            None,
             &action("task.pause", "{}"),
         )
         .await;
@@ -543,6 +610,7 @@ mod tests {
             None,
             None,
             &CURATION,
+            None,
             &action_with_request_id("tui-42", "quest.pause", "{}"),
         )
         .await;
@@ -580,6 +648,7 @@ mod tests {
             None,
             None,
             &CURATION,
+            None,
             &action_with_request_id("tui-42", "task.pause", "{}"),
         )
         .await;
@@ -613,6 +682,7 @@ mod tests {
             None,
             None,
             &CURATION,
+            None,
             &action("view.switch_layout", "{}"),
         )
         .await;
@@ -636,6 +706,7 @@ mod tests {
             None,
             None,
             &CURATION,
+            None,
             &action("quest.pause", "{}"),
         )
         .await;
@@ -657,7 +728,7 @@ mod tests {
             metadata: EventMetadata::new("test"),
             cache_key: "k".into(),
         };
-        handle_action_event(&bus, &engine, None, None, &CURATION, &unrelated).await;
+        handle_action_event(&bus, &engine, None, None, &CURATION, None, &unrelated).await;
         assert!(
             matches!(rx.try_recv(), Ok(None)),
             "非 TuiActionRequested 事件不应触发任何发布"
@@ -720,6 +791,7 @@ mod tests {
             Some(&handle),
             None,
             &CURATION,
+            None,
             &action("overwindow.run", r#"{"query":"语义检索"}"#),
         )
         .await;
@@ -772,6 +844,7 @@ mod tests {
             Some(&handle),
             None,
             &CURATION,
+            None,
             &action("overwindow.run", r#"{"query":"x"}"#),
         )
         .await;
@@ -806,6 +879,7 @@ mod tests {
             Some(&handle),
             None,
             &CURATION,
+            None,
             &action("overwindow.run", "{}"),
         )
         .await;
@@ -829,6 +903,7 @@ mod tests {
             None,
             None,
             &CURATION,
+            None,
             &action("overwindow.run", r#"{"query":"x"}"#),
         )
         .await;
@@ -896,6 +971,7 @@ mod tests {
             None,
             None,
             &CURATION,
+            None,
             &action("quest.checkpoint", r#"{}"#),
         )
         .await;
@@ -922,6 +998,7 @@ mod tests {
             None,
             None,
             &CURATION,
+            None,
             &action("quest.checkpoint", "{}"),
         )
         .await;
@@ -962,6 +1039,7 @@ mod tests {
             None,
             chat.as_ref(),
             &cfg,
+            None,
             &action("compact", r#"{}"#),
         )
         .await;
@@ -1013,6 +1091,7 @@ mod tests {
             None,
             chat.as_ref(),
             &CURATION,
+            None,
             &action("compact", r#"{"args":""}"#),
         )
         .await;
@@ -1060,6 +1139,7 @@ mod tests {
             None,
             chat.as_ref(),
             &CURATION,
+            None,
             &action("compact", r#"{"args":"turbo"}"#),
         )
         .await;
@@ -1085,6 +1165,7 @@ mod tests {
             None,
             None,
             &CURATION,
+            None,
             &action("compact", "{}"),
         )
         .await;
@@ -1111,6 +1192,7 @@ mod tests {
             None,
             chat.as_ref(),
             &CURATION,
+            None,
             &action("compact", "{}"),
         )
         .await;

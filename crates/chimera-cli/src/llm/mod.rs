@@ -21,7 +21,7 @@ pub mod tools;
 #[cfg(feature = "mca")]
 pub mod mca_client;
 
-pub use approval::{ApproveAll, CliApproval, DenyWrites, ToolApproval};
+pub use approval::{ApproveAll, CliApproval, DenyWrites, ToolApproval, TuiApproval};
 pub use client::{LlmClient, LlmError, LlmLoopError, LlmLoopOutcome, LlmLoopStop};
 pub use mock::MockLlmClient;
 pub use tool_loop::{LlmToolLoop, LlmToolLoopConfig, ASK_REQUIRED_MARKER};

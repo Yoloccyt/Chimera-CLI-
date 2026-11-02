@@ -348,7 +348,7 @@ pub async fn execute_with_ctx(
         Some(chat_provider),
         // B2:/compact 策展配置随 TuiConfig 四源合并后透传编排器
         curation_cfg,
-        // B1 收下不取用（B3 换档）；先传 Some 让"通道断了"类缺陷在本批即暴露
+        // 写工具审批闸门：agent.chat 进 LLM 循环时，写调用逐条经它弹窗问人
         Some(approval_gate),
     ));
 
