@@ -134,6 +134,13 @@ pub struct TuiApp {
     /// `experience_card_provider` 都落在 `TuiApp`。
     pub(crate) approval_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<crate::approval_gate::ApprovalTicket>>,
+    /// 待答的写工具审批：`call_id` → 一次性回执发送端（第三波 B 批）
+    ///
+    /// WHY 单独一张表而不是把 sender 塞进弹窗：`PopupKind` 要能序列化，sender 不能。
+    /// 完整状态是「这张表 ∪ 弹窗栈上的 Approval」，两者的差集都由 `poll_approvals`
+    /// 的清扫按**拒**收口 —— 表里有而弹窗没了＝人没同意；弹窗在而表里没有＝答不出去。
+    pub(crate) pending_approvals:
+        std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>,
     /// 导出目录覆盖(Phase 6B/T6B.5):`None` = `~/.chimera/exports`
     ///
     /// WHY 做成可注入字段而非读环境变量:测试需要确定性地指定落盘位置,而
@@ -353,6 +360,7 @@ impl TuiApp {
             // Phase 6B/T6B.5:导出改异步后,构造期无在飞任务、无目录覆盖
             pending_export: None,
             approval_rx: None,
+            pending_approvals: Default::default(),
             export_dir: None,
         };
         // F-37:主题强调色装配期注入 —— 面板层仅持 &TuiState 不可达 TuiApp 主题

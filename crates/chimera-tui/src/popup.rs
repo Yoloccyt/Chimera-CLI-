@@ -118,6 +118,25 @@ pub enum PopupKind {
         /// 当前选中项下标(钳制在 [0, entries.len()))
         selected: usize,
     },
+    /// 写工具审批弹窗 —— LLM 要执行写工具时逐次问人（第三波 B 批，ADR-232 D6）
+    ///
+    /// WHY 只放标量：`PopupKind` 带 `Serialize`/`Deserialize`（状态可持久化），而回执
+    /// 通道句柄不可序列化 —— 它存在 `TuiApp::pending_approvals`（按 `call_id` 索引），
+    /// 弹窗只带"给人看的内容"加一个选择位。
+    ///
+    /// WHY 默认选中 Yes：与 `control_confirm` 同律（省掉每次多点一键的摩擦）。但
+    /// **默认值不构成放行** —— 未被显式 Enter 之前不会发出任何 send；Esc/关闭/通道断/
+    /// 无 gate 一律按拒（fail-closed，与 `llm/approval.rs` 的 stdin 错误按拒同律）。
+    Approval {
+        /// 工具调用唯一键 —— 决策只对它生效（ADR-232 拒绝项 R3：per-invocation 粒度）
+        call_id: String,
+        /// 工具名（如 `fs.write`）
+        tool: String,
+        /// 参数摘要（由 cli 侧截断后传入，避免整段 payload 打进终端）
+        args_preview: String,
+        /// 当前选中 Yes(true) 还是 No(false)
+        selected_yes: bool,
+    },
 }
 
 impl PopupKind {
@@ -508,9 +527,28 @@ impl PopupStack {
 
     /// 切换当前确认弹窗的选中项(Yes/No)
     pub fn toggle_confirm(&mut self) {
-        if let Some(PopupKind::Confirm { confirmed, .. }) = self.current_mut() {
-            *confirmed = !*confirmed;
+        // 同一对左右键服务两种二选一弹窗：`Confirm` 用 `confirmed`，`Approval` 用
+        // `selected_yes`。WHY 不给 Approval 另立键位/动作：让同一手势在两种弹窗里
+        // 语义分叉，等于给"哪个键才是同意"再造一处真相。
+        match self.current_mut() {
+            Some(PopupKind::Confirm { confirmed, .. }) => *confirmed = !*confirmed,
+            Some(PopupKind::Approval { selected_yes, .. }) => *selected_yes = !*selected_yes,
+            _ => {}
         }
+    }
+
+    /// 栈上是否存在指定 `call_id` 的待批弹窗（**全栈**查找，不是只看栈顶）
+    ///
+    /// WHY 全栈：审批弹窗可能被 HelpOverlay / ActionMenu 临时盖住。只看栈顶会把
+    /// "仍在等人"误判成"已被关闭"，进而向任务侧发出假的"拒"——那是把 UX 层叠
+    /// 当成安全决策，方向恰好反了。
+    pub fn has_approval(&self, call_id: &str) -> bool {
+        self.stack.iter().any(|popup| {
+            matches!(
+                popup,
+                PopupKind::Approval { call_id: cid, .. } if cid == call_id
+            )
+        })
     }
 
     /// 移动动作菜单选中项(down=true 下移,false 上移;钳制边界不环绕)
@@ -607,16 +645,7 @@ impl PopupStack {
 
         match popup {
             PopupKind::Notification { message, severity } => {
-                let block = Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Notification ")
-                    .border_style(Style::default().fg(severity.color()));
-                let text = Text::from(message.as_str());
-                let paragraph = Paragraph::new(text)
-                    .block(block)
-                    .alignment(Alignment::Center)
-                    .wrap(Wrap { trim: true });
-                paragraph.render(popup_area, buf);
+                draw_notification(popup_area, buf, message, severity);
             }
             PopupKind::Detail {
                 title,
@@ -638,36 +667,34 @@ impl PopupStack {
             PopupKind::Confirm {
                 prompt, confirmed, ..
             } => {
-                let block = Block::default().borders(Borders::ALL).title(" Confirm ");
-                let yes_style = if *confirmed {
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
-                } else {
-                    Style::default().fg(Color::Green)
-                };
-                let no_style = if *confirmed {
-                    Style::default().fg(Color::Red)
-                } else {
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD | Modifier::REVERSED)
-                };
-                let lines = vec![
-                    Line::from(prompt.as_str()),
-                    Line::from(""),
-                    Line::from(vec![
-                        Span::styled("[Yes]", yes_style),
-                        Span::raw("   "),
-                        Span::styled("[No]", no_style),
-                    ]),
-                    Line::from(""),
-                    Line::from("Left/Right to select, Enter to confirm, Esc to cancel."),
-                ];
-                let paragraph = Paragraph::new(Text::from(lines))
-                    .block(block)
-                    .wrap(Wrap { trim: true });
-                paragraph.render(popup_area, buf);
+                draw_yes_no(
+                    popup_area,
+                    buf,
+                    " Confirm ",
+                    vec![Line::from(prompt.as_str())],
+                    *confirmed,
+                );
+            }
+            // 与 Confirm 同一套 Yes/No 呈现，只多两行"要批准的是什么"的数据。
+            // 提示语刻意用 ASCII 英文而非新增 i18n 键：与既有 Confirm 的脚注行同源，
+            // 新增键要 en/zh 两份齐备并过 locale 完备性测试，而那与本次能力无关。
+            PopupKind::Approval {
+                tool,
+                args_preview,
+                selected_yes,
+                ..
+            } => {
+                draw_yes_no(
+                    popup_area,
+                    buf,
+                    " Tool approval ",
+                    vec![
+                        Line::from(format!("tool: {tool}")),
+                        Line::from(format!("args: {args_preview}")),
+                        Line::from("Allow this write call?"),
+                    ],
+                    *selected_yes,
+                );
             }
             PopupKind::HelpOverlay { entries, scroll } => {
                 // WHY 使用深色背景 + 标题栏与 Notification 区分:
@@ -802,6 +829,69 @@ impl PopupStack {
             }
         }
     }
+}
+
+/// 渲染通知弹窗（从 `PopupStack::render` 抽出）
+///
+/// WHY 抽出而非留在 `render`：`render` 已作为超 200 行函数登记在
+/// `scripts/fnlen_baseline.txt`，基线行自己的处置建议就是"split before it grows"，
+/// 而 only-decrease 棘轮意味着**往里加臂必红**。加 `Approval` 臂前先抽两个臂，
+/// 既满足棘轮，也把"改一次弹窗样式要改多处"的重复面收小。
+fn draw_notification(popup_area: Rect, buf: &mut Buffer, message: &str, severity: &Severity) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Notification ")
+        .border_style(Style::default().fg(severity.color()));
+    let text = Text::from(message);
+    Paragraph::new(text)
+        .block(block)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true })
+        .render(popup_area, buf);
+}
+
+/// 渲染 Yes/No 二选一弹窗 —— `Confirm` 与 `Approval` 共用同一呈现
+///
+/// `prompt_lines` = 提问内容（可多行，如审批弹窗的 tool/args 三行）；选中位与
+/// 脚注键位（Left/Right 切换、Enter 确认、Esc 取消）由本函数统一给，两处不再各写一遍。
+/// WHY 高亮规则必须单点：Yes/No 哪个被选中是**唯一的用户可见反馈**，两份实现迟早分叉，
+/// 而分叉的表现是"看着选中 No 却按 Yes 放行"——对写工具审批这是安全侧缺陷，不是样式问题。
+fn draw_yes_no(
+    popup_area: Rect,
+    buf: &mut Buffer,
+    title: &str,
+    prompt_lines: Vec<Line>,
+    selected_yes: bool,
+) {
+    let yes_style = if selected_yes {
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+    } else {
+        Style::default().fg(Color::Green)
+    };
+    let no_style = if selected_yes {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default()
+            .fg(Color::Red)
+            .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+    };
+    let mut lines: Vec<Line> = prompt_lines;
+    lines.extend([
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("[Yes]", yes_style),
+            Span::raw("   "),
+            Span::styled("[No]", no_style),
+        ]),
+        Line::from(""),
+        Line::from("Left/Right to select, Enter to confirm, Esc to cancel."),
+    ]);
+    Paragraph::new(Text::from(lines))
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .wrap(Wrap { trim: true })
+        .render(popup_area, buf);
 }
 
 /// 只读辅助方法,避免测试/调用方直接解构 enum

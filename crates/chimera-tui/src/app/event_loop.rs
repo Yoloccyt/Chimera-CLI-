@@ -1365,6 +1365,58 @@ impl TuiApp {
         self.apply_export_outcome(&path, result);
     }
 
+    /// 轮询写工具审批请求并把它变成弹窗 —— 由 `step()` 每帧调用（第三波 B 批）
+    ///
+    /// 做两件事，顺序固定：**先收新请求，后清扫差集**。
+    /// WHY 这个顺序：新到请求若先被清扫看见，会被判成"栈上没有对应弹窗"而立刻拒掉，
+    /// 于是"刚问出口就被答拒"——问人形同没问。
+    ///
+    /// 清扫是必需的而非兜底：弹窗可以不经键派发就消失（`PopupStack::clear()`、
+    /// 上层 `pop()`、或从持久化恢复出一个栈上有弹窗而 `pending_approvals` 里没有 sender
+    /// 的反向状态）。**每一条没有显式同意出口的路径都必须 send(false)**，与本仓既有
+    /// 先例同律（`chimera-cli/src/llm/approval.rs`：stdin 不可用按拒处理）。
+    ///
+    /// WHY 在帧循环里轮询而非 await：与 `poll_export_completion` 同理 —— TUI 主循环是
+    /// 同步 `step()` 驱动的，任何 await 点都会牵动整条循环的取消/超时语义；等待发生在
+    /// **任务侧**的 future 里，UI 侧零 await，帧预算 `MIN_FRAME_MS` 不受影响。
+    fn poll_approvals(&mut self) {
+        let mut arrived = Vec::new();
+        if let Some(rx) = self.approval_rx.as_mut() {
+            while let Ok(ticket) = rx.try_recv() {
+                arrived.push(ticket);
+            }
+        }
+
+        for (request, reply) in arrived {
+            let call_id = request.call_id;
+            // 同一 call_id 重复在表内出现时，先按**拒**收口旧的再登记新的：挂着的
+            // 发送端永远等不到回执，任务侧只能等到自身超时，比立即拒更糟。
+            if let Some(stale) = self.pending_approvals.insert(call_id.clone(), reply) {
+                let _ = stale.send(false);
+            }
+            self.state.popup_stack.push(PopupKind::Approval {
+                call_id,
+                tool: request.tool,
+                args_preview: request.args_preview,
+                // 默认选中 Yes 只是省一次按键；未 Enter 之前不会有任何 send
+                selected_yes: true,
+            });
+        }
+
+        // 差集清扫：表里挂着、但弹窗已不在**全栈**任何位置 → 拒
+        let dangling: Vec<String> = self
+            .pending_approvals
+            .keys()
+            .filter(|call_id| !self.state.popup_stack.has_approval(call_id))
+            .cloned()
+            .collect();
+        for call_id in dangling {
+            if let Some(reply) = self.pending_approvals.remove(&call_id) {
+                let _ = reply.send(false);
+            }
+        }
+    }
+
     /// 发布 Quest 暂停请求
     fn publish_pause(&mut self, quest_id: &str) {
         self.publish_control_event(NexusEvent::QuestPauseRequested {
@@ -1815,6 +1867,9 @@ impl TuiApp {
     pub(crate) fn step(&mut self, ev: Option<crossterm::event::Event>) -> Result<(), TuiError> {
         // Phase 6B/T6B.5:先收异步导出的回执,再刷状态 —— 同一帧内把"进行中"换成终态。
         self.poll_export_completion();
+        // 第三波 B 批：同一帧位序收写工具审批请求。放在 `update()` 之前，让"谁在等
+        // 人"这一事实与本轮渲染的弹窗栈一致；否则会出现"任务已被拒、界面还没问"。
+        self.poll_approvals();
         // 渲染前刷新状态,确保面板显示最新快照(与事件循环同序)。
         // WHY 节流跳过渲染但不跳过 update:数据必须每轮拉取,否则下一次
         // 渲染会呈现滞后快照,面板指标出现"一拍延迟"。
@@ -2319,5 +2374,194 @@ mod export_async_tests {
             "同步路径必须直接落终态,实际: {status}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+/// 写工具审批弹窗的决策回路（第三波 B 批，B2）
+///
+/// WHY 落在本模块内而非 `tests/`：被验的 `poll_approvals` 是私有帧钩子，且
+/// `pending_approvals` 是 `pub(crate)` —— 为测试升公开 API 会无谓扩面（同
+/// `pending_export` 的既有落点与理由）。
+///
+/// 全部用真通道驱动（`install_approval_requests` + `ApprovalGate::send`），不直接
+/// push 弹窗：绕开 `poll_approvals` 就等于把"请求 → 弹窗 → 决策"这条链的中段
+/// 排除在验证之外，而缺陷恰恰藏在中段的登记/清扫顺序里。
+mod approval_popup_tests {
+    use super::{PopupKind, TuiApp};
+    use crate::approval_gate::{ApprovalGate, ApprovalRequest, ApprovalTicket};
+    use crate::config::TuiConfig;
+    use crate::types::ViewMode;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use tokio::sync::{mpsc, oneshot};
+
+    /// 建一个装了审批通道的 app，返回（app，发送端，接收端句柄）
+    fn app_with_gate() -> (TuiApp, ApprovalGate) {
+        let mut app = TuiApp::new(TuiConfig {
+            default_view_mode: ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .expect("默认配置应可建 app");
+        let (tx, rx): (mpsc::UnboundedSender<ApprovalTicket>, _) = mpsc::unbounded_channel();
+        app.install_approval_requests(rx);
+        (app, tx)
+    }
+
+    fn ask(gate: &ApprovalGate, call_id: &str) -> oneshot::Receiver<bool> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        gate.send((
+            ApprovalRequest {
+                call_id: call_id.to_string(),
+                tool: "fs.write".to_string(),
+                args_preview: "{\"path\":\"secret.env\"}".to_string(),
+            },
+            reply_tx,
+        ))
+        .expect("接收端仍在 app 手里");
+        reply_rx
+    }
+
+    fn key(app: &mut TuiApp, code: KeyCode) {
+        app.handle_key_event(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn approval_on_top(app: &TuiApp) -> Option<String> {
+        match app.state.popup_stack.current() {
+            Some(PopupKind::Approval { call_id, .. }) => Some(call_id.clone()),
+            _ => None,
+        }
+    }
+
+    /// ① 一条请求 = 一张弹窗 + 表里一条待答（弹窗与表必须同时到位，缺一即挂死）
+    #[test]
+    fn request_becomes_popup_and_pending_entry_together() {
+        let (mut app, gate) = app_with_gate();
+        let mut reply = ask(&gate, "call-1");
+        app.poll_approvals();
+
+        assert_eq!(approval_on_top(&app).as_deref(), Some("call-1"));
+        assert_eq!(app.pending_approvals.len(), 1, "弹窗与待答表必须同增");
+        assert!(
+            matches!(reply.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+            "还没问完就不得给出任何决策"
+        );
+    }
+
+    /// ② Yes+Enter ⇒ 该 call_id 得真，且弹窗与表同批清空
+    #[test]
+    fn yes_enter_approves_and_consumes_pending() {
+        let (mut app, gate) = app_with_gate();
+        let mut reply = ask(&gate, "call-yes");
+        app.poll_approvals();
+
+        key(&mut app, KeyCode::Enter);
+
+        assert!(
+            matches!(reply.try_recv(), Ok(true)),
+            "Yes 选中态按 Enter 必须送回允许"
+        );
+        assert!(
+            app.pending_approvals.is_empty(),
+            "答完必须摘表，否则清扫会二次送回"
+        );
+        assert_eq!(approval_on_top(&app), None, "答完弹窗应出栈");
+    }
+
+    /// ③ 选中 No 后 Enter ⇒ 拒（同一条键位路径，只有选择位不同）
+    #[test]
+    fn no_enter_denies() {
+        let (mut app, gate) = app_with_gate();
+        let mut reply = ask(&gate, "call-no");
+        app.poll_approvals();
+
+        key(&mut app, KeyCode::Left); // ToggleConfirm：Yes → No
+        key(&mut app, KeyCode::Enter);
+
+        assert!(
+            matches!(reply.try_recv(), Ok(false)),
+            "选中 No 时 Enter 必须送回拒绝"
+        );
+        assert!(app.pending_approvals.is_empty());
+    }
+
+    /// ④ Esc ⇒ 拒，且不留下待答残留（"关掉了但没人答"是挂死的确切形状）
+    #[test]
+    fn esc_denies_and_leaves_nothing_pending() {
+        let (mut app, gate) = app_with_gate();
+        let mut reply = ask(&gate, "call-esc");
+        app.poll_approvals();
+
+        key(&mut app, KeyCode::Esc);
+
+        assert!(
+            matches!(reply.try_recv(), Ok(false)),
+            "Esc 属于非显式同意路径，必须按拒收口"
+        );
+        assert!(app.pending_approvals.is_empty());
+    }
+
+    /// ⑤ 两条待批互不影响：后到的在栈顶，答它不碰前一条（R3 的机器表达）
+    #[test]
+    fn two_pending_are_answered_independently() {
+        let (mut app, gate) = app_with_gate();
+        let mut first = ask(&gate, "call-a");
+        let mut second = ask(&gate, "call-b");
+        app.poll_approvals();
+
+        // 后到者压在上面，第一次 Enter 只该答它
+        assert_eq!(approval_on_top(&app).as_deref(), Some("call-b"));
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(second.try_recv(), Ok(true)), "只应答栈顶那条");
+        assert!(
+            matches!(first.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+            "前一条必须仍在等待——一次确认不得为整批背书"
+        );
+
+        // 栈顶回到 call-a，再答一次
+        assert_eq!(approval_on_top(&app).as_deref(), Some("call-a"));
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(first.try_recv(), Ok(true)));
+        assert!(app.pending_approvals.is_empty());
+    }
+
+    /// ⑥ 弹窗不经键派发就消失（这里用 clear 模拟被别的路径摘掉）⇒ 清扫按拒收口
+    ///
+    /// 这条是"清扫"存在的理由：只测 Yes/No/Esc 会漏掉一切非键退出口。
+    #[test]
+    fn popup_removed_without_key_is_denied_by_sweep() {
+        let (mut app, gate) = app_with_gate();
+        let mut reply = ask(&gate, "call-orphan");
+        app.poll_approvals();
+
+        app.state.popup_stack.clear();
+        app.poll_approvals(); // 下一帧的清扫
+
+        assert!(
+            matches!(reply.try_recv(), Ok(false)),
+            "弹窗消失而无人应答时必须按拒，不能让任务侧等到超时"
+        );
+        assert!(app.pending_approvals.is_empty());
+    }
+
+    /// ⑦ 同一 call_id 重复到达 ⇒ 旧的按拒收口，不留下永远等回执的发送端
+    #[test]
+    fn replaced_ticket_for_same_call_id_is_denied() {
+        let (mut app, gate) = app_with_gate();
+        let mut stale = ask(&gate, "call-dup");
+        app.poll_approvals();
+        let mut fresh = ask(&gate, "call-dup");
+        app.poll_approvals();
+
+        assert!(
+            matches!(stale.try_recv(), Ok(false)),
+            "被替换的发送端必须立刻收到拒，否则其任务侧会一直等"
+        );
+        assert_eq!(app.pending_approvals.len(), 1, "同 id 只该留一条待答");
+        assert!(
+            matches!(fresh.try_recv(), Err(oneshot::error::TryRecvError::Empty)),
+            "新的一条应仍在等待人作答"
+        );
     }
 }

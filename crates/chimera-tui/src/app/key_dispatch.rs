@@ -220,13 +220,65 @@ impl TuiApp {
         }
     }
 
+    /// 把审批决策送回任务侧（一次性：`oneshot::Sender::send(self)` 发完即失效）
+    ///
+    /// `send` 失败不补发也不报错：那代表任务侧已经不等了（取消/超时/循环退出），
+    /// 此时唯一正确的动作就是把这条从待答表里摘掉，别让它继续占着"在等人"的样子。
+    /// 表里没有对应 sender 时记 warn 而非静默：那说明弹窗与表已经不一致（持久化恢复、
+    /// 重复注入等），是必须留痕的状态缺陷，不是正常路径。
+    fn resolve_approval(&mut self, call_id: &str, allowed: bool) {
+        match self.pending_approvals.remove(call_id) {
+            Some(reply) => {
+                let _ = reply.send(allowed);
+            }
+            None => {
+                // 只发字段、不发文案字面量：本 crate 的 i18n 不变量同时禁 CJK 与
+                // ≥2 词的英文字面量（`tests/i18n_hardcode_invariant_test.rs`），
+                // 而给一条诊断日志新增豁免行等于放宽棘轮。字段名不是字符串字面量，
+                // 事件可由 target + 字段定位。
+                tracing::warn!(call_id = %call_id, reply_channel_present = false);
+            }
+        }
+    }
+
+    /// Esc / 关闭路径：栈顶若是审批弹窗，先按**拒**送回
+    ///
+    /// WHY 单独成函数：`Close` 是弹窗最通用的退出口（Esc、q、菜单复用同一动作），
+    /// 审批的 fail-closed 必须挂在这个唯一出口上，而不是挂在某个键位上——否则加一条
+    /// 新的关闭路径就漏一次，而漏掉的那次表现为"任务永远等不到回执"。
+    fn deny_current_approval(&mut self) {
+        if let Some(PopupKind::Approval { call_id, .. }) = self.state.popup_stack.current() {
+            let call_id = call_id.clone();
+            self.resolve_approval(&call_id, false);
+        }
+    }
+
     /// 执行弹窗语义动作(键表的单点解释器:表只表达"键 → 动作",副作用只此一处)
     fn apply_popup_action(&mut self, action: PopupKeyAction) {
         match action {
             PopupKeyAction::Close => {
+                // 关闭 = 人没同意 ⇒ 先按拒送回回执，再交给 pop（顺序不能反：pop 之后
+                // 就不知道刚被关掉的是哪一张审批弹窗了）。
+                self.deny_current_approval();
                 self.state.popup_stack.pop();
             }
             PopupKeyAction::ConfirmOrClose => {
+                // 审批弹窗先分流：它的 Yes/No 必须**两条路都回流**，不能只接 Yes。
+                // WHY 不复用 Confirm 的 on_confirm 命令串：`Close` 与 `ConfirmOrClose`
+                // 的未确认分支都只 `pop()` 而不调 `apply_confirm_command`，走那条路
+                // 决策永不回到任务侧，被挂住的是一次写工具调用而不是一条命令。
+                if let Some(PopupKind::Approval {
+                    call_id,
+                    selected_yes,
+                    ..
+                }) = self.state.popup_stack.current()
+                {
+                    let call_id = call_id.clone();
+                    let allowed = *selected_yes;
+                    self.state.popup_stack.pop();
+                    self.resolve_approval(&call_id, allowed);
+                    return;
+                }
                 // 确认弹窗且选中 Yes 时执行关联命令
                 if let Some(PopupKind::Confirm {
                     on_confirm,
