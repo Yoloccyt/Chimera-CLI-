@@ -367,12 +367,18 @@ fn payload_str(payload: &str, key: &str) -> Option<String> {
 ///   立即继续,避免长处理阻塞 recv。
 /// - recv 错误:`SlowConsumerDropped`(Lagged)记录后继续;`ChannelClosed` 等退出。
 /// - 调用方负责在退出时 `abort()` 句柄,避免 orphan task。
+///
+/// `gate` = 写工具审批闸门（第三波 B 批）。B1 只把它接进签名而**不取用**——审批档
+/// 仍硬取 `DenyWrites`，故本批行为逐位不变；B3 才改 `route_action` 的取档。
+/// `None` = 无 UI 可问（headless/测试）⇒ 永远只能取 `DenyWrites`，这正是 B 批
+/// 默认档的语义：新能力未接线时不得比今天多放行一个写调用。
 pub fn spawn_action_orchestrator(
     bus: EventBus,
     engine: Arc<QuestEngine>,
     overwindow: Option<OverWindowHandle>,
     chat: Option<ChatMessagesProvider>,
     curation: CurationConfig,
+    _gate: Option<chimera_tui::approval_gate::ApprovalGate>,
 ) -> JoinHandle<()> {
     let mut rx = bus.subscribe();
     tokio::spawn(async move {
@@ -663,8 +669,15 @@ mod tests {
         let bus = EventBus::new();
         let (engine, _qid) = engine_with_one_quest(&bus).await;
         let mut rx = bus.subscribe();
-        let handle =
-            spawn_action_orchestrator(bus.clone(), Arc::new(engine), None, None, CURATION.clone());
+        let handle = spawn_action_orchestrator(
+            bus.clone(),
+            Arc::new(engine),
+            None,
+            None,
+            CURATION.clone(),
+            // B1 编排器不取用闸门 ⇒ 无 UI 可问的档即今天的档（DenyWrites）
+            None,
+        );
         bus.publish(action("quest.cancel", "{}")).await.unwrap();
 
         let mut saw_completed = false;

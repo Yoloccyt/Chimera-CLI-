@@ -335,6 +335,9 @@ pub async fn execute_with_ctx(
             .unwrap_or_default()
     });
 
+    // 写工具审批通道：接收端注入 app，发送端交下面的编排器（B1 收下不取用，B3 换档）
+    let approval_gate = install_approval_gate(&mut app);
+
     // P0 交互链:启动 Action 编排器,消费命令面板/斜杠/面板派发的 TuiActionRequested,
     // 按 action_id 域前缀路由:quest.* 驱动同一 engine 真实执行,回发 TuiActionCompleted/Failed。
     // UI 本地态动作由 TUI 本地 dispatch_action 处理,不到达此处(误达则回 Failed)。
@@ -345,6 +348,8 @@ pub async fn execute_with_ctx(
         Some(chat_provider),
         // B2:/compact 策展配置随 TuiConfig 四源合并后透传编排器
         curation_cfg,
+        // B1 收下不取用（B3 换档）；先传 Some 让"通道断了"类缺陷在本批即暴露
+        Some(approval_gate),
     ));
 
     // 启动 TUI 事件循环(阻塞直到用户退出)
@@ -494,6 +499,24 @@ async fn build_data_pipeline(
             ))
         }
     }
+}
+
+/// 建写工具审批通道对：接收端注入 app，返回发送端交编排器（第三波 B 批）。
+///
+/// WHY 抽成函数而非内联在 `execute_with_ctx`：后者是组合根装配序列，物理行数本就贴着
+/// §6.1 的 200 行红线走，把通道对与它的三条 WHY 内联进去即越线（本批实测 195 → 205）；
+/// 与同文件 `build_overwindow_handle` / `spawn_l9_sidecars` 的既有处置一致——装配步骤
+/// 各自成函数，调用处一眼可读。
+///
+/// WHY 必须在 `app.run()` 之前调用：若晚于帧循环启动，任务侧发来的请求在本帧取不到，
+/// 而通道另一端尚未建立 ⇒ 任务读到 `Disconnected`，按 fail-closed 走拒——那会把
+/// "还没来得及问人"误记成"人不同意"，是本能力最不可接受的假阴性。
+fn install_approval_gate(
+    app: &mut chimera_tui::TuiApp,
+) -> chimera_tui::approval_gate::ApprovalGate {
+    let (gate, rx) = tokio::sync::mpsc::unbounded_channel();
+    app.install_approval_requests(rx);
+    gate
 }
 
 /// P1(ADR-072):构造超窗兜底桥并返回注入 Action 编排器所需的 [`OverWindowHandle`]。
