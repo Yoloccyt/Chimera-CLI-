@@ -323,8 +323,8 @@ selftest 加两条植入（env 读取点改名 / 窗口默认改 0），断言�
 **不做 `latest_events: Arc<VecDeque<Arc<NexusEvent>>>` 的逐元素 Arc 化。**
 
 - 收益上界：一次深拷 256 条 = **24.36 µs**，而这只在"本 tick 有新事件"时发生（≤4 次/秒）⇒ 稳态 ≤**98 µs/秒**，约一个核的 0.01%；同一进程一次全量对齐是 33 µs/次。
-- 代价实测面：`grep -rc latest_events crates/chimera-tui` 得 **222 处引用 / 约 40 个文件**（`panels/event_stream.rs` 23、`app/tests.rs` 20、`panels/log.rs` 14、`types.rs` 13、`panels/filter_cache.rs` 11…），且 `DataPipelineSnapshot` 是**公开类型**——`match NexusEvent::X{..}` 在 `&Arc<NexusEvent>` 上不成立，面板侧逐点要改成 `&**ev`。批准计划把它估成"5 处 + 夹具"，那是错的（本波计划里的 seam 清单只覆盖了当时查到的消费点，未穷举 bench/panel/test 面）。
-- 结论：用 40 文件的类型迁移换 ≤0.01% 的 CPU，与本仓"避免过度工程化 / 禁止无数据的推荐"两条同时相悖。
+- 代价实测面：现取命令 `grep -rc latest_events crates/chimera-tui`，把逐文件数字求和。**量纲钉死**：`grep -c` 数的是**匹配行数**（同一行出现两次只计一次），所以该和是引用点数的下界，不是"引用出现次数"；换口径（`grep -o | wc -l`）得到的数不可与本行比较。**该数随时点变，引用前重跑，勿抄本行**：2026-11-02 复测 231 行 / 47 文件，W2 决策时点为 222 行 / 约 40 文件，两个都是时点值。前列消费者：`panels/event_stream.rs`、`app/tests.rs`、`panels/log.rs`、`types.rs`、`panels/filter_cache.rs`（逐文件数以命令输出为准）。且 `DataPipelineSnapshot` 是**公开类型**——`match NexusEvent::X{..}` 在 `&Arc<NexusEvent>` 上不成立，面板侧逐点要改成 `&**ev`。批准计划把它估成"5 处 + 夹具"，那是错的（本波计划里的 seam 清单只覆盖了当时查到的消费点，未穷举 bench/panel/test 面）。
+- 结论：用一次跨数十文件的公开类型迁移换 ≤0.01% 的 CPU，与本仓"避免过度工程化 / 禁止无数据的推荐"两条同时相悖。
 - **翻转条件（写死在这里，便于日后重开）**：`max_event_history` 上调、tick 间隔下调、或事件流之外还有别的字段共用同一 deque（使一次替换变成多次深拷）三者任一发生 ⇒ `snapshot_swap_segment` 这条组已在盘上，重跑即可判定，无需再建比较器。Step 5 的"共有元素 `Arc::ptr_eq`"结构断言随本条一起不做——它是为一次未发生的迁移准备的锁。
 
 ### 验证与回滚
@@ -344,11 +344,13 @@ selftest 加两条植入（env 读取点改名 / 窗口默认改 0），断言�
 |---|---|
 | `ParticipantClient` trait 的方法面 | `prepare` / `commit` / `rollback` / `send_query` / `send_tool_invoke`——**无**任何能力列举方法；`grep -n "list_tools\|tools/list" crates/mcp-mesh/src/quantum/participant_client.rs` **0 命中** |
 | 线协议形状 | `TwoPcRequest{Prepare,Commit,Rollback}` + `QueryRequest` + `ToolInvokeRequest`，全是本仓自定义的 2PC/查询/调用消息（`participant_client.rs:70-140`）——不是 MCP |
-| 有没有 MCP JSON-RPC 编解码 | `grep -rn "jsonrpc\|JsonRpc\|JSON-RPC\|\"jsonrpc\"" crates/mcp-mesh/src/` **0 命中**（全 crate） |
+| 有没有 MCP JSON-RPC 编解码 | `grep -rn "jsonrpc\|JsonRpc\|JSON-RPC\|\"jsonrpc\"" crates/mcp-mesh/src/` **0 命中**——范围＝**仅本 crate**（命令自带 `crates/mcp-mesh/src/` 边界）。**这一行原写作"（全 crate）"是无范围误写**：全仓 tracked 现取 13 文件 / 59 命中，其中 `crates/**/*.rs` 9 文件 / 54 命中，帧形与本仓已有实现同源（见下两指针） |
 | `client_v2.rs`（名字像 MCP 客户端） | 其头注自陈：**2026-08-28 磁盘 ENOSPC 事故中数据丢失**，现按 WI-22/ADR-150 语义做"最小但真实的三项**骨架**重建"（`DiscoveryResult` / `SchemaCache` / `RouteRegistry` 三个数据结构），并明写"**未恢复**丢失前的完整连接器/协议握手逻辑" |
 | 配置侧 | `McpServerConfig{id, command, args, url, auth}` 无 capabilities；`MeshServer.capabilities: Vec<String>` 只是字符串列表（W0 更正 #2 的根因，与这里同源） |
 
 结论：真实 MCP 装配（`initialize` → `tools/list`，还要覆盖 stdio 与 HTTP/SSE 两种传输）是一个**新子系统**，需要自己的 ADR 与验证面，不属于"性能与可达性波次里补一根线"的规模。
+
+**W4b 成本因此下移（帧层不从零起）**：本仓已有 JSON-RPC v2 帧实现可直接作参照——`crates/nexus-app-server/src/protocol.rs:1`（模块自述"JSON-RPC v1 编解码 — App 协议传输帧"）、`:5-7`（请求/响应/通知三形态示例，含 `"jsonrpc":"2.0"` 字面）、`:77` `JsonRpcError`（带 -32700/-32600/-32601/-32602 标准码位）。于是 W4b 要新增的是 **MCP 语义层**（`initialize` 握手、`tools/list` 能力形状、两种传输的分帧），而不是再立一套帧；上表把 jsonrpc 命中数限定在"仅 `crates/mcp-mesh/src`"正是为了不把这个既有资产抹掉。
 
 **为什么不给 `discover_tools` 加一个返回空的实现先把线接上**：那会让 `chimera tool list` 看上去"接了 MCP"而永远返回空，且 `build_tool_runtime` 的 `descriptors().is_empty()` 分支会静默不注册——一个零生产者的装饰面，比不做更糟（本仓同类红线：不得先加零生产者装饰变体）。因此本波**不做**该子集，把它连同上述证据一起登记为待立 ADR 的独立项。
 

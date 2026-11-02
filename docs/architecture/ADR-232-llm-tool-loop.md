@@ -79,8 +79,8 @@ CLI 侧退出码映射固定：`Cancelled`→用户取消（`UserCancelled`）�
 |---|---|---|
 | `chimera run --llm` | `CliApproval` | 有人在终端 |
 | `chimera chat`（`CHIMERA_LLM_LOOP=apply`） | `CliApproval` | 同上 |
-| `action_orchestrator` 的 `agent.chat` | `DenyWrites` | 无人值守自动化 ⇒ 只允许只读工具 |
-| TUI | 未接线（Phase 7B） | 弹窗审批 UI 尚未实现；**当前 TUI 不走 LLM 循环**，诚实登记而非默认放行 |
+| `action_orchestrator` 的 `agent.chat`（TUI 命令面板进循环的实际路径） | `DenyWrites` | 无人值守自动化 ⇒ 只允许只读工具；TUI 持终端控制权，后台任务不能去读 stdin 问人 |
+| TUI 弹窗审批 | 未接线（Phase 7B ⇒ 本波 B 批） | **默认 `CHIMERA_LLM_LOOP` off ⇒ TUI 不进循环**；开档（`=apply`）后 TUI 经上一行的编排器分支进循环（`action_orchestrator.rs:160-169`），此档下审批硬取 `DenyWrites`（写调用被拒并回填 `ask_required`）。缺的是"逐次弹窗问人"这一档——诚实登记而非默认放行。本表旧版在此另起一行写"当前 TUI 不走 LLM 循环"，与上一行自相矛盾（编排器就住在 TUI 进程里），已合并订正 |
 
 **拒绝项 R3**：拒绝"批量审批一次通过后续全部写工具"。审批粒度必须是 per-invocation，否则第一次确认会为整条循环背书（与 ADR-231 D6 Pre 保序同源：把关不能合并）。
 
