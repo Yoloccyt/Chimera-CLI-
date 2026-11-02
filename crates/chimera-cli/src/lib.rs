@@ -4,7 +4,7 @@
 //! BACKEND:  fs
 //! PRODUCERS: 14 BudgetExceeded,ClaimIssued,ClaimRetracted,OperationTimedOut,ParentSelected…
 //! CONSUMERS: 0 -
-//! MATURITY: NOT-IMPL-CN|PLACEHOLDER-EN|SIMPLIFIED-CN
+//! MATURITY: NOT-IMPL-CN|PLACEHOLDER-EN
 //! CRATE-CONTRACT END
 //! Chimera CLI — NEXUS-OMEGA AI 编码代理的命令行入口
 //!
