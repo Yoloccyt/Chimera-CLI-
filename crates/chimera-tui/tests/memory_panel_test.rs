@@ -59,6 +59,11 @@ fn render_to_string(app: &mut TuiApp, width: u16, height: u16) -> String {
 
 #[test]
 fn test_memory_panel_renders_with_sample_data() {
+    // C-107/M77：标题断言按 En 文本写，必须自己 pin locale（同 bin 他测遗留的
+    // 全局 locale 不是输入；nextest 进程级隔离下必红，cargo test 同进程下偶然绿）。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    set_locale(Locale::En);
+
     let snapshot = DataSnapshot {
         memory_metrics: MemoryMetrics {
             hit_rate_percent: 92.5,
@@ -94,7 +99,7 @@ fn test_memory_panel_renders_with_sample_data() {
     assert!(
         content.contains("92.5%"),
         "hit rate should be rendered, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         content.contains("8192 bytes"),
@@ -109,6 +114,10 @@ fn test_memory_panel_renders_with_sample_data() {
 
 #[test]
 fn test_memory_panel_empty_data_renders_defaults() {
+    // C-107/M77：同上——locale 自 pin。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    set_locale(Locale::En);
+
     let snapshot = DataSnapshot {
         memory_metrics: MemoryMetrics::default(),
         ..Default::default()
@@ -189,7 +198,7 @@ fn test_memory_panel_displays_tier_distribution() {
     assert!(
         content.contains("Storage: Hot:5"),
         "面板应从事件流派生四层存储分布,实际内容前 300 字符: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
     set_locale(Locale::Zh); // 复位默认中文
 }
@@ -221,7 +230,7 @@ fn test_memory_panel_no_tier_event_shows_na() {
     assert!(
         content.contains("Storage: N/A"),
         "无事件时应诚实显示 N/A,实际内容前 300 字符: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
     set_locale(Locale::Zh);
 }

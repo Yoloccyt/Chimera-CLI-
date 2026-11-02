@@ -1,7 +1,16 @@
-//! SubAgent × Quest 执行引擎 — L10 组合根接线（P4-T3②，D-P5 裁决）
+//! SubAgent × Quest 执行引擎 — L10 侧适配器（**装配态：GATED-UNWIRED**）
 //!
 //! 对应架构层: **L10 Interface**（nexus-app-server）
 //! 对应任务: **P4-T3**（W20 集成周:Phase 3 遗留接线②）
+//!
+//! # 装配态（2026-10-27 实测，M62/C-82）
+//! **零生产构造**：全仓 `SubAgentQuestEngine` 的构造点只有本文件的 `#[cfg(test)]`
+//! 段与本 crate 的重导出；`chimera-cli`（唯一组合根）内 `subagent`/`SubAgent`
+//! **0 命中** —— 即没有任何 CLI 面消费它。因此本模块的现在时态只能写
+//! 「提供 L10 侧适配器、待装配」，**不得**写「已接线」：`nexus-subagent` 的
+//! crate 边可达（G-09 管）与「装配点存在」（本文件的实际状态）是两件事。
+//! 接线路径见 ADR-225 §5 T-19；台账注记见 `scripts/dep_edge_freeze.txt` 的
+//! `nexus-app-server|nexus-subagent` 行。
 //!
 //! # 设计（依赖铁律合规）
 //! [`nexus_subagent::SubAgentRuntime`]（L7）的 spawn 闭包需要真实执行体;
@@ -23,7 +32,7 @@ use nexus_subagent::runtime::{SubAgentHandle, SubAgentRuntime, SubAgentTask};
 use nexus_subagent::types::SubAgentSpec;
 use quest_engine::QuestEngine;
 
-/// SubAgent Quest 执行引擎 — 组合根接线（L10 → L7 + L9 向下合规）
+/// SubAgent Quest 执行引擎 — L10 侧适配器（GATED-UNWIRED；L10 → L7 + L9 向下合规）
 pub struct SubAgentQuestEngine {
     /// L7 运行时（拍卖 + JoinSet + 禁嵌套 + 规模上限）
     runtime: SubAgentRuntime,

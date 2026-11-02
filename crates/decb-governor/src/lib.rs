@@ -26,6 +26,8 @@
 //! - 档位切换 → `BudgetAdjusted` 事件
 //! - 溢出降级 → `BudgetExceeded` 事件 `[Critical]`
 //! - 统计报告 → `BudgetStatsReported` 事件
+//! - 结构化预算指标 → `BudgetMetricsUpdated` 事件(WS-4A,与统计报告同周期发布)
+//! - 降级后资源恢复 → `ResourceRecovered` 事件(§16.4 孤儿治理,打通 quest-engine ambient_mode)
 //!
 //! # 快速示例
 //! ```

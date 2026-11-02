@@ -81,6 +81,12 @@ jobs:
       # 与 ci.yml 同口径钉 1.97.1,使 A1 红线的红/绿可归因到代码而非工具链。
       - uses: dtolnay/rust-toolchain@1.97.1
 
+      # 同理钉解释器：本 job 的 python 步骤是红线读数判定面，浮动版本会让红/绿
+      # 可归因到 runner 镜像而非代码。与 ci.yml 同口径，理由全文见 ci.yml。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - uses: Swatinem/rust-cache@v2 # zizmor: ignore[cache-poisoning]
         with:
           workspaces: '.'

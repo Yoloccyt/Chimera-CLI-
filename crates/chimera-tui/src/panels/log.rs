@@ -18,7 +18,7 @@ use crate::panels::filter_cache::FilterCache;
 use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
-use crate::render::{scroll_offset_window, FOOTER_TEXT};
+use crate::render::scroll_offset_window;
 use crate::types::{PanelId, TuiCommand, TuiState};
 use event_bus::{EventSeverity, NexusEvent};
 
@@ -165,7 +165,7 @@ impl LogPanel {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(FOOTER_TEXT));
+        lines.push(Line::from(crate::t!("panel.footer")));
         Text::from(lines)
     }
 

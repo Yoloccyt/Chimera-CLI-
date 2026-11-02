@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """从 cargo metadata 取 lru 的版本约束与可用升级空间（为 ADR-167 的 A/B 裁决供事实）。"""
-import io
 import json
 import subprocess
 import sys
@@ -11,8 +10,11 @@ meta = subprocess.run(["cargo", "metadata", "--format-version", "1",
                        "--filter-platform", "x86_64-pc-windows-gnu"],
                       capture_output=True, text=True, encoding="utf-8", errors="replace")
 if meta.returncode != 0:
-    print("cargo metadata 失败:", (meta.stderr or "")[:300])
-    sys.exit(1)
+    # 方言：外部命令失败 = 判据没能跑完 = 退 2（不可判定），不是退 1（判红）。
+    # 借 1 会让 run_gate_manifest 的 `ok = rc == expect` 把「没跑成」记成「跑过且红」，
+    # 收口台账就把它当成待修缺陷消化掉（gate_rc.py F33 记的正是这条假绿通道）。
+    print("[UNDECIDABLE] cargo metadata 失败:", (meta.stderr or "")[:300])
+    sys.exit(2)
 d = json.loads(meta.stdout)
 
 print("=== 包与约束 ===")

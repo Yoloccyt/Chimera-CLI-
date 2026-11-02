@@ -12,18 +12,29 @@
 //! 对应创新点:GQEP(Gather-Query Execution Protocol)
 //!
 //! ## 核心职责
-//! - 使用 `FuturesUnordered` 流式聚集并发异步操作(对应 A.2 设计决策)
+//! - 使用 `FuturesUnordered` 流式聚集并发异步操作(对应 A.2 设计决策)，
+//!   并**按 `GqepConfig.max_concurrency` 分批入流**（ADR-202 Option B）：
+//!   首波最多 bound 个，每完成一个从 backlog 补一个，故在飞峰值始终 ≤ bound。
+//!   上界经 `effective_bound` 钳到 `[1, MAX_GATHER_FANOUT]`——`0` 等价串行、
+//!   `10^9` 被截到静态帽；限流只**延后**不**拒绝**（不引入新错误变体）。
 //! - 双层超时治理,杜绝永久挂起(对应尸检教训:5.4% 孤儿调用):
 //!   - **单操作超时**:`entangle` 内部 `tokio::time::timeout` 包裹每个 future
 //!     (阈值 `GqepConfig.default_timeout_ms`),超时返回 `OperationTimeout`
-//!   - **全局超时**:整个 `stream.next()` 循环用 `tokio::time::timeout` 包裹
+//!   - **全局超时**:整个采集循环用 `tokio::time::timeout_at` 包裹
 //!     (阈值 `GqepConfig.gather_deadline_ms`),超时返回 `GlobalTimedOut` 并
 //!     发布 `GatherTimedOut` 事件;`0` 禁用(向后兼容)。WHY 全局超时:大规模
-//!     gather 时单操作超时累积可能导致整体执行时间失控,全局 deadline 为整批兜底
+//!     gather 时单操作超时累积可能导致整体执行时间失控,全局 deadline 为整批兜底。
+//!     WHY `timeout_at` 而非相对 `timeout`:分批入流后多批必须**共享同一个绝对
+//!     时刻**，逐批重置会把总墙钟放大成 `deadline × 批数`（ADR-202 I4）。
+//! - 四段守恒（ADR-202 I5，红线级）：`succeeded + failed + abandoned + not_started
+//!   == total`。`abandoned` 已入流被 poll（有 `OrphanGuard` 归因）；`not_started`
+//!   **从未入流因而从未被 poll**，不会触发 `OrphanGuard`，只能由 `GatherResult
+//!   ::not_started` 与 `GatherTimedOut` 事件字段显式归因——**不得与 abandoned 合并**：
+//!   前者可安全重试，后者重试可能重复副作用。
 //! - 批量原子性保证:任一失败触发回滚,回滚本身也经 GQEP 聚集
 //! - 集成 QEEP `OrphanDetector`,检测孤儿调用并发布 Critical 事件
 //! - Phase 7 D-6 占位治理:`timeout_stats()` 从恒零占位改为双层超时真实
-//!   计数（计数点收敛在 with_timeout 超时分支 + collect_with_deadline 全局分支）
+//!   计数（计数点收敛在 with_timeout 超时分支 + collect_bounded 全局分支）
 //!
 //! ## 对应尸检教训
 //! Claude Code 5.4% 孤儿调用(void Promise 无 await)的根因是:
@@ -75,7 +86,7 @@ pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use batch::RollbackFn;
-pub use config::GqepConfig;
+pub use config::{GqepConfig, MAX_GATHER_FANOUT};
 pub use error::GqepError;
 pub use gatherer::GqepExecutor;
 pub use timeout::with_timeout;
@@ -185,7 +196,7 @@ pub(crate) fn record_with_timeout_call(timeout_enabled: bool) {
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::batch::RollbackFn;
-    pub use crate::config::GqepConfig;
+    pub use crate::config::{GqepConfig, MAX_GATHER_FANOUT};
     pub use crate::error::GqepError;
     pub use crate::gatherer::GqepExecutor;
     pub use crate::timeout::with_timeout;

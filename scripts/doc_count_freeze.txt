@@ -22,9 +22,13 @@
 #   (docs still say "9 categories" in crates/event-bus), workspace 43 members.
 # =============================================================================
 
-nexus_event_variants = 152
+nexus_event_variants = 154
 event_topic_variants = 10
-workspace_crates = 39
+workspace_crates = 46
+# ADR-222 (2026-10-20): +nexus-telemetry (L0-B core foundation), 39 -> 40.
+# ADR-222 D2 (2026-10-20): +6 L0-A sibling contract crates (core/sparse/safety/
+# seams/mca/memory), 40 -> 46. The 1+6 split is a deliberate reversal of the
+# ADR-193 subtraction trend, ruled by the owner; see ADR-222 D2/D5.
 
 # --- drift registry: doc declarations currently disagreeing with the lock ---
 # format: drift = <file> | <metric> | <declared>

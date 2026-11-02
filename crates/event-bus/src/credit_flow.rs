@@ -397,10 +397,13 @@ mod tests {
 
     #[test]
     fn test_concurrent_acquire_no_over_issue() {
-        // WHY 用多线程测试替代 loom:loom 需 nightly-only 特性,在 Windows
-        // GNU 工具链下编译失败(任务约定:编译失败则用 8 线程 × 1000 次
-        // acquire 竞争测试替代,报告说明)。8 线程同时竞争 1000 信用,
-        // 验证任何交错下"成功总数 + 剩余可用 == 初始容量"(信用守恒,不超发)。
+        // WHY 用多线程测试（而非 loom 模型检验）：
+        // 原注写「loom 需 nightly-only、Windows GNU 下编译失败」——**该断言已失实**：
+        // R2 C-102 实测（探针 `tmp/loom_probe`，loom 0.7.2，rustc 1.97.1,
+        // x86_64-pc-windows-gnu）编过 59.9s 且 `loom::model` 真能抓出丢更新交错
+        // （对照组与反例组均如预期）。真正的原因是**取舍**：本测试锁的是
+        // 信用守恒（成功总数 + 剩余 == 初始容量）这个全称不变式，用 8 线程 × 1000
+        // 次真并发抽样压它；loom 全排列属另一层工具，见 ADR-226 的 E1 闸门。
         let cf = Arc::new(CreditFlow::with_capacity(1000));
         let mut handles = Vec::new();
         for _ in 0..8 {

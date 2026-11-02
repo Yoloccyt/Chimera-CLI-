@@ -9,14 +9,15 @@
 //! - [`seam`]:Clock / Rng / Fs / Net 四个缝合点（手册 §10.8,Ω₇ 可测试性根基）
 //! - [`reduce`]:DetReduce 双模式归约 — 固定分块树 + ReproBLAS 式指数分桶（手册 §10.2,ADR-102/106）
 //! - [`utilization`]:WI-34 CPU 利用率测量基座 — tokio 稳定子集 + rayon 池活跃双探针（v4.0 §7.5.4）
-//! - [`telemetry`]:ADR-197 计算面遥测与池饱和判定 — 按 TaskKind 归因计数、
-//!   千分比占用判定与三态处置策略（env）、饱和观测事件周期上报
+//! - [`telemetry`]:ADR-197 计算面遥测适配层（ADR-222 D3）— 纯判定与上报循环已上提
+//!   `nexus-telemetry`，本模块只留 `ComputeTelemetry` 适配器与旧签名包装
+//! - [`counters`]:按 TaskKind 归因的有状态计数器（定长原子数组，热路径零分配零锁）
 //! - [`calibration`]:ADR-198 Phase B1 阈值校准闭环 — 把已有的 SPRT 序贯检验
 //!   接到 [`update_threshold`](bridge::ComputeBridge::update_threshold);
 //!   默认 `off`（不探测不写表），`observe` 只出证据，`apply` 才写表
 //!
 //! # 依赖关系（T14 预留）
-//! - T14(WI-34):各 crate CPU 热点经 [`bridge::spawn_compute`] 卸载,序贯检验采样接线
+//! - T14(WI-34):各 crate CPU 热点经 [`bridge::spawn_compute_batch`] 卸载,序贯检验采样接线
 //!   （已由 [`calibration`] 于 ADR-198 完成采样→判定→写表闭环，默认 off）;
 //!   缝合点注入生产实现;利用率采样器驱动中期验收
 //!
@@ -26,6 +27,7 @@
 
 pub mod bridge;
 pub mod calibration;
+pub mod counters;
 pub mod dispatch;
 pub mod hts;
 pub mod reduce;
@@ -44,6 +46,7 @@ pub use reduce::{reduce, repro_reduce, tree_reduce_fixed, ReduceMode, DEFAULT_CH
 // T1(WI-34):CPU 利用率测量基座(手册 §8.5 / v4.0 §7.5.4)
 pub use utilization::{RayonProbe, TokioProbe, UtilizationSampler, UtilizationSnapshot};
 // A1/ADR-197:饱和判定与按类型归因遥测(装配层直接调用上报器与判定纯函数)
+// 纯判定与契约来自 nexus-telemetry（ADR-222 D3），计数器来自 counters；两者经本模块保持旧路径。
 pub use telemetry::{
     parse_saturation_mode, parse_threshold_bp, report_needed, saturation_mode, saturation_ratio_bp,
     spawn_saturation_reporter, threshold_bp, KindCounters, KindStat, SaturationMode,

@@ -18,6 +18,21 @@
 //! - **铁律3**: 案例卡片只读消费（蒸馏提取模式，不修改原卡片）
 //! - **f32 红线**: GlobalExperience/SuccessPattern/StrategyRecord 含 f32，仅 PartialEq
 //! - **蒸馏幂等**: 已蒸馏案例标记 `distilled=true`，不重复蒸馏
+//!
+//! # 装配态（② 诊断/离线研究面；2026-10-09 v3.5 W6-4 现取）
+//!
+//! 本类型今日**没有任何生产构造点**：全仓对 `DualExperienceBank::new` 的调用
+//! 仅出现在本文件的 `#[cfg(test)]` 与 `tests/` 夹具里；`lib.rs` 只 `pub use` 导出它。
+//! 同时它对应的**开关也没人读**：L0 `nexus-contracts::harness_dimensions` 的
+//! `dual_experience_bank: bool`（默认 true）在全仓的唯一 `.字段` 引用是定义件自身的断言
+//! ⇒ “启用双层经验库”在配置面上为真、在行为面上为假。
+//! 因此本模块应读作“案例库→蒸馏的算法已交付并可测，但未接入生产链路”；
+//! 接进 `MlcEngine`/经验闭环属行为变更（会改变卡片去向与检索结果集），需 ADR 并与台账同批。
+//!
+//! ⚠ **同名双实现警示**（Spec W6-3「同名概念冲突登记」类）：`repo-wiki::experience_bank::DualExperienceBank`
+//! 是**另一个**同名类型（P1-3 Task 5，案例级 = `WikiEntry`、全局蒸馏 = `distilled_insights` 表，
+//! 落在 L5 并有 `SQLite` 持久化）。两者不同源、不互调；引用时务必带路径前缀，
+//! 否则会误判“双层经验库已接线”（L5 那个有库表，L2 这个零生产构造）。
 
 use std::collections::HashMap;
 

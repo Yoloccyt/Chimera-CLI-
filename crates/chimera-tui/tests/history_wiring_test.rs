@@ -63,10 +63,17 @@ async fn pipeline_with_history_backfills_and_persists() {
     let subscriber = EventSubscriber::new(bus.clone());
     let pipeline = DataPipeline::new_with_history(subscriber, fast_config(), Arc::new(history));
 
-    // 轮询等待回填进快照(首 tick 含 SysMetricsCollector::new 的系统全量
-    // 采集,Windows 上可达数秒;固定 sleep 会造成时序脆弱,与 data_test.rs
-    // 的 wait_for_events 同一模式)。build_scaled_timeout!(2.0):debug 8s/release 3s。
-    let deadline = std::time::Instant::now() + build_scaled_timeout!(2.0);
+    // 轮询等待回填进快照（首 tick 含 SysMetricsCollector::new 的首轮 CPU/内存
+    // 采样（W2 起定向刷新，不再 new_all 全量枚举）；固定 sleep 会造成时序脆弱，
+    // 与 data_test.rs 的 wait_for_events 同一模式）。
+    //
+    // C-113/M78：护栏由 `build_scaled_timeout!(2.0)`（debug 8s）抬到 `(5.0)`（debug 20s）。
+    // 实测：1765 用例并跑时本用例烧尽 8s 窗口仍没等到回填（报 8.7s），单跑只要 2.2s。
+    // 这是**看门狗而不是性能阈值**——断言强度不变（仍然是「回填必然出现」），只把
+    // 「真的挂死」与「被 runtime 饥饿」分开；仓内同先例见
+    // `data_test.rs::pipeline_snapshot_includes_net_rate_history`（10s 看门狗，
+    // 注因全量 nextest 并行饥饿而由 3s 抬到 10s）。真挂死仍会越过 20s 红。
+    let deadline = std::time::Instant::now() + build_scaled_timeout!(5.0);
     let mut snap = pipeline.snapshot();
     while snap.resource_cpu_backfill.is_empty() && std::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -84,7 +91,9 @@ async fn pipeline_with_history_backfills_and_persists() {
 
     // 采样写入路径:轮询等待 fire-and-forget insert 落库后独立连接直查
     let verify = MetricsHistory::new(&db_path).await.expect("reopen db");
-    let deadline = std::time::Instant::now() + build_scaled_timeout!(2.0);
+    // C-113/M78：同一个饥饿机制——fire-and-forget insert 走 spawn_blocking，
+    // runtime 被抢时落库也会超 8s ⇒ 看门狗同步抬到 (5.0)，断言强度不变。
+    let deadline = std::time::Instant::now() + build_scaled_timeout!(5.0);
     let mut cpu = Vec::new();
     while cpu.len() < 2 && std::time::Instant::now() < deadline {
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -128,7 +137,7 @@ async fn plain_pipeline_keeps_backfill_fields_empty() {
     let pipeline = DataPipeline::new(subscriber, fast_config());
 
     // 轮询等待首个 tick(revision>0)后断言回填字段恒空;同样规避
-    // SysMetricsCollector 初始化耗时的时序脆弱。
+    // SysMetricsCollector 首轮采样耗时的时序脆弱。
     let deadline = std::time::Instant::now() + build_scaled_timeout!(2.0);
     let mut snap = pipeline.snapshot();
     while snap.revision == 0 && std::time::Instant::now() < deadline {

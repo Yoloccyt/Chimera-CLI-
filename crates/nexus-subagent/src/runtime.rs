@@ -8,7 +8,8 @@
 //! - **禁嵌套**:spawn 时检查任务来源（运行中任务再 spawn = 嵌套）,
 //!   触发 [`NestedSubAgentForbidden`]（L0 契约,运行期断言;编译期由
 //!   API 面保证:spawn 只能从运行时入口调用）;
-//! - **规模上限**:`SWARM_LIMIT = 8`（ADR-148 门禁,超额拒绝）;
+//! - **规模上限**:`SWARM_LIMIT = 8`（ADR-148 门禁,满载拒绝并返回
+//!   [`NexusError::SwarmCapacityExceeded`]——与嵌套违规变体可区分,C-23）;
 //! - 取消:每任务 [`CancellationToken`] 四因传播;
 //! - **错误分类**(架构方向 F-c,2026-09-12):任务结果与 [`join_next_typed`]
 //!   ([`SubAgentRuntime::join_next_typed`]) 携带 [`SubAgentError`]
@@ -111,16 +112,22 @@ impl SubAgentRuntime {
     /// （嵌套 spawn）→ [`NexusError::NestedSubAgentForbidden`]。
     ///
     /// # 规模上限
-    /// 活跃任务 ≥ [`SWARM_LIMIT`] → 拒绝（Err）。
+    /// 活跃任务 ≥ [`SWARM_LIMIT`] → 拒绝（[`NexusError::SwarmCapacityExceeded`]，
+    /// 携带 active/limit 快照；与嵌套违规 [`NexusError::NestedSubAgentForbidden`]
+    /// 可区分，C-23）。
     pub fn spawn(
         &mut self,
         spec: SubAgentSpec,
         task: SubAgentTask,
         from_task: Option<&str>,
     ) -> Result<SubAgentHandle, NexusError> {
-        // 1. 规模上限（ADR-148:Swarm ≤ 8）
+        // 1. 规模上限（ADR-148:Swarm ≤ 8）——满载专用变体（C-23）:
+        //    此前复用 NestedSubAgentForbidden 保守拒否,满载与嵌套不可诊断区分
         if self.active.len() >= SWARM_LIMIT {
-            return Err(NexusError::NestedSubAgentForbidden); // 复用:超限即拒（保守）
+            return Err(NexusError::SwarmCapacityExceeded {
+                active: self.active.len(),
+                limit: SWARM_LIMIT,
+            });
         }
         // 2. 禁嵌套断言（运行期;编译期由 API 面保证——spawn 仅运行时入口）
         if let Some(parent) = from_task {
@@ -286,7 +293,8 @@ mod tests {
         while rt.join_next().await.is_some() {}
     }
 
-    /// 规模上限 — 活跃 ≥ 8 拒绝
+    /// 规模上限 — 活跃 ≥ 8 拒绝,且满载（SwarmCapacityExceeded）与嵌套
+    /// （NestedSubAgentForbidden）两路径变体可区分（C-23 可诊断性要求）
     #[tokio::test]
     async fn swarm_limit_enforced() {
         let mut rt = SubAgentRuntime::new();
@@ -304,7 +312,21 @@ mod tests {
             Box::new(|_s, _c| Ok("overflow".into())),
             None,
         );
-        assert!(err.is_err(), "超限必须拒绝");
+        // 满载必须以专用变体拒绝,携带 active/limit 快照（≠ 嵌套变体,可诊断区分）
+        assert!(
+            matches!(
+                err,
+                Err(NexusError::SwarmCapacityExceeded {
+                    active: SWARM_LIMIT,
+                    limit: SWARM_LIMIT,
+                })
+            ),
+            "满载必须以 SwarmCapacityExceeded{{active: {SWARM_LIMIT}, limit: {SWARM_LIMIT}}} 拒绝"
+        );
+        assert!(
+            !matches!(err, Err(NexusError::NestedSubAgentForbidden)),
+            "满载不得再复用嵌套变体（C-23 前的保守行为,已退役）"
+        );
         // 清理
         while rt.join_next().await.is_some() {}
     }

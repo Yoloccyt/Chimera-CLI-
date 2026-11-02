@@ -238,6 +238,76 @@ fn chat_view_keyboard_scroll_routes_to_chat_panel() {
 }
 
 // ============================================================
+// R5 F-26:贴底按 ↓(滚轮向下同语义)保持跟随 —— 修复前无条件解除
+// follow,新回复到达后视口滞留原地、新消息在视口外且无未读提示
+// ============================================================
+
+#[test]
+fn chat_view_bottom_down_keeps_following() {
+    let mut app = make_app(ViewMode::Chat);
+    seed_long_conversation(&mut app, 40);
+    let baseline = render_frame_text(&mut app);
+    assert!(
+        baseline.contains("msg-39") && !baseline.contains("msg-00"),
+        "贴底基线应显示最新消息 msg-39 且最早消息 msg-00 不可见"
+    );
+
+    // 贴底按 ↓:画面保持贴底(修复后 follow 不被解除)
+    app.handle_key_event(key(KeyCode::Down));
+    let after_down = render_frame_text(&mut app);
+    assert!(
+        after_down.contains("msg-39") && !after_down.contains("msg-00"),
+        "贴底按 ↓ 应保持贴底画面不变"
+    );
+
+    // 流式新回复到达:跟随语义下新消息应立即可见。
+    // 判别力:修复前按 ↓ 已解除 follow,且中间渲染帧把偏移钳回旧底部,
+    // 新消息行恰在视口外 → contains 必败。
+    app.state_mut()
+        .chat_messages
+        .push(chimera_tui::ChatMessage {
+            role: chimera_tui::ChatRole::Assistant,
+            content: "msg-40-new-reply".into(),
+        });
+    let after_new = render_frame_text(&mut app);
+    assert!(
+        after_new.contains("msg-40-new-reply"),
+        "贴底按 ↓ 后新回复到达应仍贴底可见(修复前 follow 已静默解除,新消息在视口外)"
+    );
+}
+
+#[test]
+fn chat_view_bottom_wheel_down_keeps_following() {
+    // 滚轮向下与 Down/j 同语义(R5 F-26:滚轮 arm 同病同修)
+    let mut app = make_app(ViewMode::Chat);
+    seed_long_conversation(&mut app, 40);
+    let baseline = render_frame_text(&mut app);
+    assert!(
+        baseline.contains("msg-39") && !baseline.contains("msg-00"),
+        "贴底基线应显示最新消息 msg-39 且最早消息 msg-00 不可见"
+    );
+
+    app.handle_mouse_event(wheel(MouseEventKind::ScrollDown, 10, 10));
+    let after_wheel = render_frame_text(&mut app);
+    assert!(
+        after_wheel.contains("msg-39") && !after_wheel.contains("msg-00"),
+        "贴底向下滚轮应保持贴底画面不变"
+    );
+
+    app.state_mut()
+        .chat_messages
+        .push(chimera_tui::ChatMessage {
+            role: chimera_tui::ChatRole::Assistant,
+            content: "msg-40-new-reply".into(),
+        });
+    let after_new = render_frame_text(&mut app);
+    assert!(
+        after_new.contains("msg-40-new-reply"),
+        "贴底向下滚轮后新回复到达应仍贴底可见(修复前 follow 已静默解除)"
+    );
+}
+
+// ============================================================
 // R5 F-01:Chat 视图 Ctrl+P 后命令面板必须真被渲染
 // ============================================================
 

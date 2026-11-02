@@ -15,7 +15,5 @@
 # Each entry carries a WHY note for the debt it freezes.
 # =============================================================================
 
-# doctor.rs: 纯占位构造(`let _bus = EventBus::new()`,立即 drop,零行为)
-crates/chimera-cli/src/commands/doctor.rs 1
-# tui.rs: TUI 主路径手写装配残留(B-b 最大迁移项,已迁 1 处)
-crates/chimera-cli/src/commands/tui.rs 2
+# (empty) — T2.1 已把 doctor/tui 的派生构造迁入 composition.rs；
+# 本文件保留为空，后续新增绕过必须登记并解释 WHY。

@@ -12,6 +12,9 @@
 //! # 性能红线
 //! `WindowAffinity::fold()` 是 O(1) 查表,不进任何热路径分配。
 //! 单次调用应 < 10ns(p99 受 CPU 缓存影响,目标 < 50ns)。
+//! 非门禁目标:上述数值仅为开发参考值,不是 CI 门禁红线——本 bench 在
+//! scripts/bench_inventory_freeze.txt 登记为 dev-only,perf_thresholds.toml /
+//! perf_redlines.toml 双表均无 window_affinity 阈值键,bench_check.yml 不会断言。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};

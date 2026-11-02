@@ -26,7 +26,6 @@ digraph chimera {
   "kvbsr-router" [label="kvbsr-router\nL6"];
   "omega-learner" [label="omega-learner\nL6"];
   "osa-coordinator" [label="osa-coordinator\nL6"];
-  "router-traits" [label="router-traits\nL6"];
   "sesa-router" [label="sesa-router\nL6"];
   "gsoe-evolution" [label="gsoe-evolution\nL5"];
   "repo-wiki" [label="repo-wiki\nL5"];
@@ -34,7 +33,6 @@ digraph chimera {
   "qeep-protocol" [label="qeep-protocol\nL4"];
   "seccore" [label="seccore\nL4"];
   "cmt-tiering" [label="cmt-tiering\nL3"];
-  "lsct-tiering" [label="lsct-tiering\nL3"];
   "scc-cache" [label="scc-cache\nL3"];
   "session-store" [label="session-store\nL3"];
   "hcw-window" [label="hcw-window\nL2"];
@@ -42,7 +40,14 @@ digraph chimera {
   "nmc-encoder" [label="nmc-encoder\nL2"];
   "event-bus" [label="event-bus\nL1"];
   "nexus-core" [label="nexus-core\nL1"];
+  "nexus-telemetry" [label="nexus-telemetry\nL1"];
   "nexus-contracts" [label="nexus-contracts\nL0"];
+  "nexus-contracts-core" [label="nexus-contracts-core\nL0"];
+  "nexus-contracts-mca" [label="nexus-contracts-mca\nL0"];
+  "nexus-contracts-memory" [label="nexus-contracts-memory\nL0"];
+  "nexus-contracts-safety" [label="nexus-contracts-safety\nL0"];
+  "nexus-contracts-seams" [label="nexus-contracts-seams\nL0"];
+  "nexus-contracts-sparse" [label="nexus-contracts-sparse\nL0"];
   "chimera-cli" -> "chimera-mas";
   "chimera-cli" -> "chimera-tui";
   "chimera-cli" -> "cmt-tiering";
@@ -55,6 +60,7 @@ digraph chimera {
   "chimera-cli" -> "gsoe-evolution";
   "chimera-cli" -> "hcw-window";
   "chimera-cli" -> "kvbsr-router";
+  "chimera-cli" -> "mas-sched";
   "chimera-cli" -> "mcp-mesh";
   "chimera-cli" -> "mlc-engine";
   "chimera-cli" -> "nexus-app-server";
@@ -66,6 +72,7 @@ digraph chimera {
   "chimera-cli" -> "repo-wiki";
   "chimera-cli" -> "scc-cache";
   "chimera-cli" -> "seccore";
+  "chimera-cli" -> "session-store";
   "chimera-mas" -> "decay-engine";
   "chimera-mas" -> "event-bus";
   "chimera-mas" -> "gea-activator";
@@ -85,7 +92,6 @@ digraph chimera {
   "chtc-bridge" -> "event-bus";
   "chtc-bridge" -> "nexus-core";
   "cmt-tiering" -> "event-bus";
-  "cmt-tiering" -> "lsct-tiering";
   "cmt-tiering" -> "nexus-contracts";
   "cmt-tiering" -> "nexus-core";
   "csn-substitutor" -> "event-bus";
@@ -122,7 +128,6 @@ digraph chimera {
   "kvbsr-router" -> "event-bus";
   "kvbsr-router" -> "nexus-contracts";
   "kvbsr-router" -> "nexus-core";
-  "lsct-tiering" -> "event-bus";
   "mas-sched" -> "nexus-contracts";
   "mca-gateway" -> "event-bus";
   "mca-gateway" -> "hcw-window";
@@ -130,6 +135,7 @@ digraph chimera {
   "mca-gateway" -> "osa-coordinator";
   "mca-gateway" -> "scc-cache";
   "mcp-mesh" -> "event-bus";
+  "mcp-mesh" -> "nexus-contracts";
   "mlc-engine" -> "event-bus";
   "mlc-engine" -> "nexus-contracts";
   "mlc-engine" -> "nexus-core";
@@ -141,12 +147,23 @@ digraph chimera {
   "nexus-app-server" -> "nexus-subagent";
   "nexus-app-server" -> "quest-engine";
   "nexus-app-server" -> "session-store";
+  "nexus-contracts" -> "nexus-contracts-core";
+  "nexus-contracts" -> "nexus-contracts-mca";
+  "nexus-contracts" -> "nexus-contracts-memory";
+  "nexus-contracts" -> "nexus-contracts-safety";
+  "nexus-contracts" -> "nexus-contracts-seams";
+  "nexus-contracts" -> "nexus-contracts-sparse";
+  "nexus-contracts-memory" -> "nexus-contracts-core";
+  "nexus-contracts-memory" -> "nexus-contracts-mca";
+  "nexus-contracts-memory" -> "nexus-contracts-seams";
   "nexus-core" -> "event-bus";
   "nexus-core" -> "nexus-contracts";
+  "nexus-core" -> "nexus-telemetry";
   "nexus-hook" -> "event-bus";
   "nexus-hook" -> "nexus-contracts";
   "nexus-hook" -> "seccore";
   "nexus-subagent" -> "nexus-contracts";
+  "nexus-telemetry" -> "event-bus";
   "nmc-encoder" -> "event-bus";
   "nmc-encoder" -> "nexus-core";
   "omega-learner" -> "event-bus";
@@ -154,7 +171,6 @@ digraph chimera {
   "osa-coordinator" -> "event-bus";
   "osa-coordinator" -> "nexus-contracts";
   "osa-coordinator" -> "nexus-core";
-  "osa-coordinator" -> "router-traits";
   "parliament" -> "event-bus";
   "parliament" -> "nexus-contracts";
   "parliament" -> "nexus-core";
@@ -169,7 +185,6 @@ digraph chimera {
   "repo-wiki" -> "nexus-contracts";
   "repo-wiki" -> "nexus-core";
   "repo-wiki" -> "nmc-encoder";
-  "router-traits" -> "nexus-contracts";
   "scc-cache" -> "event-bus";
   "scc-cache" -> "nexus-contracts";
   "scc-cache" -> "nexus-core";

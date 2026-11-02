@@ -15,8 +15,6 @@ import sys
 import gate_rc  # F37：平铺脚本无 __main__ 可包 => 崩溃经 excepthook 退 2, 不借默认 1
 gate_rc.install()
 
-sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-
 DOCS = ["agents.md", ".claude/CLAUDE.md", "CHANGELOG.md",
         "docs/reports/phaseR-wave1-closure.md",
         "docs/reports/phaseR-release-checklist-v2.28.0.md",
@@ -59,9 +57,18 @@ SH_ID = int(m2.group(2)) if m2 else -1
 if rs is None:
     print("!! 注意：找不到可执行 bash ⇒ .sh 侧自报 id 记为 -1（.sh 写死项按不可判定处理）")
 
-idx = io.open("docs/architecture/adr_index.md", encoding="utf-8", errors="replace").read()
-m3 = re.search(r"ADR 声明总数 = (\d+)", idx)
-ADR_DECL = int(m3.group(1)) if m3 else -1
+# D-31：声明总数由索引行**派生**（单编号行 + 区间行展开去重），不再读正文手抄整数。
+# 原口径的致命处在于「任何消费方都证不了伪」：2026-10-17 实测手抄值 184、
+# 按行展开真值 193，而 D2 只问 `declared >= disk`，一个足够大的陈旧常量永远满足。
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import adr_index_metrics as _adr_metrics  # noqa: E402  (单一派生源,与 .sh 侧同源)
+
+_m3, _p3 = _adr_metrics.metrics(
+    io.open("docs/architecture/adr_index.md", encoding="utf-8", errors="replace").read())
+ADR_DECL = _m3["declared_total"] if not _p3 else -1
+if _p3:
+    print("!! adr_index 声明集不可判定（%s）=> ADR_DECL 记为 -1，相关断言按不可判定处理"
+          % "; ".join(_p3))
 
 print(f"权威值: .ps1 自报 {PS_CAT} 类/{PS_ID} id | .sh 自报 {SH_ID} id | adr_index 声明总数 {ADR_DECL}")
 

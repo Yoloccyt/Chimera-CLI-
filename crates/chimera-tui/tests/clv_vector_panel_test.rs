@@ -107,12 +107,7 @@ fn test_clv_vector_panel_help_key_returns_none() {
 
 /// 宽字符感知的渲染收集(仿 osa_sparse_panel_test 同款口径:跳过 CJK 续格,
 /// 避免 zh chrome 文案被续格空格隔断导致 contains 失配)
-fn render_panel_to_string(
-    panel: &mut ClvVectorPanel,
-    state: &TuiState,
-    w: u16,
-    h: u16,
-) -> String {
+fn render_panel_to_string(panel: &mut ClvVectorPanel, state: &TuiState, w: u16, h: u16) -> String {
     let area = ratatui::layout::Rect::new(0, 0, w, h);
     let mut buf = ratatui::buffer::Buffer::empty(area);
     panel.render(state, area, &mut buf);

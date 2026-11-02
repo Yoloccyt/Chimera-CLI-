@@ -190,6 +190,21 @@ impl Drop for WikiStore {
     }
 }
 
+// v2.3 §(b.5) 写入敏感扫描策略(单点定义)。
+//
+// WHY 抽取：本文件四个 `pub` 写入口(insert / insert_batch /
+// insert_with_contradiction_check / insert_distilled_insight)必须共用同一
+// 判定;内联字面量复制四份会让“只改一处策略”成为可能——与抽取前语义
+// 逐字等价(同一 ScanPolicy 字面量)。与 `cmt-tiering/src/ice.rs:78-82`
+// 保持同口径。
+fn wiki_scan_policy() -> nexus_contracts::sensitive::ScanPolicy {
+    nexus_contracts::sensitive::ScanPolicy {
+        on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+        on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+        ..Default::default()
+    }
+}
+
 impl WikiStore {
     /// 使用默认配置打开/创建数据库
     ///
@@ -339,11 +354,7 @@ impl WikiStore {
     pub async fn insert(&self, entry: WikiEntry) -> Result<(), WikiError> {
         // v2.3 §(b.5) 写入敏感扫描门:知识条目落库前拦截私钥/凭证/令牌类硬载荷(Block)。
         // 高熵/键名启发式设 Pass 以降误报;命中即拒绝入库(不阻断正常知识沉淀)。
-        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
-            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
-            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
-            ..Default::default()
-        };
+        let scan_policy = wiki_scan_policy();
         if nexus_contracts::sensitive::scan(
             &format!("{}\n{}", entry.title, entry.content),
             &scan_policy,
@@ -389,11 +400,7 @@ impl WikiStore {
         }
         // v2.3 §(b.5): 批量插入同走敏感扫描(否则绕过单条 insert 的守卫)。
         // Block-only;高熵/键名设 Pass 防误报;任一条目命中硬敏感载荷则整批拒绝(与事务原子性一致)。
-        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
-            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
-            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
-            ..Default::default()
-        };
+        let scan_policy = wiki_scan_policy();
         if let Some(bad) = entries.iter().find(|e| {
             nexus_contracts::sensitive::scan(&format!("{}\n{}", e.title, e.content), &scan_policy)
                 .is_blocked()
@@ -443,6 +450,19 @@ impl WikiStore {
         &self,
         entry: WikiEntry,
     ) -> Result<crate::contradiction::ContradictionResult, WikiError> {
+        // v2.3 §(b.5) 入口级补齐:本入口与 `insert` 写同一 `WikiEntry`
+        // (title + content 为自由文本),缺扫描则形成“同文件已插桩但本入口可无声
+        // 绕过”的盲区(G-84 现为文件级存在性判定,拦不住)。口径与 `insert` 一致。
+        let scan_policy = wiki_scan_policy();
+        if nexus_contracts::sensitive::scan(
+            &format!("{}\n{}", entry.title, entry.content),
+            &scan_policy,
+        )
+        .is_blocked()
+        {
+            return Err(WikiError::SensitiveContent(entry.entry_id.clone()));
+        }
+
         // 1. 查找相似候选(用读连接池,仅 Current 状态条目)
         let candidates = self.find_contradiction_candidates().await?;
 
@@ -929,6 +949,13 @@ impl WikiStore {
         &self,
         insight: DistilledInsight,
     ) -> Result<(), WikiError> {
+        // v2.3 §(b.5) 入口级补齐:`DistilledInsight.content` 自陈“自然语言,规则
+        // 模板生成”(experience_bank.rs:44-45),模板输入源自案例条目正文 → 同属可
+        // 控自由文本落盘面,与 entries 写入同口径扫描。
+        let scan_policy = wiki_scan_policy();
+        if nexus_contracts::sensitive::scan(&insight.content, &scan_policy).is_blocked() {
+            return Err(WikiError::SensitiveContent(insight.insight_id.clone()));
+        }
         let (tx, rx) = oneshot::channel();
         self.write_tx
             .send(WriteOp::InsertDistilledInsight(insight, tx))
@@ -1951,6 +1978,130 @@ mod tests {
             vec!["b4-prime".to_string()],
             vec![0.0; 512],
         )
+    }
+
+    // =========================================================
+    // v2.3 §(b.5) 写入敏感插桩——四个 `pub` 写入口逐一正向证据
+    // (W5-1 R-1)。私钥 PEM 属 `Block` 类扫描面,任何写入口都不得落库。
+    // =========================================================
+
+    /// 敏感样本:私钥 PEM 起始行（命中 `PRIVATE_KEY_MARKERS` = `Block`）。
+    const SENSITIVE_PEM: &str = "参考如下密钥 -----BEGIN PRIVATE KEY-----\nMIIEvQIBADAN\n结束";
+
+    fn sensitive_wiki_entry(id: &str) -> WikiEntry {
+        WikiEntry::new(
+            id,
+            format!("title-{id}"),
+            SENSITIVE_PEM.to_string(),
+            vec!["b4-prime".to_string()],
+            vec![0.0; 512],
+        )
+    }
+
+    fn distilled_insight(id: &str, content: &str) -> DistilledInsight {
+        DistilledInsight {
+            insight_id: id.to_string(),
+            content: content.to_string(),
+            tags: vec!["rust".to_string()],
+            embedding: vec![0.0; 512],
+            confidence: 0.5,
+            source_count: 1,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn insert_blocks_sensitive_entry() {
+        let dir = tempfile::TempDir::new().expect("创建临时目录");
+        let store = WikiStore::open(&dir.path().join("wiki.db")).expect("打开 WikiStore");
+
+        let err = store
+            .insert(sensitive_wiki_entry("sec-1"))
+            .await
+            .expect_err("含私钥 PEM 的条目必须拒绝入库");
+        assert!(
+            matches!(err, WikiError::SensitiveContent(ref id) if id == "sec-1"),
+            "应报 SensitiveContent 且携带条目 ID,实测 {err:?}"
+        );
+        assert_eq!(store.count().await.expect("计数"), 0, "被拒条目不得落库");
+    }
+
+    #[tokio::test]
+    async fn insert_batch_blocks_whole_batch_on_one_sensitive_entry() {
+        // 批量入口与事务原子性同口径:任一条命中即整批拒绝。
+        let dir = tempfile::TempDir::new().expect("创建临时目录");
+        let store = WikiStore::open(&dir.path().join("wiki.db")).expect("打开 WikiStore");
+
+        let err = store
+            .insert_batch(vec![wiki_entry("ok-1"), sensitive_wiki_entry("sec-2")])
+            .await
+            .expect_err("批内含敏感条目应整批拒绝");
+        assert!(
+            matches!(err, WikiError::SensitiveContent(ref id) if id == "sec-2"),
+            "应报污染条目的 ID,实测 {err:?}"
+        );
+        assert_eq!(
+            store.count().await.expect("计数"),
+            0,
+            "整批拒绝:benign 条目也不得落库"
+        );
+    }
+
+    #[tokio::test]
+    async fn insert_with_contradiction_check_blocks_sensitive_entry() {
+        // W5-1 R-1 入口级补齐:本入口原未插桩——修复前本测试会因写入成功而翻红。
+        let dir = tempfile::TempDir::new().expect("创建临时目录");
+        let store = WikiStore::open(&dir.path().join("wiki.db")).expect("打开 WikiStore");
+
+        let err = store
+            .insert_with_contradiction_check(sensitive_wiki_entry("con-sec"))
+            .await
+            .expect_err("矛盾检测入口与 insert 写同一文本,必须同口径拦截");
+        assert!(
+            matches!(err, WikiError::SensitiveContent(ref id) if id == "con-sec"),
+            "实测 {err:?}"
+        );
+        assert_eq!(store.count().await.expect("计数"), 0);
+        // 牙齿探针的反向对照:同入口对 benign 条目仍正常写入
+        let ok = store
+            .insert_with_contradiction_check(wiki_entry("con-ok"))
+            .await
+            .expect("benign 条目不得被误拦");
+        assert!(ok.inserted, "首次写入应记为真实新增");
+        assert_eq!(store.count().await.expect("计数"), 1);
+    }
+
+    #[tokio::test]
+    async fn insert_distilled_insight_blocks_sensitive_content() {
+        // W5-1 R-1 入口级补齐:蒸馏洞察正文同为可控自由文本。
+        let dir = tempfile::TempDir::new().expect("创建临时目录");
+        let store = WikiStore::open(&dir.path().join("wiki.db")).expect("打开 WikiStore");
+
+        let err = store
+            .insert_distilled_insight(distilled_insight("single:rust", SENSITIVE_PEM))
+            .await
+            .expect_err("含私钥 PEM 的洞察必须拒绝");
+        assert!(
+            matches!(err, WikiError::SensitiveContent(ref id) if id == "single:rust"),
+            "应报 insight_id,实测 {err:?}"
+        );
+        assert!(
+            store
+                .list_distilled_insights()
+                .await
+                .expect("列表")
+                .is_empty(),
+            "被拒洞察不得落库"
+        );
+        // 反向对照:benign 洞察正常写入
+        store
+            .insert_distilled_insight(distilled_insight("single:go", "错误处理优先用 Result"))
+            .await
+            .expect("benign 洞察不得被误拦");
+        assert_eq!(
+            store.list_distilled_insights().await.expect("列表").len(),
+            1
+        );
     }
 
     #[tokio::test]

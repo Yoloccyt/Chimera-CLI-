@@ -17,11 +17,39 @@ F20 的教训是"同一事实存两份登记表就会分叉"，守卫逻辑同�
     if __name__ == "__main__":
         sys.exit(gate_rc.run(lambda: main(sys.argv[1:])))
 """
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 import traceback
 
 UNDECIDABLE = 2
+_SELFTEST_TMPDIRS = []
+
+
+def tmpdir(prefix="gate-"):
+    """Make a selftest temp directory that is removed when the process exits.
+
+    WHY here instead of in each gate: seven selftest sites across four gates
+    called ``tempfile.mkdtemp`` with no cleanup, so every ``--selftest`` run
+    leaked a directory into the host's temp tree (measured 2026-10-29). A gate
+    that judges the repository must not be the thing that eats the disk -- this
+    host has had 0.15 GiB free. Same single-source-of-truth reasoning as
+    `_utf8_stdio()`: fix it once, not in 37 places.
+    """
+    path = tempfile.mkdtemp(prefix=prefix)
+    _SELFTEST_TMPDIRS.append(path)
+    atexit.register(_cleanup_tmpdirs)
+    return path
+
+
+def _cleanup_tmpdirs():
+    """Best-effort removal of `tmpdir()` results. Never raises: an atexit hook
+    that throws would change a gate's exit code, which is exactly the dialect
+    this module exists to protect."""
+    while _SELFTEST_TMPDIRS:
+        shutil.rmtree(_SELFTEST_TMPDIRS.pop(), ignore_errors=True)
 
 
 def _utf8_stdio():
@@ -37,6 +65,16 @@ def _utf8_stdio():
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError, OSError):
             pass
+
+
+def utf8_stdio():
+    """Public name for the stdio pin, so callers do not reach for the private one.
+
+    Every gate gets this through run()/install(); scripts that print before those
+    entry points should call *this* function instead of re-typing the
+    reconfigure block (register: scripts/stdio_dup_baseline.txt, axis H9).
+    """
+    return _utf8_stdio()
 
 
 def install():
@@ -124,6 +162,21 @@ def selftest():
     q = subprocess.run([sys.executable, "-c", ok_probe], cwd=here,
                        capture_output=True, text=True)
     check("install() leaves SystemExit dialect untouched (1 stays 1)", q.returncode, 1)
+
+    # tmpdir() cleans up at process exit, so the assertion needs a real child:
+    # in-process we would be observing our own still-open directory. The control
+    # case (bare mkdtemp) must survive, or this test proves nothing.
+    leak_probe = "import tempfile; print(tempfile.mkdtemp(prefix='gate-rc-leak-'))"
+    leaked = subprocess.run([sys.executable, "-c", leak_probe], cwd=here,
+                            capture_output=True, text=True).stdout.strip()
+    cleaned_probe = "import gate_rc; print(gate_rc.tmpdir(prefix='gate-rc-clean-'))"
+    cleaned = subprocess.run([sys.executable, "-c", cleaned_probe], cwd=here,
+                             capture_output=True, text=True).stdout.strip()
+    check("tmpdir() removes its directory at process exit", os.path.isdir(cleaned), False)
+    check("bare mkdtemp still leaks (the control that gives the assertion teeth)",
+          os.path.isdir(leaked), True)
+    if os.path.isdir(leaked):
+        shutil.rmtree(leaked, ignore_errors=True)
     print("  RESULT: %s (%d assertions)" % ("PASS" if not bad else "FAIL", n))
     return 1 if bad else 0
 

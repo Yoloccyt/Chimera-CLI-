@@ -27,7 +27,13 @@ mca = []
 members = [
     # L0 Contracts (ADR-033): 纯类型零依赖契约层，必须最先编译
     "crates/nexus-contracts",
-    "crates/nexus-core", "crates/event-bus", "crates/quest-engine",
+    "crates/nexus-contracts-core",
+    "crates/nexus-contracts-sparse",
+    "crates/nexus-contracts-safety",
+    "crates/nexus-contracts-seams",
+    "crates/nexus-contracts-mca",
+    "crates/nexus-contracts-memory",
+    "crates/nexus-core", "crates/event-bus", "crates/nexus-telemetry", "crates/quest-engine",
     "crates/repo-wiki", "crates/parliament",
     "crates/pvl-layer", "crates/osa-coordinator", "crates/kvbsr-router",
     "crates/faae-router", "crates/gea-activator", "crates/gqep-executor",
@@ -39,36 +45,39 @@ members = [
     "crates/gsoe-evolution", "crates/mcp-mesh",
     "crates/nmc-encoder", "crates/chtc-bridge", "crates/chimera-tui",
     "crates/chimera-cli", "crates/chimera-mas",
-    # L6 Router: omega-learner Bandit 六接缝(P4-W13.1,workspace 第 37 个 crate)
+    # L6 Router: omega-learner Bandit 六接缝(P4-W13.1,workspace 加入时第 37 个 crate)
     # WHY 排在最后: 学习层为环外新增,通过异步下发 SelectorPolicy::Learned 给调用方,
     # 不参与现有 crate 依赖环;依赖方向 L6 → L0(nexus-contracts)/L1(event-bus) 合规
     "crates/omega-learner",
-    # L10 Interface: mca-gateway 多通道亲和网关(ADR-065,workspace 第 38 个 crate)
+    # L10 Interface: mca-gateway 多通道亲和网关(ADR-065,workspace 加入时第 38 个 crate)
     # WHY 排在末位: MCA 体系新增,仅依赖 L0(nexus-contracts)/L1(event-bus),
-    # 与 chtc-bridge 同构;流式数据面走 bounded mpsc 不进 event-bus(ADR-065 决策 4)
+    # 与 chtc-bridge 同构;流式数据面走 bounded mpsc 不进 event-bus(ADR-065 决策 4;
+    # M1 未交付,规划态——stream() 流式面未实装,此句为设计契约而非已实现行为)
     "crates/mca-gateway",
-    # L10 Interface: nexus-app-server 核心-表面分离(WI-01,workspace 第 39 个 crate)
+    # L10 Interface: nexus-app-server 核心-表面分离(WI-01,workspace 加入时第 39 个 crate)
     # WHY 排在末位: 宿主层协议门面,仅依赖 L0(nexus-contracts)/L1(event-bus/nexus-core);
-    # 外部协议面类型在 L0 app.rs(内闭外开 T6);48/53 crate 预算内(38+1=39)
+    # 外部协议面类型在 L0 protocol/app.rs(内闭外开 T6;W3 子模块化后由 src/app.rs 迁入
+    # src/protocol/,经 lib.rs `pub use protocol::app;` 保持 nexus_contracts::app 旧路径);
+    # 48/53 crate 预算内(38+1=39)
     "crates/nexus-app-server",
-    # L3 Storage: session-store 会话事件流存储(Phase 2 新增,ADR-141,workspace 第 40 个 crate)
+    # L3 Storage: session-store 会话事件流存储(Phase 2 新增,ADR-141,workspace 加入时第 40 个 crate)
     # WHY 排在末位: 会话持久化从 Checkpoint 线性快照升级为 append-only 段 + CBMR 微批写
     # (手册 W9 T-07 / ADR-108 / v4.0 WI-18 存储面);仅依赖 L0(nexus-contracts),
     # 消费者为 nexus-app-server(装配期注入), 事件回放面 P2-T3 接入
     "crates/session-store",
-    # L9 Quest: mas-sched 多代理调度器控制面(Phase 3 新增,ADR-145,workspace 第 41 个 crate)
+    # L9 Quest: mas-sched 多代理调度器控制面(Phase 3 新增,ADR-145,workspace 加入时第 41 个 crate)
     # WHY 排在末位: 从 chimera-mas 拆出的控制面(PeerScheduler claim/renew/handoff/should_run),
     # 仅依赖 L0(nexus-contracts) 内部 1 个(WI-29),
     # 无消费者(影子模式先行,后续 chimera-mas 拆出经 L0 契约承接),加入 members 零影响
     # 注(ADR-160): 原注释所称"L1(nexus-core/event-bus) 内部 3 个"系声明先于实现,
     # 事件面未落地,虚假依赖声明已删;该 crate 现登记于 crate_reachability_freeze.txt
     "crates/mas-sched",
-    # L9 Quest: nexus-hook 生命周期 Hook 系统(Phase 3 新增,ADR-146,workspace 第 42 个 crate)
+    # L9 Quest: nexus-hook 生命周期 Hook 系统(Phase 3 新增,ADR-146,workspace 加入时第 42 个 crate)
     # WHY 排在末位: 13+ LifecycleEvent + TOML 挂载 + seccore ProcessFence 沙箱,
     # 依赖 L0(nexus-contracts)/L1(event-bus)/L4(seccore) 内部 3 个(≤6 门禁),
     # 无消费者(配置空载=现状,回退路径安全),加入 members 零影响
     "crates/nexus-hook",
-    # L7 Execution: nexus-subagent 类型化 SubAgent 运行时 + Task Auction（Phase 3 新增,ADR-148,workspace 第 43 个 crate）
+    # L7 Execution: nexus-subagent 类型化 SubAgent 运行时 + Task Auction（Phase 3 新增,ADR-148,workspace 加入时第 43 个 crate）
     # WHY 排在末位: 3 类型 + Arena + 禁嵌套 + 竞价;依赖 L0(nexus-contracts) 内部 1 个,
     # 消费者为 nexus-app-server(运行时先行,接入方经 spawn/join 驱动)
     # 注(ADR-160): 原注释所称"L1(nexus-core/event-bus) 内部 3 个"含未实现的事件面,
@@ -99,11 +108,12 @@ license = "MIT"
 unwrap_used = "warn"
 expect_used = "warn"
 
-# tokio_unstable cfg 声明全局化（原 nexus-core 局部 [lints.rust] 提升）：
-# 全员 opt-in 后局部 lints 与 workspace=true 互斥；check-cfg 对不使用该 cfg
-# 的 crate 仅是放宽白名单，零行为影响。
+# tokio_unstable / loom 两个自定义 cfg 声明全局化：全员 opt-in workspace lints 后，
+# 局部 [lints.rust] 与 `lints.workspace = true` 互斥（cargo 直接报 cannot override），
+# 所以只能放在 workspace 层。check-cfg 对不使用该 cfg 的 crate 仅是放宽白名单，零行为影响。
+# loom（C-94 / ADR-226）：模型检验测试用 `#![cfg(loom)]` 门控，靠 `RUSTFLAGS="--cfg loom"` 拉起。
 [workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)', 'cfg(loom)'] }
 
 [workspace.dependencies]
 tokio = { version = "1.40", features = ["full", "tracing"] }
@@ -144,6 +154,14 @@ tract-onnx = "0.22"
 # WHY 添加到 workspace: nmc-encoder 的图像预处理需将原始字节解码为 RGB 像素矩阵，
 # 统一在 workspace 声明版本避免与其他 crate 冲突
 image = "0.25"
+# 以下三条为 nmc-encoder 感知栈内联版本收口(C-31,L0L10-R1 W4):
+# 版本 req 与原内联声明逐字同值上移,nmc-encoder 为全仓唯一消费者,Cargo.lock 不漂。
+# tokenizers: 分词器,TextPerceptor ONNX 推理分词(all-MiniLM-L6-v2,纯 Rust 分词栈)
+tokenizers = "0.21"
+# mel_spec: Mel 频谱生成,Whisper encoder 的 log-mel 频谱计算(纯 Rust)
+mel_spec = "0.4"
+# hound: WAV 音频解码,音频预处理解析 WAV 文件头与 f32 PCM 数据
+hound = "3.5"
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"] }
 axum = "0.7"
 prometheus-client = "0.22"
@@ -175,6 +193,9 @@ thiserror = "1.0"
 # 中作为传递依赖存在(rayon/async-channel 等),无新增编译器负担;
 # 纯 safe Rust 实现(unsafe 在依赖内部不传播),符合 forbid(unsafe_code) 哲学。
 crossbeam-queue = "0.3"
+# D-18:parliament/scheduler 的工作窃取全局注入器。crossbeam-deque 早已作为
+# rayon-core 的传递依赖存在于 Cargo.lock,此处仅提升为直接依赖(无新增包)。
+crossbeam-deque = "0.8"
 # ADR-004:消息序列化协议为 MessagePack
 rmp-serde = "1.3"
 # tempfile:测试用临时文件/目录,跨平台安全
@@ -195,12 +216,22 @@ toml = "0.8"
 # 版本号由 workspace.package 集中管理。
 # 按 L0→L1→...→L10 顺序排列,确保编译顺序符合依赖铁律。
 # L0 Contracts (ADR-033):纯类型零依赖契约层,所有上层 crate 可依赖 L0
+# ADR-222:L0 = L0-A(0A 纯契约) + L0-B(0B 核心基础面),机器层号 0/1 不重排
 nexus-contracts = { path = "crates/nexus-contracts" }
+# L0-A sibling: core_domain 领域契约（ADR-222 D2；umbrella 以 facade 保持旧路径）
+nexus-contracts-core = { path = "crates/nexus-contracts-core" }
+nexus-contracts-sparse = { path = "crates/nexus-contracts-sparse" }
+nexus-contracts-safety = { path = "crates/nexus-contracts-safety" }
+nexus-contracts-seams = { path = "crates/nexus-contracts-seams" }
+nexus-contracts-mca = { path = "crates/nexus-contracts-mca" }
+nexus-contracts-memory = { path = "crates/nexus-contracts-memory" }
 # L7 SubAgent 运行时（Phase 3 ADR-148;P4-T3 L10 组合根接线引用）
 nexus-subagent = { path = "crates/nexus-subagent" }
-# L1 Core:核心运行时，事件总线
+# L1 Core (ADR-222 称 L0-B 核心基础面):核心运行时，事件总线
 nexus-core = { path = "crates/nexus-core" }
 event-bus = { path = "crates/event-bus" }
+# ADR-222 L0-B 核心基础面：计算面遥测契约与上报编排（nexus-core 单向依赖）
+nexus-telemetry = { path = "crates/nexus-telemetry" }
 mcp-mesh = { path = "crates/mcp-mesh" }  # L10 Interface(跨进程 MCP 网格);物理位置沿史留在 L1 段,层号以本行为准
 # L2 Memory:多模态编码，分层窗口，四级记忆
 nmc-encoder = { path = "crates/nmc-encoder" }
@@ -285,6 +316,11 @@ tokio-test = "0.4"
 # sysinfo:系统信息库(CPU/内存/进程等)
 # WHY 统一到 workspace:chimera-tui 使用,保持 0.32 版本不变(API 兼容性)
 sysinfo = "0.32"
+# loom:并发 permutation 模型检验（ADR-226 / 业主 T-2「允许 loom，但仅限 dev-dependency」）
+# WHY 进 workspace 而非直接写进 mlc-engine：本仓依赖一律经 workspace 统一版本，
+#     且「只进 dev 面」这条约束靠 mlc-engine 的 [dev-dependencies] 落实；
+#     若哪天它出现在任何 [dependencies]，G-99 / l0b_dep_freeze 两侧会抖红。
+loom = "0.7.2"
 
 # ============================================================
 # E2E 集成测试配置(Week 6 Task 6)
@@ -612,10 +648,12 @@ path = "tests/stress/token_efficiency_stress.rs"
 name = "token_efficiency_benchmark_driver"
 path = "tests/e2e/token_efficiency_benchmark_driver.rs"
 
-# Phase 1: Dependency Rules Inner Ring Test (GAP-A validation)
-[[test]]
-name = "dependency_rules_inner_ring_test"
-path = "tests/dependency_rules_inner_ring_test.rs"
+# Phase 1: Dependency Rules Inner Ring Test — 已按 ADR-213 R3 退役(2026-10-13)。
+# 退役理由见 docs/reports/L0-contracts-residual-debt_2026-10-14.md §2:该 target 4/5 用例
+# 调 `powershell` + 硬编码 `current_dir("d:\\Chimera CLI")`,在 ci.yml 的 ubuntu-latest
+# runner 上 spawn 失败即 panic(本分支从未跑过 ci.yml,故此前未暴露);其 TC-1 断言
+# "[GAP-A] 不出现" 是恒真守卫(Check A 已随 ADR-187 双源删除),合法后继在
+# check_dependency_rules.sh 的 --selftest 内。其余判据由 G-08/G-45/G-46/G-14 承担。
 
 # Phase 1: Composition Root Omega-Learner Test (GAP-R validation)
 [[test]]
@@ -667,9 +705,9 @@ gqep-executor = { path = "crates/gqep-executor" }    # L7 Execution(聚集执行
 mtpe-executor = { path = "crates/mtpe-executor" }    # L7 Execution(多步预测)
 scc-cache = { path = "crates/scc-cache" }            # L3 Storage(推测缓存+WAL)
 # P5.5: nexus-contracts 用于 HarnessSpec/ContractSpec/HopSpec 类型 (P5.5.1 任务集定义)
-nexus-contracts = { path = "crates/nexus-contracts" }
+nexus-contracts = { path = "crates/nexus-contracts" } # L0 Contracts(契约层;此前无 inline 标,继承上上段 # L1 组头而被误判 L1)
 # L7 SubAgent 运行时（Phase 3 ADR-148;P4-T3 L10 组合根接线引用）
-nexus-subagent = { path = "crates/nexus-subagent" } # L0 Contracts(契约层)
+nexus-subagent = { path = "crates/nexus-subagent" }   # L7 Execution(子代理运行时;旧标 L0 系根 dev-deps 残留,ADR-213 W-E 订正)
 # P1-9: chimera-mas 用于 MasError::R2FreezeViolation 变体验证(ADR-042 决策 4)
 chimera-mas = { path = "crates/chimera-mas" }         # L9 Quest(MAS 错误类型)
 # P7-T6: omega-learner 用于 M1 属性 #5(学习单调性)与 S8 学习器真实轨迹集成
@@ -700,6 +738,22 @@ panic = "abort"
 opt-level = "z"
 lto = true
 codegen-units = 1
+
+# ============================================================
+# Wave-2 — 本地/低内存 bench 档（不参与 CI 阈值；不改 [profile.bench]/release）
+#
+# WHY: criterion 默认继承 [profile.release] 的 lto=true + codegen-units=1；
+#      全 workspace 单 CU fat LTO 在 15GB 机上 OOM（见
+#      docs/reports/toolchain-perf-baseline-2026-10-22.md §4）。本档仅服务
+#      本地测量与同档相对对照（Off vs Auto 同档可比），绝不入三表阈值。
+#      绝对值 SLO 仍由 release 档 event-bus bench（bus_bench/bus_shard_bench）负责。
+# 使用: CARGO_TARGET_DIR=target/bench-lite cargo bench --profile bench-lite ...
+# ============================================================
+[profile.bench-lite]
+inherits = "release"
+lto = false
+codegen-units = 16
+opt-level = 1
 
 # Milestone D-3:评估-进化-协同三位一体闭环 E2E
 [[test]]

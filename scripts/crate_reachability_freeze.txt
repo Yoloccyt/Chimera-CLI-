@@ -22,6 +22,22 @@
 # reachable via the r2_island_repayment feature wiring (debt repaid); lines
 # deleted per ADR-160 shrink-only rule. mca-gateway stays GATED (feature-gated,
 # not listed here).
+#
+# Attribution corrected 2026-10-26 (R2 L53): the two crates above are NOT
+# reachable by the same mechanism, and the shared wording over-credited a
+# feature to a plain production edge.
+#   mas-sched   : NON-optional production edge -- chimera-cli/Cargo.toml:99
+#                 `mas-sched = { workspace = true }` with no `optional`, and
+#                 :96 records the optional -> production flip; wired at
+#                 composition.rs:107 / :215 and called at commands/agent.rs:223;
+#                 dep_edge_freeze.txt:185 says WIRED per ADR-211.
+#   nexus-hook  : still feature-gated -- chimera-cli/Cargo.toml:100 optional,
+#                 :203-205 machete exemption, zero `nexus_hook` uses in
+#                 chimera-cli/src, and gated_wiring_baseline.txt:14 says
+#                 DECORATIVE. So only THIS crate's rotation reason is the
+#                 r2_island_repayment feature wiring.
+# Judgment rows are unchanged (neither crate is listed); this is a comment-only
+# provenance fix, so the shrink-only ADR-160 rule is not touched.
 
 # --- compiled only under a cargo feature, absent from the default binary ---
 # mca-gateway Frozen entry REMOVED 2026-09-03 (T2): chimera-cli now declares it
@@ -71,6 +87,13 @@
 #   batch-P3: mtpe-executor/ssra-fusion/sesa-router/csn-substitutor/mas-sched/nexus-hook wired
 # Ratchet update: frozen 7 -> 0 (all islands repaid), reachable 31 -> 38 (+7)
 # Note: mas-sched/nexus-hook remain GATED (shadow-first reservation per ADR-145/146)
+#
+# ⚠ 订正注记（v3.5 C-48，2026-10-10；历史行不改写）：上面两行对同一对象给出相反结论——
+#   :71 的 "wired" 与 :73 的 "remain GATED" 并存。以现取为准（ADR-188 §5）：
+#   nexus-hook 在除自身外的 crates/*/src 全库零引用，gated_wiring_baseline.txt:15 在册 DECORATIVE，
+#   dep_edge_freeze.txt:183 仅为 optional GATED 声明边。故 :71 的 "wired" 只能读作
+#   "已在 Cargo.toml 声明为 optional 依赖"，**不得读作"已接进启动链"**（那正是风险 R-5
+#   "拿 optional/feature 宣布岛屿清偿"的本族形状）。本订正不改任何计数行，只封误读。
 
 # --- module-level islands (ADR-160 blind spot; R3 F-R3-02) — ALL RETIRED 2026-09-03 ---
 # The 4 dead-module debts (osa-coordinator::cheap_index, hcw-window::CompressionPipeline,

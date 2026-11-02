@@ -80,6 +80,9 @@ rand = { workspace = true }
 regex = { workspace = true }
 
 [dev-dependencies]
+# 注：INV-9 双源对账测（tests/invariants_test.rs 固定样本集 + tests/inv9_parity_proptest.rs
+# 随机图与顺序无关性）直接用已有的**生产**依赖 `gsoe-evolution`（:63，L9→L5 向下，
+# 已册 `dep_edge_freeze.txt`），因此**零新增依赖边**：曾在 [dev-dependencies] 再加一条同名录项是多余的，已删。
 # tokio 测试支持(完整 features + test-util 用于 pause/freezing 时间)
 tokio = { workspace = true, features = ["full", "test-util"] }
 # L2 Memory / L3 Storage:mas_benchmark 基准专用(bench 属 dev 面,非生产装配边)

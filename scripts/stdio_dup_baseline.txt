@@ -1,0 +1,39 @@
+# stdio_dup_baseline.txt -- only-decrease register for axis H9 of
+# scripts/check_py_tooling_health.py (the UTF-8 stdio pin belongs in gate_rc).
+#
+# Detection is by call node, not by text: a docstring or test fixture that
+# quotes reconfigure(...) is NOT a duplicate (the first draft said it was, and
+# registered the gate itself).
+#
+# Format: <script under scripts/> | <reason>. A row without a reason is a parse
+# error, not a silent pass. Removing a row is the intended direction: delete the
+# block, call gate_rc.utf8_stdio(), and drop the row in the same commit -- the
+# gate reports STALE if a row outlives the code.
+#
+# Every reason is derived from the file itself (AST call nodes + the line number
+# of its gate_rc entry); no count and no reason is typed by hand.
+audit_gate_parity.py | gate_rc entry runs at line 347, AFTER this block (line 32), so the block is the active pin; consolidation must move the entry up
+check_topk_registry.py | gate_rc entry runs at line 465, AFTER this block (line 33), so the block is the active pin; consolidation must move the entry up
+count_test_attrs.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+coverage_gate.py | gate_rc entry runs at line 521, AFTER this block (line 43), so the block is the active pin; consolidation must move the entry up
+lru_evict_chain.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+lru_facts.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+lru_lock_facts.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+lru_reachability.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+nc_coupling.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+nc_d3_d4.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+nc_d3_d4_d5.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+nc_gate_manifest.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+nc_gate_manifest_dead.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+nc_gate_selfreport.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+nc_spec_coverage.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+nc_spec_probe.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+panel_facts2.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+recover_s7_s0.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+recover_spec_sections.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+run_gate_manifest.py | gate_rc entry runs at line 554, AFTER this block (line 26), so the block is the active pin; consolidation must move the entry up
+s7_relock_measure.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+scan_mojibake.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+t2_coupling_audit.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+t2_doc_paths_verify.py | standalone evidence/diagnostic tool with no gate_rc entry; call gate_rc.utf8_stdio() when it is next touched
+# rows = 24

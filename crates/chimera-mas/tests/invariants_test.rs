@@ -240,3 +240,145 @@ fn archive_tier_level_returns_strictly_increasing_values() {
     assert!(ArchiveTier::Warm.level() < ArchiveTier::Cold.level());
     assert!(ArchiveTier::Cold.level() < ArchiveTier::Ice.level());
 }
+
+// ===========================================================================
+// INV-9 双源对账（v3.5 W6-5）
+// ===========================================================================
+//
+// WHY：无环判定存在**两份实现**——L9 权威
+// `chimera_mas::invariants::InvariantChecker::check_inv9_delegation_acyclic`（关联函数）
+// 与 L5 镜像 `gsoe_evolution::check_inv9_delegation_acyclic`（自由函数）（ADR-045 决策 8 已明文承认
+// 这一依赖铁律偏差）。两者同字段但**返回类型不同**（`Result<(), MasError>` vs
+// `Result<(), Vec<String>>`），故不可能靠类型系统发现“只改了一份”——
+// 那会直接造成 R-4：门绿而内核红（或反之）。本组测试把“两份判定必须同结论”
+// 固定为可执行断言；终局方案仍是下沉 L0 后删镜像（需 ADR），在此之前本测试是唯一防线。
+//
+// 依赖面：本文件零新增依赖边——`gsoe-evolution` 已是 chimera-mas 的
+// [dependencies]（L9→L5 向下，已登记于 `scripts/dep_edge_freeze.txt`）。
+
+/// 把一对边列表分别映射到两份实现各自的类型（字段同名，仅类型不同）。
+fn mas_edges(pairs: &[(&str, &str)]) -> Vec<chimera_mas::invariants::DelegationEdge> {
+    pairs
+        .iter()
+        .map(|(f, t)| chimera_mas::invariants::DelegationEdge {
+            from: (*f).to_string(),
+            to: (*t).to_string(),
+        })
+        .collect()
+}
+
+fn gsoe_edges(pairs: &[(&str, &str)]) -> Vec<gsoe_evolution::DelegationEdge> {
+    pairs
+        .iter()
+        .map(|(f, t)| gsoe_evolution::DelegationEdge {
+            from: (*f).to_string(),
+            to: (*t).to_string(),
+        })
+        .collect()
+}
+
+/// 两份实现在同一输入上必须给出**相同的判定结论**（允许报错粒度不同）。
+fn assert_verdicts_agree(name: &str, pairs: &[(&str, &str)]) {
+    let mas_ok =
+        chimera_mas::invariants::InvariantChecker::check_inv9_delegation_acyclic(&mas_edges(pairs))
+            .is_ok();
+    let gsoe_ok = gsoe_evolution::check_inv9_delegation_acyclic(&gsoe_edges(pairs)).is_ok();
+    assert_eq!(
+        mas_ok, gsoe_ok,
+        "INV-9 双源在样本「{name}」上结论分叉：chimera-mas={mas_ok} / gsoe-evolution={gsoe_ok}"
+    );
+}
+
+#[test]
+fn inv9_dual_source_parity_on_fixed_corpus() {
+    // 固定语料：把“形状差异”逐类扫到，尤其要区分“真环”与“共根但无环”。
+    let corpus: Vec<(&str, &[(&str, &str)])> = vec![
+        ("空图", &[]),
+        ("单边", &[("a", "b")]),
+        ("链 a→b→c", &[("a", "b"), ("b", "c")]),
+        (
+            "钻石 a→b→d, a→c→d",
+            &[("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")],
+        ),
+        ("自环 a→a", &[("a", "a")]),
+        ("互环 a→b→a", &[("a", "b"), ("b", "a")]),
+        ("三环 a→b→c→a", &[("a", "b"), ("b", "c"), ("c", "a")]),
+        ("共根无环（多父一子）", &[("a", "c"), ("b", "c")]),
+        ("不连通：一边 + 一环", &[("a", "b"), ("x", "y"), ("y", "x")]),
+        ("重复边", &[("a", "b"), ("a", "b")]),
+        (
+            "深链 6 层",
+            &[
+                ("a", "b"),
+                ("b", "c"),
+                ("c", "d"),
+                ("d", "e"),
+                ("e", "f"),
+                ("f", "g"),
+            ],
+        ),
+        (
+            "环在主干尾部",
+            &[("a", "b"), ("b", "c"), ("c", "d"), ("d", "b")],
+        ),
+    ];
+    for (name, edges) in &corpus {
+        assert_verdicts_agree(name, edges);
+    }
+
+    // 同时固定“期望结论”，防止两份实现**一起**错到同一侧（parity 本身对
+    // “共同错误”无牙，所以这里把 DAG/环的应然值也钉住）。
+    assert!(
+        chimera_mas::invariants::InvariantChecker::check_inv9_delegation_acyclic(&mas_edges(&[
+            ("a", "b"),
+            ("b", "c"),
+        ]))
+        .is_ok()
+    );
+    assert!(
+        gsoe_evolution::check_inv9_delegation_acyclic(&gsoe_edges(&[("a", "b"), ("b", "c"),]))
+            .is_ok()
+    );
+    let cyclic = [("a", "b"), ("b", "a")];
+    assert!(
+        chimera_mas::invariants::InvariantChecker::check_inv9_delegation_acyclic(&mas_edges(
+            &cyclic
+        ))
+        .is_err()
+    );
+    assert!(gsoe_evolution::check_inv9_delegation_acyclic(&gsoe_edges(&cyclic)).is_err());
+}
+
+/// 随机图上的双源对账：把“只改一份”变成几乎不可能漏过的事件。
+///
+/// 用局部 xorshift64 而非 `rand`/`proptest`：本 crate 的 dev-deps 里没有 `rand`，
+/// 而为一个对账测试新增依赖是浪费；种子固定 ⇒ 失败可复现，不引入 flaky。
+/// 生成器刻意不限定 DAG（环与无环均可能出现），以同时覆盖两侧的判定分支。
+#[test]
+fn inv9_dual_source_parity_on_random_graphs() {
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15; // 固定种子，非时间/环境依赖
+    let mut next = move || -> u64 {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+
+    for round in 0..300usize {
+        let n_nodes = 2 + (next() % 7) as usize; // 2..=8
+        let n_edges = (next() % 13) as usize; // 0..=12
+                                              // 直接构 owned 边集，避免借用临时量生命期问题。
+        let pairs: Vec<(String, String)> = (0..n_edges)
+            .map(|_| {
+                let a = (next() % n_nodes as u64) as usize;
+                let b = (next() % n_nodes as u64) as usize;
+                (format!("n{a}"), format!("n{b}"))
+            })
+            .collect();
+        let borrowed: Vec<(&str, &str)> = pairs
+            .iter()
+            .map(|(f, t)| (f.as_str(), t.as_str()))
+            .collect();
+        assert_verdicts_agree(&format!("random#{round}"), &borrowed);
+    }
+}

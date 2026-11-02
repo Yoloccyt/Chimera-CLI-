@@ -15,7 +15,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::panels::Panel;
-use crate::render::{self, FOOTER_TEXT};
+use crate::render;
 use crate::types::{PanelId, SystemMetrics, TuiCommand, TuiState};
 
 /// Health 面板
@@ -146,7 +146,7 @@ impl HealthPanel {
                 ),
             ]),
             Line::from(""),
-            Line::from(FOOTER_TEXT),
+            Line::from(crate::t!("panel.footer")),
         ];
         Text::from(lines)
     }

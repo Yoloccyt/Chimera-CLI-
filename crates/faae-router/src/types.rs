@@ -6,6 +6,7 @@
 //! # 类型职责
 //! - `ToolId`:工具唯一标识(newtype,与 KVBSR/OSA 共享同一命名空间)
 //! - `ExpertProfile`:专家画像(工具 ID + 64 维语义向量 + 能力标签 + 使用统计 + 优先级)
+//! - `ExpertScoring`:画像中构造后不变的评分三元组(预计算副本,供 `route()` 热路径零拷贝读取)
 //! - `RoutingResult`:路由结果(路由工具 + 置信度 + Top-K 候选)
 //! - `EntropyStats`:熵统计(熵值 + 总使用量 + 工具数)
 //!
@@ -29,6 +30,42 @@ use tokio::sync::RwLock;
 // ADR-033 已将 ToolId 收敛至 nexus_contracts，kvbsr / faae / osa 三 crate 共享同一类型，
 // 星型耦合已消解，无需本地 newtype 展开。
 pub use nexus_contracts::ToolId;
+
+/// 专家评分三元组 — 评分所需的、构造后不变的那部分画像
+///
+/// # WHY 独立于 [`ExpertProfile`] 存在
+/// `route()` 的评分阶段只需要 `tool_id` / `expert_vector` / `priority` 三项,而
+/// [`ExpertProfile`] 另外持有 `usage_count` / `last_used_at` 两个**可变更**字段。
+/// 若每次路由都从 `ExpertProfile` 现场深拷贝这三个字段构成评分输入,拷贝成本
+/// 就落在**每次请求**上(12_000 专家实测 ~12.4ms,约为同规模并行评分本身
+/// ~2.1ms 的 6 倍)。本类型把这三项在 `ExpertProfile::new` 时**预计算一次**
+/// 并以 `Arc` 共享,热路径的快照收集退化为引用计数自增。
+///
+/// # 不变式(承重,编译器不强制)
+/// **本类型的三个字段一经 [`ExpertProfile::new`] 构造即不得再写。** 正确性
+/// 完全押在这条不变式上:`route()` 的快照只读 `ExpertProfile::scoring`,若有人
+/// 在注册之后改写 `ExpertProfile` 的 `tool_id` / `expert_vector` / `priority`,
+/// 评分就会读到**陈旧副本**而外部看不出任何异常(不 panic、不报错,只是路由到
+/// 错误的工具)—— 这是最贵的一类静默漂移。
+///
+/// 现状核验(2026-10-02 全仓):全工作区 `ExpertProfile` 结构体字面量为 0,
+/// 构造一律经 `ExpertProfile::new` / `with_usage_count` / `from_snapshot`
+/// (后两者都委托 `new`),三个字段在注册后**无任何写入点**。但字段仍是 `pub`
+/// (收紧可见性属破坏性 API 变更,不在本批范围),编译器不会拦,故:
+/// - 文档在此把不变式写成可核对的断言(字段、构造点、写入点);
+/// - `router::collect_scoring_snapshot` 设有 `debug_assert!` 复核
+///   `scoring` 与 profile 同源,release 构建下零成本;
+/// - 全字段逐元素相等由 `router::tests::snapshot_shares_precomputed_scoring`
+///   在测试构建中锁住(hot loop 内不做 O(64) 的逐元素断言,见该断言处注释)。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExpertScoring {
+    /// 工具唯一标识 — **构造后只读**（见类型级不变式）
+    pub tool_id: ToolId,
+    /// 专家语义向量(64 维,评分纯计算用)— **构造后只读**（见类型级不变式）
+    pub expert_vector: Vec<f32>,
+    /// 优先级权重(final = sim × priority)— **构造后只读**（见类型级不变式）
+    pub priority: f32,
+}
 
 /// 专家画像 — 工具的语义化专家表示
 ///
@@ -64,6 +101,14 @@ pub struct ExpertProfile {
     pub last_used_at: Arc<RwLock<Instant>>,
     /// 优先级 [0.0, 1.0],影响路由评分(高优先级工具更易被选中)
     pub priority: f32,
+    /// 评分三元组的不可变预计算副本(见 [`ExpertScoring`])
+    ///
+    /// WHY 冗余存储:上面三个 pub 字段的内容在此已各存一份,热路径只读本字段,
+    /// 以避免每次 `route()` 为全部候选深拷贝 `String` + `Vec<f32>`。
+    /// **承重不变式:本字段构造后不再变更,且与上面三个字段保持同源** —— 若将来
+    /// 出现改写 `tool_id` / `expert_vector` / `priority` 的路径,必须同步重建
+    /// `scoring`,否则评分会读到陈旧副本(详见 [`ExpertScoring`] 的不变式说明)。
+    pub scoring: Arc<ExpertScoring>,
 }
 
 /// 专家画像快照 — 可序列化的 ExpertProfile 表示

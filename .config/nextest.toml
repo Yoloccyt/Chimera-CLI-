@@ -1,7 +1,8 @@
 # =============================================================================
 # .config/nextest.toml — P9-T2 测试档位 profile 配置
 # =============================================================================
-# Purpose: 定义三档 nextest profile,支撑 P9-T2 测试运行时间优化的回归分级。
+# Purpose: 定义 5 档 nextest profile（default / ci-fast / full / stress / slo），
+#          支撑 P9-T2 测试运行时间优化的回归分级。
 #          - ci-fast: PR 快轨(默认),使用 CHIMERA_TEST_TIMEOUT_SCALE=0.1,
 #                     排除根 package E2E/压测 binary。
 #                     ⚠ 排除手段是命令行 `-E 'not binary(/stress/)'`,
@@ -11,8 +12,9 @@
 #                     互斥资源串行，不能做“按名字排除”，参下方 slo 档说明）。
 #          - default (= full): 完整档(开发本地 / Release 验收),
 #                     跑所有非 #[ignore] 测试,scale 缺省 1.0。
-#          - stress: 压测档,仅跑 test-group = "stress" 的目标
-#                    (1000-iter 压测 + bench 阈值验证),由 nightly/manual 触发。
+#          - stress: 压测档,仅跑 binary 名含 "stress" 的目标
+#                    (1000-iter 压测 + bench 阈值验证),由 nightly/manual 触发;
+#                    过滤式由命令行 `-E 'binary(/stress/)'` 指定（非 test-group）。
 # Refs:    .trae/specs/p9-t2-test-runtime-optimization/{spec,tasks}.md
 #          .github/workflows/{ci,stress}.yml
 # =============================================================================
@@ -44,6 +46,23 @@ fail-fast = false
 [profile.ci-fast]
 inherits = "default"
 # CI 命令: cargo nextest run --profile ci-fast -E 'not binary(/stress/)'
+#
+# C-124/T-20：并发上限 4（而不是默认 num-cpus=8）。
+# WHY：11387 条用例 / 约 450 个 test binary 在同一轮里跑，默认 8 个并发
+# test 进程会把本机 CPU 超订一倍以上；这时**任何绝对时间/吞吐类断言**
+# （带 `#[ignore]` 的 slo 档已按“静默态单跑”登记，但默认档里仍残留几处
+# 代理量断言）都会因被自己人抢 CPU 而抖。本轮已经把能改判据的
+# （locale / HNSW 迭代序 / 虚拟滚动 / 分解耗时）逐条改掉，剩下的是
+# **宿主机资源**这个变量，用并发上限消掉它——并行收益仍保留（4 >> 1），
+# 但不再自己抢自己。实测本机：默认并发 535s 且每轮轮换 1 条假红；
+# 限 4 后见提交里的对比记录。
+test-threads = 4
+# 性能重构 D8：为快轨加挂死护栏（与 slo 档同形制）。slow-timeout 基于“无输出”而非
+# 墙钟——仅终止连续 `period × terminate-after`（=180s）无任何输出的真挂死用例，
+# 不误杀“持续有输出的慢测试”；把挂死发现时间从 job 级 15min（ci.yml）压到 ≤3min。
+[profile.ci-fast.slow-timeout]
+period = '60s'
+terminate-after = 3
 
 # =============================================================================
 # full 档 —— Release 验收 / 开发本地

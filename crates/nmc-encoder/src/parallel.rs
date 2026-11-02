@@ -4,6 +4,18 @@
 //! 对应架构层:L2 Memory
 //! 对应创新点:NMC(Native Multimodal Context,原生多模态上下文编码)
 //!
+//! ## 接线三要件（第三轮 T2.4 · 本入口 `perceive_parallel`/`perceive_batch` 当前零调用点、G-87 判 DEAD）
+//! 若未来接线进生产,接线前须逐条满足（负收益红线:不预投不可达点位;G-87 权威判定见
+//! `scripts/compute_offload_reachability_freeze.txt` 行 `nmc-encoder/src/parallel.rs::perceive_parallel|DEAD`;
+//! 台账行见 `scripts/check_dead_contract_apis.py` `NmcEncoder::perceive_batch`）:
+//! 1. **错误姿态评审** —— 依 ADR-197 D2 决策表评审 strict/degrade/observe 在真实流量下的
+//!    失败语义;T2.2 已定「降级项数独立计数、拒绝逐项 `active.enter`」,接线时不得把降级
+//!    计入并发占用而触发饱和自屏蔽。
+//! 2. **G-88 同步卸载保护** —— async 上下文裸调本同步阻塞入口须配 `block_in_place`/
+//!    `spawn_blocking` 让出并通过 `check_sync_offload_guard.py` 判 GUARDED。
+//! 3. **逐位断测复核** —— 接线后复跑双路径逐位等价测试（结果序=输入序、panic 逐个隔离、
+//!    Inline/Pool 逐元素一致）,确认行为契约不回退。
+//!
 //! # 注入模式（WI-34 七条纪律 ④桥接唯一 / ⑤逐一回滚 / ⑥IO 不上 rayon）
 //! - **识别热点**:[`NmcEncoder::perceive`] 的批量路径 —— 感知器哈希/嵌入
 //!   (Text/Desktop 为 SHA256 + 字节频率;Image/Video/Audio 为 tract-onnx 推理)
@@ -12,7 +24,7 @@
 //!   为无副作用纯计算(无 IO/await/持锁);事件发布(`publish_encoded_event`,
 //!   tokio broadcast,IO 侧)留主线程按序执行,禁入 rayon 闭包。
 //! - **挂 ComputeBridge**:[`ComputeBridge::route`](nexus_core::compute::ComputeBridge::route)
-//!   按 `TaskKind::ClvSimilarity` 三态判定 → `Inline`(n 小于阈值,串行)或 `Rayon`
+//!   按 `TaskKind::NmcEncode` 三态判定 → `Inline`(n 小于阈值,串行)或 `Rayon`
 //!   ([`spawn_compute_batch`](nexus_core::compute::ComputeBridge::spawn_compute_batch)
 //!   批量并行,结果序 = 输入序)。
 //! - **保留回退**:`NmcConfig::parallel_encode` 配置开关 + `CHIMERA_NO_PARALLEL_NMC`
@@ -20,10 +32,10 @@
 //! - **确定性**:并行与串行逐元素一致(感知为确定性纯函数,断言测试锁定)。
 //!
 //! # TaskKind 选择
-//! `TaskKind::ClvSimilarity`(阈值 1000,chunk 64)—— 任务约束"不新增 TaskKind 变体";
-//! 批量编码的产出正是 **CLV**(512 维潜在向量),与 ClvSimilarity("CLV 相似度配对")
-//! 语义最接近;批量 > 1000 输入触发 Rayon,与批量编码场景吻合
-//! (Generic 阈值 10000 过高,批量编码通常 < 10K 输入/波次)。
+//! `TaskKind::NmcEncode`(阈值 1000)—— ADR-196 C1 从 `ClvSimilarity` 拆出的专用登记位;
+//! 批量编码的产出虽是 **CLV**(512 维潜在向量),但语义是多模态编码(非相似度配对),
+//! 独立表项使阈值/校准历史可归属到 NMC 编码本身;批量 > 1000 输入触发 Rayon,与批量编码场景吻合
+//! (`Generic` 阈值 10000 对波次编码(< 10K 输入)过高,故拆出 1000 位)。
 //!
 //! # 并行粒度（CHUNK 分组）
 //! 单条编码约微秒级(SHA256 + 256 桶字节频率 + 融合),逐条 spawn 微任务的调度
@@ -81,7 +93,7 @@ pub(crate) fn should_parallel(config_flag: bool) -> bool {
 ///
 /// 路由判定:
 /// ① `should_parallel(config_flag)` 为 false(配置/env 关闭)→ 串行;
-/// ② `bridge().route(TaskKind::ClvSimilarity, n)` 为 `Inline` → 串行;
+/// ② `bridge().route(TaskKind::NmcEncode, n)` 为 `Inline` → 串行;
 /// ③ 否则 → `spawn_compute_batch` 并行(CHUNK 分组)。
 ///
 /// `inputs` 以 `&Arc<Vec<PerceptionInput>>` 传入:并行闭包捕获同一 Arc + 索引范围,
@@ -105,7 +117,7 @@ pub fn perceive_batch(
 ) -> Vec<Result<ClvOutput, NmcError>> {
     let n = inputs.len();
     if !should_parallel(parallel_enabled)
-        || bridge().route(TaskKind::ClvSimilarity, n) == DispatchPlan::Inline
+        || bridge().route(TaskKind::NmcEncode, n) == DispatchPlan::Inline
     {
         perceive_serial(encoder, inputs)
     } else {
@@ -162,7 +174,7 @@ fn perceive_parallel(
         })
         .collect();
 
-    let results = bridge().spawn_compute_batch(TaskKind::ClvSimilarity, tasks);
+    let results = bridge().spawn_compute_batch(TaskKind::NmcEncode, tasks);
 
     let mut out = Vec::with_capacity(inputs.len());
     let mut input_idx = 0usize;

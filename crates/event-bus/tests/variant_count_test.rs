@@ -9,11 +9,13 @@
 //!    变体即编译错误。即使未来 severity() 被误加回通配符(本 M1 修复的回归),
 //!    这道锁依然拦住未登记的变体。
 //! 2. **计数锁** `test_variant_count_lock` — 样本清单实际构造的变体数必须
-//!    等于 `VARIANT_COUNT_LOCK`(151);样本与序数表交叉断言一一对应
+//!    等于 `VARIANT_COUNT_LOCK`(常量定义即权威数值,散文不重复登记;
+//!    G-37 DECLS 亦对该常量行做机器对拍);样本与序数表交叉断言一一对应
 //!    (清单漏登/重登即失败)。
 //! 3. **分级分布锁** `test_severity_distribution_lock` — severity() 的
-//!    Critical/Info/Normal 分布必须等于 20/11/120;并与 bus.rs
-//!    `LANE_FORBIDDEN_SHARD` 的 20 个 Critical 名单双向互锁。
+//!    Critical/Info/Normal 分布必须等于 `CRITICAL_LOCK`/`INFO_LOCK`/
+//!    `NORMAL_LOCK` 常量(数值以常量定义为权威);并与 bus.rs
+//!    `LANE_FORBIDDEN_SHARD` 的 22 个 Critical 名单双向互锁。
 //!
 //! # 维护规约(新增变体时必须同步修改)
 //! - enum 新增变体 → 编译器强制修改 severity()/type_name()/topic(),
@@ -40,21 +42,24 @@ use nexus_contracts::reward::RewardSignal;
 
 /// 变体总数锁定值(2026-09-20 实测 enum = 146,含 SecurityInterceptionReported;
 /// L4 深度优化 P1-1:FormalVerificationFailed 升入 Critical 后 18/11/117 分布;
-/// ADR-197:+ComputePoolSaturated(Normal/System)= 152,分布 20/11/121)
-const VARIANT_COUNT_LOCK: usize = 152;
-/// severity 分布锁定值(Critical,与 bus.rs CRITICAL_TOTAL = 20 一致)
-const CRITICAL_LOCK: usize = 20;
+/// ADR-197:+ComputePoolSaturated(Normal/System)= 152,分布 20/11/121;
+/// ADR-223 D2:+TelemetryCalibrationApplied / TelemetryReporterDegraded = 154,分布 20/11/123;
+/// C-13/M09:ShadowBreakerTripped Normal→Critical(定级升级,变体零新增)= 154,分布 21/11/122;
+/// C-64b: SandboxViolation Normal→Critical(同为定级升级、变体零新增)= 154,分布 22/11/121
+const VARIANT_COUNT_LOCK: usize = 154;
+/// severity 分布锁定值(Critical,与 bus.rs CRITICAL_TOTAL = 21 一致)
+const CRITICAL_LOCK: usize = 22;
 /// severity 分布锁定值(Info)
 const INFO_LOCK: usize = 11;
 /// severity 分布锁定值(Normal)
 const NORMAL_LOCK: usize = 121;
 
-/// 构造全部 152 个 NexusEvent 变体的最小实例清单(enum 声明序)
+/// 变体清单第 1 段（`NexusEvent::UserIntentEncoded` … `NexusEvent::ContextWindowSwitched`，声明序连续切片）
 ///
-/// WHY 每变体一个构造器: 把"变体清单"变成编译期契约 —— 变体改名/删除立即
-/// 编译错误;新增变体未登记时,下方计数锁与序数表交叉断言失败。
-/// 字段值一律取最小合法值(空集合/零值/None),与业务语义无关。
-fn all_variant_samples() -> Vec<NexusEvent> {
+/// WHY 分段：`all_variant_samples` 原为单函数 988 行，破「单函数 ≤200 行」
+///（G-48 / `scripts/fnlen_baseline.txt`）。本段只做清单，元素逐字未动；
+/// 分段函数本身也 <200 行，不会变成新的未登记违例。
+fn variant_samples_chunk_1() -> Vec<NexusEvent> {
     vec![
         NexusEvent::UserIntentEncoded {
             metadata: EventMetadata::new("test"),
@@ -235,6 +240,16 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             to_tier: "s".into(),
             reason: "s".into(),
         },
+    ]
+}
+
+/// 变体清单第 2 段（`NexusEvent::ContextCompressed` … `NexusEvent::BudgetStatsReported`，声明序连续切片）
+///
+/// WHY 分段：`all_variant_samples` 原为单函数 988 行，破「单函数 ≤200 行」
+///（G-48 / `scripts/fnlen_baseline.txt`）。本段只做清单，元素逐字未动；
+/// 分段函数本身也 <200 行，不会变成新的未登记违例。
+fn variant_samples_chunk_2() -> Vec<NexusEvent> {
+    vec![
         NexusEvent::ContextCompressed {
             metadata: EventMetadata::new("test"),
             original_size: 1,
@@ -295,6 +310,8 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             elapsed_ms: 1,
             total: 1,
             abandoned: 1,
+            // 四段守恒样本（ADR-202 I5）：total 1 = abandoned 1 + 其余三段 0
+            not_started: 0,
         },
         NexusEvent::OrphanCallDetected {
             metadata: EventMetadata::new("test"),
@@ -413,6 +430,16 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             remaining_budget: 0.5,
             utilization_rate: 0.5,
         },
+    ]
+}
+
+/// 变体清单第 3 段（`NexusEvent::BudgetMetricsUpdated` … `NexusEvent::ChtcAdapterStatus`，声明序连续切片）
+///
+/// WHY 分段：`all_variant_samples` 原为单函数 988 行，破「单函数 ≤200 行」
+///（G-48 / `scripts/fnlen_baseline.txt`）。本段只做清单，元素逐字未动；
+/// 分段函数本身也 <200 行，不会变成新的未登记违例。
+fn variant_samples_chunk_3() -> Vec<NexusEvent> {
+    vec![
         NexusEvent::BudgetMetricsUpdated {
             metadata: EventMetadata::new("test"),
             metrics: BudgetMetricsPayload {
@@ -586,6 +613,16 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             recent_requests: vec![],
             is_online: true,
         },
+    ]
+}
+
+/// 变体清单第 4 段（`NexusEvent::ClvSnapshotReported` … `NexusEvent::AuditFindingRaised`，声明序连续切片）
+///
+/// WHY 分段：`all_variant_samples` 原为单函数 988 行，破「单函数 ≤200 行」
+///（G-48 / `scripts/fnlen_baseline.txt`）。本段只做清单，元素逐字未动；
+/// 分段函数本身也 <200 行，不会变成新的未登记违例。
+fn variant_samples_chunk_4() -> Vec<NexusEvent> {
+    vec![
         NexusEvent::ClvSnapshotReported {
             metadata: EventMetadata::new("test"),
             modality: "s".into(),
@@ -765,6 +802,16 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             evidence_kind: "s".into(),
             fix_hint: "s".into(),
         },
+    ]
+}
+
+/// 变体清单第 5 段（`NexusEvent::HarnessReportGenerated` … `NexusEvent::OverWindowFallbackTriggered`，声明序连续切片）
+///
+/// WHY 分段：`all_variant_samples` 原为单函数 988 行，破「单函数 ≤200 行」
+///（G-48 / `scripts/fnlen_baseline.txt`）。本段只做清单，元素逐字未动；
+/// 分段函数本身也 <200 行，不会变成新的未登记违例。
+fn variant_samples_chunk_5() -> Vec<NexusEvent> {
+    vec![
         NexusEvent::HarnessReportGenerated {
             metadata: EventMetadata::new("test"),
             task_comprehension: 0.5,
@@ -942,6 +989,16 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             candidate_count: 1,
             loaded_count: 1,
         },
+    ]
+}
+
+/// 变体清单第 6 段（`NexusEvent::ResourceRecovered` … `NexusEvent::BlackboardEntry`，声明序连续切片）
+///
+/// WHY 分段：`all_variant_samples` 原为单函数 988 行，破「单函数 ≤200 行」
+///（G-48 / `scripts/fnlen_baseline.txt`）。本段只做清单，元素逐字未动；
+/// 分段函数本身也 <200 行，不会变成新的未登记违例。
+fn variant_samples_chunk_6() -> Vec<NexusEvent> {
+    vec![
         NexusEvent::ResourceRecovered {
             metadata: EventMetadata::new("test"),
             resource_type: "s".into(),
@@ -1040,7 +1097,37 @@ fn all_variant_samples() -> Vec<NexusEvent> {
             epistemic: "Fact".into(),
             provenance: None,
         },
+        // ADR-223 D2:遥测治理面事件样本(整型/只读计数,无浮点相等语义)
+        NexusEvent::TelemetryCalibrationApplied {
+            metadata: EventMetadata::new("test"),
+            applied_rows: 1,
+        },
+        NexusEvent::TelemetryReporterDegraded {
+            metadata: EventMetadata::new("test"),
+            requested_period_secs: 0,
+            effective_period_secs: 1,
+        },
     ]
+}
+
+/// 构造全部 154 个 NexusEvent 变体的最小实例清单(enum 声明序)
+///
+/// WHY 每变体一个构造器: 把"变体清单"变成编译期契约 —— 变体改名/删除立即
+/// 编译错误;新增变体未登记时,下方计数锁与序数表交叉断言失败。
+/// 字段值一律取最小合法值(空集合/零值/None),与业务语义无关。
+///
+/// WHY 有序拼接：清单顺序 = enum 声明序（计数锁与序数表交叉断言依赖它），
+/// 段序不得调换;每段仍是同形 `vec![…]` 字面量 ⇒ 与原单函数逐项等价。
+fn all_variant_samples() -> Vec<NexusEvent> {
+    [
+        variant_samples_chunk_1(),
+        variant_samples_chunk_2(),
+        variant_samples_chunk_3(),
+        variant_samples_chunk_4(),
+        variant_samples_chunk_5(),
+        variant_samples_chunk_6(),
+    ]
+    .concat()
 }
 
 /// 变体序数表(enum 声明序,1..=146) — 编译期穷举锁
@@ -1202,6 +1289,9 @@ fn variant_ordinals(event: &NexusEvent) -> u32 {
         NexusEvent::BlackboardEntry { .. } => 151,
         // ADR-197:新增变体尾号登记(序数只增不改,避免历史序数全量位移)
         NexusEvent::ComputePoolSaturated { .. } => 152,
+        // ADR-223 D2:遥测双事件(尾号续增)
+        NexusEvent::TelemetryCalibrationApplied { .. } => 153,
+        NexusEvent::TelemetryReporterDegraded { .. } => 154,
     }
 }
 
@@ -1213,7 +1303,7 @@ fn test_variant_count_lock() {
         VARIANT_COUNT_LOCK,
         "NexusEvent 变体实际数量与锁定值不符: 清单需同步登记 enum 新变体"
     );
-    // 序数表与样本清单交叉锁: 152 个样本必须映射到 152 个不同序数
+    // 序数表与样本清单交叉锁: 全部样本必须映射到互不相同的一组序数
     // (清单漏登变体 → 样本数不足;序数表漏登 → 编译错误;双重登记 → 序数重复)
     let ordinals: HashSet<u32> = all.iter().map(variant_ordinals).collect();
     assert_eq!(
@@ -1257,7 +1347,7 @@ fn test_severity_distribution_lock() {
 
 #[test]
 fn test_critical_set_matches_lane_forbidden_shard() {
-    // 与 bus.rs LANE_FORBIDDEN_SHARD(20 个 Critical 变体名)双向互锁:
+    // 与 bus.rs LANE_FORBIDDEN_SHARD(22 个 Critical 变体名)双向互锁:
     // severity() 的 Critical 集合 == 分片禁区名单,任何一侧漂移即失败
     let critical_names: HashSet<&str> = all_variant_samples()
         .iter()

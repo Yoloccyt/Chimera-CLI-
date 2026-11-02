@@ -372,3 +372,108 @@ async fn test_no_event_bus_skips_publish() {
     let result = sandbox.audit_and_execute(cmd).await;
     assert!(result.is_err(), "拦截仍应生效(不依赖事件发布)");
 }
+
+// ============================================================
+// R2 C-64a(M49):拦截必须上 Merkle 审计链 —— 拒绝面留痕
+// ============================================================
+//
+// WHY这组测试存在:此前拦截只走 `stats.record_blocked()` 与 Normal 级 broadcast
+// 事件。计数器不是不可篡改证据,而 broadcast 对慢消费者可丢 ⇒ 「拦了但什么都没留下」。
+// 下面四条分别钉住:上链发生、两个拒绝口都覆盖、状态与分类可读、
+// 且留下的东西被改写时 `verify()` 能抖出来(红线要求是「不可篡改」不是「有痕」)。
+
+use seccore::audit::{AuditRecordStatus, DecisionStepType};
+
+/// 静态分析拦截(CommandBlocked)必须新增一个终态审计块。
+#[tokio::test]
+async fn test_blocked_command_appends_audit_record() {
+    let mut sandbox = Sandbox::with_default_policy();
+    assert_eq!(sandbox.audit_chain.len(), 0, "初始链应为空");
+
+    let cmd = Command::new("echo").arg("$(whoami)");
+    let result = sandbox.audit_and_execute(cmd).await;
+    assert!(result.is_err(), "注入应被拦截");
+
+    assert_eq!(
+        sandbox.audit_chain.len(),
+        1,
+        "拦截必须在 Merkle 链上留下一个记录(M49)"
+    );
+    let block = &sandbox.audit_chain.blocks[0];
+    assert_eq!(
+        block.status,
+        AuditRecordStatus::Failed,
+        "拦截记录应为终态 Failed"
+    );
+    assert_eq!(block.decision_chain.len(), 1, "拒绝原因应作为单个步骤入链");
+    let step = &block.decision_chain[0];
+    assert_eq!(step.step_type, DecisionStepType::Result);
+    assert!(
+        step.outcome.starts_with("blocked:"),
+        "outcome 应带 blocked: 前缀, 实际: {}",
+        step.outcome
+    );
+    assert_eq!(step.step_hash.len(), 64, "step_hash 应为 SHA-256 十六进制");
+    assert!(
+        sandbox.audit_chain.verify().unwrap(),
+        "拦截记录入链后链完整性仍应为真"
+    );
+}
+
+/// 环境变量拦截(EnvVarBlocked)同样必须上链,且分类与事件侧同口径。
+#[tokio::test]
+async fn test_env_blocked_command_appends_audit_record() {
+    let mut sandbox = Sandbox::with_default_policy();
+    let cmd = Command::new("echo").arg("hello").env("SECRET_KEY", "leak");
+    let result = sandbox.audit_and_execute(cmd).await;
+    assert!(result.is_err(), "环境变量泄露应被拦截");
+
+    assert_eq!(sandbox.audit_chain.len(), 1, "env 拦截也必须上链(M49)");
+    let block = &sandbox.audit_chain.blocks[0];
+    assert_eq!(block.status, AuditRecordStatus::Failed);
+    assert_eq!(
+        block.decision_chain[0].outcome, "blocked:env_blocked",
+        "审计侧分类必须与 publish_violation 的 `env_blocked` 字面一致"
+    );
+    assert!(sandbox.audit_chain.verify().unwrap());
+}
+
+/// 篡改拒绝原因必须被 `verify()` 检出(留痕本身不可篡改)。
+#[tokio::test]
+async fn test_rejection_record_tampering_is_detected() {
+    let mut sandbox = Sandbox::with_default_policy();
+    let cmd = Command::new("echo").arg("$(whoami)");
+    assert!(sandbox.audit_and_execute(cmd).await.is_err());
+    assert!(sandbox.audit_chain.verify().unwrap(), "未篡改时链应为完整");
+
+    // 攻击面:把拦截原因改成看起来像批准的文字(保留 step_hash 不变)
+    sandbox.audit_chain.blocks[0].decision_chain[0].outcome =
+        "blocked:injected -> approved".to_string();
+    assert!(
+        !sandbox.audit_chain.verify().unwrap(),
+        "outcome 参入 decision_chain_hash,改写后 verify() 必须报篡改"
+    );
+}
+
+/// 同一条命令两次拦截必须得到相同 command_hash(env 多项不得因哈希表迭代序而漂)。
+#[tokio::test]
+async fn test_rejection_command_hash_is_reproducible() {
+    let mk = || {
+        Command::new("echo")
+            .arg("hello")
+            .env("SECRET_KEY", "a")
+            .env("API_TOKEN", "b")
+    };
+    let mut a = Sandbox::with_default_policy();
+    let mut b = Sandbox::with_default_policy();
+    assert!(a.audit_and_execute(mk()).await.is_err());
+    assert!(b.audit_and_execute(mk()).await.is_err());
+
+    // 两个拦截都发生在 validate_command 之后、validate_env 失败 ⇒ 各一个记录
+    assert_eq!(a.audit_chain.len(), 1);
+    assert_eq!(b.audit_chain.len(), 1);
+    assert_eq!(
+        a.audit_chain.blocks[0].command_hash, b.audit_chain.blocks[0].command_hash,
+        "env 按 key 排序后才能得到可跨进程对拍的审计身份"
+    );
+}

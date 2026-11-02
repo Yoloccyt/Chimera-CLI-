@@ -66,6 +66,26 @@ pub trait AppTransport: Send + Sync {
     /// 推送服务端事件（下行）
     async fn send_event(&self, ev: &AppEvent) -> Result<(), TransportError>;
 
+    /// 批量推送服务端事件（下行）。默认逐条 `send_event`，保证所有实现（含测试桩
+    /// `MockTransport`、单向 `SseConnection`）向后兼容、无需覆写。
+    ///
+    /// # 契约
+    /// - **成功路径**：输出字节与逐条 `send_event` 完全一致（同批事件连续写出、
+    ///   不与其他 op 交错）；
+    /// - **编码失败**：整批**不写任何字节**（原子）——高频实现先锁外预编码；
+    /// - **I/O 失败**：已写前缀不可撕回（与逐条版同语义）；
+    ///   因此调用方（serve/acp）在批失败时应降级逐条重试，以隔离不可编码事件。
+    ///
+    /// 高频实现（[`IoTransport`]）覆写为**一次 writer 锁 + 单次 flush**：
+    /// `BufWriter` 下单帧 `write_all` 仅 memcpy 进缓冲、不产生 syscall，
+    /// 真实收益是**每帧一次 flush → 整批一次 flush**（N → 1），而非帧数级的写 syscall。
+    async fn send_events(&self, events: &[AppEvent]) -> Result<(), TransportError> {
+        for ev in events {
+            self.send_event(ev).await?;
+        }
+        Ok(())
+    }
+
     /// 回送协议级错误帧 — 帧解码失败时的 JSON-RPC error response（架构方向 F-c 终章）
     ///
     /// # 默认实现（降级语义）
@@ -82,6 +102,38 @@ pub trait AppTransport: Send + Sync {
     async fn send_decode_error(&self, error: &JsonRpcError) -> Result<(), TransportError> {
         let _ = error;
         Ok(())
+    }
+}
+
+/// 批量下发，批失败时降级逐条（P2-3）。
+///
+/// 返回值：`(delivered, batch_error)`。`batch_error` 仅在批路径失败时非空，
+/// 供调用方 warn；逐条重试的失败以 debug 记录（避免刷屏）。
+///
+/// WHY 需要：`send_events` 的成功路径与逐条字节等价，但**失败路径**不同——
+/// 批内首个失败后不再尝试剩余帧；宿主（serve/acp）需要逐条隔离，
+/// 使不可编码事件不再吞掉整批（编码失败今日事实上不可达，但 I/O 中途失败可达）。
+pub async fn send_events_resilient(
+    transport: &dyn AppTransport,
+    events: &[AppEvent],
+) -> (usize, Option<TransportError>) {
+    if events.is_empty() {
+        return (0, None);
+    }
+    match transport.send_events(events).await {
+        Ok(()) => (events.len(), None),
+        Err(batch_err) => {
+            let mut delivered = 0usize;
+            for ev in events {
+                match transport.send_event(ev).await {
+                    Ok(()) => delivered += 1,
+                    Err(e) => {
+                        tracing::debug!(error = %e, "逐条重试仍失败（已跳过该事件）");
+                    }
+                }
+            }
+            (delivered, Some(batch_err))
+        }
     }
 }
 
@@ -190,6 +242,32 @@ where
         Ok(())
     }
 
+    /// 覆写批量推送 — **锁外整批预编码 + 一次锁 + 单次 flush**（性能重构 D7；
+    /// P2-2 修正错误语义）。
+    ///
+    /// - 成功路径：与逐条 [`send_event`](Self::send_event) 字节完全一致（帧 + `\n`）；
+    /// - 编码失败：**0 字节写出**（原子）——旧实现在锁内逐条编码，第 k 条失败时
+    ///   前 k-1 帧已写入缓冲/已发，形成不可回退的半批；
+    /// - I/O 失败：已写前缀不可撤回；调用方（serve/acp）按逐条重试隔离。
+    async fn send_events(&self, events: &[AppEvent]) -> Result<(), TransportError> {
+        use tokio::io::AsyncWriteExt;
+        if events.is_empty() {
+            return Ok(());
+        }
+        // 锁外预编码：任一帧失败 → `?` 直接返回，writer 未被触碰（0 字节）。
+        // 容量预估 96B/帧（典型 notification 帧大小）仅作摊销，不保证精确。
+        let mut buf = Vec::with_capacity(events.len() * 96);
+        for ev in events {
+            let frame = crate::protocol::RpcCodec::encode_notification(ev)?;
+            buf.extend_from_slice(frame.as_bytes());
+            buf.push(b'\n');
+        }
+        let mut writer = self.writer.lock().await;
+        writer.write_all(&buf).await?;
+        writer.flush().await?;
+        Ok(())
+    }
+
     /// 覆写错误回帧 — stdio 通道写 JSON-RPC error response 行
     ///
     /// # id=0 约定
@@ -245,6 +323,59 @@ fn decode_error_frame(error: &JsonRpcError) -> Result<String, TransportError> {
 mod tests {
     use super::*;
     use crate::protocol::{JsonRpcError, RpcCodec};
+    use async_trait::async_trait;
+
+    /// 批路径恒失败、逐条路径仅对 code == "bad-frame" 失败（P2-3 降级验证用）。
+    struct BatchFailingTransport;
+
+    #[async_trait]
+    impl AppTransport for BatchFailingTransport {
+        async fn recv_op(&self) -> Result<AppOp, TransportError> {
+            Err(TransportError::Eof)
+        }
+
+        async fn send_event(&self, ev: &AppEvent) -> Result<(), TransportError> {
+            if let AppEvent::Error { code, .. } = ev {
+                if &**code == "bad-frame" {
+                    return Err(TransportError::Io(std::io::Error::other("bad frame")));
+                }
+            }
+            Ok(())
+        }
+
+        async fn send_events(&self, _events: &[AppEvent]) -> Result<(), TransportError> {
+            Err(TransportError::Io(std::io::Error::other(
+                "batch channel down",
+            )))
+        }
+    }
+
+    fn err_event(code: &str) -> AppEvent {
+        AppEvent::Error {
+            code: code.into(),
+            message: "test".into(),
+        }
+    }
+
+    /// P2-3：批失败 → 逐条降级，坏事件被隔离，其余仍送达。
+    #[tokio::test]
+    async fn resilient_batch_falls_back_to_per_event() {
+        let t = BatchFailingTransport;
+        let events = vec![err_event("ok-1"), err_event("bad-frame"), err_event("ok-2")];
+
+        let (delivered, batch_err) = send_events_resilient(&t, &events).await;
+        assert!(batch_err.is_some(), "批路径应失败并返回错误供宿主 warn");
+        assert_eq!(delivered, 2, "坏帧被隔离，其余 2 条应逐条送达");
+    }
+
+    /// 空批：不触碰传输，直接成功。
+    #[tokio::test]
+    async fn resilient_empty_batch_is_noop() {
+        let t = BatchFailingTransport;
+        let (delivered, batch_err) = send_events_resilient(&t, &[]).await;
+        assert_eq!(delivered, 0);
+        assert!(batch_err.is_none(), "空批不应调用批路径");
+    }
 
     #[test]
     fn transport_trait_send_sync() {
@@ -419,5 +550,42 @@ mod tests {
         );
         // 行尾恰一个换行(NDJSON 纪律)
         assert!(line.ends_with('\n') && !line.ends_with("\n\n"));
+    }
+
+    /// 性能重构 D7：批量写与逐条写必须产生完全相同的字节（一个 op 事件批次连续、不交错）。
+    #[tokio::test]
+    async fn batch_send_events_matches_sequential_bytes() {
+        use nexus_contracts::app::AppEvent;
+        let ev1 = AppEvent::Error {
+            code: "E1".into(),
+            message: "one".into(),
+        };
+        let ev2 = AppEvent::Error {
+            code: "E2".into(),
+            message: "two".into(),
+        };
+
+        // 逐条 send_event（×2）
+        let seq = IoTransport::with_io(std::io::Cursor::new(Vec::new()), Vec::new());
+        seq.send_event(&ev1).await.expect("逐条1");
+        seq.send_event(&ev2).await.expect("逐条2");
+        let seq_bytes = seq.into_writer();
+
+        // 一次 send_events 批量
+        let bat = IoTransport::with_io(std::io::Cursor::new(Vec::new()), Vec::new());
+        bat.send_events(&[ev1, ev2]).await.expect("批量");
+        let bat_bytes = bat.into_writer();
+
+        assert_eq!(seq_bytes, bat_bytes, "批量写字节必须与逐条写完全一致");
+        assert_eq!(
+            bat_bytes.iter().filter(|&&b| b == b'\n').count(),
+            2,
+            "两帧两行（NDJSON）"
+        );
+
+        // 空批次：不写任何字节（serve/acp 无事件时调用路径）
+        let empty = IoTransport::with_io(std::io::Cursor::new(Vec::new()), Vec::new());
+        empty.send_events(&[]).await.expect("空批次应成功");
+        assert!(empty.into_writer().is_empty(), "空批次不得写入任何字节");
     }
 }

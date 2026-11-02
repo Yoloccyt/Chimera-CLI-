@@ -1,0 +1,17 @@
+# BusLogger Prometheus metric field registry (WI-G5, 2026-10-07; ADR-191 closing item).
+#
+# Locked by crates/event-bus/tests/logger_metrics_registry_test.rs against
+# BusLogger::render_metrics() output: a metric added/renamed/removed on either side
+# (registry row vs Registry::register call) turns the test RED -- the exposition
+# surface cannot drift silently.
+#
+# schema: <family>|<type>|<exposition-series>|<labels>|<note>
+#   family            = registration name (also the '# TYPE <family> <type>' line)
+#   type              = counter | histogram
+#   exposition-series = actual series name in the text output (prometheus-client
+#                       appends _total to counters)
+#   labels            = comma list or '-'
+family|type|exposition-series|labels|note
+nexus_event|counter|nexus_event_total|topic|Events published, partitioned by EventTopic (10 topic labels)
+nexus_critical_event|counter|nexus_critical_event_total|-|Critical-severity events published
+nexus_event_publish_duration_seconds|histogram|nexus_event_publish_duration_seconds|-|Publish duration seconds (exponential buckets 100us..~3.3s)

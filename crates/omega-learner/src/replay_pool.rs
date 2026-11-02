@@ -37,7 +37,7 @@
 //! **冻结状态**:R2(GSOE×AutoDPO 约束 RL)路径在 FormalVerifier 落地前无条件冻结。
 //!
 //! - **冻结依据**:[ADR-042](docs/architecture/ADR-042-r2-freeze-before-formal-verifier.md)(2026-07-25 批准)
-//! - **冻结范围**:本回放池的轨迹数据**仅可用于 R1 路径**(召回配额 CQL/IQL,需满足影子模式 2 周前置,P4-W16.2.4),**禁止用于 R2 路径**(GSOE×AutoDPO 约束 RL)
+//! - **冻结范围**:本回放池的轨迹数据**仅可用于 R1 路径**(召回配额 CQL/IQL,需满足影子模式 2 周前置,P4-W16.2.4),**禁止用于 R2 路径**(GSOE×AutoDPO 约束 RL;AutoDPO crate 已按 ADR-193 退役,此处为 R2 路径历史名)
 //! - **解冻条件**:FormalVerifier 落地 + 新 ADR 评审通过 + 影子模式 2 周验证(ADR-042 决策 3)
 //! - **违反处置**:自动回滚 + `NexusEvent::R2FreezeViolation` Critical 告警 + 事故复盘(ADR-042 决策 4)
 //! - **关联 ADR**:[ADR-032 决策 4](docs/architecture/ADR-032-dual-channel-evaluator.md)(验证器层级跃迁路径)

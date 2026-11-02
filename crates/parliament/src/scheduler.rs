@@ -10,7 +10,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crossbeam::deque::Injector;
+use crossbeam_deque::Injector;
 
 /// 工作窃取调度器 — 分发任务到工作线程，支持窃取
 ///
@@ -113,7 +113,7 @@ mod tests {
 
         // 从 injector 窃取并执行任务
         match scheduler.injector.steal() {
-            crossbeam::deque::Steal::Success(task) => {
+            crossbeam_deque::Steal::Success(task) => {
                 task();
             }
             _ => panic!("应有可窃取的任务"),
@@ -151,12 +151,12 @@ mod tests {
         let mut executed = 0;
         loop {
             match scheduler.injector.steal() {
-                crossbeam::deque::Steal::Success(task) => {
+                crossbeam_deque::Steal::Success(task) => {
                     task();
                     executed += 1;
                 }
-                crossbeam::deque::Steal::Empty => break,
-                crossbeam::deque::Steal::Retry => continue,
+                crossbeam_deque::Steal::Empty => break,
+                crossbeam_deque::Steal::Retry => continue,
             }
         }
 

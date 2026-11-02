@@ -18,8 +18,10 @@
 //! # 状态变更通知(P1-1 接线,L1 Core 深度优化)
 //! 架构红线"状态变更必须广播"的落地采用**依赖倒置**:本模块定义最小
 //! [`StateChangeListener`] trait(纯 std,零新依赖),EventBus 适配器实现
-//! 在上层(L9 quest-engine `state_listener` 模块)。nexus-core 若直接依赖
-//! event-bus 会形成 L1 内部环(event-bus 已反向依赖过 nexus-core),cargo 禁止。
+//! 在上层(L9 quest-engine `state_listener` 模块)。P1-2 解耦后 event-bus 对
+//! nexus-core 已零依赖(ClvSummary::from_clv_slice 改签),nexus-core 同层依赖
+//! event-bus 合法且无环(`CLV::report_snapshot` 即经此直接发布);依赖倒置现仅
+//! 承载"适配层归 L9"语义(L1 不可向上依赖 L9,§2.2),故实现留在上层。
 //! 回调在写锁**释放后**执行(红线:不持锁调用外部代码)。
 
 use std::collections::HashMap;
@@ -59,7 +61,8 @@ pub enum StateChangeKind {
 
 /// 状态变更监听器 — 依赖倒置观察点(P1-1)
 ///
-/// nexus-core 不依赖 event-bus(避免 L1 内部环),监听器实现由上层提供:
+/// 依赖倒置现仅承载"适配层归 L9"语义(L1 不可向上依赖 L9,§2.2;P1-2 解耦后
+/// 同层依赖 event-bus 已无环,见模块头注),监听器实现由上层提供:
 /// - 生产适配器:L9 quest-engine `BusStateChangeListener`(转 NexusStateChanged 事件)
 /// - 测试:mock 实现断言回调时机与参数
 ///

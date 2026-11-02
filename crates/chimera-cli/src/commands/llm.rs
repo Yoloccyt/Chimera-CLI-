@@ -1,16 +1,16 @@
 //! `chimera llm <action>` — LLM Provider 管理子命令(Task 2 of spec)
 //!
-//! 封装 `mca-gateway` 与 `model-router`,提供 6 个子动作:
+//! 读取 `model_router.providers` 配置,提供 6 个子动作:
 //! - `list`:列出已配置 Provider
 //! - `show <name>`:显示 Provider 详情
 //! - `set-default <name>`:设置默认 Provider(触发 permission prompt)
-//! - `test [name]`:连通性探测
-//! - `channels`:列出 model-router 4 路由渠道
-//! - `strategy [name]`:显示/设置 model-router 策略(触发 permission prompt)
+//! - `test [name]`:连通性探测(mock)
+//! - `channels`:列出本地静态渠道表
+//! - `strategy [name]`:显示/设置 model_router.strategy(触发 permission prompt)
 //!
 //! # 骨架声明(Task 2 范围)
 //!
-//! 本 Task **不**实装真实 `mca-gateway` / `model-router` API,
+//! 本 Task **不**实装真实 `mca-gateway` API,
 //! 仅搭骨架:硬编码 Provider 列表、Channels 表格、Test 模拟 1s 延迟。
 //! 真实接入计划见后续 Task(预计通过 `ChimeraConfig::set_llm_default` 等接口持久化)。
 //!
@@ -47,7 +47,7 @@ use crate::permission::{self, PermissionCtx};
 /// `Chimera_全模型亲和适配体系设计文档_v1.0.md`;`mca-gateway` 侧**无同名枚举**
 /// (仅 `AffinityError`),故本清单与该 crate 不构成编译期耦合——
 /// 增删此处的名字不会触发对侧失败,反之亦然。
-const FALLBACK_PROVIDER_NAMES: &[&str] = &[
+pub(crate) const FALLBACK_PROVIDER_NAMES: &[&str] = &[
     "deepseek", "zhipu", "minimax", "volcano", "moonshot", "stepfun", "alicloud", "custom",
 ];
 
@@ -163,13 +163,12 @@ fn render_provider_rows(rows: &[ProviderRow]) -> String {
 /// `llm list` — 列出所有已配置 Provider
 fn list_providers(cfg: &ChimeraConfig, json: bool) -> Result<()> {
     let rows = available_providers(cfg);
-    if json {
-        output::print_json(&rows).context("序列化 llm list 为 JSON 失败")?;
-    } else {
+    output::emit(json, &rows, || {
         output::print_info("已配置 LLM Provider:");
         println!("{}", render_provider_rows(&rows));
-    }
-    Ok(())
+        Ok(())
+    })
+    .context("llm list 输出失败")
 }
 
 /// `llm show <name>` — 显示 Provider 详情(endpoint / 协议 / 配额)
@@ -179,16 +178,24 @@ fn show_provider(cfg: &ChimeraConfig, name: &str, json: bool) -> Result<()> {
         .iter()
         .find(|r| r.name == name)
         .ok_or_else(|| ChimeraCliError::ConfigError(format!("未找到 Provider: {name}")))?;
-    if json {
-        output::print_json(row).context("序列化 llm show 为 JSON 失败")?;
-    } else {
+    output::emit(json, row, || {
         output::print_info(&format!("Provider 详情: {}", name));
         println!("  endpoint: {}", row.endpoint);
         println!("  protocol: {}", row.protocol);
         println!("  tier:     {}", row.tier);
         println!("  default:  {}", if row.is_default { "yes" } else { "no" });
-    }
-    Ok(())
+        Ok(())
+    })
+    .context("llm show 输出失败")
+}
+
+/// `llm set-default` 的 JSON 载荷（typed，字段名编译期校验）。
+#[derive(Debug, Serialize)]
+struct SetDefaultPayload<'a> {
+    action: &'static str,
+    provider: &'a str,
+    persisted: bool,
+    note: &'static str,
 }
 
 /// `llm set-default <name>` — 设置默认 Provider(骨架,仅打印 mock)
@@ -204,19 +211,28 @@ async fn set_default_provider(name: &str, perm: &PermissionCtx, json: bool) -> R
             ChimeraCliError::PermissionDenied(format!("用户拒绝设置默认 Provider {name}")).into(),
         );
     }
-    if json {
-        let payload = serde_json::json!({
-            "action": "set-default",
-            "provider": name,
-            "persisted": false,
-            "note": "[mock] ChimeraConfig::set_llm_default 尚未实装,后续 Task 接入",
-        });
-        output::print_json(&payload).context("序列化 llm set-default 为 JSON 失败")?;
-    } else {
+    let payload = SetDefaultPayload {
+        action: "set-default",
+        provider: name,
+        persisted: false,
+        note: "[mock] ChimeraConfig::set_llm_default 尚未实装,后续 Task 接入",
+    };
+    output::emit(json, &payload, || {
         println!("[mock] default provider set to: {name}");
         println!("(后续 Task 接入 ChimeraConfig::set_llm_default 持久化)");
-    }
-    Ok(())
+        Ok(())
+    })
+    .context("llm set-default 输出失败")
+}
+
+/// `llm test` 的 JSON 载荷（typed；成功时省略 `error` 字段）。
+#[derive(Debug, Serialize)]
+struct TestPayload<'a> {
+    provider: &'a str,
+    ok: bool,
+    latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'static str>,
 }
 
 /// `llm test [name]` — 探测 Provider 连通性(1s 模拟延迟 + 50/50 伪随机结果)
@@ -246,31 +262,28 @@ async fn test_provider(cfg: &ChimeraConfig, name: Option<&str>, json: bool) -> R
         .unwrap_or(0);
     let success = epoch_ns.is_multiple_of(2);
 
-    if json {
-        let payload = if success {
-            serde_json::json!({
-                "provider": target,
-                "ok": true,
-                "latency_ms": latency_ms,
-            })
+    let payload = TestPayload {
+        provider: &target,
+        ok: success,
+        latency_ms,
+        error: if success {
+            None
         } else {
-            serde_json::json!({
-                "provider": target,
-                "ok": false,
-                "latency_ms": latency_ms,
-                "error": "连通性探测失败(mock)",
-            })
-        };
-        output::print_json(&payload).context("序列化 llm test 为 JSON 失败")?;
-        if !success {
-            return Err(
-                ChimeraCliError::EngineError(format!("Provider {target} 连通性探测失败")).into(),
-            );
+            Some("连通性探测失败(mock)")
+        },
+    };
+    output::emit(json, &payload, || {
+        if success {
+            output::print_success(&format!("OK {latency_ms}ms ({target})"));
+        } else {
+            output::print_error(&format!("FAIL {latency_ms}ms ({target}) — 连通性探测失败"));
         }
-    } else if success {
-        output::print_success(&format!("OK {latency_ms}ms ({target})"));
-    } else {
-        output::print_error(&format!("FAIL {latency_ms}ms ({target}) — 连通性探测失败"));
+        Ok(())
+    })
+    .context("llm test 输出失败")?;
+
+    // 失败时保持既有契约：先输出结果，再返回错误（退出码 3）。
+    if !success {
         return Err(
             ChimeraCliError::EngineError(format!("Provider {target} 连通性探测失败")).into(),
         );
@@ -278,9 +291,32 @@ async fn test_provider(cfg: &ChimeraConfig, name: Option<&str>, json: bool) -> R
     Ok(())
 }
 
-/// `llm channels` — 列出 model-router 4 路由渠道(硬编码骨架)
+/// `llm channels` 的 JSON 载荷（typed）。
+#[derive(Debug, Serialize)]
+struct ChannelPayload<'a> {
+    name: &'a str,
+    providers: &'a [&'a str],
+}
+
+/// `llm strategy set` 的 JSON 载荷（typed）。
+#[derive(Debug, Serialize)]
+struct SetStrategyPayload<'a> {
+    action: &'static str,
+    strategy: &'a str,
+    previous: &'a str,
+    persisted: bool,
+    note: &'static str,
+}
+
+/// `llm strategy show` 的 JSON 载荷（typed）。
+#[derive(Debug, Serialize)]
+struct StrategyPayload<'a> {
+    strategy: &'a str,
+}
+
+/// `llm channels` — 列出本地静态渠道表（硬编码骨架）
 ///
-/// 后续 Task 接入 `model_router.channels()` 真实数据。
+/// 后续 Task 接入真实渠道数据。
 fn channels(json: bool) -> Result<()> {
     let data: &[(&str, &[&str])] = &[
         ("Quality", &["zhipu", "alicloud"]),
@@ -288,27 +324,24 @@ fn channels(json: bool) -> Result<()> {
         ("Cost", &["volcano"]),
         ("Speed", &["moonshot"]),
     ];
-    if json {
-        let payload: Vec<serde_json::Value> = data
-            .iter()
-            .map(|(name, members)| {
-                serde_json::json!({
-                    "name": name,
-                    "providers": members,
-                })
-            })
-            .collect();
-        output::print_json(&payload).context("序列化 llm channels 为 JSON 失败")?;
-    } else {
-        output::print_info("model-router 4 路由渠道:");
+    let payload: Vec<ChannelPayload<'_>> = data
+        .iter()
+        .map(|(name, members)| ChannelPayload {
+            name,
+            providers: members,
+        })
+        .collect();
+    output::emit(json, &payload, || {
+        output::print_info("本地静态路由渠道（4 个）:");
         for (name, members) in data {
             println!("{name:<10}[{members:?}]");
         }
-    }
-    Ok(())
+        Ok(())
+    })
+    .context("llm channels 输出失败")
 }
 
-/// `llm strategy [name]` — 显示/设置 model-router 策略
+/// `llm strategy [name]` — 显示/设置 `model_router.strategy`
 ///
 /// `strategy=None` 时打印当前策略;`Some(s)` 时切换(permission prompt)。
 async fn strategy(
@@ -322,7 +355,7 @@ async fn strategy(
         // 切换策略:影响全局路由行为,必须经 permission prompt
         let confirmed = permission::confirm(
             perm,
-            "切换 model-router 策略",
+            "切换 model_router.strategy",
             &format!("new strategy: {target} (current: {current})"),
         )
         .await?;
@@ -331,23 +364,25 @@ async fn strategy(
                 ChimeraCliError::PermissionDenied(format!("用户拒绝切换策略 {target}")).into(),
             );
         }
-        if json {
-            let payload = serde_json::json!({
-                "action": "set-strategy",
-                "strategy": target,
-                "previous": current,
-                "persisted": false,
-                "note": "[mock] 策略切换尚未实装,后续 Task 接入",
-            });
-            output::print_json(&payload).context("序列化 llm strategy 为 JSON 失败")?;
-        } else {
+        let payload = SetStrategyPayload {
+            action: "set-strategy",
+            strategy: target,
+            previous: current,
+            persisted: false,
+            note: "[mock] 策略切换尚未实装,后续 Task 接入",
+        };
+        output::emit(json, &payload, || {
             println!("[mock] strategy switched to: {target} (previous: {current})");
-        }
-    } else if json {
-        let payload = serde_json::json!({ "strategy": current });
-        output::print_json(&payload).context("序列化 llm strategy 为 JSON 失败")?;
+            Ok(())
+        })
+        .context("llm strategy 输出失败")?;
     } else {
-        output::print_info(&format!("当前 model-router 策略: {current}"));
+        let payload = StrategyPayload { strategy: current };
+        output::emit(json, &payload, || {
+            output::print_info(&format!("当前 model_router.strategy: {current}"));
+            Ok(())
+        })
+        .context("llm strategy 输出失败")?;
     }
     Ok(())
 }

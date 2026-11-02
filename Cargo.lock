@@ -596,6 +596,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sesa-router",
+ "session-store",
  "ssra-fusion",
  "tempfile",
  "thiserror 1.0.69",
@@ -1725,7 +1726,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2041,6 +2042,21 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "generator"
+version = "0.8.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1be81b31c9ce4caf7f3178eeb90662bb1864d3ad363ec6bdada3201adff19c37"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "libc",
+ "log",
+ "rustversion",
+ "windows-link",
+ "windows-result 0.4.1",
 ]
 
 [[package]]
@@ -2745,7 +2761,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3066,6 +3082,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "953f07c43838f8e6f9758cab68bf5bed85465e7587ebe0b823f1bcd81978ad3a"
 
 [[package]]
+name = "loom"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "419e0dc8046cb947daa77eb95ae174acfbddb7673b4151f56d1eed8e93fbfaca"
+dependencies = [
+ "cfg-if",
+ "generator",
+ "scoped-tls",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "loop9"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3303,6 +3332,7 @@ dependencies = [
  "dashmap",
  "event-bus",
  "hnsw_rs",
+ "loom",
  "nexus-contracts",
  "nexus-core",
  "proptest",
@@ -3462,6 +3492,12 @@ version = "2.29.0-omega"
 dependencies = [
  "chrono",
  "criterion",
+ "nexus-contracts-core",
+ "nexus-contracts-mca",
+ "nexus-contracts-memory",
+ "nexus-contracts-safety",
+ "nexus-contracts-seams",
+ "nexus-contracts-sparse",
  "proptest",
  "rmp-serde",
  "serde",
@@ -3469,6 +3505,78 @@ dependencies = [
  "serde_yaml",
  "thiserror 1.0.69",
  "uuid",
+]
+
+[[package]]
+name = "nexus-contracts-core"
+version = "2.29.0-omega"
+dependencies = [
+ "chrono",
+ "proptest",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "nexus-contracts-mca"
+version = "2.29.0-omega"
+dependencies = [
+ "nexus-contracts",
+ "proptest",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nexus-contracts-memory"
+version = "2.29.0-omega"
+dependencies = [
+ "chrono",
+ "nexus-contracts",
+ "nexus-contracts-core",
+ "nexus-contracts-mca",
+ "nexus-contracts-seams",
+ "proptest",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nexus-contracts-safety"
+version = "2.29.0-omega"
+dependencies = [
+ "nexus-contracts",
+ "proptest",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "nexus-contracts-seams"
+version = "2.29.0-omega"
+dependencies = [
+ "nexus-contracts",
+ "proptest",
+ "rmp-serde",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+]
+
+[[package]]
+name = "nexus-contracts-sparse"
+version = "2.29.0-omega"
+dependencies = [
+ "nexus-contracts",
+ "proptest",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3483,6 +3591,7 @@ dependencies = [
  "hex",
  "ndarray",
  "nexus-contracts",
+ "nexus-telemetry",
  "proptest",
  "rand 0.8.6",
  "rayon",
@@ -3521,6 +3630,16 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "nexus-telemetry"
+version = "2.29.0-omega"
+dependencies = [
+ "event-bus",
+ "proptest",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -3613,7 +3732,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3917,6 +4036,7 @@ version = "2.29.0-omega"
 dependencies = [
  "async-trait",
  "criterion",
+ "crossbeam-deque",
  "decb-governor",
  "event-bus",
  "futures",
@@ -4465,7 +4585,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4955,7 +5075,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5074,6 +5194,12 @@ checksum = "91c1b7e4904c873ef0710c1f407dde2e6287de2bebc1bbbf7d430bb7cbffd939"
 dependencies = [
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "scoped-tls"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1cf6437eb19a8f4a6cc0f7dca544973b0b78843adbfeb3683d1a94a0024a294"
 
 [[package]]
 name = "scopeguard"
@@ -5610,10 +5736,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6922,7 +7048,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

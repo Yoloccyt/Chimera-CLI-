@@ -1,6 +1,7 @@
 //! `chimera help` — EXAMPLES 一级入口(Task 5 of spec)
 //!
-//! 简化策略:硬编码 5 个顶级 EXAMPLES + 6 个常用子命令的示例映射,
+//! 简化策略:硬编码 5 个顶级 EXAMPLES + 子命令示例映射（与 clap 命令树双向对齐，
+//! 由 `subcommand_examples_cover_all_subcommands` 测试守护；不写死易漂移的条目数），
 //! 避免 clap 反射式 help 的复杂度。新增子命令只需在 `SUBCOMMAND_EXAMPLES`
 //! 表中追加一行即可。
 //!
@@ -22,7 +23,7 @@ EXAMPLES:
   chimera run \"实现一个 hello world 函数\"            # 运行单次任务
   chimera --json quest list                         # JSON 格式列出 Quest
   chimera --yes agent cancel <agent-id>             # 取消 Agent(跳过确认)
-  chimera doctor                                    # 9 维度健康检查
+  chimera doctor                                    # 11 维度健康检查
   chimera completions bash > /etc/bash_completion.d/chimera  # 生成补全脚本";
 
 /// 子命令 EXAMPLES 映射(扩展:任何新增子命令只需在此添加一行)
@@ -49,7 +50,59 @@ const SUBCOMMAND_EXAMPLES: &[(&str, &str)] = &[
     ),
     (
         "doctor",
-        "EXAMPLES:\n  chimera doctor            # 9 维检查\n  chimera --json doctor     # JSON",
+        "EXAMPLES:\n  chimera doctor            # 11 维检查\n  chimera --json doctor     # JSON",
+    ),
+    (
+        "help",
+        "EXAMPLES:\n  chimera help              # 顶级 EXAMPLES\n  chimera help quest        # quest 子命令 EXAMPLES",
+    ),
+    (
+        "config",
+        "EXAMPLES:\n  chimera config init       # 生成默认 omega.yaml\n  chimera config list       # 列出当前生效配置\n  chimera config path       # 显示配置文件路径",
+    ),
+    (
+        "wiki",
+        "EXAMPLES:\n  chimera wiki \"Quest 分解机制\"   # 语义检索\n  chimera --json wiki \"EventBus\"  # JSON 输出",
+    ),
+    (
+        "grep",
+        "EXAMPLES:\n  chimera grep 事件总线      # 双通道检索\n  chimera --json grep 沙箱   # JSON 输出",
+    ),
+    (
+        "parliament",
+        "EXAMPLES:\n  chimera parliament \"重构核心模块\"  # 提交审议\n  chimera --json parliament \"新增 Agent\"  # JSON 输出",
+    ),
+    (
+        "mcp",
+        "EXAMPLES:\n  chimera mcp list          # 列出 MCP 服务器\n  chimera --yes mcp call srv tool  # 调用工具",
+    ),
+    (
+        "audit",
+        "EXAMPLES:\n  chimera audit             # 全量红队审计\n  chimera audit --severity high  # 过滤严重度",
+    ),
+    (
+        "agent",
+        "EXAMPLES:\n  chimera agent list        # 列出 Agent\n  chimera agent spawn --quadrant Q1 --task \"实现 hello\"",
+    ),
+    (
+        "completions",
+        "EXAMPLES:\n  chimera completions bash > /etc/bash_completion.d/chimera\n  chimera completions powershell >> $PROFILE",
+    ),
+    (
+        "cost",
+        "EXAMPLES:\n  chimera cost              # 人类可读价格向量\n  chimera --json cost       # JSON envelope",
+    ),
+    (
+        "exec",
+        "EXAMPLES:\n  chimera exec '修复编译错误'   # stdout 仅最终结果\n  chimera exec --json '列出文件'  # JSONL 事件流",
+    ),
+    (
+        "serve",
+        "EXAMPLES:\n  chimera serve             # 启动协议宿主（等待 stdin）\n  printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"app.op\"}' | chimera serve",
+    ),
+    (
+        "acp",
+        "EXAMPLES:\n  chimera acp               # 启动 ACP 桥（等待 stdin）\n  printf '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"session/new\"}' | chimera acp",
     ),
 ];
 
@@ -68,7 +121,8 @@ fn render_examples<W: Write>(command: Option<&str>, out: &mut W) -> std::io::Res
             if let Some((_, examples)) = SUBCOMMAND_EXAMPLES.iter().find(|(n, _)| *n == name) {
                 writeln!(out, "{examples}")?;
             } else {
-                // [E001] UserError:未知命令,引导用户跑 `chimera help` 看可用命令
+                // [E001] 是 help 子命令的展示字符串，不是 ChimeraCliError 变体
+                // （ChimeraCliError 无 UserError；见 error.rs 的 7 个变体）。
                 writeln!(
                     out,
                     "[E001] UserError: 未知命令 '{name}',运行 `chimera help` 查看可用命令"
@@ -81,9 +135,9 @@ fn render_examples<W: Write>(command: Option<&str>, out: &mut W) -> std::io::Res
 
 /// `chimera help [command]` 入口
 ///
-/// `--no-examples` flag 在 `Cli` 上不存在(本 Task 不引入),先用简化路径。
+/// `Cli` 上未引入 `no-examples` 类开关，当前只输出 EXAMPLES。
 /// `cli` 参数当前未消费,显式 `let _ = cli;` 抑制未使用警告,保留签名以备
-/// 未来 `--json` / `--no-examples` 等扩展(Task 5.x 后续迭代)。
+/// 未来 `--json` 等扩展(Task 5.x 后续迭代)。
 pub async fn execute(command: Option<&str>, cli: &Cli) -> Result<()> {
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -98,7 +152,7 @@ pub async fn execute(command: Option<&str>, cli: &Cli) -> Result<()> {
 mod tests {
     use super::*;
     use crate::cli::Cli;
-    use clap::Parser;
+    use clap::{CommandFactory, Parser};
 
     /// 辅助:解析空 `chimera help` 调用所需的最小 `Cli`(只用于签名占位,
     /// `execute` 内部不消费其字段)
@@ -160,6 +214,29 @@ mod tests {
             s.contains("llm list"),
             "llm 输出应含 llm list 示例:got={s:?}"
         );
+    }
+
+    /// EXAMPLES 表必须与 clap 命令树双向对齐：
+    /// 每个子命令都有条目（新增命令不补示例即红），每个条目都是真实子命令（防幽灵 key）。
+    #[test]
+    fn subcommand_examples_cover_all_subcommands() {
+        let names: Vec<String> = Cli::command()
+            .get_subcommands()
+            .map(|c| c.get_name().to_string())
+            .collect();
+
+        for name in &names {
+            assert!(
+                SUBCOMMAND_EXAMPLES.iter().any(|(key, _)| key == name),
+                "子命令 {name} 缺少 EXAMPLES 条目"
+            );
+        }
+        for (key, _) in SUBCOMMAND_EXAMPLES {
+            assert!(
+                names.iter().any(|n| n == key),
+                "EXAMPLES 条目 {key} 不是有效子命令（幽灵 key）"
+            );
+        }
     }
 
     #[tokio::test]

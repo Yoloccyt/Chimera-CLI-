@@ -177,7 +177,9 @@ impl SessionStore {
         }
         let session_id = session_id.to_string();
         let role = role_str(msg.role).to_string();
-        let blocks = rmp_serde::to_vec(&msg.blocks).map_err(|e| AffinityError::Unknown {
+        // Class A 持久化面:blocks 落 SQLite 会话库并在下方 from_slice 回读(ADR-213 R8.1)
+        // ⇒ 具名 map,避免位置式在同类字段换序时静默改值。
+        let blocks = rmp_serde::to_vec_named(&msg.blocks).map_err(|e| AffinityError::Unknown {
             raw: format!("serialize blocks: {e}"),
         })?;
         let conn = Arc::clone(&self.conn);

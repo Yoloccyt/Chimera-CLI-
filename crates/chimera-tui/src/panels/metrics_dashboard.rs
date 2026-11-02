@@ -90,6 +90,11 @@ pub struct MetricsDashboardPanel {
     cells: Vec<Option<Cell>>,
     /// 当前选中 cell 索引(键盘导航,默认 0)
     selected: usize,
+    /// 主题强调色(选中格边框高亮用;F-37 后经 `Panel::set_accent` 注入)
+    ///
+    /// WHY 默认 Cyan:`TuiApp` 装配/切主题时会广播实际值,默认值取 Dark
+    /// 主题预设 accent,使面板级测试无需构造 TuiApp 即可获得生产同款配色。
+    accent: Color,
 }
 
 impl Default for MetricsDashboardPanel {
@@ -105,6 +110,7 @@ impl MetricsDashboardPanel {
         Self {
             cells: (0..GRID_SIZE).map(|_| None).collect(),
             selected: 0,
+            accent: Color::Cyan,
         }
     }
 
@@ -190,14 +196,14 @@ impl MetricsDashboardPanel {
                     .enumerate()
                     .map(|(i, &v)| (i as f64, v as f64))
                     .collect();
-                let widget = line_chart(&data, "Metric", Color::Cyan);
+                let widget = line_chart(&data, crate::t!("panel.metrics.cell_metric"), Color::Cyan);
                 Widget::render(widget, area, buf);
             }
             VizChartKind::Heatmap => {
                 // 热力图:取 budget_history 重组为 1xN 矩阵(spec 简化用法)
                 let values: Vec<f32> = snap.budget_history.iter().map(|&v| v as f32).collect();
                 let cols = values.len().max(1);
-                let widget = heatmap(&values, 1, cols, "Heatmap");
+                let widget = heatmap(&values, 1, cols, crate::t!("panel.metrics.cell_heatmap"));
                 Widget::render(widget, area, buf);
             }
             VizChartKind::BarChart => {
@@ -211,19 +217,23 @@ impl MetricsDashboardPanel {
                     .collect();
                 let label_refs: Vec<(&str, f64)> =
                     entries.iter().map(|(l, v)| (l.as_str(), *v)).collect();
-                let widget = bar_chart(&label_refs, "Bar", Color::Yellow);
+                let widget = bar_chart(
+                    &label_refs,
+                    crate::t!("panel.metrics.cell_bar"),
+                    Color::Yellow,
+                );
                 Widget::render(widget, area, buf);
             }
             VizChartKind::Gauge => {
                 // 仪表盘:取 budget utilization_rate [0, 1] × 100
                 let value = (snap.budget_metrics.utilization_rate as f64) * 100.0;
-                let widget = viz_gauge(value, 100.0, 80.0, "Util");
+                let widget = viz_gauge(value, 100.0, 80.0, crate::t!("panel.metrics.cell_util"));
                 Widget::render(widget, area, buf);
             }
             VizChartKind::Histogram => {
                 // 直方图:取 health_metrics.average_latency_ms
                 let data = vec![snap.health_metrics.average_latency_ms as f32];
-                let widget = histogram(&data, 4, "Latency");
+                let widget = histogram(&data, 4, crate::t!("panel.metrics.cell_latency"));
                 Widget::render(widget, area, buf);
             }
         }
@@ -231,14 +241,14 @@ impl MetricsDashboardPanel {
 
     /// 渲染空槽位占位符
     ///
-    /// WHY 独立函数:unbind 后槽位仍占 1 cell,显示 "(empty)" 提示,
+    /// WHY 独立函数:unbind 后槽位仍占 1 cell,显示 "(空)"(En: "(empty)")提示,
     /// 与 viz widget 风格一致(Border + 文字)。
     fn render_empty(area: Rect, buf: &mut Buffer) {
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" (empty) ")
+            .title(crate::t!("panel.metrics.empty_title"))
             .border_style(Style::default().fg(Color::DarkGray));
-        let paragraph = Paragraph::new(Line::from("(unbound)"))
+        let paragraph = Paragraph::new(Line::from(crate::t!("panel.metrics.unbound")))
             .style(Style::default().fg(Color::DarkGray))
             .block(block);
         Widget::render(paragraph, area, buf);
@@ -259,6 +269,10 @@ impl Panel for MetricsDashboardPanel {
 
     fn id(&self) -> PanelId {
         PanelId::MetricsDashboard
+    }
+
+    fn set_accent(&mut self, accent: ratatui::style::Color) {
+        self.accent = accent;
     }
 
     fn title(&self) -> Line<'static> {
@@ -286,14 +300,14 @@ impl Panel for MetricsDashboardPanel {
         // **超时发生**次数,无法派生(且 gather 路径恒受保护,该值近乎恒为 100%),
         // 故如实标注"未上报",而非伪造一个百分比。
         let t = &state.gqep_timeouts;
+        // 键值含 4 个 {} 占位:3 个计数字段 + 覆盖率标注段(第 4 段经既有键拼入),
+        // 按序链式 replacen(per_op=/global=/orphan= 为协议字段名,两表同形)
         let gqep_summary = Line::from(vec![Span::styled(
-            format!(
-                "GQEP Timeout: per_op={}  global={}  orphan={}  {}",
-                t.per_op,
-                t.global,
-                t.orphan,
-                crate::t!("panel.metrics.coverage_unreported"),
-            ),
+            crate::t!("panel.metrics.gqep_summary")
+                .replacen("{}", &t.per_op.to_string(), 1)
+                .replacen("{}", &t.global.to_string(), 1)
+                .replacen("{}", &t.orphan.to_string(), 1)
+                .replacen("{}", crate::t!("panel.metrics.coverage_unreported"), 1),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -354,6 +368,19 @@ impl Panel for MetricsDashboardPanel {
                 Some(cell) => Self::render_cell(cell, cell_area, buf),
                 None => Self::render_empty(cell_area, buf),
             }
+            // F-38:对选中 cell 叠加 accent 边框(复用 app/render.rs 多窗格
+            // 焦点高亮的 Block+border_style 模式),使 hjkl/方向键导航有视觉
+            // 反馈 —— 此前 selected 被导航修改但渲染路径零消费,按键后无反馈。
+            // F-37:高亮色不再硬编码 —— 批次四时主题色是 TuiApp 的 pub(crate)
+            // 方法,面板层(仅持 &TuiState)不可达而暂用 Cyan(与本面板 viz
+            // 色板同族,亦即 Dark 主题预设 accent);现经 `Panel::set_accent`
+            // 注入(TuiApp 装配/切主题广播),随用户主题与 colors.accent 定制联动。
+            if idx == self.selected {
+                let highlight = Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(self.accent));
+                Widget::render(highlight, cell_area, buf);
+            }
         }
     }
 
@@ -396,9 +423,12 @@ impl Panel for MetricsDashboardPanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
+        // F-38:键帽如实化为实际导航键。'l' 已由全局键位表绑定
+        // view.switch_layout,InputRouter 先行截获(见 handle_key 注),
+        // 故键帽不得含 'l';方向键与 vim 键分列两条,描述同为导航。
         vec![
-            ("↑/↓", crate::t!("shortcut.navigate")),
-            ("R", crate::t!("shortcut.refresh")),
+            ("↑/↓/←/→", crate::t!("shortcut.navigate")),
+            ("h/j/k", crate::t!("shortcut.navigate")),
         ]
     }
 }

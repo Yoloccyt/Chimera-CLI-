@@ -3,7 +3,7 @@
 //! v2.9.0-omega Task 1.4:替换 NotImplemented 占位,真实调用 Parliament::deliberate。
 //!
 //! # 流程
-//! 1. 构造进程内 EventBus + QuestEngine + Parliament(共享 EventBus)
+//! 1. 使用组合根共享的 EventBus + QuestEngine + Parliament(dispatch 级单例)
 //! 2. 将 proposal 文本封装为 UserIntent,经 QuestEngine::create_quest 分解为 Quest
 //!    (对齐 §5.2 数据流:用户输入 → Quest 分解 → Parliament 审议)
 //! 3. 从 Quest 构建 Proposal(proposal_id / quest_id / content / risk_level)
@@ -23,7 +23,9 @@
 
 use anyhow::Result;
 use nexus_core::{MultimodalInput, UserIntent};
-use parliament::{Consensus, Parliament, ParliamentConfig, Proposal};
+use parliament::{
+    Consensus, CrossVendorDebate, CrossVendorFallback, Parliament, ParliamentConfig, Proposal,
+};
 use uuid::Uuid;
 
 use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET};
@@ -75,7 +77,22 @@ pub async fn execute_with_ctx(
     //    OperationTimedOut 事件(本层超时兜底)。
     let bus = &ctx.bus;
     let engine = &ctx.engine;
-    let parliament = Parliament::new(ParliamentConfig::default(), bus.clone());
+    // WI-D1：默认主干恒绿（cross_vendor_debate: None）；仅当组合根给出激活输入
+    // (config.model_router.cross_vendor_debate=true 且去重 provider>=2) 时才注入
+    // 跨厂商辩论。from_provider_names 内部 fail-safe（不足/去相关失败→None）。
+    let base_parliament = Parliament::new(ParliamentConfig::default(), bus.clone());
+    let parliament = match &ctx.cross_vendor_providers {
+        Some(names) => match CrossVendorDebate::from_provider_names(
+            names,
+            CrossVendorFallback::FallbackToSame,
+            bus.clone(),
+        ) {
+            Some(cvd) => base_parliament.with_cross_vendor(cvd),
+            // fail-safe：无法构建则退回未启用（与 None 同义）。
+            None => base_parliament,
+        },
+        None => base_parliament,
+    };
 
     // 2. 将 proposal 封装为 UserIntent,经 QuestEngine 分解为 Quest
     //    WHY 先分解:Parliament::deliberate 需要 &Quest 上下文(任务数、思考模式)
@@ -116,19 +133,16 @@ pub async fn execute_with_ctx(
         .await
         .map_err(|e| ChimeraCliError::EngineError(format!("议会审议失败: {e}")))?;
 
-    // 5. 输出
-    if json {
-        // JSON 模式:输出共识结果 + Quest 上下文 envelope
-        let payload = serde_json::json!({
-            "quest_id": quest.quest_id,
-            "quest_title": quest.title,
-            "task_count": quest.tasks.len(),
-            "thinking_mode": format!("{:?}", quest.thinking_mode),
-            "proposal_id": proposal_obj.proposal_id,
-            "consensus": consensus,
-        });
-        output::print_json(&payload)?;
-    } else {
+    // 5. 输出（统一双通道入口；payload 用引用构造，避免 move 后无法走人类可读分支）
+    let payload = ParliamentPayload {
+        quest_id: &quest.quest_id,
+        quest_title: &quest.title,
+        task_count: quest.tasks.len(),
+        thinking_mode: format!("{:?}", quest.thinking_mode),
+        proposal_id: &proposal_obj.proposal_id,
+        consensus: &consensus,
+    };
+    output::emit(json, &payload, || {
         // 人类可读模式:审议上下文到 stderr,共识结果到 stdout
         eprintln!("=== 议会审议 ===");
         eprintln!(
@@ -142,9 +156,19 @@ pub async fn execute_with_ctx(
         eprintln!("风险等级: {:.2}", proposal_obj.risk_level);
         eprintln!("--- 审议结果 ---");
         print_consensus_human(&consensus);
-    }
+        Ok(())
+    })
+}
 
-    Ok(())
+/// `parliament` 的 JSON 载荷（typed，字段名编译期校验）。
+#[derive(Debug, serde::Serialize)]
+struct ParliamentPayload<'a> {
+    quest_id: &'a str,
+    quest_title: &'a str,
+    task_count: usize,
+    thinking_mode: String,
+    proposal_id: &'a str,
+    consensus: &'a Consensus,
 }
 
 /// 人类可读模式输出共识结果(SubTask 1.4.2)

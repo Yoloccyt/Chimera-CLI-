@@ -49,47 +49,46 @@ pub async fn execute(pattern: &str, config: &ChimeraConfig, json: bool) -> Resul
     .map_err(|e| ChimeraCliError::EngineError(format!("Agent Grep 任务失败: {e}")))?
     .map_err(|e| ChimeraCliError::EngineError(format!("Agent Grep 检索失败: {e}")))?;
 
-    // 4. 输出
-    if json {
-        output::print_json(&report)?;
-    } else if report.is_empty() {
-        output::print_info(&format!("未找到匹配「{pattern_display}」的知识或代码"));
-    } else {
-        // 知识通道命中
-        if !report.knowledge_hits.is_empty() {
-            let rows: Vec<Vec<String>> = report
-                .knowledge_hits
-                .iter()
-                .enumerate()
-                .map(|(i, hit)| {
-                    let snippet = truncate(&hit.snippet, SNIPPET_CHARS);
-                    vec![(i + 1).to_string(), hit.title.clone(), snippet]
-                })
-                .collect();
-            output::print_table(&["#", "知识条目", "摘要"], &rows);
+    // 4. 输出（统一双通道入口）
+    output::emit(json, &report, || {
+        if report.is_empty() {
+            output::print_info(&format!("未找到匹配「{pattern_display}」的知识或代码"));
+        } else {
+            // 知识通道命中
+            if !report.knowledge_hits.is_empty() {
+                let rows: Vec<Vec<String>> = report
+                    .knowledge_hits
+                    .iter()
+                    .enumerate()
+                    .map(|(i, hit)| {
+                        let snippet = truncate(&hit.snippet, SNIPPET_CHARS);
+                        vec![(i + 1).to_string(), hit.title.clone(), snippet]
+                    })
+                    .collect();
+                output::print_table(&["#", "知识条目", "摘要"], &rows);
+            }
+            // 代码通道命中
+            if !report.code_hits.is_empty() {
+                let rows: Vec<Vec<String>> = report
+                    .code_hits
+                    .iter()
+                    .enumerate()
+                    .map(|(i, hit)| {
+                        vec![
+                            (i + 1).to_string(),
+                            hit.unit_id.clone(),
+                            hit.file_path.clone(),
+                        ]
+                    })
+                    .collect();
+                output::print_table(&["#", "单元", "位置"], &rows);
+            }
+            if report.knowledge_degraded {
+                output::print_warning("知识通道已降级为 LIKE 检索（FTS5 不可用）");
+            }
         }
-        // 代码通道命中
-        if !report.code_hits.is_empty() {
-            let rows: Vec<Vec<String>> = report
-                .code_hits
-                .iter()
-                .enumerate()
-                .map(|(i, hit)| {
-                    vec![
-                        (i + 1).to_string(),
-                        hit.unit_id.clone(),
-                        hit.file_path.clone(),
-                    ]
-                })
-                .collect();
-            output::print_table(&["#", "单元", "位置"], &rows);
-        }
-        if report.knowledge_degraded {
-            output::print_warning("知识通道已降级为 LIKE 检索（FTS5 不可用）");
-        }
-    }
-
-    Ok(())
+        Ok(())
+    })
 }
 
 /// 展开 `~` 为 home 目录（与 wiki 命令同款，避免重复实现）

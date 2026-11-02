@@ -55,8 +55,9 @@ if (-not $cliffCmd) {
     exit 1
 }
 
-$env:CARGO_HOME = "D:\Chimera CLI\.toolchain\cargo"
-$env:PATH = "$env:CARGO_HOME\bin;$env:PATH"
+# 工具链 bin 目录从仓内推导（.toolchain 存在时优先），不再钉死绝对路径
+. (Join-Path $PSScriptRoot 'toolchain-env.ps1')
+Set-ChimeraToolchainEnv | Out-Null
 
 Write-Host "=== git-cliff CHANGELOG 生成 ===" -ForegroundColor Cyan
 

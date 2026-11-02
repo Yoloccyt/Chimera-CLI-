@@ -2,7 +2,7 @@
 //! LAYER:    L8
 //! ROLE:     对抗性议会 — 5 角色对抗性审议与决策治理
 //! BACKEND:  memory
-//! PRODUCERS: 19 AgentTaskCompleted,AgentTaskFailed,AhirtProbeCompleted,BudgetExceeded,CapabilityFrozen…
+//! PRODUCERS: 15 AhirtProbeCompleted,CapabilityFrozen,CertifyIssued,ConsensusReached,CrossVendorNegotiation…
 //! CONSUMERS: 2 chimera-cli,chimera-mas
 //! MATURITY: NOT-IMPL-CN|PLACEHOLDER-CN|SIMPLIFIED-CN
 //! CRATE-CONTRACT END
@@ -72,7 +72,9 @@ pub mod config;
 /// 确保 Skeptic 与 Producer 使用不同厂商通道，修复同源相关失败(病理 D3)。
 pub mod cross_vendor;
 pub mod debate;
+pub mod delegation;
 pub mod error;
+pub mod event_pipeline;
 /// FormalVerifier L4 骨架 — Parliament 形式化验证模块
 ///
 /// 共识安全性的形式化验证：Security 一票否决不可覆盖 + 2/3 多数阈值正确性。
@@ -96,6 +98,7 @@ pub mod learner_holder;
 pub mod provider_affinity;
 pub mod reasoning;
 pub mod roles;
+pub mod scheduler;
 /// 策略封顶守卫 — ratio 反馈驱动的审议深度降级封顶(推理悖论红线风控)
 ///
 /// 消费 `CoordinationRatioReported` 事件,滞后带状态机维护审议策略上界

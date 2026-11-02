@@ -387,16 +387,20 @@ def main(argv):
         with open(PS1, encoding="utf-8-sig") as fh:
             ps_text = fh.read()
     except OSError as exc:
-        print("[FAIL] cannot read twin scripts: %s" % exc)
-        return 1
+        # H7/F33: "could not read the twins" is not a parity finding. Emitting 1
+        # here would make a missing file look like the drift this gate hunts for.
+        print("[UNDECIDABLE] cannot read twin scripts: %s" % exc)
+        return 2
     sh = parse(sh_text, "sh")
     ps = parse(ps_text, "ps1")
     if not sh or not ps:
-        # A twin whose Check headers we cannot see is NOT a pass: the gate would
-        # be vacuous. Fail loud rather than judge nothing.
-        print("[FAIL] Check headers not found (sh=%d ps1=%d) - gate cannot judge"
+        # A twin whose Check headers we cannot see is NOT a pass -- but it is also
+        # not a parity finding: no comparison happened. Undecidable (2) keeps the
+        # loud failure (expect=0, so the runner still reports MISMATCH) while
+        # putting it in the "judge did not run" box instead of "gate went red".
+        print("[UNDECIDABLE] Check headers not found (sh=%d ps1=%d) - gate cannot judge"
               % (len(sh), len(ps)))
-        return 1
+        return 2
     findings, stale = adjudicate(sh, ps,
                                  parse_selftest_expectations(sh_text),
                                  parse_selftest_expectations(ps_text),

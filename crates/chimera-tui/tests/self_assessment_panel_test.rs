@@ -70,6 +70,39 @@ fn test_zh_locale_renders_chinese_copy() {
         content.contains("记忆策略阶段"),
         "Zh locale 下记忆策略阶段标签应为中文,实际: {content}"
     );
+
+    // B5-K(F-29)回退锁定:五维标签经 t! 消费 dim_* 键表(self_assessment.rs)。
+    // 若回退为硬编码英文(如 "Comprehension"),单词级 token 数 <2 逃过 i18n
+    // 硬编码门禁(english_token_count>=2),别无机械手段可拦,故以键表期望串
+    // 锁死:注入一份 HarnessReportGenerated 触发五维标签行,zh 模式下标签一旦
+    // 脱离键表即红。期望串经 t! 取值,键值文案微调不破测试。
+    let state = TuiState {
+        latest_events: std::sync::Arc::new(VecDeque::from(vec![
+            NexusEvent::HarnessReportGenerated {
+                metadata: EventMetadata::new("test-harness"),
+                task_comprehension: 0.9,
+                controllable_execution: 0.8,
+                change_verification: 0.7,
+                reliable_delivery: 0.6,
+                experience_accumulation: 0.5,
+                findings_count: 2,
+            },
+        ])),
+        ..Default::default()
+    };
+    let content = SelfAssessmentPanel::content(&state).to_string();
+    for key in [
+        "panel.self_assessment.dim_comprehension",
+        "panel.self_assessment.dim_execution",
+        "panel.self_assessment.dim_verification",
+        "panel.self_assessment.dim_delivery",
+        "panel.self_assessment.dim_experience",
+    ] {
+        assert!(
+            content.contains(chimera_tui::t!(key)),
+            "Zh locale 下五维标签应取键表值(防硬编码回退), key: {key}, 实际: {content}"
+        );
+    }
 }
 
 #[test]

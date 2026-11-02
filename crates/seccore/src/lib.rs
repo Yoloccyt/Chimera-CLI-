@@ -4,7 +4,7 @@
 //! BACKEND:  fs
 //! PRODUCERS: 5 AsaIntervention,AuditLogged,ErrorSignatureMatched,SandboxViolation,SecurityInterceptionReported
 //! CONSUMERS: 4 chimera-cli,gqep-executor,nexus-hook,pvl-layer
-//! MATURITY: DEFERRED|NOT-IMPL-CN|PLACEHOLDER-CN
+//! MATURITY: DEFERRED|PLACEHOLDER-CN
 //! CRATE-CONTRACT END
 //! 零信任执行核心 — SecCore
 //!

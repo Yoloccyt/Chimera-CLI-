@@ -23,6 +23,8 @@ serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 # 结构化日志(DebateStarted/RoleRegistered 等未集成事件用 tracing 记录)
 tracing = { workspace = true }
+# D-18:WorkStealingScheduler 的全局注入器(work-stealing 队列)
+crossbeam-deque = { workspace = true }
 # FuturesUnordered 流式并发收集 5 角色 Opinion(对应 A.2 设计决策)
 futures = { workspace = true }
 # UUIDv7 ID 生成(提案 ID、决议哈希等,时间有序便于追溯)

@@ -20,7 +20,7 @@
   --criterion-dir PATH  criterion 根 (默认 target/criterion)
   --legacy-out PATH     compare 模式读入的 heredoc stdout 文件
   --json                thresholds 模式输出机器可读结果 (供双跑比对使用)
-  --strict              thresholds 模式把关键词匹配歧义也算作失败
+  --strict              thresholds 模式把关键词匹配歧义与零匹配幽灵键也算作失败
 
 WHY 存在这个文件:
   2026-08-31 第四轮冗余审计 F-R4-01 发现: 本门禁原有 .ps1(429 行) + .sh(246 行)
@@ -33,6 +33,8 @@ WHY 存在这个文件:
   - [STALE]  登记表里有、盘上没有 -> FAIL (清单自身要防腐)
   - [UNKNOWN] 盘上有、登记格里没有 -> FAIL (新增/忘登记的 bench 必被捕获)
   - [RATCHET] 兜底债 (calibration_pending) 只减不增
+  - [SKIP-GHOST] thresholds 键在 criterion 树中零匹配 -> 默认 advisory (可见不致命),
+                --strict 下计入 FAIL (C-07/D6: 门禁噪声不作默认阻塞, 可见性不打折)
 
 退出码: 0=通过 / 1=至少一条违反 / 2=用法或环境错误(判据未真正运行)
   ★ F18: rc 是**状态**, 不是计数器。违规条数只出现在 stdout 载荷里
@@ -74,6 +76,7 @@ BENCH_WORKFLOW_PATH = os.path.join(ROOT, ".github", "workflows", "bench_check.ym
 # 只认 "us" -> 落入 else 分支按 ms 处理, 造成 1000 倍误判 (check_perf_redlines.sh
 # :178-182 的实测缺陷, 本表是其在 py 侧的归零点)。
 UNIT_TO_SEC = {
+    "ps": 1e-12,  # 皮秒: criterion 对 <1 ns 的值独立渲染为 ps (2026-10-02 实测 immune_probe readonly 组)
     "ns": 1e-9,
     "us": 1e-6,
     "\u00b5s": 1e-6,  # µ MICRO SIGN
@@ -337,6 +340,18 @@ def mode_invariants(redlines, thresholds_doc, freeze):
         for p in ci_problems:
             print(f"         {p}")
 
+    # I9 heredoc THRESHOLDS_NS 键集 == [[thresholds_ns]] 键集 (R2 M44 的根修)
+    # WHY 与 I7 同一个形式: 两者都是「CI 自己那份表 vs 登记处」的双源对拍。
+    # 先证提取本身有东西可提取, 否则「没找到 dict」会被当成「无分歧」而静默放行。
+    thr_keys = set(thr)
+    th_problems = ci_threshold_key_sync(BENCH_WORKFLOW_PATH, thr_keys)
+    if not _check(f"I9 bench_check.yml heredoc keys == [[thresholds_ns]] keys "
+                  f"({len(thr_keys)} keys; dict found={ci_threshold_dict_present(BENCH_WORKFLOW_PATH)})",
+                  not th_problems):
+        fails += 1
+        for p in th_problems:
+            print(f"         {p}")
+
     # I4 兜底债棘轮: 列表只减不增, 且列表内每项当前值必须仍是 100ms 兜底
     pending = set(ratchet.get("calibration_pending", []))
     cap = int(ratchet.get("max_calibration_pending", len(pending)))
@@ -426,6 +441,77 @@ def mode_invariants(redlines, thresholds_doc, freeze):
         if not _check(f"I8b event-bus sources readable ({exc})", False):
             fails += 1
 
+    # I8c (v3.5 W6-3, 2026-10-09): 关闭 I8/I8b 自陈的「mpsc 旁路 N 类」自由文本盲区。
+    # 两段断言（均仅读源文本，不依赖编译产物）：
+    #   (a) 常量 vs 臂数：CRITICAL_MPSC_VARIANTS 必须等于 `is_critical_mpsc_event` 体内
+    #       `NexusEvent::X { .. }` 模式数。此前该等式只由 Rust 侧
+    #       test_critical_double_list_d8_counts 锁，治理门本身看不见；
+    #   (b) 措辞：行内同时出现「旁路/mpsc/is_critical_mpsc_event」与**清单规模指标词**
+    #       （清单 / CRITICAL_MPSC_VARIANTS / 变体数 / 判定的）且写了「N 类」时，
+    #       N 必须等于该常量——这是 bus.rs:42-52 注释自己登记的已知盲区
+    #       （旧值 13/14/17/18 全在监测面外）。
+    #       为何需两个条件：单看「mpsc + N 类」会误伤“本测试覆盖 4 类事件”这类
+    #       **测试范围声明**（实测 4 处假阳性）——它们说的不是旁路清单规模。
+    # 取向沿用 I8b：`scanned >= 1` 才算有效（空扫描=判据失能，不许当干净）；
+    # 而 (a) 两侧任缺其一即红，不允许“没找到函数体”路径静默绿。
+    try:
+        import glob as _glob
+        with open(os.path.join(ROOT, "crates", "event-bus", "src", "bus.rs"),
+                  encoding="utf-8", errors="ignore") as fh:
+            _bus = fh.read()
+        _mpsc_m = re.search(r"CRITICAL_MPSC_VARIANTS\s*:\s*usize\s*=\s*(\d+)", _bus)
+        _fn_at = _bus.find("fn is_critical_mpsc_event")
+        # 函数体：从签名到下一个顶格 `}`（不剥缩进，否则会被嵌套臂收尾带偏）
+        _body = ""
+        if _fn_at >= 0:
+            _end = _bus.find("\n}\n", _fn_at)
+            _body = _bus[_fn_at:_end if _end > 0 else len(_bus)]
+        _arms = re.findall(r"NexusEvent::([A-Z]\w*)\s*\{\s*\.\.\s*\}", _body)
+        _n_mpsc = int(_mpsc_m.group(1)) if _mpsc_m else None
+        ok_a = bool(_arms) and _n_mpsc is not None and len(_arms) == _n_mpsc
+        if not _check(
+                "I8c CRITICAL_MPSC_VARIANTS == is_critical_mpsc_event arm-count "
+                "(const=%s arms=%d)" % (_n_mpsc, len(_arms)), ok_a):
+            fails += 1
+        _off, _seen = [], 0
+        # 规模指标词：只有把“N 类”归给「清单/常量/函数判定」的措辞才是规模声明。
+        _size_tokens = ("清单", "CRITICAL_MPSC_VARIANTS", "变体数", "判定的")
+        for _path in _glob.glob(os.path.join(ROOT, "crates", "event-bus", "**", "*.rs"),
+                                recursive=True):
+            try:
+                with open(_path, encoding="utf-8", errors="ignore") as fh:
+                    for _lineno, _line in enumerate(fh, 1):
+                        if not ("旁路" in _line or "mpsc" in _line
+                                or "is_critical_mpsc_event" in _line):
+                            continue
+                        if not any(_t in _line for _t in _size_tokens):
+                            continue
+                        _cm = re.search(r"(\d+)\s*类", _line)
+                        if not _cm:
+                            continue
+                        _seen += 1
+                        if _n_mpsc is None or _cm.group(1) != str(_n_mpsc):
+                            _off.append("%s:%d=%s类" % (
+                                os.path.relpath(_path, ROOT), _lineno, _cm.group(1)))
+            except OSError:
+                continue
+        if not _check(
+                "I8c mpsc-bypass list-size 'N 类' prose == CRITICAL_MPSC_VARIANTS "
+                "(scanned=%d, const=%s, offenders=%s)" % (
+                    _seen, _n_mpsc, _off or "none"),
+                _seen >= 1 and not _off):
+            fails += 1
+    except OSError as exc:
+        if not _check(f"I8c event-bus sources readable ({exc})", False):
+            fails += 1
+
+    # I8 盲区收敛记录（第三轮 T1.3 登记 → v3.5 W6-3 闭合）：
+    #   I8/I8b 锁 “N 个 Critical 事件/变体” 措辞 == CRITICAL_TOTAL(=20 全量)；
+    #   mpsc 旁路子数那一组自由文本（=16）与「常量 == is_critical_mpsc_event 臂数」
+    #   曾长期在本门监测面之外（历史上 v2.3 补入 CertifyIssued/FailureRegistered 后
+    #   正文多处残留旧值 13/14/17/18）。自 2026-10-09 起由 **I8c** 接住：
+    #   两个子断言均为静态源文扫描，不依赖编译产物，也不改动任何判定阈值。
+
     verdict = f"FAIL ({fails} violation(s))" if fails else "PASS (all invariants hold)"
     print(f"\n  RESULT: {verdict}")
     return rc_from_findings(fails)
@@ -436,6 +522,13 @@ def mode_invariants(redlines, thresholds_doc, freeze):
 # re.M 不可省: 缺它则 `^` 只在字符串开头成立, 31 行只匹到第 1 行 —— 负对照 10b
 # (CI 多出必红) 当场判红 got=0, 没让这条不变式静默变成假绿。
 CI_RUNBENCH_RE = re.compile(r"^\s*run_bench\s+(\S+)\s+cargo bench -p (\S+) --bench (\S+)", re.M)
+
+# I9 的比对对象：workflow 里 heredoc 自带的 THRESHOLDS_NS dict。
+# dict 体以「单独一行的 }」收尾（值均为带 # 注的整数字面量，无嵌套花括号），
+# 故 .*? 配 \n\s*} 不会越界到 heredoc 之外的下一个花括号。
+CI_THRESHOLDS_DICT_RE = re.compile(r"THRESHOLDS_NS\s*=\s*\{(.*?)\n\s*\}", re.S)
+# 只认「行首可选空白 + 引号键 + :」；注行因前导 # 不会落入此形。
+CI_THRESHOLD_KEY_RE = re.compile(r'^\s*"([a-z0-9_]+)":', re.M)
 
 
 def ci_runbench_sync(workflow_path, run_bench_entries):
@@ -457,6 +550,46 @@ def ci_runbench_sync(workflow_path, run_bench_entries):
     problems += [f"alias drift: {k} ci={ci[k]} table={table[k]}"
                  for k in sorted(set(ci) & set(table)) if ci[k] != table[k]]
     return problems
+
+
+def ci_threshold_key_sync(workflow_path, thresholds_ns_keys):
+    """返回 I9 的分歧列表（空 = 对等或本文件无 dict 可查）。
+
+    WHY 需要它: bench_check.yml 的 "Assert thresholds" 步实际用的是它自己那份
+    heredoc THRESHOLDS_NS dict, 而 workflow 里一行注释声称「与
+    perf_thresholds.toml 的 [thresholds_ns] 逐键一致（I1）」—— 那行是假的:
+    I1 只断言本文件内 thresholds_ns 与 path_keywords 两表相等, 从不拿 heredoc
+    相比。实测后果（R2 M44）: perf_thresholds.toml 有 hnsw_tiered = 2_000_000
+    而 heredoc 无此键, 且该 bench 每轮都跑 —— 阈值在册却永不被断言, 而
+    I1/I7/compare 三步全照绿。本断言把「两表键集对拍」从注释变成机器判据。
+
+    返回 [] 的两种情况必须区分清楚, 否则又是一个假绿: 文件里根本没有
+    THRESHOLDS_NS dict 时(合成夹具、或将来真删了 heredoc)不去猜, 直接当作
+    「无可查」; 真实 workflow 有 dict 时才比。由调用方另用一条断言保证
+    真文件确实有 dict 可查（否则本判据会因提取失败而静默失效）。
+    """
+    if not os.path.exists(workflow_path):
+        return [f"workflow not found: {os.path.relpath(workflow_path, ROOT)}"]
+    with open(workflow_path, encoding="utf-8-sig") as fh:
+        text = fh.read()
+    m = CI_THRESHOLDS_DICT_RE.search(text)
+    if not m:
+        return []
+    ci = set(CI_THRESHOLD_KEY_RE.findall(m.group(1)))
+    table = set(thresholds_ns_keys)
+    problems = [f"threshold key in [[thresholds_ns]] but never asserted by CI: {k}"
+                for k in sorted(table - ci)]
+    problems += [f"threshold asserted by CI heredoc but absent from [[thresholds_ns]]: {k}"
+                 for k in sorted(ci - table)]
+    return problems
+
+
+def ci_threshold_dict_present(workflow_path):
+    """I9 的防伪绿前提：真实 workflow 里确实有 THRESHOLDS_NS dict 可查。"""
+    if not os.path.exists(workflow_path):
+        return False
+    with open(workflow_path, encoding="utf-8-sig") as fh:
+        return bool(CI_THRESHOLDS_DICT_RE.search(fh.read()))
 
 
 def keyword_overlaps(kw):
@@ -599,7 +732,8 @@ def mode_thresholds(thresholds_doc, criterion_dir, as_json, strict):
     """解析 criterion estimates.json 并断言阈值 (bench_check.yml heredoc 的等价移植)。
 
     迁移期纪律: 默认保持与 heredoc **逐键等价**的 first-match-wins 语义, 以便
-    R1-T6 的"双跑比对"能证明零行为变更; 匹配歧义只在 strict 模式下才致命。
+    R1-T6 的"双跑比对"能证明零行为变更; 匹配歧义与零匹配幽灵键([SKIP-GHOST],
+    C-07/D6)只在 strict 模式下才致命。
     """
     thr = thresholds_doc.get("thresholds_ns", {})
     if not os.path.isdir(criterion_dir):
@@ -612,11 +746,17 @@ def mode_thresholds(thresholds_doc, criterion_dir, as_json, strict):
 
     payload, unmatched, ambiguous = collect_threshold_results(thresholds_doc, criterion_dir)
     fails = 0
+    ghost_keys = []
     print("=== Benchmark threshold assertions ===")
     for name, limit in thr.items():
         row = payload[name]
         if row["passed"] is None:
-            print(f"  [SKIP] {name}: no estimates found")
+            # C-07/D6: 零匹配键 = 幽灵键(登记在 perf_thresholds.toml, 但 criterion 树
+            # 无任何产物命中其关键词 —— bench 未跑或已改名)。默认 advisory 不致命:
+            # 实测 47 键中 30 键 SKIP(部分 bench 组合不在当次 criterion 树), 无条件判红
+            # 会重蹈"门禁噪声 -> 被迫放宽整体门禁"覆辙(AGENTS §7.2 前车)。
+            ghost_keys.append(name)
+            print(f"  [SKIP-GHOST] {name}: no estimates found")
             continue
         worst_ns, worst_path = row["max_median_ns"], row["worst"]
         passed = row["passed"]
@@ -625,6 +765,16 @@ def mode_thresholds(thresholds_doc, criterion_dir, as_json, strict):
         print(f"         worst group: {worst_path}")
         if not passed:
             fails += 1
+
+    if ghost_keys:
+        print(f"\n  [SKIP-GHOST] {len(ghost_keys)} threshold key(s) matched zero "
+              f"criterion groups")
+        if strict:
+            fails += len(ghost_keys)
+            print("  strict mode: ghost keys are fatal")
+        else:
+            print("  advisory (bench not run or renamed); "
+                  "pass --strict to make it fatal")
 
     if unmatched:
         print(f"\n  {len(unmatched)} estimates path(s) matched no keyword (diagnostics):")
@@ -683,12 +833,18 @@ def parse_criterion_time(txt):
     float('ns')):
       * criterion 2.x: 'lo est hi unit'                     -> 4 tokens
       * criterion 3.x: 'lo u est u hi u' (unit per value)   -> 6 tokens
+    criterion 0.5.1 对 CI 下界/点估计/上界各自独立选单位 (report.rs 逐值调
+    format_value: <1e3->ns / <1e6->us), 故三单位可不相等。旧分支要求
+    vals[1]==vals[3]==vals[5] 在亚微秒项 CI 跨档时 (下界落 ns、点估计落 us,
+    2026-10-02 实测 immune_probe) 会返回 None -> mode_slo SKIP -> rc=2, 把
+    仪器抖动误报成门失败。改为"每个单位槽都是已知单位"既接受混合单位行,
+    又仍拒绝垃圾行 (selftest-20e), 门不失牙。取点估计 vals[2] 配其自身单位 vals[3]。
     Returns (float, str), or None when the line matches neither shape.
     """
     vals = txt.split()
     if len(vals) == 4:
         est, unit = vals[1], vals[3]
-    elif len(vals) == 6 and vals[1] == vals[3] == vals[5]:
+    elif len(vals) == 6 and all(v in UNIT_TO_SEC for v in (vals[1], vals[3], vals[5])):
         est, unit = vals[2], vals[3]
     else:
         return None
@@ -1035,12 +1191,27 @@ def mode_selftest():
 
         # 第 7 枚地雷：criterion 3.x 逐值单位行曾使 mode_slo 崩溃（ValueError
         # float('ns')，2026-09-25 实测）；解析纯函数两方言各一枚断言 + 垃圾行兑底
-        expect("selftest-19a criterion 2.x line parses (mid, unit)",
+        # （编号取 20x 而非续用 19x：mode_compare 夹具已占 selftest-19a..19d，
+        #   本文件"标记须可机检且唯一"纪律——grep selftest-19a 曾同时命中两处。）
+        expect("selftest-20a criterion 2.x line parses (mid, unit)",
                parse_criterion_time("9.902 9.967 10.037 ns"), (9.967, "ns"))
-        expect("selftest-19b criterion 3.x per-value-unit line parses",
+        expect("selftest-20b criterion 3.x per-value-unit line parses",
                parse_criterion_time("68.439 ns 68.483 ns 68.661 ns"), (68.483, "ns"))
-        expect("selftest-19c garbage line yields None (SKIP not crash)",
+        expect("selftest-20c garbage line yields None (SKIP not crash)",
                parse_criterion_time("ns"), None)
+        # 20d：混合单位 6-token (criterion 0.5.1 逐值选单位, CI 跨档实测行) 须解析为
+        #   (点估计, 其单位); 旧"三单位全等"守卫会 None -> SKIP -> rc=2。
+        expect("selftest-20d mixed-unit per-value line parses (est, its unit)",
+               parse_criterion_time("960.53 ns 1.2215 \u00b5s 1.2868 \u00b5s"),
+               (1.2215, "\u00b5s"))
+        # 20e：6-token 但单位槽非已知单位 -> 仍 None (特异度对照, 保住门的牙)
+        expect("selftest-20e 6-token with unknown unit-token yields None",
+               parse_criterion_time("1.0 zz 2.0 zz 3.0 zz"), None)
+        # 20f：ps 单位须可解 (亚纳秒值渲染为 ps), 否则 window_select 等逼近 1 ns 会假红
+        expect("selftest-20f ps unit resolves",
+               ("ps" in UNIT_TO_SEC,
+                parse_criterion_time("500.0 ps 600.0 ps 700.0 ps")),
+               (True, (600.0, "ps")))
 
         # 断言 9：真实表必绿（防止自测只测红路径而把真表测挂）
         rc = _capture(lambda: mode_lint(real_rl),)
@@ -1118,6 +1289,21 @@ def mode_selftest():
         expect("selftest-19d compare undecidable when legacy log is absent",
                (rc19d, "UNDECIDABLE" in out19d), (2, True))
 
+        # 断言 21：C-07/D6 —— thresholds 模式零匹配幽灵键: 默认 advisory 可见不致命,
+        #   --strict 计入 fails; 无幽灵键时一声不吭(防空转式常报)。复用断言 19 的
+        #   合成 criterion 树(zz_ns 有产物)+ 一个零匹配键, 不读真仓 target/。
+        thr_td = {"thresholds_ns": {"zz_ns": 1000, "zz_ghost": 1000},
+                  "path_keywords": {"zz_ns": ["zz_fn/"], "zz_ghost": ["zz_absent/"]}}
+        rc21a, out21a = _capture_out(mode_thresholds, thr_td, cmp_dir, False, False)
+        expect("selftest-21a ghost key: advisory visible, rc untouched",
+               ("[SKIP-GHOST]" in out21a, rc21a), (True, 0))
+        rc21b, out21b = _capture_out(mode_thresholds, thr_td, cmp_dir, False, True)
+        expect("selftest-21b ghost key fatal under --strict",
+               (rc21b, "ghost keys are fatal" in out21b), (1, True))
+        rc21c, out21c = _capture_out(mode_thresholds, cmp_td, cmp_dir, False, False)
+        expect("selftest-21c control: zero ghost keys announce nothing",
+               ("[SKIP-GHOST]" in out21c, rc21c), (False, 0))
+
         # 断言 10：I7 的五种形态（干净/CI 多出/表多出/alias 漂/文件缺失）
         # 前四种用临时 workflow 文件, 不碰真仓的 bench_check.yml。
         # （wf_text 已上提到夹具区开头, 与 inv_rc 共用同一份行格式 —— 两处各写一份
@@ -1138,6 +1324,43 @@ def mode_selftest():
         # 断言 11：真实 bench_check.yml 与真表对等（I7 在产环境必绿，与自测红路径互补）
         expect("selftest-11 real bench_check.yml is in sync with [[run_bench]]",
                ci_runbench_sync(BENCH_WORKFLOW_PATH, load_toml(THRESHOLDS_PATH)["run_bench"]), [])
+
+        # 断言 11b-11g：I9（R2 M44 的根修）—— 同样必须「有牙」，否则 I9 本身
+        # 就是又一条「写在注释里的同步」：真仓对账与红路径缺一不成立。
+        def wf_dict_text(keys, tag):
+            """生成一份含 THRESHOLDS_NS dict 的 workflow 夹具（与真文同形）。"""
+            p = os.path.join(tmp, f"wf_dict_{tag}.yml")
+            with open(p, "w", encoding="utf-8") as fh:
+                fh.write("          THRESHOLDS_NS = {\n")
+                for k in keys:
+                    fh.write(f'              "{k}": 1_000,\n')
+                fh.write("          }\n")
+            return p
+
+        rt9 = {"alpha": 1000, "beta": 2000}
+        expect("selftest-11b I9 clean when heredoc key set equals the table",
+               ci_threshold_key_sync(wf_dict_text(["alpha", "beta"], "clean"), rt9), [])
+        p9_missing = ci_threshold_key_sync(wf_dict_text(["alpha"], "missing"), rt9)
+        expect("selftest-11c I9 fatal when a table key is never asserted by CI",
+               p9_missing, ["threshold key in [[thresholds_ns]] but never asserted by CI: beta"])
+        # 11d：夹具必须**只多不少**——用 ["alpha","ghost"] 会同时构成
+        # 「beta 未被断言」+「ghost 未登记」两条分歧，拿 want=1 去期就
+        # 是把测例自bug 误读成判据失效（本条首版就这么错了）。
+        expect("selftest-11d I9 fatal when heredoc asserts an unregistered key",
+               ci_threshold_key_sync(wf_dict_text(["alpha", "beta", "ghost"], "extra"), rt9),
+               ["threshold asserted by CI heredoc but absent from [[thresholds_ns]]: ghost"])
+        expect("selftest-11e I9 fatal when the workflow file is missing",
+               len(ci_threshold_key_sync(os.path.join(tmp, "nope9.yml"), rt9)), 1)
+        # 11f：无 dict 时不猜（[]），但 present 探针必须报 False —— 两者合起来
+        # 才封住「提取失败被当成无分歧」这个假绿口子。
+        no_dict = wf_text([("c1", "b1", "a1")], "nodict")
+        expect("selftest-11f I9 neutral without a dict, and the presence probe says so",
+               (ci_threshold_key_sync(no_dict, rt9), ci_threshold_dict_present(no_dict)),
+               ([], False))
+        # 11g：产环境对账 —— 这一条就是本可当场抓住 M44 的断言。
+        expect("selftest-11g real bench_check.yml heredoc is in sync with [[thresholds_ns]]",
+               ci_threshold_key_sync(BENCH_WORKFLOW_PATH,
+                                     load_toml(THRESHOLDS_PATH)["thresholds_ns"]), [])
 
         # 断言 12/13：入口契约（F18 + F29）—— 过了 main() 的码才算数，
         # 只在注释里写"0=通过/1=违反/2=不可判定"不算（那是另一道"写了不跑"）。

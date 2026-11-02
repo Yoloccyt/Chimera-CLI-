@@ -16,6 +16,7 @@ use event_bus::ChatStatus;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
 use ratatui::Terminal;
+use unicode_width::UnicodeWidthStr;
 
 /// 构造带对话历史与状态的 TuiState
 fn state_with(messages: Vec<ChatMessage>, status: ChatStatus) -> TuiState {
@@ -108,4 +109,73 @@ fn different_statuses_render_without_panic() {
         let out = render_chat(&state, 40, 8);
         assert!(out.contains('q'), "状态 {status:?} 下应渲染消息");
     }
+}
+
+// ============================================================
+// F-25:超宽消息按面板宽度预折行(修复前 ratatui 无 wrap 走
+// LineTruncator,超宽即横向截断,尾部内容永久不可读且无横向滚动)
+// ============================================================
+
+#[test]
+fn long_message_wraps_instead_of_truncated() {
+    // WHY 借公开的 ChatPanel::content_lines 取折行末段文本作 marker:折行断点
+    // 由实现决定,不硬编码;marker 与渲染帧同宽(42 外宽 → 40 内容宽)自洽。
+    // 判别力:修复前 content_lines 不折行,marker 为全文 130 列,渲染帧必然
+    // 截断不含 marker;修复后 marker 是折行末段,完整渲染可见。
+    let tail = "TAIL-MARK";
+    let content = format!("{} {tail}", "x".repeat(120));
+    let state = state_with(vec![msg(ChatRole::User, &content)], ChatStatus::Idle);
+
+    let lines = ChatPanel::content_lines(&[msg(ChatRole::User, &content)], 40);
+    assert!(lines.len() > 1, "130 列内容在 40 宽面板应折为多行");
+    let raw_last: String = lines
+        .last()
+        .unwrap()
+        .spans
+        .iter()
+        .map(|s| s.content.to_string())
+        .collect();
+    let marker = raw_last.trim_start().to_string();
+    assert!(
+        marker.len() < content.len(),
+        "折行末段应短于原文(折行确实发生)"
+    );
+
+    // 渲染层:外宽 42(边框 2)→ 内容宽 40,与上方 marker 计算同宽;
+    // 首段 + 末段均可见 = 全文经折行后可读,不是仅首行
+    let out = render_chat(&state, 42, 12);
+    let head = lines.first().unwrap().spans[1].content.to_string();
+    assert!(out.contains(&head), "折行首段应可见");
+    assert!(
+        out.contains(&marker),
+        "折行末段 {marker:?} 应在渲染帧可见(修复前被横向截断,尾部永久不可读)"
+    );
+}
+
+#[test]
+fn content_lines_wraps_cjk_by_display_width() {
+    // CJK 双宽字符按显示宽度折行:宽度口径与 ratatui 同源(unicode-width)。
+    // WHY 不做 TestBackend 渲染断言:CJK 宽字符在 TestBackend 逐单元格重组时
+    // 续位格被 reset 为空格,contains(中文) 永假(见本文件头注释),故只在
+    // content_lines 层断言行数/行宽/无损性。
+    let content = "中".repeat(60); // 显示宽 120 列
+    let lines = ChatPanel::content_lines(&[msg(ChatRole::User, &content)], 40);
+    assert!(lines.len() > 1, "120 列 CJK 内容在 40 宽面板应折为多行");
+
+    // 行宽约束:每行 spans 显示宽合计 ≤ 面板内容宽
+    for line in &lines {
+        let w: usize = line.spans.iter().map(|s| s.content.width()).sum();
+        assert!(w <= 40, "折行后行显示宽 {w} 不应超过面板内容宽 40");
+    }
+
+    // 无损性:首行内容段 + 各续行内容段(spans[1])拼接应还原原文(折行不丢字符)
+    let restored = lines
+        .iter()
+        .map(|l| l.spans[1].content.to_string())
+        .collect::<Vec<_>>()
+        .join("");
+    assert_eq!(
+        restored, content,
+        "折行不得丢失字符(全文可读是 F-25 的核心诉求)"
+    );
 }

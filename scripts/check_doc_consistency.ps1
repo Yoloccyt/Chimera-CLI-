@@ -61,7 +61,11 @@ $nuxusRulesRel = if ($null -ne $nuxusRules) { $nuxusRules } else { '.trae/rules/
 # =============================================================================
 
 # A1. canonical crate count: Cargo.toml members == disk crates/*/Cargo.toml
-$cargo = Get-Content 'Cargo.toml' -Raw
+# WHY -Encoding UTF8 on every Get-Content below: Windows PowerShell 5.1 defaults to
+#     ANSI (GBK), which corrupts UTF-8 CJK sequences AND swallows newlines -- that
+#     breaks `(?m)^` line anchors, so the version read silently failed and cascaded
+#     six bogus [GAP-*] entries while the docs themselves were never out of sync.
+$cargo = Get-Content 'Cargo.toml' -Encoding UTF8 -Raw
 $membersBlock = [regex]::Match($cargo, 'members\s*=\s*\[(.*?)\]', 'Singleline').Groups[1].Value
 $nMembers = ([regex]::Matches($membersBlock, '"crates/[^"]+"')).Count
 $nDirs = @(Get-ChildItem 'crates' -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'Cargo.toml') }).Count
@@ -89,7 +93,13 @@ if (-not $verMatch.Success) {
 # B1. main docs contain current crate count (4 docs: README, CODE_WIKI, CLAUDE.md, nuxus-rules)
 # Note: adr_index.md is an ADR index, not a crate index, so it is NOT checked here.
 $b1Docs = @('docs/architecture/README.md', 'docs/architecture/CODE_WIKI.md', '.claude/CLAUDE.md', $nuxusRulesRel)
-$crateTokens = @("$nMembers crate", "${nMembers} crate", "$nMembers Crate", "$nMembers/$nMembers crate", "${nMembers}个crate", "${nMembers} 个crate")
+# The four emphasis variants exist for the same reason as the 4th alternative in
+# check_doc_consistency.sh: a correct document whose count is bolded ("**39** crates")
+# was reported stale purely because the token list matched a literal string instead
+# of the fact. They stay narrow on purpose -- they must not absorb an ordinal usage
+# ("<ordinal> 39 <ge> crate" = "the 39th crate") nor a stale "43 crate", either of
+# which would let a genuinely stale document pass.
+$crateTokens = @("$nMembers crate", "${nMembers} crate", "$nMembers Crate", "$nMembers/$nMembers crate", "${nMembers}个crate", "${nMembers} 个crate", "${nMembers}** crate", "${nMembers}** Crate", "${nMembers}__ crate", "${nMembers}__ Crate")
 # B1/B2 used to be silent on success, so the run reported fewer ids than checks actually
 # executed and the hardcoded "14 checks" total could never be reconciled with observation.
 # Every check must self-report on the green path too (see the derived footer count).
@@ -100,7 +110,7 @@ foreach ($f in $b1Docs) {
     # CI checkout 必然缺失文档 —— 降级为 warn 而非阻断。
     if ($null -eq $f -or $f -eq '' -or $f -like '*not-found*') { $b1Skipped++; $report += '[B1-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)'; continue }
     if (-not (Test-Path $f)) { $b1Skipped++; $report += '[B1-warn] missing document: ' + $f + ' (gitignore *.md 策略,CI 环境无此文档,跳过)'; continue }
-    $content = Get-Content $f -Raw
+    $content = Get-Content $f -Encoding UTF8 -Raw
     $hit = $false
     foreach ($t in $crateTokens) { if ($content.Contains($t)) { $hit = $true; break } }
     if (-not $hit) {
@@ -121,7 +131,7 @@ foreach ($f in $b2Docs) {
     # 2026-08-07 适配: 同 B1 —— gitignore *.md 策略下缺失文档降级为 warn。
     if ($null -eq $f -or $f -eq '' -or $f -like '*not-found*') { $b2Skipped++; $report += '[B2-warn] nuxus rules file not discovered (gitignore *.md 策略,仅本地维护)'; continue }
     if (-not (Test-Path $f)) { $b2Skipped++; $report += '[B2-warn] missing document: ' + $f + ' (gitignore *.md 策略,CI 环境无此文档,跳过)'; continue }
-    $content = Get-Content $f -Raw
+    $content = Get-Content $f -Encoding UTF8 -Raw
     if (-not $content.Contains($baselineString)) {
         $report += '[GAP-B2] ' + $f + ' does not contain baseline string (' + $baselineString + ')'
         $status = 1
@@ -144,7 +154,7 @@ if (-not (Test-Path 'CHANGELOG.md')) {
     # CI checkout 必然缺失 —— 降级为 warn 而非阻断。
     $report += '[C1-warn] missing document: CHANGELOG.md (gitignore *.md 策略,仅本地维护,跳过)'
 } else {
-    $changelog = Get-Content 'CHANGELOG.md' -Raw
+    $changelog = Get-Content 'CHANGELOG.md' -Encoding UTF8 -Raw
     $verHeaderPattern = '^##\s+\[?v?' + [regex]::Escape($currentVersion) + '\]?(?=\s|$)'
     if (-not [regex]::IsMatch($changelog, $verHeaderPattern, 'Multiline')) {
         $report += '[GAP-C1] CHANGELOG.md missing ## v' + $currentVersion + ' header (should be first entry)'
@@ -180,16 +190,37 @@ $report += '[D1] ADR physical file main numbers = ' + $adrMainCount + ' (with ' 
 #   - expected: declared >= physical (some ADRs may be reserved/historical with no file)
 #   - GAP only if declared < physical (index undercount vs actual files)
 if (Test-Path 'docs/architecture/adr_index.md') {
-    $declaredTotal = $null
+    # D-31: the declared total is DERIVED from the index rows (single-number rows
+    # + interval rows expanded, de-duplicated) rather than read as a hand-copied
+    # integer from prose -- that literal could not be falsified by any consumer
+    # (measured 2026-10-17: literal 184 vs derived 193, every gate stayed green).
+    # Same rule as scripts/adr_index_metrics.py, re-implemented natively here
+    # because this twin runs without a python interop layer. The floors (60 single
+    # rows / 100 distinct) mirror the helper's, so a collapsed parse reports
+    # undecidable instead of emitting a plausible small number.
+    $declared = New-Object 'System.Collections.Generic.HashSet[int]'
+    $singleRows = 0
+    $intervalRows = 0
     $adrIndexLines = Get-Content 'docs/architecture/adr_index.md' -Encoding UTF8
     foreach ($line in $adrIndexLines) {
-        if ($line -match '(\d+)\s*\u4E2A\s*ADR') {
-            $declaredTotal = [int]$Matches[1]
-            break
+        if ($line -match '^\|\s*ADR-(\d{3})\s*\|') {
+            $singleRows++
+            [void]$declared.Add([int]$Matches[1])
+        } elseif ($line -match '^\|\s*ADR-(\d{3})\s*~\s*(\d{3})\s*\|') {
+            $lo = [int]$Matches[1]
+            $hi = [int]$Matches[2]
+            if ($hi -ge $lo) {
+                $intervalRows++
+                for ($n = $lo; $n -le $hi; $n++) { [void]$declared.Add($n) }
+            }
         }
     }
+    $declaredTotal = $null
+    if ($singleRows -ge 60 -and $declared.Count -ge 100) {
+        $declaredTotal = $declared.Count
+    }
     if ($null -eq $declaredTotal) {
-        $report += '[WARN-D2] adr_index.md has no machine-readable ADR total declaration'
+        $report += '[WARN-D2] adr_index.md declared set undecidable (floors unmet: single=' + $singleRows + ' distinct=' + $declared.Count + ' intervals=' + $intervalRows + ')'
     } elseif ($declaredTotal -lt $adrMainCount) {
         # real gap: index undercounts physical files
         $report += '[GAP-D2] adr_index.md declares ' + $declaredTotal + ' ADRs, disk has ' + $adrMainCount + ' main numbers (index undercount)'
@@ -464,7 +495,7 @@ if (Test-Path $eventTypes) {
             # == measured. WARN when declared > measured (possible doc leading edge).
             $codeWiki = 'docs/architecture/CODE_WIKI.md'
             if (Test-Path $codeWiki) {
-                $cw = Get-Content $codeWiki -Raw
+                $cw = Get-Content $codeWiki -Encoding UTF8 -Raw
                 $declMatch = [regex]::Match($cw, '(\d+)\s*NexusEvent')
                 if (-not $declMatch.Success) { $declMatch = [regex]::Match($cw, 'NexusEvent[^0-9]{0,40}(\d+)') }
                 if ($declMatch.Success) {

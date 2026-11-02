@@ -276,6 +276,10 @@ pub fn classify(event: &NexusEvent) -> TuiEventClass {
         SsraFusionCompleted { .. } => TuiEventClass::NotForTui,
         StopRulingIssued { .. } => TuiEventClass::NotForTui,
         StreamSessionCompleted { .. } => TuiEventClass::NotForTui,
+        // ADR-223 D2:L0-B 遥测治理事件（校准写表 / 启动期配置降级）——
+        // 属治理与可观测面，不占面板；与 ComputePoolSaturated 同一分类。
+        TelemetryCalibrationApplied { .. } => TuiEventClass::NotForTui,
+        TelemetryReporterDegraded { .. } => TuiEventClass::NotForTui,
         ThinkingModeSwitched { .. } => TuiEventClass::Consumed,
         TokenLedgerRecorded { .. } => TuiEventClass::NotForTui,
         ToolsRouted { .. } => TuiEventClass::NotForTui,

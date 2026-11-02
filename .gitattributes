@@ -1,0 +1,39 @@
+# 行尾唯一权威：仓库内存 LF，检出亦 LF。
+#
+# WHY this file exists (measured 2026-10-16):
+#   `git ls-files --eol` over the whole repo: 1821 blobs are i/lf, ZERO are i/crlf
+#   (the two `i/` entries are gitlinks: Aegis, dsh-taskboard). But the *working
+#   tree* under scripts/ splits three ways by file provenance: 89 w/crlf, 86 w/lf,
+#   3 w/mixed. Nothing in the repo decides that -- it falls out of whatever
+#   `core.autocrlf` each developer happens to have set (this host: true) and
+#   whether a file arrived by `git checkout` (converted) or was written by a tool
+#   (left LF).
+#
+# The consequence is not cosmetic. Three governance shells were checked out as
+# CRLF -- check_cli_startup.sh, check_doc_drift.sh, check_lock_await.sh -- so the
+# documented local command `bash scripts/check_doc_drift.sh` dies on `$'\r':
+# command not found` while the identical CI run on Linux passes, because CI checks
+# out the LF blob. A "local-only" failure that CI cannot see is the worst kind of
+# reproducibility defect, and this repo has already been bitten repeatedly by
+# line-ending-sensitive anchors silently matching zero bytes (see the CLAIM
+# reasoning in scripts/gate_manifest.toml G-119 and the fixture assertions in
+# scripts/check_l0_logic_ledger.py --selftest, which has to write every fixture
+# twice, once LF and once CRLF, to prove its parser is eol-independent).
+#
+# Scope is the audited governance surface, on purpose:
+#   * /scripts/**  -- the 91 .py + ledgers (.txt) + gate_manifest.toml + .sh/.ps1.
+#                     Every blob there is already LF, so this line cannot trigger a
+#                     renormalisation storm; it only removes the smudge conversion.
+#   * *.sh anywhere -- a CRLF shell script is broken on Linux by definition.
+#
+# Deliberately NOT declared here: *.ps1 outside scripts/ (PowerShell tolerates
+# either, and scripts/ .ps1 files are already covered), and any file that stores
+# line endings as DATA. If such a fixture is ever added, mark it `-text` explicitly
+# rather than loosening these rules.
+#
+# Follow-up that this file does NOT perform: `git add --renormalize .` would also
+# rewrite the 89 CRLF working copies in one sweep. That is a separate, deliberate,
+# all-or-nothing act -- it is intentionally left to a human signing a commit.
+
+/scripts/** text eol=lf
+*.sh      text eol=lf

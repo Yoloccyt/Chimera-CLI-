@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::error::ParliamentError;
-use crate::provider_affinity::ProviderAffinityRegistry;
+use crate::provider_affinity::{ProviderAffinityRegistry, ProviderBinding};
 use crate::types::{Proposal, RoleId};
 
 // ============================================================
@@ -237,6 +237,66 @@ impl CrossVendorDebate {
     /// - `event_bus`:事件总线，用于发布 CrossVendorNegotiation 事件
     pub fn new(router: AffinityRouter, event_bus: EventBus) -> Self {
         Self { router, event_bus }
+    }
+
+    /// WI-D1：从配置 provider 名构建跨厂商辩论策略（将默认 `None` 死码激活为生产 `Some`）。
+    ///
+    /// 语义：取 `names` 去重后的前两个互异通道 → Producer / Verifier（映射为
+    /// `ProviderId::Custom`，即通道命名标识）；Skeptic 由 [`prepare_debate`] 的
+    /// `pick_alternative_provider` 自动轮换，恒与 Producer 异厂商（P7 硬约束）。
+    ///
+    /// # fail-safe
+    /// - 去重后互异 provider 不足 2 个 → 返回 `None`（不激活，仅告警）；
+    /// - provider 绑定去相关校验（producer==verifier/skeptic）失败 → 返回 `None`。
+    ///
+    /// 两种回退都使 `Parliament` 保持 `cross_vendor_debate: None`，等价于未启用，
+    /// 不改变既有 `deliberate` 行为（主干恒绿）。
+    pub fn from_provider_names(
+        names: &[String],
+        fallback: CrossVendorFallback,
+        event_bus: EventBus,
+    ) -> Option<Self> {
+        // 去重（保序）：同一 provider id 多次出现仅计一次
+        let distinct: Vec<&String> = {
+            let mut seen: Vec<&String> = Vec::new();
+            for n in names {
+                if !seen.iter().any(|s| s.as_str() == n.as_str()) {
+                    seen.push(n);
+                }
+            }
+            seen
+        };
+        if distinct.len() < 2 {
+            warn!(
+                distinct = distinct.len(),
+                "cross_vendor_debate 未激活：去重后 provider 不足 2（fail-safe 回退 None）"
+            );
+            return None;
+        }
+        let producer = ProviderId::Custom(distinct[0].clone().into_boxed_str());
+        let verifier = ProviderId::Custom(distinct[1].clone().into_boxed_str());
+
+        // 侧表绑定：resolve_provider 会读取各角色绑定的 .producer 字段并自校验去相关，
+        // 故每个绑定需满足 producer != verifier 且 producer != skeptic。
+        let registry = ProviderAffinityRegistry::new();
+        let prod_binding =
+            ProviderBinding::new(producer.clone(), verifier.clone(), verifier.clone());
+        let ver_binding =
+            ProviderBinding::new(verifier.clone(), producer.clone(), producer.clone());
+        let bind_result = registry
+            .bind_provider(RoleId::new("role-producer"), prod_binding)
+            .and_then(|()| registry.bind_provider(RoleId::new("role-verifier"), ver_binding));
+        if let Err(e) = bind_result {
+            warn!(error = %e, "cross_vendor_debate 未激活：provider 绑定去相关校验失败（fail-safe）");
+            return None;
+        }
+
+        let config = CrossVendorConfig {
+            enabled: true,
+            fallback,
+        };
+        let router = AffinityRouter::new(config, Arc::new(registry));
+        Some(Self::new(router, event_bus))
     }
 
     /// 辩论前准备，确定每个角色的厂商分配
@@ -616,6 +676,160 @@ mod tests {
             assignment.skeptic_provider, assignment.producer_provider,
             "Skeptic 应与 Producer 异厂商"
         );
+    }
+
+    // ============================================================
+    // WI-D1：from_provider_names 激活路径测试
+    // ============================================================
+
+    /// 构造最小 Quest 夹具（与 test_cross_vendor_debate_prepare 同形态）。
+    fn wi_d1_quest() -> Quest {
+        Quest {
+            quest_id: "q-wid1".into(),
+            title: "WI-D1 测试 Quest".into(),
+            tasks: vec![],
+            thinking_mode: nexus_core::ThinkingMode::Fast,
+            checkpoint_id: None,
+            priority: 128,
+        }
+    }
+
+    #[test]
+    fn test_from_provider_names_two_distinct_activates() {
+        // 去重后 >=2 互异 → Some（激活）
+        let names = vec![
+            "chan-a".to_string(),
+            "chan-b".to_string(),
+            "chan-c".to_string(),
+        ];
+        let debate = CrossVendorDebate::from_provider_names(
+            &names,
+            CrossVendorFallback::FallbackToSame,
+            EventBus::new(),
+        );
+        assert!(debate.is_some(), "2+ 互异 provider 应激活跨厂商辩论");
+        let debate = debate.unwrap();
+        assert!(
+            debate.router().config().enabled,
+            "激活后 config.enabled 应为 true"
+        );
+    }
+
+    #[test]
+    fn test_from_provider_names_fail_safe_on_insufficient() {
+        // 去重后 <2（含空、含单一重复）→ None（fail-safe，主干恒绿）
+        let bus = EventBus::new();
+        assert!(
+            CrossVendorDebate::from_provider_names(
+                &[],
+                CrossVendorFallback::FallbackToSame,
+                bus.clone()
+            )
+            .is_none(),
+            "空列表应回退 None"
+        );
+        assert!(
+            CrossVendorDebate::from_provider_names(
+                &["only".to_string()],
+                CrossVendorFallback::FallbackToSame,
+                bus.clone(),
+            )
+            .is_none(),
+            "单一 provider 应回退 None"
+        );
+        assert!(
+            CrossVendorDebate::from_provider_names(
+                &["dup".to_string(), "dup".to_string()],
+                CrossVendorFallback::FallbackToSame,
+                bus,
+            )
+            .is_none(),
+            "去重后仅剩一个应回退 None"
+        );
+    }
+
+    #[test]
+    fn test_from_provider_names_prepare_debate_enforced() {
+        // 激活后 prepare_debate 应产出 cross_vendor_enforced=true 且三方真互异（非伪异构）
+        let names = vec!["chan-a".to_string(), "chan-b".to_string()];
+        let debate = CrossVendorDebate::from_provider_names(
+            &names,
+            CrossVendorFallback::FallbackToSame,
+            EventBus::new(),
+        )
+        .expect("2 互异应激活");
+        let quest = wi_d1_quest();
+        let proposal = make_proposal(0.5);
+        let assignment = debate
+            .prepare_debate(&quest, &proposal)
+            .expect("prepare_debate 应成功");
+        assert!(
+            assignment.cross_vendor_enforced,
+            "激活后应为 cross_vendor_enforced=true"
+        );
+        assert_ne!(
+            assignment.skeptic_provider, assignment.producer_provider,
+            "P7 硬约束：Skeptic 必与 Producer 异厂商"
+        );
+        assert_ne!(
+            assignment.verifier_provider, assignment.producer_provider,
+            "Verifier 应与 Producer 异厂商（配置驱动真异构）"
+        );
+        assert!(
+            debate.validate_decorrelation(&assignment),
+            "去相关校验应通过"
+        );
+    }
+
+    // ============================================================
+    // WI-D1：proptest 属性测试（真异构不变量 + 伪异构防护）
+    // ============================================================
+
+    mod proptest_wi_d1 {
+        use super::*;
+        use proptest::prelude::*;
+
+        // 任意两个互异 provider 名 → prepare_debate 产出的 Skeptic 恒与 Producer 异厂商
+        proptest! {
+            #[test]
+            fn skeptic_always_differs_from_producer(ref a in "[a-z]{2,8}", ref b in "[a-z]{2,8}") {
+                prop_assume!(a != b);
+                let names = vec![a.clone(), b.clone()];
+                let debate = CrossVendorDebate::from_provider_names(
+                    &names,
+                    CrossVendorFallback::FallbackToSame,
+                    EventBus::new(),
+                )
+                .expect("2 互异必激活");
+                let quest = wi_d1_quest();
+                let proposal = make_proposal(0.4);
+                let asg = debate.prepare_debate(&quest, &proposal).unwrap();
+                prop_assert!(asg.cross_vendor_enforced);
+                prop_assert_ne!(asg.skeptic_provider.clone(), asg.producer_provider.clone());
+            }
+        }
+
+        // 伪异构防护：producer==skeptic 或 producer==verifier 的绑定必被 bind_provider 拒绝
+        proptest! {
+            #[test]
+            fn non_decorrelated_binding_rejected(ref a in "[a-z]{2,8}") {
+                let reg = ProviderAffinityRegistry::new();
+                // producer==skeptic
+                let bad1 = ProviderBinding::new(
+                    ProviderId::Custom(a.clone().into_boxed_str()),
+                    ProviderId::Zhipu,
+                    ProviderId::Custom(a.clone().into_boxed_str()),
+                );
+                prop_assert!(reg.bind_provider(RoleId::new("r1"), bad1).is_err());
+                // producer==verifier
+                let bad2 = ProviderBinding::new(
+                    ProviderId::Custom(a.clone().into_boxed_str()),
+                    ProviderId::Custom(a.clone().into_boxed_str()),
+                    ProviderId::Zhipu,
+                );
+                prop_assert!(reg.bind_provider(RoleId::new("r2"), bad2).is_err());
+            }
+        }
     }
 
     #[test]

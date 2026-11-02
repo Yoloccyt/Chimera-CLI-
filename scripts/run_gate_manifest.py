@@ -66,6 +66,31 @@ def augment_path():
     mingw = r"D:\msys64\mingw64\bin"
     if os.path.isdir(mingw):
         extra.append(mingw)
+    # Git-for-Windows 的 bash 自带 coreutils，但它们与 bash.exe 同目录（usr/bin），
+    # 而 PATH 只包含 `.../cmd`（或调用方直接以绝对路径拉 bash.exe）。
+    # 后果（2026-10-09 实测）：`.sh` 门里的 `dirname`/`awk`/`grep`/`head` 全部
+    # `command not found`，REPO_ROOT 退化成空串，门报出 `[FAIL] ... file not found`
+    # 或被环境签名分类为 ENV-FAIL —— 四条 `.sh` 判据因此长期“不可判定”，
+    # 清单上看起来“不是红”，实际上**从未给出过判定**。
+    # 解法不是返现有目录，而是从已解析到的 bash 本体反推其安装目录，
+    # 对任何 Git 安装位置均成立；在 Linux/macOS 上 `dirname(which('bash'))`
+    # 本就是 /bin 或 /usr/bin（已在 PATH），因此去重后无作用、无风险。
+    # ★ 必须从 `usable_bash()` 拿路径，而不是 `shutil.which("bash")`：两者不同源时本
+    #   补强会静默失效——后台环境里 `which bash` 可能解析到 WSL 的 /bin/bash（其目录没有
+    #   dirname），而真正跑子进程的是 usable_bash() 候选表里选中的那个 bash。
+    #   “同一个解释器才对应同一套工具集”，这也是单一事实源要求。
+    bash_path, _note = usable_bash()
+    if bash_path:
+        core = os.path.dirname(os.path.abspath(bash_path))
+        # 注意扩展名：Windows 上 Git 的 coreutils 是 `dirname.exe`/`awk.exe`…，
+        # 只探裸名会恒判“不含 coreutils”而使本补强静默失效（2026-10-09 首次实测就中了这一条）。
+        # POSIX 侧无扩展名，因此两个名字都要探。
+        def has(tool):
+            return any(os.path.exists(os.path.join(core, name))
+                       for name in (tool, tool + ".exe"))
+
+        if core and all(has(t) for t in ("dirname", "awk", "grep", "head")):
+            extra.append(core)
     cur = os.environ.get("PATH", "")
     add = [p for p in extra if os.path.isdir(p) and p not in cur.split(os.pathsep)]
     if add:
@@ -85,10 +110,31 @@ AMBIGUOUS_ENV_SIGS = (
     "No such file or directory",  # 脚本自身缺失 or 门报"某证据文件不存在"
     "SyntaxError",                # 被调脚本没编译过
     "Traceback (most recent call last)",  # 子进程崩溃
+    # 与 govd.classify 保持同步（2026-10-29 实测）：`cargo fmt --all` 在本机长路径下未执行任何
+    # 检查即中断并退 1，而 1 正是"发现差异"的红码。回滚面若默认分类不同，紧急切回 legacy
+    # 就会把环境问题当成仓库缺陷（或反之）；两分类器的一致性由单测逐条验证。
+    "os error 206",
 )
 ENV_FAILURE_SIGNATURES = UNCONDITIONAL_ENV_SIGS + AMBIGUOUS_ENV_SIGS
 # shell 解释器报错的形态（`<path>: line <N>: ...`）；用于把 `.sh` 判据的误判风险压到零。
 SHELL_ERROR_RE = re.compile(r"^.+: line \d+: ")
+# 与 govd.classify 同步（2026-10-29）：本仓方言只有 0/1/2，G-138 也强制 expect∈{0,1,2}，
+# 因此任何其他退出码都不可能是判决：126/127 是 shell 跑不起来，3221225773 是 Windows
+# fastfail，2147516553 是控制台/RPC 异常。实测一次被污染的全量 run 里这三种都被记成了
+# mismatch（4 个假红），单独重跑均达期望。回滚面与默认面必须同判决,否则紧急切回 legacy
+# 会把环境问题报成仓库缺陷（一致性由 govd 单测逐条验证）。
+VERDICT_CODES = (0, 1, 2)
+
+
+def abnormal_exit_reason(rc, expect):
+    """退出码不属于判决方言时的环境成因，否则 None。"""
+    if rc is None:
+        return None
+    if rc not in VERDICT_CODES:
+        return "abnormal-exit:rc=%d" % rc
+    if rc == 2 and expect != 2:
+        return "gate-declared-undecidable"
+    return None
 
 
 def env_failure_reason(log_text, cmd):
@@ -133,18 +179,53 @@ def classify(rc, expect, log_text, cmd):
     sig = env_failure_reason(log_text, cmd)
     if sig:
         return "env", sig
+    abnormal = abnormal_exit_reason(rc, expect)
+    if abnormal:
+        return "env", abnormal
     return ("ok", None) if rc == expect else ("mismatch", None)
 
 
 KNOWN_FLAGS = ("--selftest", "--list", "--with-heavy")
+ENGINES = ("legacy", "govd")
 USAGE = ("用法: py -3 scripts/run_gate_manifest.py [--list] [--selftest] [--with-heavy]\n"
+         "                              [--engine legacy|govd]\n"
          "  无参数 = 跑全部 light 判据（heavy 需显式 --with-heavy）\n"
+         "  --engine govd = 默认：同一清单交给 scripts.govd 执行（--engine legacy 保留回滚面）\n"
          "  ⚠ 未知参数不再静默降级为「跑全部」，而是退 2（不可判定）")
+
+
+def engine_of(argv):
+    """Return (engine, error). govd is now the default after the 133-gate A/B parity.
+
+    `--engine legacy` remains as the one-version rollback surface; it is no
+    longer the silent default, because a silent legacy path is how the two
+    execution planes drifted apart in the first place.
+    """
+    for i, arg in enumerate(argv):
+        if arg == "--engine":
+            if i + 1 >= len(argv):
+                return None, "--engine needs a value"
+            return argv[i + 1], None
+        if arg.startswith("--engine="):
+            return arg.split("=", 1)[1], None
+    return "govd", None
 
 
 def unknown_flags(argv):
     """返回本工具不认识的参数。空列表才算"调用方式合法"。"""
-    return [a for a in argv if a not in KNOWN_FLAGS]
+    out, skip = [], False
+    for arg in argv:
+        if skip:
+            skip = False
+            continue
+        if arg == "--engine":
+            skip = True
+            continue
+        if arg.startswith("--engine="):
+            continue
+        if arg not in KNOWN_FLAGS:
+            out.append(arg)
+    return out
 
 
 def is_launcher_absent(err: OSError) -> bool:
@@ -179,6 +260,12 @@ def mode_selftest():
          "[FAIL] three-way reconciliation found gaps\n", "bash s.sh", False),
         ("shell-sig-without-error-shape",
          "note: invalid option name is not accepted by this tool\n[FAIL] 2 gaps\n", "bash s.sh", False),
+        # 实测形状（release 任务 R-01）：cargo 因 Windows 长路径中断并打印 usage 横幅，退 1。
+        ("cargo-longpath-usage-banner",
+         "(os error 206)\nThis utility formats all bin and lib files of the current crate.\n"
+         "Usage: cargo fmt [OPTIONS]\n", "cargo fmt --all -- --check", True),
+        ("shell-quoting-longpath-mid-body",
+         "scripts/x.sh: cannot stat: os error 206\n[FAIL] real finding\n", "bash s.sh", False),
         ("empty-log", "\n\n", "bash s.sh", False),
     ]
     fails = 0
@@ -205,12 +292,27 @@ def mode_selftest():
         ("flags-help-unknown", ["--help"], 1),
         ("flags-typo", ["--lit"], 1),
         ("flags-positional", ["gate"], 1),
+        ("flags-engine-value", ["--engine", "govd"], 0),
+        ("flags-engine-equals", ["--engine=govd"], 0),
     ]
     for name, argv_in, want_unknown in flag_cases:
         got = len(unknown_flags(argv_in))
         ok = got == want_unknown
         fails += 0 if ok else 1
         print(f"  [{'PASS' if ok else 'FAIL'}] selftest-{name} (want_unknown={want_unknown} got={got})")
+    # --engine 的值本身也要有夹具：未知引擎必须退 2，不得悄悄回落到 legacy。
+    engine_cases = [
+        ("engine-default", [], "govd", False),
+        ("engine-explicit", ["--engine", "govd"], "govd", False),
+        ("engine-equals", ["--engine=govd"], "govd", False),
+        ("engine-missing-value", ["--engine"], None, True),
+    ]
+    for name, argv_in, want_engine, want_err in engine_cases:
+        got_engine, got_err = engine_of(argv_in)
+        ok = got_engine == want_engine and bool(got_err) == want_err
+        fails += 0 if ok else 1
+        print(f"  [{'PASS' if ok else 'FAIL'}] selftest-{name} "
+              f"(want_engine={want_engine} got={got_engine} err={got_err!r})")
     # F33: 判决的**顺序**也要有夹具 —— 只看分类器有牙不够, expect=1 的门崩掉时必须
     # 落进 env 而不是 ok, 否则台账上是一次静默假绿（这条正是本轮实测到的形状）。
     verdict_cases = [
@@ -220,15 +322,20 @@ def mode_selftest():
         ("expect1-real-red-is-ok", 1, 1,
          "[GAP] two sources disagree\n[FAIL] 2 gaps\n", "ok"),
         ("expect0-green-is-ok", 0, 0, "[OK] all gates as expected\n", "ok"),
-        ("expect0-undecidable-is-mismatch", 2, 0,
-         "[UNDECIDABLE] missing data file: scripts/x.toml\n", "mismatch"),
+        # 门自己宣布“不可判定”(rc=2)：既不是红也不是绿，而是未判定。
+        ("expect0-undecidable-is-env", 2, 0,
+         "[UNDECIDABLE] missing data file: scripts/x.toml\n", "env"),
+        ("abnormal-shell-127-is-env", 127, 0, "", "env"),
+        ("abnormal-fastfail-is-env", 3221225773, 1, "", "env"),
+        ("abnormal-rpc-console-is-env", 2147516553, 0, "", "env"),
+        ("expect2-is-honoured-as-ok", 2, 2, "[UNDECIDABLE] declared\n", "ok"),
     ]
     for name, rc, exp, text, want in verdict_cases:
         got = classify(rc, exp, text, "{python} x.py")[0]
         ok = got == want
         fails += 0 if ok else 1
         print(f"  [{'PASS' if ok else 'FAIL'}] selftest-{name} (want={want} got={got})")
-    total = len(cases) + len(launcher_cases) + len(flag_cases) + len(verdict_cases)
+    total = (len(cases) + len(launcher_cases) + len(flag_cases) + len(engine_cases) + len(verdict_cases))
     print(f"  RESULT: {'FAIL' if fails else 'PASS'} ({fails}/{total} assertion(s) violated)")
     return 1 if fails else 0
 
@@ -278,7 +385,15 @@ def usable_bash():
         if not path or not os.path.isfile(path):
             continue
         try:
-            out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=20).stdout
+            # 必须钉死 encoding/errors：本文件已把 sys.stdout 重配为 UTF-8（见顶部），但子进程
+            # 输出默认按**宿主 locale** 解码。Windows+GBK 宿主上任一个 bash 的 --version
+            # 输出含非 GBK 字节时，reader 线程报 UnicodeDecodeError 并把 stdout 置 None，
+            # 于是下面的 splitlines() 直接崩 —— 整张清单一行判据都跑不了（实测：PATH 里
+            # 出现 D:\msys64\usr\bin 后必现）。与 augment_path() / check_slash_vocab.sh 自检同族：
+            # 宿主方差只能钉死，不能靠“这台机器正好是 UTF-8”。
+            proc = subprocess.run([path, "--version"], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", timeout=20)
+            out = proc.stdout or ""
         except Exception as e:
             rejected.append(f"{path}: {type(e).__name__}")
             continue
@@ -294,6 +409,25 @@ def usable_bash():
     return None, "; ".join(rejected) or "无可用 bash"
 
 
+def run_govd(list_only, with_heavy):
+    """Thin adapter: same gate_manifest.toml, govd executor.
+
+    The adapter deliberately runs serially (`--jobs 1`) so that the parity run
+    compares like with like; parallelism is a govd flag the caller can opt into
+    directly via `python -m scripts.govd`. `--engine legacy` remains available
+    as the rollback surface for one version.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    from govd import cli as govd_cli
+
+    profile = "nightly" if with_heavy else "pr"
+    argv = ["list" if list_only else "run", "--profile", profile]
+    if not list_only:
+        argv += ["--jobs", "1"]
+    return govd_cli.main(argv)
+
 def main(argv):
     os.chdir(ROOT)
     bad_flags = unknown_flags(argv)
@@ -304,10 +438,18 @@ def main(argv):
         print(f"[UNDECIDABLE] 未知参数: {' '.join(bad_flags)} —— 未执行任何判据，"
               f"不把拼错的旗标降级成「跑全部」")
         return 2
+    engine, engine_err = engine_of(argv)
+    if engine_err or engine not in ENGINES:
+        print(USAGE)
+        print("[UNDECIDABLE] --engine 只接受 legacy|govd（收到 %r）——未执行任何判据"
+              % (engine if engine else engine_err))
+        return 2
     if "--selftest" in argv:
         return mode_selftest()
     list_only = "--list" in argv
     with_heavy = "--with-heavy" in argv
+    if engine == "govd":
+        return run_govd(list_only, with_heavy)
     try:
         gates, problems = load()
     except Exception as e:
@@ -351,10 +493,15 @@ def main(argv):
         os.makedirs(LOGDIR)
 
     bad, unknown, env_fail = [], [], []
+    # 记账闭合用：每一道判据必须落进五个状态之一（ok / mismatch / env-fail / unknown / skip）。
+    # WHY：本工具曾把开工读数记成“76 OK / 6 MISMATCH / 3 ENV-FAIL”（= 85），而 light 实为 84
+    # —— 数字对不上却没人发现，因为旧版只报分类列表、不报总数闭合。现在让工具自己报。
+    ok_ids, skipped = [], []
     for g in gates:
         heavy = g["kind"] == "heavy"
         if heavy and not with_heavy:
             print(f"  [{g['id']}] SKIP  heavy 未选择执行（--with-heavy 才跑）")
+            skipped.append(g["id"])
             continue
         need = g.get("disk_gb", 0)
         if heavy and free < need:
@@ -406,6 +553,7 @@ def main(argv):
             continue
         if verdict == "ok":
             print(f"  [{g['id']}] OK      rc={rc} expect={g['expect']}  {g['cmd']}")
+            ok_ids.append(g["id"])
             continue
         print(f"  [{g['id']}] MISMATCH rc={rc} expect={g['expect']}  {g['cmd']}")
         bad.append((g["id"], f"rc={rc}!={g['expect']}"))
@@ -413,6 +561,14 @@ def main(argv):
             print("        |", line.strip()[:118])
 
     print("-" * 96)
+    # 先查记账闭合，再下结论 —— 一道判据没被归入任何状态，上面所有数字都不可信。
+    accounted = len(ok_ids) + len(bad) + len(env_fail) + len(unknown) + len(skipped)
+    print(f"[SUM] ok={len(ok_ids)} mismatch={len(bad)} env-fail={len(env_fail)} "
+          f"unknown={len(unknown)} skip={len(skipped)} —— 合计 {accounted}/{len(gates)}")
+    if accounted != len(gates):
+        print(f"[TOOL-ERROR] 记账不闭合：有 {len(gates) - accounted} 条判据未归入任何状态"
+              " ⇒ 本次分类计数与退出码均不可引用（先修运行器，不得拿上面数字写台账）")
+        return 2
     if unknown:
         print(f"[UNKNOWN] 资源不足未能判定：{', '.join(unknown)} —— 不得当作通过")
     if env_fail:

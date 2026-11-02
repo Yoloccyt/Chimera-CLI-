@@ -27,7 +27,6 @@ import os
 import re
 import subprocess
 import sys
-import tempfile
 
 # 控制台兜底：即便上游是 GBK 也不因写中文崩溃（本项目脚本惯例）。
 try:
@@ -343,7 +342,7 @@ def mode_emit_sites():
 def mode_selftest():
     """证明门有牙齿：对构造的 fixture 断言各违规必红、干净必绿、增长必红。"""
     print("=== selftest: topk registry gate must have teeth ===")
-    tmp = tempfile.mkdtemp(prefix="topk_gate_selftest_")
+    tmp = gate_rc.tmpdir(prefix="topk_gate_selftest_")
     fails = []
 
     def expect(name, cond):

@@ -2,9 +2,9 @@
 //! LAYER:    L10
 //! ROLE:     Chimera CLI — NEXUS-OMEGA AI 编码代理的命令行入口
 //! BACKEND:  fs
-//! PRODUCERS: 23 CacheHit,CoordinationRatioReported,GatherCompleted,OperationTimedOut,OverWindowFallbackTriggered…
+//! PRODUCERS: 13 ClaimIssued,ClaimRetracted,OperationTimedOut,ParentSelected,StopRulingIssued…
 //! CONSUMERS: 0 -
-//! MATURITY: NOT-IMPL-CN|PLACEHOLDER-EN|SIMPLIFIED-CN
+//! MATURITY: NOT-IMPL-CN|PLACEHOLDER-EN
 //! CRATE-CONTRACT END
 //! Chimera CLI — NEXUS-OMEGA AI 编码代理的命令行入口
 //!
@@ -19,9 +19,10 @@
 //! ## 配置优先级
 //! Figment 合并顺序(后者覆盖前者):
 //! 1. 内置默认值(`ChimeraConfig::default`)
-//! 2. 配置文件(默认 `~/.chimera/omega.yaml`,可由 `--config` 覆盖)
+//! 2. 配置文件(默认 `~/.chimera/omega.yaml`)
 //! 3. 环境变量(前缀 `CHIMERA_`,嵌套用 `__` 分隔,如 `CHIMERA_QUEST__MAX_TASKS_PER_QUEST`)
-//! 4. CLI 参数(目前仅 `--config` 影响配置加载路径,后续可扩展)
+//!
+//! `--config` 只选择配置文件路径，不进入 Figment（CLI 参数不是第 4 源）。
 //!
 //! ## 热加载方案(注释说明,骨架暂不实现)
 //! 配置热加载计划通过两种机制实现:
@@ -55,6 +56,8 @@
 pub mod action_orchestrator;
 /// 启动 banner 输出(品牌 ASCII art,可通过 `--no-banner` 关闭)
 pub mod banner;
+/// `/bench` 一期：build.rs 静态计数 provider（供 commands::tui 装配 BenchPanel）。
+mod bench_provider;
 /// 统一调用预算包装 — 超时 + CancellationToken 注入(M2,M1-方向5:
 /// chat/quest 主路径 LLM/长操作的本层兜底防护,超时发 OperationTimedOut 事件)
 pub mod call_budget;
@@ -75,6 +78,10 @@ pub mod experience_loop;
 pub mod handshake;
 /// Quest 分解编排器(消费 TuiChatSubmitted,经 QuestEngine 真实分解并流式回发)
 pub mod orchestrator;
+/// P1 候选③（ADR-211 Accepted）：`agent spawn` 前 mas-sched claim 准入
+/// （env 三态 `CHIMERA_SCHED_CLAIM`，off 默认逐位等价）
+/// + `ClaimIssued`/`ClaimRetracted` 生产发出点（Normal/Parliament Topic）。
+mod sched_claim;
 // PROBE P3.2: 超窗兜底桥（kvbsr→repo-wiki→hcw 两级检索真实链路）
 pub mod overwindow_bridge;
 // PROBE P2.2: 选择器学习编排器（S4 → holder → window 注入链）
@@ -88,6 +95,8 @@ pub mod quest_loop;
 // Milestone C-3: rl-client 通道（HttpRlClient feature-gated，NoopRlClient 常驻）
 pub mod rl_client;
 pub mod selector_orchestrator;
+/// 命令装配分类(编译期穷尽,决定是否装配 AppContext)
+pub mod spec;
 
 // === 公开 API 重导出 ===
 pub use cli::{Cli, Commands, ConfigAction, QuestAction};

@@ -198,7 +198,7 @@ impl FineRecall {
     where
         S: VectorStore<Meta = ()>,
         // WHY `Display` 而非 `std::error::Error`: 测试 mock 用 `Error = String`
-        // （String 未实现 StdError），放宽到 Display 让 mock 与生产 WikiError 均满足
+        // （String 不满足 StdError），放宽到 Display 让 mock 与生产 WikiError 均满足
         S::Error: std::fmt::Display + Send + Sync + 'static,
     {
         self.rank_impl(

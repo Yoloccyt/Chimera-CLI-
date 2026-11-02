@@ -128,7 +128,7 @@ async fn test_recall_by_clv() {
         .await
         .unwrap();
 
-    let results = engine.recall_by_clv(&query, 10).await.unwrap();
+    let results = engine.recall_by_clv(&query, 10, None).await.unwrap();
     assert!(!results.is_empty());
 }
 

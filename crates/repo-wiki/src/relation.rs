@@ -43,7 +43,7 @@ impl RelationKind {
 
     /// 从字符串解析关系类型(用于 SQLite 反序列化)
     ///
-    /// WHY:未实现 `std::str::FromStr` — 与 `Layer::from_str` 一致,
+    /// WHY:刻意不实现 `std::str::FromStr` — 与 `Layer::from_str` 一致,
     /// 返回 `Option<Self>` 更适合"非错误即缺失"的语义
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
@@ -138,7 +138,7 @@ mod tests {
     fn test_relation_kind_from_str_invalid() {
         assert_eq!(RelationKind::from_str("invalid"), None);
         assert_eq!(RelationKind::from_str(""), None);
-        assert_eq!(RelationKind::from_str("supports"), None); // 未实现的关系
+        assert_eq!(RelationKind::from_str("supports"), None); // 不存在的关系变体
     }
 
     #[test]

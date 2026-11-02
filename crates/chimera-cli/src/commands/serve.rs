@@ -22,21 +22,29 @@
 use anyhow::Result;
 use nexus_app_server::{AppServer, AppTransport, StdinTransport, TransportError};
 
+use crate::composition::AppContext;
 use crate::config::ChimeraConfig;
 
 /// 执行 serve 命令 — 事件循环直至 EOF（客户端断开）或 Ctrl+C（优雅关闭）
 pub async fn execute(config: &ChimeraConfig) -> Result<()> {
-    tracing::info!("chimera serve: 协议宿主启动（JSON-RPC v1 over stdio）");
-
-    // C1(2026-09-04): 真实核心装配——组合根集中构造 AppContext，
-    // QuestBackend 包装 L9 QuestEngine（此前 AppServer::new 默认 InMemoryBackend，
-    // 协议宿主对外承诺与实际能力脱节，F-A2-4）。
+    // 库调用方（非 dispatch）仍可独立装配；dispatch 路径走 execute_with_ctx。
     let ctx = crate::composition::build(config)?;
+    execute_with_ctx(ctx, config).await
+}
+
+/// 执行 serve 命令 — 复用 dispatch 已装配的 AppContext（消除二次装配）。
+pub async fn execute_with_ctx(ctx: AppContext, config: &ChimeraConfig) -> Result<()> {
+    tracing::info!("chimera serve: 协议宿主启动（JSON-RPC v1 over stdio）");
     tracing::info!(
         version = %config.nexus.version,
         "chimera serve: 真实核心装配完成（QuestBackend + critical 旁路订阅，C1/C12）"
     );
-    let server = crate::composition::build_app_server(ctx);
+    // A1/ADR-197 覆盖扩展（2026-10-04）:协议宿主路径同启 L1 计算池饱和观测报告器
+    // ——此前仅 experience_loop（TUI）启动,serve 宿主无饱和可见性。WHY 在本层:
+    // nexus-core 拥有池统计但不持 EventBus,组合根同时持有二者（同款接线先例
+    // 见 experience_loop.rs）;句柄命名绑定保活至进程退出（随 runtime 释放）。
+    let _saturation_reporter = nexus_core::compute::spawn_saturation_reporter(ctx.bus.clone(), 60);
+    let server = crate::composition::build_app_server(ctx).await;
     let transport = StdinTransport::new();
 
     // C1: 优雅关闭——正常 EOF 退出与 Ctrl+C 信号竞争；
@@ -83,10 +91,16 @@ async fn serve_loop(server: &AppServer, transport: &dyn AppTransport) -> Result<
         // 处理操作 → 事件推送（内闭外开：AppOp/AppEvent 协议面）
         match server.handle_op(&op).await {
             Ok(events) => {
-                for ev in &events {
-                    if let Err(e) = transport.send_event(ev).await {
-                        tracing::warn!(error = %e, "chimera serve: 事件推送失败");
-                    }
+                // 性能重构 D7：整批一次 flush；P2-3：批失败降级逐条，隔离不可编码事件。
+                let (delivered, batch_err) =
+                    nexus_app_server::transport::send_events_resilient(transport, &events).await;
+                if let Some(e) = batch_err {
+                    tracing::warn!(
+                        error = %e,
+                        delivered,
+                        total = events.len(),
+                        "chimera serve: 事件批推送失败，已降级逐条重试"
+                    );
                 }
             }
             Err(e) => {
@@ -117,13 +131,11 @@ mod tests {
 
     /// T-1：serve_loop 逐帧处理（ThreadStart→TurnSubmit）后遇 EOF 正常返回 Ok，
     /// 且把 ThreadStart 产出事件经 send_event 推送（覆盖新增循环体与 EOF 退出，G7）。
-    /// T-1：serve_loop 逐帧处理（ThreadStart→TurnSubmit）后遇 EOF 正常返回 Ok，
-    /// 且把 ThreadStart 产出事件经 send_event 推送（覆盖新增循环体与 EOF 退出，G7）。
     /// TurnSubmit 用未知 thread 以顺带验证“处理失败不中断循环”的降级路径。
     #[tokio::test]
     async fn serve_loop_processes_frames_and_stops_on_eof() {
         let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
-        let server = crate::composition::build_app_server(ctx);
+        let server = crate::composition::build_app_server(ctx).await;
         let ops = vec![
             AppOp::ThreadStart(ThreadStartParams::new("g1", "r1")),
             AppOp::TurnSubmit {
@@ -150,7 +162,7 @@ mod tests {
     #[tokio::test]
     async fn serve_loop_replies_error_frame_on_bad_frame() {
         let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
-        let server = crate::composition::build_app_server(ctx);
+        let server = crate::composition::build_app_server(ctx).await;
         // 第 1 帧 = 坏帧（parse_error, code -32700）；第 2 帧 = 正常 ThreadStart
         let transport = MockTransport::new_with_decode_errors(
             vec![AppOp::ThreadStart(ThreadStartParams::new("g1", "r1"))],
@@ -182,7 +194,7 @@ mod tests {
         use nexus_app_server::{IoTransport, RpcResponse};
 
         let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
-        let server = crate::composition::build_app_server(ctx);
+        let server = crate::composition::build_app_server(ctx).await;
         // 输入流:坏帧 + 合法 ThreadStart 请求帧(id=1)
         // reader 用 Cursor(Vec<u8> 无 AsyncRead;Cursor<T: AsRef<[u8]>> 有)
         let valid = nexus_app_server::RpcCodec::encode_request(

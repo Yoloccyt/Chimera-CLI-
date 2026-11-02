@@ -315,9 +315,19 @@ fn assess_risk(program: &str, args: &[String]) -> u8 {
 /// 红线的不可变性本身就是约束的一部分:若红线可由配置/运行时修改,
 /// 则存在被奖励黑客(reward hacking)游戏化的风险。编译期常量确保
 /// 任何变更必须经代码审查 + ADR 记录(同 `ImmutableSurface` 设计哲学)。
+///
+/// # 第 2 条红线的当前覆盖范围（⭐ R2 T-16 采纳默认路径 A：实测后收窄措辞）
+///
+/// 实测（ADR-225 T-16 / M72）：`Sandbox::audit_and_execute` 的**生产调用数为 0**
+/// （唯一调用方是 `tests/security/owasp_top10.rs`），真实命令执行走
+/// `gqep-executor::exec_tool_executor`（ExecPolicy）与 `nexus-hook::executor`
+/// （ProcessFence），二者**不写 Merkle 链**；`AuditChain` 亦无持久化/导出 API。
+/// 所以本行的真实含义是「**已入链的记录不可篡改**」（`verify()` 能检出对 outcome 的篡改，
+/// 由 C-64a 的拒绝口接线在 OWASP 套件里真实执行），而不是「生产的所有执行都有链」。
+/// 状态标为 **DORMANT-ONLY**：接线到两条真实执行路径属另一次功效变更（ADR-225 T-16 B/C）。
 pub const UNLEARNABLE_SECURITY_RULES: &[&str] = &[
     "seccomp/gVisor 沙箱策略不可降低",
-    "Merkle 审计链完整性不可篡改",
+    "Merkle 审计链完整性不可篡改（DORMANT-ONLY：生产执行路径当前不写链，范围见 ADR-225 T-16）",
     "零孤儿调用保证(QEEP)不可绕过",
     "最小权限底线不可突破",
     "#![forbid(unsafe_code)] 不可移除",

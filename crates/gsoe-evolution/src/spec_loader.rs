@@ -409,7 +409,9 @@ impl SpecLoader {
     /// WHY 提供: 调用方（如 SpecRegistry P4-W15.2）可能需要枚举不可进化面
     /// 做安全审计。此方法透传 `HarnessSpec::immutable_surfaces()` 避免调用方
     /// 直接依赖 nexus_contracts（虽然 gsoe-evolution 已依赖）
-    pub fn immutable_surfaces() -> &'static [ImmutableSurface; 20] {
+    // C-64b：冻结面 32→33（SandboxViolation 升 Critical 后 +1），
+    // 本处是委托 `HarnessSpec::immutable_surfaces()`，返回类型长度须同批对齐。
+    pub fn immutable_surfaces() -> &'static [ImmutableSurface; 33] {
         HarnessSpec::immutable_surfaces()
     }
 
@@ -991,9 +993,12 @@ acceptance_gates = ["tests_pass", "bench_no_regression", "invariants_clean", "re
     // === 不可进化面清单 API 测试 ===
 
     #[test]
-    fn test_immutable_surfaces_returns_20_variants() {
+    fn test_immutable_surfaces_returns_33_variants() {
+        // 权威口径 = nexus-contracts `ImmutableSurface::all()`：8 红线 + 19 Critical
+        // + 3 不变量 + 2 沙箱/QEEP + 1 验证器 = 33（C-64b 2026-10-28 升入 SandboxViolation；ADR-212 B-P1-5 记录 20→31；
+        // C-13/M09 2026-10-25 ShadowBreakerTripped 升入 mpsc 旁路后 31→32）。
         let surfaces = SpecLoader::immutable_surfaces();
-        assert_eq!(surfaces.len(), 20);
+        assert_eq!(surfaces.len(), 33);
     }
 
     #[test]

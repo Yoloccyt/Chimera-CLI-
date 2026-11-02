@@ -207,6 +207,15 @@ pub struct ModelRouterConfig {
     pub budget: BudgetConfig,
     /// 模型提供商列表
     pub providers: Vec<ProviderConfig>,
+    /// WI-D1：进程内异构对抗审查启用开关（跨厂商辩论 cross_vendor_debate）
+    ///
+    /// 默认 `false`（off）：`chimera parliament` 命令装配的 `Parliament` 保持
+    /// `cross_vendor_debate: None`，行为与本字段引入前完全一致（主干恒绿、向后兼容）。
+    /// 开启后组合根从 `providers` 取去重后的前两个互异通道注入 `CrossVendorDebate`，
+    /// 使 Skeptic 与 Producer 走异厂商通道，修复同源相关失败（病理 D3 / ADR-067 P7）。
+    /// 去重后 provider 不足 2 时按 fail-safe 不激活（仅告警）。
+    #[serde(default)]
+    pub cross_vendor_debate: bool,
 }
 
 impl Default for ModelRouterConfig {
@@ -215,6 +224,7 @@ impl Default for ModelRouterConfig {
             strategy: "Auto".to_string(),
             budget: BudgetConfig::default(),
             providers: default_providers(),
+            cross_vendor_debate: false,
         }
     }
 }

@@ -26,6 +26,7 @@ use anyhow::Result;
 use nexus_app_server::{AppServer, AppTransport, StdinTransport, TransportError};
 use nexus_contracts::app::{AppEvent, AppOp};
 
+use crate::composition::AppContext;
 use crate::config::ChimeraConfig;
 
 // ============================================================
@@ -105,16 +106,24 @@ pub fn translate_event(ev: &AppEvent) -> Option<serde_json::Value> {
 
 /// 执行 acp 命令 — ACP JSON-RPC 2.0 over stdio 事件循环直至 EOF 或 Ctrl+C（优雅关闭）
 pub async fn execute(config: &ChimeraConfig) -> Result<()> {
-    tracing::info!("chimera acp: ACP 桥启动（JSON-RPC 2.0 over stdio）");
-
-    // C1(2026-09-04): 真实核心装配——与 serve 同源走集中组合根
-    // （QuestBackend 包装 L9 QuestEngine，替代 InMemory 桩，F-A2-4）。
+    // 库调用方（非 dispatch）仍可独立装配；dispatch 路径走 execute_with_ctx。
     let ctx = crate::composition::build(config)?;
+    execute_with_ctx(ctx, config).await
+}
+
+/// 执行 acp 命令 — 复用 dispatch 已装配的 AppContext（消除二次装配）。
+pub async fn execute_with_ctx(ctx: AppContext, config: &ChimeraConfig) -> Result<()> {
+    tracing::info!("chimera acp: ACP 桥启动（JSON-RPC 2.0 over stdio）");
     tracing::info!(
         version = %config.nexus.version,
         "chimera acp: 真实核心装配完成（QuestBackend + critical 旁路订阅，C1/C12）"
     );
-    let server = crate::composition::build_app_server(ctx);
+    // A1/ADR-197 覆盖扩展（2026-10-04）:协议宿主路径同启 L1 计算池饱和观测报告器
+    // ——此前仅 experience_loop（TUI）启动,acp 宿主无饱和可见性。WHY 在本层:
+    // nexus-core 拥有池统计但不持 EventBus,组合根同时持有二者（同款接线先例
+    // 见 experience_loop.rs）;句柄命名绑定保活至进程退出（随 runtime 释放）。
+    let _saturation_reporter = nexus_core::compute::spawn_saturation_reporter(ctx.bus.clone(), 60);
+    let server = crate::composition::build_app_server(ctx).await;
     let transport = StdinTransport::new();
 
     // C1: 优雅关闭——EOF 与 Ctrl+C 竞争（此前 Ctrl+C 硬杀，F-A2-6）。
@@ -158,14 +167,28 @@ async fn acp_loop(server: &AppServer, transport: &dyn AppTransport) -> Result<()
 
         // 处理操作 → 事件推送（转译层输出 ACP 通知帧）
         match server.handle_op(&op).await {
-            Ok(events) => {
-                for ev in &events {
-                    if let Some(notification) = translate_event(ev) {
-                        if let Err(e) = transport.send_event(ev).await {
-                            tracing::warn!(error = %e, "chimera acp: 事件推送失败");
-                        }
+            Ok(mut events) => {
+                // 保序过滤：仅透传可转译为 ACP 通知的事件（与旧逐条 send 的输出集合/顺序一致）。
+                events.retain(|ev| match translate_event(ev) {
+                    Some(notification) => {
                         // 通知帧透传（协议面调试日志，不落 stdout——stdout 仅协议帧）
                         tracing::debug!(notification = %notification, "ACP 通知");
+                        true
+                    }
+                    None => false,
+                });
+                // 性能重构 D7：过滤后整批一次 flush；P2-3：批失败降级逐条隔离。
+                if !events.is_empty() {
+                    let (delivered, batch_err) =
+                        nexus_app_server::transport::send_events_resilient(transport, &events)
+                            .await;
+                    if let Some(e) = batch_err {
+                        tracing::warn!(
+                            error = %e,
+                            delivered,
+                            total = events.len(),
+                            "chimera acp: 事件批推送失败，已降级逐条重试"
+                        );
                     }
                 }
             }
@@ -237,7 +260,7 @@ mod tests {
     #[tokio::test]
     async fn acp_loop_processes_frames_and_stops_on_eof() {
         let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
-        let server = crate::composition::build_app_server(ctx);
+        let server = crate::composition::build_app_server(ctx).await;
         let ops = vec![AppOp::ThreadStart(ThreadStartParams::new("g1", "r1"))];
         let transport = MockTransport::new(ops);
         acp_loop(&server, &transport)

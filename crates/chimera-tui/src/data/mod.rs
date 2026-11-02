@@ -33,7 +33,9 @@
 
 pub mod metrics_history;
 pub mod newline_gate;
+pub mod pace_gate;
 pub mod resource_history;
+pub mod sanitize;
 
 /// `/compact` 上下文策展器(Concord W9,ADR-081;FC-2 接线,2026-09-06)
 ///
@@ -1090,6 +1092,43 @@ mod tests {
         assert!(content.starts_with("quest_id,title,priority,task_count,status"));
         assert!(content.contains("q1,Build API,5,1,Running"));
         assert!(content.contains("\"Test, with comma\""));
+        Ok(())
+    }
+
+    /// v2.3 §(b.5) tier-2（W5-1 R-1）：导出是用户主动生成的“最易外传”自由
+    /// 文本出口（CSV 落 `Quest.title`，JSON 落整只 `quest_list` 含
+    /// `Task.description`），两条路径均须命中硬载荷时拒写。
+    #[test]
+    fn test_export_refuses_sensitive_content() -> Result<(), Box<dyn std::error::Error>> {
+        let leaky = DataSnapshot {
+            quest_list: vec![make_test_quest(
+                "q1",
+                "密钥 -----BEGIN PRIVATE KEY----- 外泄检查",
+                5,
+            )],
+            ..Default::default()
+        };
+        let dir = tempfile::tempdir()?;
+        for format in [ExportFormat::Csv, ExportFormat::Json] {
+            let path = dir.path().join(format!("leaky.{}", format.extension()));
+            let err = leaky
+                .export_quests_to(format, &path)
+                .expect_err("含私钥 PEM 的导出应拒写");
+            assert!(
+                matches!(err, crate::error::TuiError::SensitiveContent { .. }),
+                "应报 SensitiveContent，实测 {err:?}"
+            );
+            assert!(!path.exists(), "拒写不得留下导出文件");
+        }
+
+        // 反向对照：良性标题仍正常导出（守卫只拦硬载荷）
+        let ok = DataSnapshot {
+            quest_list: vec![make_test_quest("q2", "Build API", 5)],
+            ..Default::default()
+        };
+        let path = dir.path().join("benign.csv");
+        ok.export_quests_to(ExportFormat::Csv, &path)?;
+        assert!(path.exists());
         Ok(())
     }
 

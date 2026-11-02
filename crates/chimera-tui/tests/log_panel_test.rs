@@ -339,10 +339,11 @@ fn log_panel_down_to_bottom_keeps_selected_and_showing_visible() {
         content.contains(chimera_tui::t!("panel.log.showing")),
         "showing 提示行应渲染在视口内, got: {content}"
     );
-    // 页脚可见性(批次三终审 #2):FOOTER_TEXT 为英文常量,pin En 下逐字成立;
+    // 页脚可见性(批次三终审 #2):F-17 迁键后页脚走 panel.footer 键,
+    // 断言与键表同源(pin En 下 t! 返回 En 值,渲染面同 locale);
     // 与 event_stream 贴底用例的页脚断言口径对齐
     assert!(
-        content.contains("Press Tab to switch panels"),
+        content.contains(chimera_tui::t!("panel.footer")),
         "页脚应渲染在视口内, got: {content}"
     );
 }

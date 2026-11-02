@@ -4,6 +4,18 @@
 //! 对应架构层:L4 Security
 //! 对应创新点:连续权限流体衰减模型（ADR-002）
 //!
+//! ## 接线三要件（第三轮 T2.4 · 本入口 `parallel_batch` 当前 bench-only、G-87 判 DEAD）
+//! 若未来接线进生产,接线前须逐条满足（负收益红线:不预投不可达点位;G-87 权威判定见
+//! `scripts/compute_offload_reachability_freeze.txt` 行 `decay-engine/src/parallel.rs::decay_batch_parallel|DEAD`;
+//! 台账行见 `scripts/check_dead_contract_apis.py` `DecayEngine::parallel_batch`）:
+//! 1. **错误姿态评审** —— 依 ADR-197 D2 决策表评审 strict/degrade/observe 在真实流量下的
+//!    失败语义;T2.2 已定「降级项数独立计数、拒绝逐项 `active.enter`」,接线时不得把降级
+//!    计入并发占用而触发饱和自屏蔽。
+//! 2. **G-88 同步卸载保护** —— async 上下文裸调本同步阻塞入口须配 `block_in_place`/
+//!    `spawn_blocking` 让出并通过 `check_sync_offload_guard.py` 判 GUARDED。
+//! 3. **逐位断测复核** —— 接线后复跑双路径逐位等价测试（结果序=输入序、panic 逐个隔离、
+//!    Inline/Pool 逐元素一致）,确认行为契约不回退。
+//!
 //! # 注入模式（WI-34 七条纪律 ④桥接唯一 / ⑤逐一回滚 / ⑥IO 不上 rayon）
 //! - **识别热点**:[`crate::DecayEngine`] 的批量衰减路径 —— 对能力注册表内全部
 //!   能力应用衰减（`decay_bench` bulk_decay_throughput / `decay_compute` bulk 实测）:
@@ -17,7 +29,7 @@
 //!   无 IO / await / 持锁）;结果回主线程后**按输入序**串行提交写回 DashMap
 //!   （提交阶段含调试/告警日志,不入 rayon）。
 //! - **挂 ComputeBridge**:[`ComputeBridge::route`](nexus_core::compute::ComputeBridge::route)
-//!   按 `TaskKind::Generic` 三态判定 → `Inline`（n 小于阈值,串行）或 `Rayon`
+//!   按 `TaskKind::DecayBatch` 三态判定 → `Inline`（n 小于阈值,串行）或 `Rayon`
 //!   （[`spawn_compute_batch`](nexus_core::compute::ComputeBridge::spawn_compute_batch)
 //!   批量并行,结果序 = 输入序）。
 //! - **保留回退**:`DecayEngine::parallel_batch` 配置开关 + `CHIMERA_NO_PARALLEL_DECAY`
@@ -28,10 +40,9 @@
 //!   （含顺序断言:结果序 = 输入序）。
 //!
 //! # TaskKind 选择
-//! `TaskKind::Generic`（阈值 10,000,chunk 64）—— 任务约束"不新增 TaskKind 变体";
-//! 批量能力衰减不在六类登记语义内（非 CLV 相似度/掩码/KNN/GSOE/CSC 压缩评分）,
-//! 归入未登记任务的保守默认;≥ 10,000 能力的大批量衰减触发 Rayon
-//! （decay 单次计算微秒级,低于阈值时串行更优——调度开销反超计算量）。
+//! `TaskKind::DecayBatch`（阈值 10,000）—— ADR-196 C1 从 `Generic` 拆出的专用登记位;
+//! ≥ 10,000 能力的大批量衰减触发 Rayon（decay 单次计算微秒级,低于阈值时串行更优——调度开销反超计算量）;
+//! 拆位后与 faae 解耦，各自表项独立校准，SPRT 历史可归属到能力衰减负载。
 //!
 //! # rayon 闭包契约
 //! 闭包捕获 `Arc<Vec<(String, DecaySnapshot)>>` + `Arc<Vec<DecayEventParam>>`
@@ -40,9 +51,11 @@
 //!   [`apply_decay_pure`] 纯计算;闭包内禁 IO / await / 持锁（红线 §7.5.3 纪律⑥）。
 //!
 //! # 失败语义
-//! 单能力衰减失败（`CapabilityLevel::new` 越界,理论不可达——clamp 保证 ∈ [0,1]）
-//! 经 Result 逐项传播,不阻断同批其他能力（与串行逐项一致）。池内 panic 被
-//! catch_unwind 隔离,防御性回退串行（理论不可达:闭包纯计算）。
+//! 单能力衰减失败两类:① ViolationPenalty severity 域违规(负值/NaN/±∞,
+//! C-18 拒绝面,可达);② `CapabilityLevel::new` 越界(理论不可达——clamp
+//! 保证 ∈ [0,1])。失败经 Result 逐项传播,不阻断同批其他能力（与串行逐项
+//! 一致）。池内 panic 被 catch_unwind 隔离,防御性回退串行（理论不可达:
+//! 闭包纯计算）。
 
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
@@ -153,7 +166,9 @@ pub(crate) struct DecayOutcome {
 /// 语义对齐（行为锁定,断言测试覆盖）:
 /// - `TimeDecay`:level -= elapsed × rate（线性,默认）或 level × exp(-elapsed/τ)
 ///   （指数,P1-4 共享 `nexus_core::decay` 公式）;冻结跳过;触发自动冻结检查;
-/// - `ViolationPenalty`:level -= penalty × severity;冻结跳过;触发自动冻结检查;
+/// - `ViolationPenalty`:level -= penalty × severity(severity ∈ [0.0, +∞),
+///   负值/非有限值拒绝 —— 与引擎路径同型的 C-18 域校验);冻结跳过;
+///   触发自动冻结检查;
 /// - `Freeze`:level = 0 且 frozen = true（Skeptic 否决,幂等由调用方守卫）;
 /// - `Restore`:level += elapsed × restore_rate（clamp [0,1]）;冻结跳过;
 /// - 自动冻结:衰减类事件后 level ≤ freeze_threshold 且未冻结 → 置 0 + 冻结
@@ -161,7 +176,9 @@ pub(crate) struct DecayOutcome {
 /// - `last_decay_at` 更新在**提交阶段**统一进行（批量路径以统一 `now` 为基准,
 ///   与串行单次 `decay` 每次调用各自取 now 的语义不同——批量 = 快照语义）。
 ///
-/// 失败面:level 越界经 `CapabilityLevel::new` 返回 [`DecayError::InvalidLevel`]
+/// 失败面:① ViolationPenalty severity 域违规(负值/NaN/±∞)返回
+/// [`DecayError::InvalidSeverity`]（C-18 可达拒绝面）;② level 越界经
+/// `CapabilityLevel::new` 返回 [`DecayError::InvalidLevel`]
 /// （理论不可达:全部输出经 clamp 保证 ∈ [0,1],签名保留错误面与现有代码风格一致）。
 pub(crate) fn apply_decay_pure(
     level: f32,
@@ -200,6 +217,13 @@ pub(crate) fn apply_decay_pure(
         1 => {
             if frozen {
                 return Ok(DecayOutcome { level, frozen });
+            }
+            // C-18(M10):severity 域校验 — 与 engine.rs ViolationPenalty 分支同型
+            // (frozen 短路后、惩罚计算前),拒绝负值/非有限值,不 clamp。
+            if !event.severity.is_finite() || event.severity < 0.0 {
+                return Err(DecayError::InvalidSeverity {
+                    value: event.severity,
+                });
             }
             let penalty = config.event_decay_penalty * event.severity;
             let lower = config.min_level.max(0.0);
@@ -246,7 +270,7 @@ pub(crate) fn apply_decay_pure(
 ///
 /// 路由判定:
 /// ① `should_parallel(parallel_enabled)` 为 false（配置/env 关闭）→ 串行;
-/// ② `bridge().route(TaskKind::Generic, n)` 为 `Inline` → 串行;
+/// ② `bridge().route(TaskKind::DecayBatch, n)` 为 `Inline` → 串行;
 /// ③ 否则 → `spawn_compute_batch` 并行（CHUNK 分组,段内保序 + 段间按序拼接）。
 ///
 /// 返回 `Vec<Result<DecayOutcome, DecayError>>`,结果序 = 输入序,逐输入独立
@@ -261,7 +285,7 @@ pub(crate) fn decay_batch_core(
 ) -> Vec<Result<DecayOutcome, DecayError>> {
     let n = snapshots.len();
     if !should_parallel(parallel_enabled)
-        || bridge().route(TaskKind::Generic, n) == DispatchPlan::Inline
+        || bridge().route(TaskKind::DecayBatch, n) == DispatchPlan::Inline
     {
         decay_batch_serial(snapshots, events, config, now)
     } else {
@@ -326,7 +350,7 @@ fn decay_batch_parallel(
         })
         .collect();
 
-    let results = bridge().spawn_compute_batch(TaskKind::Generic, tasks);
+    let results = bridge().spawn_compute_batch(TaskKind::DecayBatch, tasks);
 
     // 按段序拼接（段间保序）,总长度 = 输入数
     let mut out = Vec::with_capacity(n);
@@ -573,6 +597,90 @@ mod tests {
             &config,
         );
         assert!(matches!(res, Err(DecayError::ConfigError(_))));
+    }
+
+    // ============================================================
+    // C-18(M10): severity 域校验 — 负值/NaN/±∞ 拒绝(与引擎路径同型)
+    // ============================================================
+
+    #[test]
+    fn test_apply_violation_penalty_invalid_severity_rejected() {
+        let config = DecayConfig::default();
+        for bad in [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            -1e-7,
+            -0.5,
+            -100.0,
+        ] {
+            let res = apply_decay_pure(
+                0.8,
+                false,
+                Instant::now(),
+                Instant::now(),
+                DecayEventParam {
+                    kind: 1,
+                    severity: bad,
+                },
+                &config,
+            );
+            assert!(
+                matches!(res, Err(DecayError::InvalidSeverity { value }) if value.to_bits() == bad.to_bits()),
+                "severity={bad} 应被拒绝为 InvalidSeverity(原值回传)"
+            );
+        }
+    }
+
+    /// 冻结能力 + 非法 severity → frozen 短路优先(与引擎 ViolationPenalty
+    /// 分支同型:冻结态对一切事件免疫,不触发域校验)
+    #[test]
+    fn test_apply_violation_penalty_invalid_severity_frozen_skipped() {
+        let config = DecayConfig::default();
+        let out = apply_decay_pure(
+            0.8,
+            true,
+            Instant::now(),
+            Instant::now(),
+            DecayEventParam {
+                kind: 1,
+                severity: -1.0,
+            },
+            &config,
+        )
+        .expect("冻结能力应原样返回");
+        assert_eq!(out.level, 0.8);
+        assert!(out.frozen, "冻结状态必须保留");
+    }
+
+    /// 非法 severity 在串行/并行批量路径产生逐位一致的 Err
+    /// (C-18 双路径同型守卫 — 拒绝语义不因路由切换而漂移)
+    #[test]
+    fn test_batch_invalid_severity_serial_parallel_consistent() {
+        let bad = f32::NAN;
+        let snapshots = Arc::new(vec![DecaySnapshot {
+            level: 0.8,
+            frozen: false,
+            last_decay_at: Instant::now(),
+        }]);
+        let events = Arc::new(vec![DecayEventParam {
+            kind: 1,
+            severity: bad,
+        }]);
+        let cfg = Arc::new(DecayConfig::default());
+        let now = Instant::now();
+        let serial = decay_batch_core(&snapshots, &events, &cfg, now, false);
+        let parallel = decay_batch_core(&snapshots, &events, &cfg, now, true);
+        assert_eq!(serial.len(), 1);
+        assert_eq!(parallel.len(), 1);
+        for (label, out) in [("serial", serial), ("parallel", parallel)] {
+            match out.into_iter().next().unwrap() {
+                Err(DecayError::InvalidSeverity { value }) => {
+                    assert_eq!(value.to_bits(), bad.to_bits(), "{label} 错误值应原值回传");
+                }
+                other => panic!("{label} 期望 Err(InvalidSeverity),实际 {other:?}"),
+            }
+        }
     }
 
     // ============================================================

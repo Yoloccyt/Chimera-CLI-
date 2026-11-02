@@ -24,7 +24,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use crate::panels::Panel;
-use crate::render::{self, FOOTER_TEXT};
+use crate::render;
 use crate::types::{PanelId, TuiCommand, TuiState};
 use event_bus::NexusEvent;
 
@@ -110,7 +110,7 @@ impl DecayPanel {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(FOOTER_TEXT));
+        lines.push(Line::from(crate::t!("panel.footer")));
 
         // Task 3.4 事件驱动化治理:原 decay_engine::shadow_breaker_status() 全局
         // 占位函数已事件驱动化(ShadowBreakerTripped 事件)。此处从 latest_events

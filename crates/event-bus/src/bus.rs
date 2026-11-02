@@ -19,10 +19,11 @@ use crate::types::{EventMetadata, EventSeverity, NexusEvent};
 // F-a(M0):ArcSwapOption 承载分片总线单一真值源(取代 Mutex<Option<Arc<_>>> +
 // AtomicBool 双表达 —— 双源真相靠手工 Release/Relaxed 配对维持,分叉即灰度时灵时不灵)
 use arc_swap::ArcSwapOption;
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, mpsc};
+use tokio::task::JoinHandle;
 use tracing::warn;
 
 /// 默认广播容量
@@ -43,24 +44,36 @@ pub const CRITICAL_CHANNEL_CAPACITY: usize = 4096;
 ///
 /// WHY 常量而非硬编码:双清单同步红线(MCA M0 起)要求新增 Critical 事件
 /// 必须同时修改 severity() 与 is_critical_mpsc_event 两处;此常量供
-/// 守护测试断言旁路清单规模不回退(16 ⊆ 20)。
+/// 守护测试断言旁路清单规模不回退(17 ⊆ 21)。
+/// 常量规模本身由 `test_critical_double_list_d8_counts` +
+/// `mpsc_bypass_exact_*` + `credit_flow_test` 三处机器锁定;而正文里
+/// 「当前 N 类」这类自由文本计数、以及「常量 == `is_critical_mpsc_event` 臂数」
+/// 两个子断言,自 2026-10-09 起由 `check_perf_redlines.py` 的 **I8c** 锁死。
+/// 此前那是已知盲区(I8/I8b 只校验「N 个 Critical 事件」措辞 == `CRITICAL_TOTAL`,
+/// 不校验 mpsc 旁路子数),第三轮 T1.3 因此只能人工把散落的旧值 13/14/17/18
+/// 纠为 16/20;I8c 落地当日即抓到一处残留旧值(backpressure_test.rs 注释),
+/// 说明该盲区真实会咬人而不是理论风险。
 /// L4 深度优化 P1-1:FormalVerificationFailed 升入旁路(13 → 14)——
 /// 验证器否决候选若丢失则违规候选继续进入后续阶段,与 FormalViolation 同语义。
-pub const CRITICAL_MPSC_VARIANTS: usize = 16;
+/// C-13(M09,2026-10-25):ShadowBreakerTripped 升入旁路(16 → 17)——
+/// 熔断跳闸为不可逆 fail-closed 状态变更,丢失则治理面无从感知;升级把
+/// 「API 决定旁路」(gsoe 侧 publish_critical 无条件入旁路而定级 Normal)
+/// 的失配收敛为「分类决定旁路」的一致语义(ADR-224 D2)。
+pub const CRITICAL_MPSC_VARIANTS: usize = 18;
 
 /// severity() 返回 Critical 的变体总数 — D-8 口径
 ///
-/// 20 = 16(mpsc 旁路)+ 4(历史 Critical 只走 broadcast:
+/// 21 = 17(mpsc 旁路)+ 4(历史 Critical 只走 broadcast:
 /// CheckpointSaved / ConsensusReached / SlowConsumerDropped / OrphanCallDetected)。
 /// 本任务不改变 4 个历史 Critical 事件的通道归属(既定设计,推演 D-8 裁决)。
-pub const CRITICAL_TOTAL: usize = 20;
+pub const CRITICAL_TOTAL: usize = 22;
 
-/// 分片禁区声明 — 20 个 Critical 变体名清单(T12 分片时使用)
+/// 分片禁区声明 — 22 个 Critical 变体名清单(T12 分片时使用)
 ///
 /// WHY 声明但不实现:T12 分片改造(SPSC 环阵列 + 分片总线)将按此清单
 /// 禁止把 Critical 单流切片 —— Critical 分片会破坏"发布方 → 订阅方"的
 /// 全序投递语义与 mpsc 旁路免背压保证(推演 9:Critical 背压 = 死锁源)。
-/// 本任务只声明常量 + 测试守护(断言 20 个名字与 severity() Critical 清单
+/// 本任务只声明常量 + 测试守护(断言 22 个名字与 severity() Critical 清单
 /// 一一对应),不实现分片总线。
 pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
     "CheckpointSaved",
@@ -85,6 +98,11 @@ pub const LANE_FORBIDDEN_SHARD: &[&str] = &[
     // v2.3 (b.1)/(b.4): Certify 与 FailureRegistry 进分片禁区(Critical)
     "CertifyIssued",
     "FailureRegistered",
+    // C-13(M09): ShadowBreakerTripped 升 Critical 后进分片禁区
+    // (定级与旁路双清单同批同步,registry.rs 注册表定级对齐)
+    "ShadowBreakerTripped",
+    // C-64b：SandboxViolation 升 Critical 后进分片禁区（与定级、旁路同批）
+    "SandboxViolation",
 ];
 
 /// §(b.1) 裁决权外置·消费辅助:供 UI/下游**只读**提取 CertifyIssued 的 claim_ref,
@@ -110,11 +128,11 @@ impl NexusEvent {
 /// - `severity()` 是事件总线背压级别(同步函数,不依赖运行时值;
 ///   AsaIntervention 自 P1-W2.1.4 起统一返回 Critical,见 registry.rs 注册表定级)
 /// - `is_critical_mpsc_event` 是 mpsc 旁路通道判定,权威清单即下方 matches! 臂,
-///   规模锚定 [`CRITICAL_MPSC_VARIANTS`](当前 16)
+///   规模锚定 [`CRITICAL_MPSC_VARIANTS`](当前 18)
 ///
 /// WHY 单独定义:AsaIntervention 的 severity() 曾返回 Normal(P1-W2.1.4 修复前),
 /// 旁路判定因此独立于 severity() 存在;修复后两清单语义已对齐,由 D-8/R7
-/// 互锁测试守护(14 ⊆ 18)。
+/// 互锁测试守护(17 ⊆ 21)。
 ///
 /// # 双清单同步红线(MCA M0 起显式声明)
 /// 本函数与 `NexusEvent::severity()` 是两张独立清单:新增 Critical 事件
@@ -167,8 +185,17 @@ fn is_critical_mpsc_event(event: &NexusEvent) -> bool {
             | NexusEvent::FormalVerificationFailed { .. }
             // v2.3 (b.1)/(b.4): Certify 与 FailureRegistry 走 mpsc 旁路(必达;
             // 双清单同步——registry.rs severity() 已定 Critical,此处补齐旁路清单)
+            // 第三轮 T1.3 纠漂:下方全量覆盖断言旧写 14,未计入本两变体 ⇒ 16
             | NexusEvent::CertifyIssued { .. }
             | NexusEvent::FailureRegistered { .. }
+            // C-13(M09,2026-10-25): ShadowBreakerTripped 升入 mpsc 旁路(16 → 17)
+            // —— 熔断跳闸为不可逆 fail-closed 状态变更,必须确保投递;双清单
+            // 同步(registry.rs 定级已升 Critical)。此前 gsoe 侧走 publish_critical
+            // 已无条件入旁路(bus.rs send_critical_mpsc),本臂使 decay 侧
+            // publish_blocking 的分类路由同样命中旁路,两生产方语义收敛。
+            | NexusEvent::ShadowBreakerTripped { .. }
+            // C-64b（M49 后半）：沙箱违规为安全类 Critical，拦截事件必须确保投递
+            | NexusEvent::SandboxViolation { .. }
     )
 }
 
@@ -218,7 +245,7 @@ impl DsRuntime {
 ///
 /// # Critical 事件双通道(§6.2 红线,2026-06-29)
 /// Critical 安全/治理告警事件(权威清单 = [`is_critical_mpsc_event`],
-/// 规模锚定 [`CRITICAL_MPSC_VARIANTS`],当前 16 类)额外走 mpsc 旁路通道,
+/// 规模锚定 [`CRITICAL_MPSC_VARIANTS`],当前 18 类)额外走 mpsc 旁路通道,
 /// 确保在 broadcast Lagged 场景下仍能被订阅者接收。订阅者通过
 /// [`subscribe_critical_events`](Self::subscribe_critical_events)
 /// 获取 mpsc Receiver。旁路通道按需初始化(首次订阅时创建),无订阅者时
@@ -351,6 +378,20 @@ pub struct EventBus {
     /// WHY Arc<AtomicU64>:EventBus 派生 Clone,所有副本共享同一计数器;
     /// 无条件统计(分片启用与否均递增),供 T13 前哨观测 Critical 车道流量。
     critical_total: Arc<AtomicU64>,
+    /// 分片 opt-in 开关(性能重构 D1)—— 默认 `true`(保持既有 leaf
+    /// `try_enable_sharding` 行为)。`without_sharding()` 置 false 后,leaf 的
+    /// `try_enable_sharding` 在未被 `CHIMERA_BUS_SHARDS` 显式覆盖时早退,
+    /// 避免 one-shot 命令为 64 个常驻 worker 付费。
+    ///
+    /// WHY Arc<AtomicBool> + Relaxed:EventBus 派生 Clone,开关须跨副本共享;
+    /// 仅在低频的 try_enable_sharding 入口读一次(非 publish 热路径),
+    /// Relaxed 内存序足够(无跨变量同步需求)。
+    sharding_allowed: Arc<AtomicBool>,
+    /// 分片 worker 生命周期 guard(性能重构 D2)—— 持有 `spawn_workers`
+    /// 返回的 `JoinHandle`,最后一个 EventBus clone drop 时 abort worker,
+    /// 根治"worker 持强引用且无退出条件"导致的泄漏(与 composition_root_bench
+    /// 的 OOM 根因同源)。`Arc<OnceLock<..>>` 使 Clone 共享且仅触发一次 drop。
+    shard_guard: Arc<OnceLock<ShardWorkerGuard>>,
 }
 
 /// 单事件发布的共享实现(**宏形式**)—— `publish` 与 `publish_blocking` 的唯一路径
@@ -384,7 +425,8 @@ pub struct EventBus {
 /// 供运维观测接线覆盖率。Normal 级静默丢弃,避免日志噪声。
 ///
 /// # §6.2 红线双通道(2026-06-29)
-/// Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 14 类)
+/// Critical 安全/治理告警事件(is_critical_mpsc_event 清单,当前 18 类;第三轮
+/// T1.3 纠漂——旧值 14 未计入 v2.3 的 CertifyIssued/FailureRegistered)
 /// 额外走 mpsc 旁路通道,确保在 broadcast Lagged 场景下
 /// 仍能被 `subscribe_critical_events` 订阅者接收。旁路通道未初始化时
 /// (无 Critical 订阅者)投递到保底 sink(B-a,M0;原为 warn 告警后放弃)。
@@ -399,6 +441,16 @@ macro_rules! dispatch_one_impl {
         // (Err(ev) => event = ev),保证回退事件继续走既有单流路径,
         // 事件永不因分片而丢失(漏发率恒 0)。
         let mut event = $event;
+        // 第三轮 T1.2(F-P2):车道判定单次求值。旧形态在信用分支(原 :421)与
+        // 分片路由分支(原 :434)各调一次 `event_lane(&event)` —— 第二次结果
+        // 被 `matches!` 即时丢弃,而 OrderSensitive 车道会先分配一个
+        // `SessionKey`(session_id/correlation_id/rule_id 的 String clone),
+        // 等于热路径每发布白做 0-2 次堆分配。提升为 `lane` 单值后:
+        //   - event_lane 是纯函数(只读事件,无副作用),两次求值同值 ⇒ 行为等价;
+        //   - `Lane` 为 owned 类型不借事件,`&event` 借位在求值结束即释放(NLL),
+        //     :438 try_shard_publish(event) 的所有权移动不受影响;
+        //   - severity() 保留原位(语义独立的廉价虚调用,不因本改动一并合并判定)。
+        let lane = event_lane(&event);
         // §16.5 吞吐量计数(Phase 10 Wave 6):发布入口递增
         $self.published_total.fetch_add(1, Ordering::Relaxed);
         // P1-T12 前哨:Critical 车道计数(无条件统计 —— 分片启用与否均递增,
@@ -417,7 +469,8 @@ macro_rules! dispatch_one_impl {
         let mut credit_deducted = false;
         if event.severity() != EventSeverity::Critical
             && $self.shard_bus.load().is_some()
-            && matches!(event_lane(&event), Lane::Unordered)
+            // `&lane` 借用匹配:两次 matches! 若按值会第一次就 move 掉 lane
+            && matches!(&lane, &Lane::Unordered)
         {
             credit_deducted = $self.credit_flow.try_acquire(1).is_ok();
         }
@@ -430,7 +483,7 @@ macro_rules! dispatch_one_impl {
         // 由 shadow_stats()/bus_shard_depth 指标承载;log_publish 埋点保留在单流
         // 路径(Critical/OrderSensitive/回退事件),避免双记与热路径额外采样。
         if $self.shard_bus.load().is_some()
-            && matches!(event_lane(&event), Lane::Unordered)
+            && matches!(&lane, &Lane::Unordered)
         {
             match $self.try_shard_publish(event) {
                 Ok(()) => return Ok(()),
@@ -468,8 +521,13 @@ macro_rules! dispatch_one_impl {
         }
 
         // §6.2 红线双通道:Critical 安全/治理告警事件(is_critical_mpsc_event 清单)额外走 mpsc 旁路
-        // WHY 先 mpsc 后 broadcast:mpsc UnboundedSender::send 不会阻塞,
-        // 先投递 mpsc 确保 Critical 订阅者必收;broadcast 仍走以保证向后兼容
+        // WHY 先 mpsc 后 broadcast:旁路走的是**有界**通道(CRITICAL_CHANNEL_CAPACITY)且用
+        // try_send,故本步「不可能阻塞」——这是把它放前面的真正理由:不因 Critical 旁路
+        // 的背压拖住主发布路径。语义边界(勿读成「无条件必达」):
+        //   - 有空位 ⇒ 必达;满载(Full)⇒ 丢弃本条并递增 critical_dropped_count 使丢弃可见,
+        //     Sender 保留(临时满载,下次可能成功);receiver 已 drop(Closed)⇒ 移除该 Sender
+        //   - 无任何活跃订阅者 ⇒ 不走「warn + 放弃」,而落 fallback sink 保底(见 B-a 分支)
+        // broadcast 仍照发以保证向后兼容(旁路不减 broadcast,两通道是并集不是二选一)。
         if is_critical_mpsc_event(&event) {
             $self.send_critical_mpsc(&event);
         }
@@ -520,6 +578,42 @@ macro_rules! dispatch_one_impl {
     }};
 }
 
+/// 分片 worker 生命周期 guard（性能重构 D2）。
+///
+/// 持有 [`spawn_workers`](ShardedEventBus::spawn_workers) 返回的全部 `JoinHandle`。
+/// 当最后一个 [`EventBus`] clone drop（即 `Arc<OnceLock<ShardWorkerGuard>>` 归零）时，
+/// `Drop` abort 所有 worker，释放其持有的 `broadcast::Sender` 克隆与 `Arc<Notify>`——
+/// 根治"worker 持强引用且无退出条件"导致 `ShardedEventBus`/队列内存永不回收的泄漏。
+///
+/// [`shutdown_sharding`](EventBus::shutdown_sharding) 会先把句柄 `take_handles` 出来
+/// await（优雅排空）；届时 `Vec` 已空，`Drop` 不再 abort。两条路径互斥且幂等。
+struct ShardWorkerGuard {
+    handles: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl ShardWorkerGuard {
+    fn new(handles: Vec<JoinHandle<()>>) -> Self {
+        Self {
+            handles: Mutex::new(handles),
+        }
+    }
+
+    /// 取走全部尚未被取走的句柄（取走后 `Drop` 不会再 abort 它们）。
+    fn take_handles(&self) -> Vec<JoinHandle<()>> {
+        let mut guard = self.handles.lock().unwrap_or_else(|p| p.into_inner());
+        std::mem::take(&mut *guard)
+    }
+}
+
+impl Drop for ShardWorkerGuard {
+    fn drop(&mut self) {
+        let mut guard = self.handles.lock().unwrap_or_else(|p| p.into_inner());
+        for handle in std::mem::take(&mut *guard) {
+            handle.abort();
+        }
+    }
+}
+
 impl EventBus {
     /// 创建事件总线,使用默认容量(1024),不启用日志埋点
     pub fn new() -> Self {
@@ -550,6 +644,9 @@ impl EventBus {
             shard_bus: Arc::new(ArcSwapOption::empty()),
             enable_lock: Arc::new(Mutex::new(())),
             critical_total: Arc::new(AtomicU64::new(0)),
+            // 性能重构 D1/D2：默认允许分片 opt-in + 空 worker guard（与既有行为零变更）
+            sharding_allowed: Arc::new(AtomicBool::new(true)),
+            shard_guard: Arc::new(OnceLock::new()),
         }
     }
 
@@ -578,6 +675,9 @@ impl EventBus {
             shard_bus: Arc::new(ArcSwapOption::empty()),
             enable_lock: Arc::new(Mutex::new(())),
             critical_total: Arc::new(AtomicU64::new(0)),
+            // 性能重构 D1/D2：默认允许分片 opt-in + 空 worker guard（与既有行为零变更）
+            sharding_allowed: Arc::new(AtomicBool::new(true)),
+            shard_guard: Arc::new(OnceLock::new()),
         }
     }
 
@@ -610,6 +710,9 @@ impl EventBus {
             shard_bus: Arc::new(ArcSwapOption::empty()),
             enable_lock: Arc::new(Mutex::new(())),
             critical_total: Arc::new(AtomicU64::new(0)),
+            // 性能重构 D1/D2：默认允许分片 opt-in + 空 worker guard（与既有行为零变更）
+            sharding_allowed: Arc::new(AtomicBool::new(true)),
+            shard_guard: Arc::new(OnceLock::new()),
         }
     }
 
@@ -688,6 +791,77 @@ impl EventBus {
     // P1-T12 分片灰度开关 — 默认不启用,零回归
     // ============================================================
 
+    /// 关闭本总线（及其所有 Clone 副本）的 leaf 分片 opt-in（性能重构 D1）。
+    ///
+    /// one-shot 命令的组合根在构造 gqep/scc 之前调用，使后续任何
+    /// `try_enable_sharding` 早退，避免为 64 个常驻 worker 付费。不影响：
+    /// - 显式 `enable_sharding(n)`（测试/宿主强制）；
+    /// - `CHIMERA_BUS_SHARDS` 显式运维覆盖（见 `try_enable_sharding`）。
+    ///
+    /// 返回 `self` 以支持 `let bus = EventBus::new().without_sharding();`。
+    #[must_use = "返回应用开关后的总线，丢弃返回值等于没关闭"]
+    pub fn without_sharding(self) -> Self {
+        // sharding_allowed 为 Arc<AtomicBool>，store 经 &self 即可，无需 `mut self`。
+        self.sharding_allowed.store(false, Ordering::Relaxed);
+        self
+    }
+
+    /// 优雅关闭分片：唤醒全部 worker 排空各自队列，await 其退出，再释放槽位强引用。
+    ///
+    /// WHY 公开：长驻宿主（TUI/serve）退出前可显式调用，保证已入片但未汇入的
+    /// `Unordered` 事件不丢。不调用亦可：[`ShardWorkerGuard`] 会在最后一个
+    /// `EventBus` clone drop 时 abort worker（硬退出，进程 teardown 语义）。
+    /// 幂等：重复调用因槽位/句柄已被 take 而为 no-op。
+    ///
+    /// # 关闭协议（P1-1 顺序不可换）
+    /// 1. `request_drain()` → worker drain-to-empty；
+    /// 2. **先把 `shard_bus` 置 None** → 此后 `try_shard_publish` 直接回退 broadcast，
+    ///    不再有「worker 已退出却仍入片」的路径；
+    /// 3. await worker 退出；
+    /// 4. 等待在飞发布者释放 Arc（`strong_count` 收敛到 1）—— 收敛后无任何
+    ///    「已 load_full 但未 push」的在飞事件；
+    /// 5. 残留队列兜底补投 broadcast 并归还信用（覆盖 empty 检查与 break 之间的极端窗口）。
+    pub async fn shutdown_sharding(&self) {
+        // 1) 取快照；未启用/已关闭 → 幂等返回
+        let Some(sb) = self.shard_bus.load_full() else {
+            return;
+        };
+        // 2) 置 draining + 唤醒（notify_one 存 permit，避免 worker 尚未 await 时丢失唤醒）
+        sb.request_drain();
+        // 3) 先切断新入片（顺序关键，见 rustdoc §关闭协议）
+        self.shard_bus.store(None);
+        // 4) 取走句柄并 await（worker 见 draining 且队列空后自行 break）
+        if let Some(guard) = self.shard_guard.get() {
+            for handle in guard.take_handles() {
+                // 忽略 JoinError：被 abort 或 panic 均视为已回收，不应因此中断关闭流程
+                let _ = handle.await;
+            }
+        }
+        // 5) 等待在飞 publisher 完成 try_push（worker 已退出，额外强引用只来自它们）
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+        while Arc::strong_count(&sb) > 1 && std::time::Instant::now() < deadline {
+            tokio::task::yield_now().await;
+        }
+        // 6) 残余兜底：极端竞态窗口（push 落在 worker 最后一次 empty 检查之后）
+        let residual = sb.drain_residual(&self.sender);
+        if residual > 0 {
+            self.credit_flow.release_many(residual);
+            tracing::warn!(
+                residual,
+                "sharding shutdown 兜底补投残余事件（极端竞态窗口）"
+            );
+        }
+    }
+
+    /// 解析 `CHIMERA_BUS_SHARDS` 覆盖值（严格：仅 `1..=256` 的整数）。
+    ///
+    /// WHY 抽纯函数：可无环境变量竞态地锁定「非法值 = 未设置」语义；
+    /// 同时避免只判存在性导致误配置绕过宿主策略。
+    fn resolve_shard_override(raw: Option<&str>) -> Option<usize> {
+        raw.and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| (1..=256).contains(n))
+    }
+
     /// 启用分片并把结果显式化（ADR-197 A3）
     ///
     /// WHY 统一入口而不是各 crate 各自 `let _ =`：全仓 10 处调用点分布在 9 个 crate，
@@ -703,15 +877,49 @@ impl EventBus {
     /// 本方法的核心价值是**副作用（日志可见）**，返回值仅供调用方自行决定是否
     /// 追加记录，故不加 `#[must_use]`（避免调用点重新写回 `let _ =`）。
     pub fn try_enable_sharding(&self, component: &str) -> bool {
-        match self.enable_sharding(crate::shard::DEFAULT_SHARD_COUNT) {
+        // D1：组合根经 `without_sharding()` 屏蔽 leaf opt-in 时，此处早退（不 spawn
+        // worker），除非运维经 `CHIMERA_BUS_SHARDS` 显式覆盖（A/B 与故障排查逃生）。
+        // 显式 `enable_sharding(n)` 不受本开关影响（测试/宿主强制仍可用）。
+        //
+        // P2-5：**先严格解析再判策略**。旧实现只判 `var_os(..).is_none()`，
+        // `CHIMERA_BUS_SHARDS=abc` 会绕过宿主策略且 `parse` 失败回退 64 分片，
+        // 把 one-shot（Off）命令推到 Auto 档。非法值按「未设置」处理并告警一次。
+        let raw_env = std::env::var("CHIMERA_BUS_SHARDS").ok();
+        let env_shards = Self::resolve_shard_override(raw_env.as_deref());
+        if raw_env.is_some() && env_shards.is_none() {
+            static ENV_WARNED: std::sync::atomic::AtomicBool =
+                std::sync::atomic::AtomicBool::new(false);
+            if !ENV_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                tracing::warn!(
+                    component,
+                    value = %raw_env.as_deref().unwrap_or_default(),
+                    "CHIMERA_BUS_SHARDS 非法（需 1..=256 的整数），按未设置处理"
+                );
+            }
+        }
+        if !self.sharding_allowed.load(Ordering::Relaxed) && env_shards.is_none() {
+            tracing::debug!(
+                component,
+                "分片被宿主策略关闭(without_sharding)，跳过 opt-in"
+            );
+            return false;
+        }
+        // T3.4：默认分片数不变（64）；`CHIMERA_BUS_SHARDS` 仅作为调优开关，
+        // 合法范围 1..=256（0 会在 ShardedEventBus::new 内回退 1，但这里显式拒绝，
+        // 避免“设 0 却悄悄变单片”的误配置）。
+        let shards = env_shards.unwrap_or(crate::shard::DEFAULT_SHARD_COUNT);
+        match self.enable_sharding(shards) {
             Ok(()) => {
-                tracing::debug!(component, "事件分片已启用");
+                tracing::debug!(component, shards, "事件分片已启用");
                 true
             }
             Err(EventBusError::ShardingAlreadyEnabled) => {
-                // 幂等重复启用：分片事实上已可用，不得记为降级
-                tracing::debug!(component, "事件分片已处于启用态（幂等）");
-                true
+                // P2-4：诚实返回——重复 enable 且分片仍在 → true；但
+                // `shutdown_sharding` 后 `shard_bus=None` 而 guard 已 set（无法重启用），
+                // 此时必须返回 false，不得谎报「分片可用」。
+                let enabled = self.sharding_enabled();
+                tracing::debug!(component, enabled, "事件分片已处于启用态（幂等）");
+                enabled
             }
             Err(e) => {
                 static WARNED_ONCE: std::sync::atomic::AtomicBool =
@@ -795,7 +1003,17 @@ impl EventBus {
         // spawn 后注册(原版顺序):发布路径经 shard_bus.load() 只在注册后可见
         // 分片,不存在"已注册未 spawn"窗口,行为与 v2.27.1 完全一致。
         let sb = Arc::new(ShardedEventBus::new(n_shards, SHARD_CAPACITY));
-        sb.spawn_workers(self.sender.clone(), Arc::clone(&self.credit_flow), &handle);
+        // D2:spawn_workers 返回句柄;先把 guard 落到 OnceLock(仅首个 enable 成功),
+        // 再注册 shard_bus。set 失败(shutdown 后重复 enable)→ 丢弃刚 spawn 的 worker
+        // (guard 随返回值 drop 触发 abort,避免脱离托管的泄漏),拒绝重复启用。
+        let handles = sb.spawn_workers(self.sender.clone(), Arc::clone(&self.credit_flow), &handle);
+        if self
+            .shard_guard
+            .set(ShardWorkerGuard::new(handles))
+            .is_err()
+        {
+            return Err(EventBusError::ShardingAlreadyEnabled);
+        }
         self.shard_bus.store(Some(sb));
         Ok(())
     }
@@ -822,9 +1040,14 @@ impl EventBus {
     pub fn shadow_stats(&self) -> ShadowStats {
         // F-a:ArcSwapOption 读端(Guard 借用解引用,无锁;统计是观测面,
         // 不再需要原 Mutex 版的 poison 恢复分支 —— ArcSwap 无锁不可中毒)
-        let (sharded_total, merged_total) = match self.shard_bus.load().as_ref() {
-            Some(sb) => (sb.sharded_total(), sb.merged_total()),
-            None => (0, 0),
+        let (sharded_total, merged_total, merge_closed_total) = match self.shard_bus.load().as_ref()
+        {
+            Some(sb) => (
+                sb.sharded_total(),
+                sb.merged_total(),
+                sb.merge_closed_total(),
+            ),
+            None => (0, 0, 0),
         };
         ShadowStats {
             published_total: self.published_total.load(Ordering::Relaxed),
@@ -832,6 +1055,7 @@ impl EventBus {
             merged_total,
             shed_total: self.credit_shed_total.load(Ordering::Relaxed),
             critical_total: self.critical_total.load(Ordering::Relaxed),
+            merge_closed_total,
         }
     }
 
@@ -980,13 +1204,21 @@ impl EventBus {
             // 遮蔽为可变:分片回退分支需重新赋值事件所有权(Err(ev) => event = ev),
             // 保证回退事件继续走本循环既有单流逻辑(事件不丢弃,漏发率恒 0)。
             let mut event = event;
-            // P1-T11 CBF 信用流:逐条判定(与 publish 一致,方案 A:仅「分片启用 +
-            // Unordered」扣信用,扣减失败静默;OrderSensitive/Critical/未启用
-            // 分片不扣 —— 见 publish 注释;shed 由 try_shard_publish 统一计数)
+            // 第三轮 T1.2 补丁（F-P2 · 批量路径同病）：车道判定单次求值。
+            // 批量循环不走 `dispatch_one_impl` 宏（手写并行副本），旧形态在信用
+            // 分支（原 :1014）与分片路由分支（原 :1027）各调一次 `event_lane(&event)`——
+            // OrderSensitive 车道会先分配一个 `SessionKey`（session_id/correlation_id/
+            // rule_id 的 String clone），等于每次批量发布白做 0-2 次堆分配。提升为
+            // `lane` 单值后：event_lane 是纯函数（只读事件），两次求值同值⇒行为等价；
+            // `Lane` 为 owned 不借事件，:1028 try_shard_publish(event) 的移动不受影响（NLL）。
+            let lane = event_lane(&event);
+            // P1-T11 CBF 信用流：逐条判定（与 publish 一致，方案 A：仅「分片启用 +
+            // Unordered」扣信用，扣减失败静默；OrderSensitive/Critical/未启用
+            // 分片不扣 —— 见 publish 注释；shed 由 try_shard_publish 统一计数）
             let mut credit_deducted = false;
             if event.severity() != EventSeverity::Critical
                 && self.shard_bus.load().is_some()
-                && matches!(event_lane(&event), Lane::Unordered)
+                && matches!(&lane, &Lane::Unordered)
             {
                 credit_deducted = self.credit_flow.try_acquire(1).is_ok();
             }
@@ -999,7 +1231,7 @@ impl EventBus {
             // 不变量见 try_shard_publish;若先路由后扣信用,worker 会归还未扣过
             // 的信用,破坏守恒语义;若扣信用条件宽于路由条件,则 OrderSensitive/
             // 未入片事件扣而无人归还)
-            if self.shard_bus.load().is_some() && matches!(event_lane(&event), Lane::Unordered) {
+            if self.shard_bus.load().is_some() && matches!(&lane, &Lane::Unordered) {
                 match self.try_shard_publish(event) {
                     Ok(()) => continue,
                     // 回退语义与 publish 一致:重新赋值所有权,继续走既有单流路径
@@ -1304,7 +1536,8 @@ impl EventBus {
         // WHY 在 retain 之前采样:retain 闭包内会 fetch_add 多次(每个满 Sender 一次),
         // 闭包后用差值得到本次发送的总丢弃数,单次 warn 记录避免日志噪声
         let dropped_before = self.critical_dropped_count.load(Ordering::Relaxed);
-        // 优先级采样丢弃:遍历所有 Sender,try_send 失败时按错误类型处理
+        // 遍历所有 Sender,try_send 失败时按错误类型处理（无优先级选择:容量满即丢,
+        // 丢弃数经 critical_dropped_count 计数可见）
         // - Full:递增丢弃计数,保留 Sender(临时满载)
         // - Closed:移除 Sender(receiver 已 drop)
         // delivered:本次成功投递到的活跃订阅者数(B-a 用于 stale 检测)
@@ -1315,7 +1548,7 @@ impl EventBus {
                 true // 投递成功,保留
             }
             Err(mpsc::error::TrySendError::Full(_)) => {
-                // 容量满:按优先级采样丢弃,递增计数,保留 Sender
+                // 容量满:丢弃本条（无优先级判定）,递增计数,保留 Sender 待后续
                 // WHY fetch_add 而非 store(load + 1):原子操作避免读改写竞态
                 self.critical_dropped_count.fetch_add(1, Ordering::Relaxed);
                 true // 保留 Sender(临时满载,下次可能成功)
@@ -1469,7 +1702,7 @@ impl EventBus {
     ///
     /// 返回 [`CriticalSubscriberBuilder`](crate::subscriber::CriticalSubscriberBuilder)`<Unsubscribed>`,
     /// 用于订阅 §6.2 红线定义的 Critical 安全/治理告警事件(is_critical_mpsc_event
-    /// 清单,当前 14 类)的 mpsc 旁路通道。
+    /// 清单,当前 18 类;第三轮 T1.3 纠漂)的 mpsc 旁路通道。
     ///
     /// 与 [`subscriber`](Self::subscriber) 区别:返回 `mpsc::Receiver` 而非 `EventReceiver`,
     /// 确保在 broadcast Lagged 场景下仍能收到 Critical 事件。
@@ -1585,11 +1818,23 @@ pub fn spawn_throughput_reporter(bus: EventBus, interval_secs: u64) -> tokio::ta
         let mut interval = tokio::time::interval(Duration::from_secs(window_secs));
         interval.tick().await; // 基线采样:跳过首个立即 tick
         let mut prev = bus.published_total();
+        // 第三轮 T1.1:shadow_stats 的首个生产消费者 —— 零订阅丢弃以窗口限速
+        // 浮出(≤1 warn/窗口;worker 侧仅首见 warn 一次,长期静默会掩盖持续增长)
+        let mut prev_closed = bus.shadow_stats().merge_closed_total;
         loop {
             interval.tick().await;
             let now = bus.published_total();
             let events_per_sec = (now.saturating_sub(prev)) as f64 / window_secs as f64;
             prev = now;
+            let closed_now = bus.shadow_stats().merge_closed_total;
+            if closed_now > prev_closed {
+                warn!(
+                    window_delta = closed_now - prev_closed,
+                    merge_closed_total = closed_now,
+                    "分片汇入零订阅者丢弃增长:merged_total 含此类丢弃,送达观测见 ShadowStats"
+                );
+                prev_closed = closed_now;
+            }
             let event = NexusEvent::BusThroughputReported {
                 metadata: EventMetadata::new("event-bus"),
                 published_total: now,
@@ -1879,8 +2124,8 @@ pub fn deserialize_json(s: &str) -> Result<NexusEvent, EventBusError> {
 
 /// Critical 变体构造测试辅助(D-8 口径)
 ///
-/// WHY pub(crate):shard.rs 的 Lane 判定全量断言(18 Critical → Critical)
-/// 复用本模块构造事件,避免两处维护 18 个变体构造代码漂移(新增 Critical
+/// WHY pub(crate):shard.rs 的 Lane 判定全量断言(21 Critical → Critical)
+/// 复用本模块构造事件,避免两处维护 22 个变体构造代码漂移(新增 Critical
 /// 事件时只需改此处一处,三处清单同步守护见 test_critical_double_list_d8_counts)。
 /// 仅测试构建存在(cfg(test)),生产零足迹。
 #[cfg(test)]
@@ -1888,9 +2133,15 @@ pub fn deserialize_json(s: &str) -> Result<NexusEvent, EventBusError> {
 pub(crate) mod tests_helpers {
     use super::*;
 
-    /// 全量 16 个 mpsc 旁路变体构造(D-8 口径,双清单同步红线)
+    /// 全量 18 个 mpsc 旁路变体构造(D-8 口径,双清单同步红线)
     pub fn all_mpsc_critical_variants() -> Vec<NexusEvent> {
         vec![
+            // C-64b（M49 后半）：沙箱违规升 Critical 后进 mpsc 旁路
+            NexusEvent::SandboxViolation {
+                metadata: EventMetadata::new("t"),
+                violation_type: "path_traversal".into(),
+                detail: "attempted /etc/passwd".into(),
+            },
             // v2.3 (b.1)/(b.4): Certify 与 FailureRegistry 进 mpsc 旁路清单(D-8 口径)
             NexusEvent::CertifyIssued {
                 metadata: EventMetadata::new("t"),
@@ -1995,12 +2246,17 @@ pub(crate) mod tests_helpers {
                 counterexample: "s".into(),
                 generation: 1,
             },
+            // C-13(M09): ShadowBreakerTripped 升入 mpsc 旁路(16 → 17,双清单同步)
+            NexusEvent::ShadowBreakerTripped {
+                metadata: EventMetadata::new("t"),
+                reason: "r".into(),
+            },
         ]
     }
 
-    /// 全量 18 个 severity() Critical 变体构造(D-8 口径)
+    /// 全量 22 个 severity() Critical 变体构造(D-8 口径)
     ///
-    /// 18 = 14(mpsc 旁路,见 [`all_mpsc_critical_variants`])
+    /// 22 = 18(mpsc 旁路,见 [`all_mpsc_critical_variants`])
     ///   + 4(历史 Critical 只走 broadcast:CheckpointSaved/ConsensusReached/
     ///     SlowConsumerDropped/OrphanCallDetected,按既定设计不回退通道归属)。
     pub fn all_severity_critical_variants() -> Vec<NexusEvent> {
@@ -2035,7 +2291,7 @@ pub(crate) mod tests_helpers {
 
     /// 按变体名构造 Critical 事件(供 LANE_FORBIDDEN_SHARD 逐名断言)
     ///
-    /// 名字不在 18 清单中返回 None(调用方断言消息定位漂移名字)。
+    /// 名字不在 22 清单中返回 None(调用方断言消息定位漂移名字)。
     pub fn critical_variant_by_name(name: &str) -> Option<NexusEvent> {
         all_severity_critical_variants()
             .into_iter()
@@ -2356,7 +2612,7 @@ mod tests {
         assert_eq!(
             mpsc_required.len(),
             14,
-            "旁路清单应覆盖全量 14 个事件,新增 Critical 必须显式加入(双清单同步红线)"
+            "本安全/资源子集 14 个必投事件须齐全(权威全量 16 见 test_critical_double_list_d8_counts;\n             此为 MCA M0 子集不回退锁,非全量清单——第三轮 T1.3 注:旧误称'全量')"
         );
         for event in &mpsc_required {
             assert!(
@@ -2373,8 +2629,10 @@ mod tests {
         }
     }
 
-    /// D-8 双清单计数守护(P1-T11):CRITICAL_MPSC_VARIANTS(14)、
-    /// CRITICAL_TOTAL(18)、14 ⊆ 18、LANE_FORBIDDEN_SHARD 一一对应
+    /// D-8 双清单计数守护(P1-T11):CRITICAL_MPSC_VARIANTS(17)、
+    /// CRITICAL_TOTAL(21)、17 ⊆ 21、LANE_FORBIDDEN_SHARD 一一对应
+    /// (第三轮 T1.3 纠漂:旧注 14/18 为 v2.3 补入 CertifyIssued/FailureRegistered
+    ///  前的滞后值;断言体以常量为准故恒绿,漂移仅存于此注 —— I8 盲区见上方常量注)
     #[test]
     fn test_critical_double_list_d8_counts() {
         // 口径断言:两清单规模与常量一致(常量是 D-8 裁决的编译期锚点)
@@ -2393,7 +2651,7 @@ mod tests {
             "severity() Critical 变体数必须等于 CRITICAL_TOTAL({CRITICAL_TOTAL})"
         );
 
-        // 14 个 mpsc 变体:is_critical_mpsc_event 必中 + severity() Critical
+        // 18 个 mpsc 变体:is_critical_mpsc_event 必中 + severity() Critical
         for event in &mpsc_variants {
             assert!(
                 is_critical_mpsc_event(event),
@@ -2407,27 +2665,27 @@ mod tests {
                 event.type_name()
             );
         }
-        // 18 个 Critical 变体:severity() 全部为 Critical(18 口径)
+        // 22 个 Critical 变体:severity() 全部为 Critical(21 口径)
         for event in &critical_variants {
             assert_eq!(
                 event.severity(),
                 EventSeverity::Critical,
-                "{} 应命中 severity() Critical 清单(18 口径)",
+                "{} 应命中 severity() Critical 清单(21 口径)",
                 event.type_name()
             );
         }
 
-        // 14 ⊆ 18:每个 mpsc 变体的名字必须在 severity() Critical 清单中
+        // 17 ⊆ 21:每个 mpsc 变体的名字必须在 severity() Critical 清单中
         let mpsc_names: Vec<&str> = mpsc_variants.iter().map(|e| e.type_name()).collect();
         let critical_names: Vec<&str> = critical_variants.iter().map(|e| e.type_name()).collect();
         for name in &mpsc_names {
             assert!(
                 critical_names.contains(name),
-                "mpsc 变体 {name} 不在 severity() Critical 清单中(14 ⊆ 18 违反)"
+                "mpsc 变体 {name} 不在 severity() Critical 清单中(17 ⊆ 21 违反)"
             );
         }
 
-        // LANE_FORBIDDEN_SHARD 分片禁区声明:18 个名字与 Critical 清单一一对应
+        // LANE_FORBIDDEN_SHARD 分片禁区声明:22 个名字与 Critical 清单一一对应
         // WHY 双向断言:T12 分片实现将按此清单禁止切片 Critical 单流;
         // 任一方向缺失都意味着声明与实际清单漂移
         assert_eq!(
@@ -2468,8 +2726,8 @@ mod tests {
         let mpsc_variants = tests_helpers::all_mpsc_critical_variants();
         let severity_variants = tests_helpers::all_severity_critical_variants();
 
-        // 现实值核验:14(mpsc 旁路)/ 18(severity Critical,含 4 个历史广播级)。
-        // WHY 锚定常量而非硬编码 14/18:常量是 D-8 裁决的编译期锚点,清单规模
+        // 现实值核验:16(mpsc 旁路)/ 20(severity Critical,含 4 个历史广播级)。
+        // WHY 锚定常量而非硬编码 16/20:常量是 D-8 裁决的编译期锚点,清单规模
         // 一旦回退(误删)此测试即红。
         assert_eq!(
             mpsc_variants.len(),
@@ -2533,7 +2791,7 @@ mod tests {
         for name in &mpsc_names {
             assert!(
                 severity_by_name.contains_key(name),
-                "mpsc 变体 {name} 不在 severity() Critical 清单中(14 ⊆ 18 违反)"
+                "mpsc 变体 {name} 不在 severity() Critical 清单中(17 ⊆ 21 违反)"
             );
         }
 
@@ -2881,6 +3139,32 @@ mod tests {
         }
     }
 
+    /// 第三轮 T1.2 结构判据：`event_lane` 在每条发布路径**只求值一次**。
+    ///
+    /// WHY 结构断言而非行为断言：`event_lane` 是纯函数，双份求值与单份求值
+    /// **行为完全等价**（`recv==sent` 抓不到），回归只会表现为热路径多做的
+    /// OrderSensitive `SessionKey` String clone（F-P2）——故只能以源码形态锁定。
+    /// 不变式：全文件禁止在 `matches!` 里内联求值 `event_lane(&event)`（计数 0），
+    /// 且单发宏 `dispatch_one_impl` 与批量 `publish_batch` 两条路径各恰好
+    /// `let lane = event_lane(&event);` 提升一次（计数 2）。新增发布路径须显式更新计数。
+    #[test]
+    fn dispatch_paths_hoist_lane_exactly_once() {
+        // 只扫描生产区（`mod tests {` 之前）——否则 include_str! 会把本测试自己的
+        // 字面量（包含待匹配串）也数进去，造成自引用假阳性。
+        let src = include_str!("bus.rs");
+        let prod = src.split("mod tests {").next().unwrap_or(src);
+        let inline_eval = prod.matches("matches!(event_lane(&event)").count();
+        let hoisted = prod.matches("let lane = event_lane(&event);").count();
+        assert_eq!(
+            inline_eval, 0,
+            "禁止在 matches! 内联求值 event_lane（双份求值 = F-P2 热路径 clone 回归）"
+        );
+        assert_eq!(
+            hoisted, 2,
+            "两条发布路径（单发宏 + 批量循环）应各提升一次 lane；实测 {hoisted}（新增发布路径请显式复核本计数）"
+        );
+    }
+
     #[test]
     fn test_sharding_default_off_zero_regression() {
         // 灰度默认关:EventBus::new() 行为与 v2.27.1 完全一致(零回归)
@@ -2956,24 +3240,22 @@ mod tests {
             1 + DEFAULT_SHARD_COUNT,
             "并发失败路径不得 spawn worker(引用计数翻倍 = 重复 spawn 泄漏)"
         );
-        // 安装的分片总线:worker 恰好一组(评审 Issue 1 的守护本意 = 不重复 spawn)
+        // 安装的分片总线:worker 恰好一组(评审 Issue 1 的守护本意 = 不重复 spawn)。
         //
-        // F-a 断言语义调整(2026-09-12,实测记录):ArcSwapOption 槽位占用期间,
-        // arc-swap 内部会为当前值多持 1 份强引用(区分实验:guard 存活/删除均 66,
-        // swap 清空槽位后 taken=65 = taken 1 + worker 64 —— +1 与槽位占用绑定,
-        // 非 spawn 翻倍、非泄漏;真正的重复-spawn 守护由上方 credit_flow 精确
-        // 计数承担,该断言在本测试中始终通过)。故本断言从"精确 65"放宽为
-        // "恰有一组 + arc-swap 内部缓存 ≤1":下界防 worker 丢失,上界防翻倍。
+        // 性能重构 D2 断言语义调整(2026-10-22):worker 现改持 `Weak<ShardedEventBus>`
+        // (根治旧设计"worker 持强引用且无退出条件"的内存泄漏 —— 即 composition_root_bench
+        // OOM 根因)。故分片总线的**强引用计数不再随 worker 数增长**:此刻仅 `load_full()`
+        // 返回的临时 guard(+ arc-swap 内部至多 1)持有强引用,worker 持 0 份。"不重复
+        // spawn" 的精确守护已由上方 `credit_flow == 1 + DEFAULT_SHARD_COUNT` 承担(每个
+        // spawn 出的 worker 恰持一份 `Arc<CreditFlow>`,失败路径不 spawn → 计数不翻倍)。
+        // 本断言相应反转:强引用计数必须**远小于** worker 数(旧断言是 `> worker 数`),
+        // 若未来 worker 重新持强引用(回退泄漏设计)即判红。
         let guard = bus.shard_bus.load_full();
         let sb = guard.as_ref().expect("分片总线必须已安装");
         let sb_count = Arc::strong_count(sb);
         assert!(
-            sb_count > DEFAULT_SHARD_COUNT,
-            "分片总线必须至少被槽位与全部 worker 持有(实测 {sb_count})"
-        );
-        assert!(
-            sb_count < 2 * (1 + DEFAULT_SHARD_COUNT),
-            "分片总线引用计数翻倍 = 重复 spawn worker(实测 {sb_count})"
+            sb_count < DEFAULT_SHARD_COUNT,
+            "worker 应只持 Weak 引用,分片总线强计数不得随 worker 数增长(实测 {sb_count})"
         );
     }
 
@@ -2996,6 +3278,187 @@ mod tests {
             "入片数 == 汇入数(影子双跑漏发率 = 0)"
         );
         assert_eq!(stats.shed_total, 0, "容量内发布不应触发 shed");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn without_sharding_blocks_opt_in_and_propagates_to_clones() {
+        // 性能重构 D1：without_sharding 后 leaf 的 try_enable_sharding 应早退
+        // （即使有 runtime，否则 Handle::try_current 会成功 → 真启用）。对照总线可启用。
+        let bus = EventBus::new().without_sharding();
+        let clone = bus.clone();
+        assert!(
+            !bus.try_enable_sharding("test-blocked"),
+            "without_sharding 应屏蔽 leaf opt-in"
+        );
+        assert!(!bus.sharding_enabled());
+        assert!(
+            !clone.sharding_enabled(),
+            "开关应跨 Clone 共享（同一 Arc<AtomicBool>）"
+        );
+        // 对照：未关闭的总线在同 runtime 下 try_enable 应成功
+        let open = EventBus::new();
+        assert!(open.try_enable_sharding("test-open"), "默认允许 opt-in");
+        assert!(open.sharding_enabled());
+        open.shutdown_sharding().await; // 清理：避免 worker 泄漏到测试 runtime
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shard_workers_terminable_after_bus_drop() {
+        // 性能重构 D2（漏发内存泄漏回归守卫）：worker 仅持 Weak<ShardedEventBus>，
+        // 故最后一个 EventBus clone drop 后，分片总线必须被回收（旧设计 worker 持强
+        // 引用 → 永不回收 → composition_root_bench OOM）。用 Weak 直接观测，不依赖
+        // 全局计数，对并行测试鲁棒。
+        let weak_sb;
+        {
+            let bus = EventBus::new();
+            bus.enable_sharding(8).unwrap();
+            weak_sb = Arc::downgrade(bus.shard_bus.load_full().as_ref().expect("已安装分片总线"));
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+            assert!(weak_sb.upgrade().is_some(), "投递期总线必须存活");
+        } // bus drop → 最后一个强引用释放（worker 持 Weak，不阻止回收）
+        for _ in 0..100 {
+            if weak_sb.upgrade().is_none() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(
+            weak_sb.upgrade().is_none(),
+            "EventBus drop 后 ShardedEventBus 必须被回收（worker 应仅持 Weak）"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn shutdown_sharding_drains_queued_events_no_loss() {
+        // 性能重构 D2 优雅关闭：shutdown_sharding 应排空已入片但未汇入的事件，
+        // 漏发率 = 0，且订阅者能收到全部事件。
+        // 注：shutdown 会 store(None) 释放分片总线，故计数器必须在 shutdown **前**读 sharded_total，
+        // 汇入完整性在 shutdown **后**经订阅者侧验证（而非读已释放的计数器）。
+        let bus = EventBus::new();
+        bus.enable_sharding(4).unwrap();
+        let mut rx = bus.subscribe();
+        const N: usize = 50;
+        for _ in 0..N {
+            bus.publish(make_test_event()).await.unwrap();
+        }
+        // 入片计数在 publish 路径同步递增（try_push 内 fetch_add）
+        assert_eq!(
+            bus.shadow_stats().sharded_total,
+            N as u64,
+            "容量内事件应全部入片"
+        );
+        // 优雅排空：唤醒 worker 将其片 drain-to-empty 汇入 broadcast 后退出
+        bus.shutdown_sharding().await;
+        let received = drain_events(&mut rx, N, 1000).await;
+        assert_eq!(
+            received.len(),
+            N,
+            "shutdown 后订阅者应收到全部已入片事件（漏发率 = 0）"
+        );
+    }
+
+    /// P1-1 并发排空：`shutdown_sharding()` 与持续 `publish(Unordered)` 重叠时，
+    /// **不得**出现「入片成功但永不汇入」的静默丢事件。
+    ///
+    /// 判定口径选「订阅者实收数 == 发布成功数」而非计数器：
+    /// shutdown 后 `shadow_stats()` 随 `store(None)` 归零，计数器不可读；
+    /// 而丢事件必然表现为订阅者少收（未汇入 broadcast）。
+    ///
+    /// 改前失效链：worker 见 `draining && is_empty()` 即 break，而 `try_push`
+    /// 无 draining 判定、槽位仍在（`store(None)` 在 await 之后）—— break 后入片的
+    /// 事件返回 Ok 却永不汇入。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_publish_and_shutdown_loses_nothing() {
+        const ROUNDS: usize = 10;
+        const PRODUCERS: usize = 8;
+        const N: usize = 400;
+
+        for round in 0..ROUNDS {
+            // 容量远大于 N：避免慢消费者 Lagged 造成假丢
+            let bus = EventBus::with_capacity(16_384);
+            bus.enable_sharding(8).expect("启用分片应成功");
+            let mut rx = bus.subscribe();
+
+            let mut handles = Vec::new();
+            for _ in 0..PRODUCERS {
+                let b = bus.clone();
+                handles.push(tokio::spawn(async move {
+                    for _ in 0..(N / PRODUCERS) {
+                        b.publish(make_test_event()).await.expect("publish 应成功");
+                    }
+                }));
+            }
+
+            // 让部分发布先入片，再与排空并发（关键竞态窗口）
+            tokio::task::yield_now().await;
+            bus.shutdown_sharding().await;
+
+            for h in handles {
+                h.await.expect("producer 不应 panic");
+            }
+
+            let received = drain_events(&mut rx, N, 3000).await;
+            assert_eq!(
+                received.len(),
+                N,
+                "round {round}: shutdown 与发布并发时不得丢事件（实收 {} / {N}）",
+                received.len()
+            );
+        }
+    }
+
+    /// P2-5：`CHIMERA_BUS_SHARDS` 严格解析——非法值等同未设置，
+    /// 不得绕过 `without_sharding()` 宿主角色的 Off 策略。
+    #[test]
+    fn env_shard_override_parsing_is_strict() {
+        assert_eq!(EventBus::resolve_shard_override(Some("1")), Some(1));
+        assert_eq!(EventBus::resolve_shard_override(Some("8")), Some(8));
+        assert_eq!(EventBus::resolve_shard_override(Some("256")), Some(256));
+        assert_eq!(EventBus::resolve_shard_override(Some("0")), None);
+        assert_eq!(EventBus::resolve_shard_override(Some("257")), None);
+        assert_eq!(EventBus::resolve_shard_override(Some("abc")), None);
+        assert_eq!(EventBus::resolve_shard_override(Some("")), None);
+        assert_eq!(EventBus::resolve_shard_override(None), None);
+    }
+
+    /// P2-4：`shutdown_sharding` 后 `shard_bus=None` 但 guard 已 set（无法重启），
+    /// `try_enable_sharding` 必须诚实返回 false，不得谎报「分片可用」。
+    #[tokio::test]
+    async fn try_enable_after_shutdown_reports_false() {
+        let bus = EventBus::new();
+        assert!(bus.try_enable_sharding("test"), "首次启用应成功");
+        bus.shutdown_sharding().await;
+        assert!(!bus.sharding_enabled(), "shutdown 后分片应为关闭态");
+        assert!(
+            !bus.try_enable_sharding("test"),
+            "shutdown 后不得谎报分片可用（guard 已 set，无法重启用）"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_zero_subscriber_merged_total_counts_entry_not_delivery() {
+        // 第三轮 T1.4/F-A2 显式锁测:零订阅者时 worker `send` 恒返 Err(Closed),
+        // 但 `merged_total` 仍 == `sharded_total`——该等式的口径是「入汇入通道」
+        // 而非「送达」;「入通道即丢弃」全部归因到 T1.1 新增的 `merge_closed_total`。
+        // 本测同锁两件事:① merged==sharded 等式不因零订阅而破;② 零订阅下
+        // merge_closed_total==merged_total(逐条都丢)。
+        let bus = EventBus::new();
+        bus.enable_sharding(64).unwrap();
+        // 故意不 subscribe:broadcast 无订阅者 → worker send 恒 Err(Closed)
+        const N: usize = 50;
+        for _ in 0..N {
+            bus.publish(make_test_event()).await.unwrap();
+        }
+        let stats = wait_merged_equals_sharded(&bus, 2000).await;
+        assert_eq!(stats.sharded_total, N as u64, "零订阅不影响入分片");
+        assert_eq!(
+            stats.merged_total, stats.sharded_total,
+            "零订阅下 merged==sharded 等式仍成立(证「入通道」非「送达」)"
+        );
+        assert_eq!(
+            stats.merge_closed_total, stats.merged_total,
+            "T1.1:零订阅者时全部汇入丢弃,merge_closed_total==merged_total"
+        );
     }
 
     #[tokio::test]
@@ -3080,8 +3543,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_sharded_concurrent_publish_no_loss() {
-        // loom 替代(Windows GNU 工具链 loom 编译失败):8 线程 × 100 次并发
-        // publish_blocking,验证 Mutex/Atomic/ArrayQueue/CAS 竞争安全 + 漏发率 0
+        // 不用 loom 的理由是**取舍**而非能力限制（原注「Windows GNU 下 loom 编译失败」
+        // 已被 R2 C-102 实测推翻：loom 0.7.2 在本工具链编过且模型检验有牙，
+        // 证据见 `tmp/loom_probe` 与 ADR-226 E1）。
+        // 本测试锁吞吐/守恒：8 线程 × 100 次并发 publish_blocking，
+        // 验证 Mutex/Atomic/ArrayQueue/CAS 竞争安全 + 漏发率 0。
         let bus = EventBus::new();
         bus.enable_sharding(64).unwrap();
         let mut rx = bus.subscribe();
@@ -3134,15 +3600,17 @@ mod tests {
         );
     }
 
-    /// T17(a) 顺序红线守护:is_critical_mpsc_event() 必须**恰好命中 14 个** mpsc 旁路
+    /// T17(a) 顺序红线守护:is_critical_mpsc_event() 必须**恰好命中 17 个** mpsc 旁路
     /// 变体(规模由 `CRITICAL_MPSC_VARIANTS` 锁定,广播专属 Critical 计数由
     /// `CRITICAL_TOTAL` 锁定)。防「全 Critical 一律进旁路」旧口径回潮:
     /// 4 个广播专属 Critical(CheckpointSaved/ConsensusReached/SlowConsumerDropped/
     /// OrphanCallDetected)按既定设计只走 broadcast,误捕即回潮破裂。
     #[test]
+    // 函数名 exact_13_not_17 为历史标签(T17 立测时的旧规模),现值以
+    // CRITICAL_MPSC_VARIANTS=18 为准(C-64b 后;改名留 T3)
     fn mpsc_bypass_exact_13_not_17() {
         let mpsc = tests_helpers::all_mpsc_critical_variants();
-        assert_eq!(mpsc.len(), CRITICAL_MPSC_VARIANTS, "13 名单规模锁定");
+        assert_eq!(mpsc.len(), CRITICAL_MPSC_VARIANTS, "18 名单规模锁定");
         for ev in &mpsc {
             assert!(
                 is_critical_mpsc_event(ev),
@@ -3151,7 +3619,7 @@ mod tests {
             );
         }
 
-        // 4 个广播专属 Critical 不得被 mpsc 旁路误捕(14 ⊆ 18,差集恒为 4)
+        // 4 个广播专属 Critical 不得被 mpsc 旁路误捕(17 ⊆ 21,差集恒为 4)
         let severity_critical = tests_helpers::all_severity_critical_variants();
         let mpsc_names: std::collections::HashSet<&str> =
             mpsc.iter().map(|e| e.type_name()).collect();
@@ -3162,7 +3630,7 @@ mod tests {
             }
             assert!(
                 !is_critical_mpsc_event(ev),
-                "{} 属广播专属 Critical,不得被 mpsc 误捕(17 口径回潮)",
+                "{} 属广播专属 Critical,不得被 mpsc 误捕(全 Critical 进旁路的旧口径回潮)",
                 ev.type_name()
             );
             broadcast_only += 1;
@@ -3170,11 +3638,11 @@ mod tests {
         assert_eq!(
             broadcast_only,
             CRITICAL_TOTAL - CRITICAL_MPSC_VARIANTS,
-            "差集 18-14 = {CRITICAL_TOTAL}-{CRITICAL_MPSC_VARIANTS} = 4 个广播专属 Critical"
+            "差集 21-17 = {CRITICAL_TOTAL}-{CRITICAL_MPSC_VARIANTS} = 4 个广播专属 Critical"
         );
     }
 
-    /// T17(b) 分片红线:14 个 mpsc 旁路变体全部判定为 Critical 车道(永不进分片,
+    /// T17(b) 分片红线:18 个 mpsc 旁路变体全部判定为 Critical 车道(永不进分片,
     /// 单流旁路投递)—— 分片(shard)仅服务非 Critical,与 event_lane/§11.2 对齐。
     #[test]
     fn mpsc_critical_variants_are_single_stream_never_sharded() {

@@ -1,3 +1,10 @@
+# 退役 crate 登记表 — check_retired_crate_residue.py 的扫描输入（门 G-54 双向 / G-55 真树）。
+# 格式: <crate-name> # <退役依据与承接去向>（纯注释行进以 # 起首;缺依据行 = 解析错误）。
+# 纪律: 新增行前须确认可执行面残余已清（Cargo/Ci/bench/fuzz/CODEOWNERS 四类）,
+#       否则 G-55 立即判红;残余面已有 6 条账本只减不增,不因本表扩张而新增豁免。
+# 权威: CODE_WIKI 退役登记（§3.11/§3.12）+ ADR-193（lsct-tiering 整并）。
+router-traits    # 退役删除（CODE_WIKI §3.11 唯一登记表;doc 面退役回声登记于 doc_symbol_claim_baseline）
+lsct-tiering     # ADR-193 批次二整并入 cmt-tiering（check_dependency_rules.sh:120 "lsct-tiering -> 39"）;lsct 模块保留于 cmt-tiering
 auto-dpo       # 批次 A 38c72e6 物理删除（CODE_WIKI §3.12 唯一登记表）
 model-router     # 批次 A 38c72e6 物理删除（ADR-172 原登记退役，后由 38c72e6 物理删）
 acb-governor     # ADR-182 退役删除（Decay/DECB 承接预算面）

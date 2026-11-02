@@ -81,10 +81,10 @@ fn test_config() -> DataSourceConfig {
 
 /// 轮询等待 pipeline 快照包含指定数量的事件，最多等待 2 秒
 ///
-/// WHY 轮询而非固定 sleep: SysMetricsCollector::new() 调用
-/// sysinfo::System::new_all() 是同步阻塞操作，在 current_thread runtime
-/// (#[tokio::test] 默认)中会阻塞整个 runtime。固定 sleep(80ms) 不足以
-/// 覆盖初始化时间，导致 DataPipeline 在窗口内未处理事件，snapshot 中
+/// WHY 轮询而非固定 sleep: SysMetricsCollector::new() 构造期做首轮 CPU/内存采样
+/// （W2 起定向刷新，不再 new_all() 全量枚举进程表），该采样是同步操作，在
+/// current_thread runtime(#[tokio::test] 默认)中仍会占用 runtime。固定 sleep(80ms)
+/// 不足以覆盖初始化时间，导致 DataPipeline 在窗口内未处理事件，snapshot 中
 /// quest_list 为空。轮询等待确保 DataPipeline 至少处理完
 /// expected_event_count 个事件后才进行断言，与 live_data_test.rs 模式一致。
 async fn wait_for_events(pipeline: &DataPipeline, expected_event_count: usize) {
@@ -216,7 +216,16 @@ async fn pipeline_handles_1000_events_per_second() {
     let config = DataSourceConfig {
         // 覆盖 test_config() 默认值 256 → 1000,确保 1000 个事件全部保留在 latest_events 中
         max_event_history: 1000,
-        tick_interval_ms: 250,
+        // 本测试断言的是「突发 1000 条不丢」，不是 Eco 降频本身。
+        // flaky 根因（单跑 3 次 1 过 2 败、失败轮均停在 128）：首轮 drain 到几条
+        // 由调度决定，而只要 ≥ 100 就命中 `event_backlog_threshold` 并切到 Eco
+        // （1s 节奏）；在 tick=250ms 的旧配置下“消费完”需要多个 Eco 周期，
+        // 与断言窗口正好重叠 ⇒ 能否跑完变成竞速。Eco 是正确的事件风暴保护，
+        // 错的是拿它当本测试的背景噪声——故把阈值抬到突发之上，并抬快 tick。
+        // 注意：流水线的 Eco 切换规则全仓无测试覆盖（仅 TickMode display/serde 与
+        // config 默认值有测），本轮不声称用它接盘；已登记为待裁 R8-7。
+        event_backlog_threshold: 1_000_000,
+        tick_interval_ms: 25,
         ..test_config()
     };
     let pipeline = DataPipeline::new(subscriber, config);
@@ -240,11 +249,11 @@ async fn pipeline_handles_1000_events_per_second() {
     }
     let publish_done = Instant::now();
 
-    // 轮询直到 snapshot 包含全部 1000 个事件。窗口 3s:事件唤醒使消费节奏
-    // 变为「更频繁、更小批」,突发 1000(事件率 ~4000/s)会触发 Eco 降频
-    // (1s 节奏,正确的事件风暴保护)——完整消费需一次 Eco 周期 + 大批处理,
-    // 与本测试自身的宽松断言口径对齐;3s 覆盖两个 Eco 周期,余量充足。
-    let deadline = publish_done + Duration::from_secs(3);
+    // 轮询直到 snapshot 包含全部 1000 个事件。窗口 10s 只当「流水线真的挂死」时的
+    // 看门狗：实测总耗时 ~1.8-2.4s 且六连跑全绿，其中绝大部分是上面 publish 环自身
+    // （每事件一条接收侧日志），不是消费滞后。旧配置（3s 窗口 + 250ms tick +
+    // Eco 1s）下“消费完”与窗口重叠，才是本测试 flaky 的真正成因。
+    let deadline = publish_done + Duration::from_secs(10);
     while Instant::now() < deadline {
         let snap = pipeline.snapshot();
         if snap.latest_events.len() == 1000 {
@@ -263,7 +272,7 @@ async fn pipeline_handles_1000_events_per_second() {
 
     // 端到端时序:事件唤醒使突发消费节奏变为「即时唤醒 + Eco 降频保护」——
     // 突发 1000(事件率 ~4000/s)触发 Eco(1s 节奏)属**预期行为**,完整消费
-    // 需一次 Eco 周期(~2.2s)。灾难性回归(事件丢失/死循环)由上方 3s deadline
+    // 需一次 Eco 周期(~2.2s)。灾难性回归(事件丢失/死循环)由上方 10s 看门狗
     // 轮询单点拦截(拿不到 1000 即 panic);精确时序仍由 criterion bench
     // (data_pipeline_snapshot_latency / data_pipeline_throughput)在受控环境度量。
 }
@@ -580,6 +589,46 @@ async fn event_wake_ticks_do_not_dilute_history() {
     assert!(
         after <= before + 1,
         "事件唤醒的轻量 tick 不得推进趋势 history(稀释 250ms 粒度);before={before}, after={after}"
+    );
+    pipeline.shutdown().await;
+}
+
+/// F-39 喂数接线:DataPipeline 重 tick 与 sysinfo 采集同节奏推入网络速率历史
+///
+/// 喂数端此前全仓零调用(push_all_samples 等),网络 sparkline 消费端无数据;
+/// 本测试锁定"快照必须承载网络速率历史"的生产契约(RX/TX 成对推进)。
+/// WHY 只断言长度不断言数值:测试环境真实网络速率不可控(可为 0),长度
+/// 增长已足以锁定喂数节奏,值断言会引入环境依赖 flake。
+#[tokio::test]
+async fn pipeline_snapshot_includes_net_rate_history() {
+    let bus = EventBus::with_capacity(1024);
+    let subscriber = EventSubscriber::new(bus.clone());
+    let pipeline = DataPipeline::new(subscriber, test_config());
+
+    // 轮询等待 ≥3 个重 tick(50ms tick;无事件唤醒时全部为定时重 tick)
+    // 10s 只当「流水线真的挂死」的看门狗（断言强度不变）：全量 nextest 并行
+    // （1764 用例/多 test binary）下 runtime 可被饥饿 >3s，旧 3s 窗口会假红。
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let snap = pipeline.snapshot();
+        if snap.net_rx_history.len() >= 3 {
+            break;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "timed out waiting for net rate history; rx len={} tx len={}",
+                snap.net_rx_history.len(),
+                snap.net_tx_history.len()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let snap = pipeline.snapshot();
+    assert_eq!(
+        snap.net_rx_history.len(),
+        snap.net_tx_history.len(),
+        "RX/TX 速率历史应成对推进"
     );
     pipeline.shutdown().await;
 }

@@ -103,7 +103,16 @@ for f in "${b1_docs[@]}"; do
         report+=("[B1-warn] missing document: ${f} (gitignore *.md 策略,CI 环境无此文档,跳过)")
         continue
     fi
-    if ! grep -qE "${n_members}[[:space:]]*crate|${n_members}个crate|${n_members}[[:space:]]*Crate" "$f"; then
+    # The 4th alternative tolerates Markdown emphasis between the number and the
+    # noun (e.g. "**39** crates"). WITHOUT it a correct document is reported
+    # stale purely because the count is bolded -- a criterion that matches a
+    # literal string instead of the underlying fact.
+    #
+    # WHY it stays narrow on purpose: it must NOT absorb an ordinal usage such
+    # as "第 39 个 crate" ("the 39th crate", an addition index) nor a stale
+    # "43 crate". Absorbing either would let a genuinely stale document pass,
+    # which is the failure mode this check exists to prevent.
+    if ! grep -qE "${n_members}[[:space:]]*crate|${n_members}个crate|${n_members}[[:space:]]*Crate|${n_members}(\*\*|__)[[:space:]]*[Cc]rate" "$f"; then
         report+=("[GAP-B1] ${f} does not contain current crate count (${n_members}), possibly stale")
         status=1
     else
@@ -197,20 +206,14 @@ if [ ! -f "docs/architecture/adr_index.md" ]; then
     # 2026-08-07 适配: 同 B/C —— gitignore *.md 策略下缺失文档降级为 warn。
     report+=("[D2-warn] missing document: docs/architecture/adr_index.md (gitignore *.md 策略,仅本地维护,跳过)")
 else
-    # Use the resolved python launcher for robust CJK+ASCII regex matching
-    declared_total=$("${py[@]}" -c "
-import re, sys
-with open('docs/architecture/adr_index.md', encoding='utf-8') as fh:
-    for line in fh:
-        m = re.search(r'(\d+)\s*个\s*ADR', line)
-        if m:
-            print(m.group(1))
-            sys.exit(0)
-sys.exit(1)
-" 2>/dev/null || echo "")
+    # D-31: declared 值由索引行**派生**(单编号行 + 区间行展开去重),读
+    # scripts/adr_index_metrics.py 这一个源。旧口径是从正文里抓一个手抄整数,
+    # 而任何消费方都证不了伪(2026-10-17 实测:手抄 184 vs 派生 193,全链路仍绿);
+    # helper 自带规模闸门,解析塌陷时退非 0 而非挤出一个可信的小数字。
+    declared_total=$("${py[@]}" scripts/adr_index_metrics.py --declared-total 2>/dev/null || echo "")
 
     if [ -z "$declared_total" ]; then
-        report+=("[WARN-D2] adr_index.md has no machine-readable ADR total declaration")
+        report+=("[WARN-D2] adr_index.md declared set undecidable (helper exit!=0 or floors unmet)")
     elif [ "$declared_total" -lt "$adr_main_count" ]; then
         report+=("[GAP-D2] adr_index.md declares ${declared_total} ADRs, disk has ${adr_main_count} main numbers (index undercount)")
         status=1

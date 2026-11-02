@@ -23,6 +23,7 @@ pub mod panel_menu;
 pub mod registry;
 pub mod slash_parser;
 pub mod slash_registry;
+pub mod user_commands;
 
 // B3/I-F(2026-09-06 复评):编排域 action_id 单一事实源见 `action_ids`
 // 模块(含 COMPACT_ACTION_ID 兼容别名),斜杠计划层与 chimera-cli 编排器
@@ -36,7 +37,7 @@ pub use action_ids::{
 pub use codegen::{HelpLine, PaletteEntry, SlashCommand};
 pub use descriptor::{ActionDescriptor, ActionDomain};
 pub use panel_menu::panel_context_actions;
-pub use registry::{ActionRegistry, MAX_ACTIONS};
+pub use registry::{builtin_registry, ActionRegistry, MAX_ACTIONS};
 pub use slash_parser::{
     parse as parse_slash, plan as plan_slash, DispatchPlan, ParsedSlash, SlashEffect,
 };

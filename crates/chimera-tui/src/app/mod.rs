@@ -40,6 +40,7 @@ pub(crate) mod fps_counter;
 /// 本地动作派发表从 event_loop.rs 收编至此,与 InputRouter(按键归属)分层分工
 pub(crate) mod key_dispatch;
 pub(crate) mod mouse;
+pub mod notify;
 pub(crate) mod pane_manager;
 pub(crate) mod render;
 pub(crate) mod state;
@@ -184,6 +185,25 @@ pub struct TuiApp {
     /// WHY `Option`:首帧必须立即渲染(`None` 视为"到期"),避免启动后黑屏到
     /// 第一个帧预算到期。节流语义见 `event_loop.rs` 的 `MIN_FRAME_MS`。
     last_render_at: Option<std::time::Instant>,
+    /// ActionRegistry 缓存(B4-S F-13)— 供帮助路径快捷键自动派生共享
+    ///
+    /// WHY 构造期缓存:render.rs 的 help_context 注入(焦点变化时)与
+    /// open_help_action(`?` 键)两条帮助路径此前各自 `ActionRegistry::
+    /// with_builtin_domains()` 现场构造;渲染路径虽只在焦点变化时重建快照,
+    /// 但 registry 构造含全 domain 扫描,放渲染调用链内与 F-08 反模式同源。
+    /// 缓存后两条路径经同一实例调用 `shortcuts_with_registry`,与
+    /// panels/mod.rs `shortcuts_with_registry` 契约文档(调用方应优先使用
+    /// 本方法)同源成立。
+    action_registry: crate::actions::ActionRegistry,
+    /// SlashCommandRegistry 缓存(F-08)— 斜杠补全/解析/导航共享
+    ///
+    /// WHY 构造期缓存:render_slash_overlay 每渲染帧、slash_tab_complete /
+    /// submit_slash / handle_slash_key 每次调用此前各自
+    /// `with_builtin_commands()` 现场重建(内建命令逐条 register,含
+    /// name/别名 HashMap 双键插入)。注册表为编译期静态表
+    /// (`BUILTIN_COMMANDS`)派生的纯数据,无内部可变性,四处消费点全部
+    /// 只读——构造期建一次存字段,消费点经 `&self.slash_registry` 共享。
+    slash_registry: crate::actions::SlashCommandRegistry,
 }
 
 /// 按 PanelId 构造面板实例 — 注册序驱动的面板工厂(Concord T1.4)
@@ -273,7 +293,7 @@ impl TuiApp {
 
         // Task 1.15.4:先取出 main_panel_ratio,避免 config 在结构体字面量中被 move 后再使用
         let main_panel_ratio = config.main_panel_ratio;
-        Ok(Self {
+        let mut app = Self {
             config,
             state,
             data_source,
@@ -301,7 +321,28 @@ impl TuiApp {
             v3_render_count: 0,
             v3_quiescent_dirty_rows: 0,
             last_render_at: None,
-        })
+            // B4-S(F-13):帮助路径共享的 registry(构造期一次,渲染路径零重建)
+            action_registry: crate::actions::ActionRegistry::with_builtin_domains(),
+            // F-08:斜杠注册表构造期一次,四处消费点(补全/提交/导航/渲染)零重建
+            slash_registry: crate::actions::SlashCommandRegistry::with_builtin_commands(),
+        };
+        // F-37:主题强调色装配期注入 —— 面板层仅持 &TuiState 不可达 TuiApp 主题
+        // (见 Panel::set_accent),切主题时亦经此广播(cycle_theme_action)。
+        app.broadcast_accent();
+        Ok(app)
+    }
+
+    /// 将主题强调色广播到全部面板(F-37)
+    ///
+    /// WHY 广播:主题色归 `TuiApp`(config.colors.resolve),面板层仅持
+    /// `&TuiState`;`Panel::set_accent` 默认 no-op,仅消费 accent 的面板
+    /// (现 MetricsDashboard 选中格)覆盖生效,其余面板零改动。
+    /// 调用点:装配期(`with_data_source`)与 `cycle_theme_action` 切主题后。
+    fn broadcast_accent(&mut self) {
+        let accent = self.theme_accent();
+        for panel in &mut self.panels {
+            panel.set_accent(accent);
+        }
     }
 
     /// 将 EventBus 绑定到已有 TUI 应用
@@ -330,6 +371,19 @@ impl TuiApp {
             self.panels[idx] = Box::new(crate::panels::ExperienceCardVizPanel::with_provider(
                 provider,
             ));
+        }
+    }
+
+    /// WI(/bench 一期)：安装基准统计提供者（chimera-cli build.rs 静态计数 provider）。
+    ///
+    /// 与 `install_experience_card_provider` 同构（运行期按面板索引替换为带提供者实例）；
+    /// 未安装时 `BenchPanel` 维持 awaiting 诚实态。`PanelId::Bench` 已在面板集内，不新增面板。
+    pub fn install_bench_provider(
+        &mut self,
+        provider: std::sync::Arc<dyn crate::panels::BenchStatsProvider>,
+    ) {
+        if let Some(idx) = self.panel_index(crate::types::PanelId::Bench) {
+            self.panels[idx] = Box::new(crate::panels::BenchPanel::with_provider(provider));
         }
     }
 

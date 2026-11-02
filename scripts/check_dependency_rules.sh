@@ -34,13 +34,16 @@
 #                              criterion baseline + a real shared-state container
 #                              (see ADR-187).
 #   B. Upward dependency     - L(N) -> L(N+1) is forbidden for every layered
-#                              crate (see expected_crates); the 1-item ADR
-#                              exception table is exempted
-#                              (pvl-layer->seccore dynamic-blacklist feature).
-#                              The former gqep-executor->qeep-protocol ADR-048
-#                              entry was retired in wave 3c (M12, ADR-185 D4):
-#                              L7->L4 is a legal DOWNWARD edge that Check B
-#                              never flags, so the exemption was a no-op pad.
+#                              crate (see expected_crates); the ADR exception
+#                              table is currently EMPTY. Both historical
+#                              entries were no-op pads retired the same way:
+#                              gqep-executor->qeep-protocol (wave 3c, M12,
+#                              ADR-185 D4) and pvl-layer->seccore (C-09/M32,
+#                              2026-10-25, same precedent) -- each is a legal
+#                              DOWNWARD L7->L4 edge that Check B never flags
+#                              (seccore has been a regular production dep of
+#                              pvl-layer since d710699, 2026-08-18; the old
+#                              "dynamic-blacklist feature" note was stale).
 #   C. Graph completeness    - every referenced workspace dependency must exist
 #                              in the layer map; layer map must cover the whole
 #                              workspace (static count + disk scan).
@@ -81,8 +84,8 @@ esac
 # conflict adjudication report section 2.5.
 layer_of() {
     case "$1" in
-        nexus-contracts) echo 0 ;;
-        nexus-core|event-bus) echo 1 ;;
+        nexus-contracts|nexus-contracts-core|nexus-contracts-sparse|nexus-contracts-safety|nexus-contracts-seams|nexus-contracts-mca|nexus-contracts-memory) echo 0 ;;
+        nexus-core|event-bus|nexus-telemetry) echo 1 ;;
         nmc-encoder|hcw-window|mlc-engine) echo 2 ;;
         # P2-T2 (2026-08-24): session-store session persistence (L3, 40th crate)
         scc-cache|cmt-tiering|session-store) echo 3 ;;
@@ -109,10 +112,24 @@ layer_of() {
     esac
 }
 
+# L0 sub-layer map (ADR-222 D1): L0 is TWO sub-layers over the SAME machine
+# layer numbers -- 0 = L0-A pure contracts, 1 = L0-B core foundation. The
+# numeric map above is deliberately NOT renumbered: 116+ historical ADRs cite
+# "L4 seccore" etc., and renumbering would falsify that evidence chain.
+# Consumer: scripts/check_l0_sublayer.py (G-125/G-126) parses this function and
+# its .ps1 twin; KEEP BOTH IN SYNC.
+sublayer_of() {
+    case "$1" in
+        nexus-contracts|nexus-contracts-core|nexus-contracts-sparse|nexus-contracts-safety|nexus-contracts-seams|nexus-contracts-mca|nexus-contracts-memory) echo "0A" ;;
+        nexus-core|event-bus|nexus-telemetry) echo "0B" ;;
+        *) echo "" ;;
+    esac
+}
+
 # All layered crates (static completeness bound for check C2).
 # Authority for layer numbers: $layerMap in check_dependency_rules.ps1 -- both
 # lists must stay identical (see DRIFT WARNING in the header).
-layered_crates="nexus-contracts nexus-core event-bus mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
+layered_crates="nexus-contracts nexus-contracts-core nexus-contracts-sparse nexus-contracts-safety nexus-contracts-seams nexus-contracts-mca nexus-contracts-memory nexus-core event-bus nexus-telemetry mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
 # ADR-182 (2026-09-16, M10): acb-governor 退役,43 -> 42
 # 架构减法批次 (2026-09-20): +router-traits -> 43
 # ADR-193 (2026-09-27): router-traits 整 crate 退役(唯一消费方 osa 的 trait 实现为空壳,
@@ -124,7 +141,10 @@ layered_crates="nexus-contracts nexus-core event-bus mcp-mesh nmc-encoder hcw-wi
 #   model-router 已换成同为 L1 的现存 event-bus（见 mock_deps_of 注释），
 #   check_layer_map_parity.py 的 selftest 夹具本就用合成名 crate-NN。
 # 口径：此值必须等于 `Cargo.toml` workspace.members 实测数，勿硬编码追数。
-expected_crates=39
+# ADR-222 (2026-10-20): +nexus-telemetry -> 40 (L0-B core foundation, single-direction
+# ADR-222 D2 (2026-10-20): +nexus-contracts-core (L0-A sibling) -> 41
+# nexus-core -> nexus-telemetry; reverse would form a crate cycle via TaskKind/KindCounters)
+expected_crates=46
 
 # Inner-ring whitelist (is_inner_ring) and L0/L1 base (is_inner_base) helpers
 # were removed together with Check A by ADR-187 (2026-09-24); they were used
@@ -134,13 +154,16 @@ expected_crates=39
 # / $innerBase removed there in the same commit).
 
 # ADR exception table: exempted from check B.
-# WHY 只剩 1 条:gqep-executor(L7)->qeep-protocol(L4) 条目已于 wave 3c 收编移除
-# (M12/ADR-185 D4)——Check B 只 flag 向上依赖(dep_layer > layer),该向下边无豁免
-# 也天然合法,例外名义只剩 no-op 安全垫,挂着反而误导后人以为该边仍异常。
+# WHY 现为 0 条(两条历史条目均为 no-op 安全垫,先后按同一先例收编移除):
+#   gqep-executor(L7)->qeep-protocol(L4) —— wave 3c 收编(M12/ADR-185 D4);
+#   pvl-layer(L7)->seccore(L4) —— C-09/M32(2026-10-25)按 ADR-185 D4 先例收编:
+#     seccore 自 d710699(2026-08-18)起已是 pvl-layer 正式生产依赖,旧注记
+#     "feature 门控"失真 2 月+;Check B 只 flag 向上依赖(dep_layer > layer),
+#     该向下边无豁免也天然合法,例外挂着反而误导后人以为该边仍异常。
 # 移除后双门仍绿 = 收编的可执行证据(先例:P9-T6 复审"外环内部 L7->L4 合法")。
+# 表机制保留:未来真需豁免的向上边须有 ADR 记录特批(AGENTS 2.2)再入表。
 is_adr_exception() {
     case "$1,$2" in
-        pvl-layer,seccore) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -211,7 +234,7 @@ mock_deps_of() {
         # （删条目即打断负控），故改用同样 L1 的 event-bus。
         event-bus) echo "nexus-core hcw-window" ;;                  # GAP-B (L1 -> L2)
         gqep-executor) echo "nexus-core event-bus qeep-protocol" ;; # legal downward L7->L4 (no exemption needed since ADR-048 wave-3c retirement, ADR-185 D4)
-        pvl-layer) echo "nexus-core event-bus seccore" ;;           # legal (feature-gated)
+        pvl-layer) echo "nexus-core event-bus seccore" ;;           # legal downward L7->L4 (exemption retired by C-09/M32, ADR-185 D4 precedent)
         nexus-contracts) echo "" ;;
         chimera-tui) echo "nexus-contracts event-bus pvl-layer" ;;  # GAP-E (L10 -> L7)
         *) echo "" ;;
@@ -391,12 +414,13 @@ if [ "$SELFTEST" = "1" ]; then
     printf '%s\n' "${report[@]}" | grep -q '\[GAP-B\] event-bus (L1) -> hcw-window' || { ok=0; report+=('[SELFTEST] missing GAP-B for event-bus -> hcw-window'); }
     printf '%s\n' "${report[@]}" | grep -q 'undefined dependency <ghost-crate>' || { ok=0; report+=('[SELFTEST] missing GAP-C for undefined dep ghost-crate'); }
     printf '%s\n' "${report[@]}" | grep -q '\[GAP-E\] chimera-tui (L10) -> pvl-layer' || { ok=0; report+=('[SELFTEST] missing GAP-E for chimera-tui -> pvl-layer'); }
-    # 合法/例外边不得报 gap:gqep-executor->qeep-protocol 为向下边(ADR-048 已于
-    # wave 3c 收编,无豁免天然合法,ADR-185 D4);pvl-layer->seccore 为 ADR 例外
-    # (feature-gated)。两条边在 mock 图中均存在,任何一条冒出 GAP 都是回归。
+    # 合法边不得报 gap:gqep-executor->qeep-protocol 与 pvl-layer->seccore 均为
+    # L7->L4 向下边,无豁免天然合法(前者 wave 3c 收编,后者 C-09/M32 按 ADR-185
+    # D4 先例收编)。两条边在 mock 图中均存在,任何一条冒出 GAP 都是回归——
+    # 这也是"删例外条目不松弛判据"的机证。
     if printf '%s\n' "${report[@]}" | grep -Eq '^\[GAP-[ABC]\] (gqep-executor|pvl-layer)'; then
         ok=0
-        report+=('[SELFTEST] legal/ADR-exempted edge (gqep-executor->qeep-protocol downward / pvl-layer->seccore) wrongly reported')
+        report+=('[SELFTEST] legal downward edge (gqep-executor->qeep-protocol / pvl-layer->seccore, L7->L4) wrongly reported')
     fi
 
     if [ "$ok" -eq 1 ]; then

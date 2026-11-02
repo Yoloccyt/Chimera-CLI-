@@ -355,13 +355,35 @@ impl HcwWindow {
                 let target_size = target_size.max(1);
                 // SubTask 19.4:传 &state.entries 借用,消除 state.entries.clone() 全量 clone
                 // compress 内部仅 clone 保留的 Top-N 条目(通常 ≤ 100)
-                let report = ContextCompressor::compress(
-                    &self.config,
-                    &state.entries,
-                    target_size,
-                    None,
-                    Utc::now(),
+                // N-2(CPU 异构面审计):compress 经 spawn_compute_batch 同步阻塞 rayon
+                // pool.scope,多线程 runtime 下会占死当前 worker(同 runtime 其它 task 饿死)。
+                // 照 osa(coordinator.rs)同形做 flavor 双分支:仅 MultiThread 让路
+                // (block_in_place),current_thread 直调(与改前逐位一致 —— block_in_place 在
+                // current_thread 上 panic,而 #[tokio::test] 默认即 current_thread)。用
+                // try_current 而非 current:非 tokio 执行器(block_on 等)下 current() 会 panic。
+                let on_multi_thread = matches!(
+                    tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()),
+                    Ok(tokio::runtime::RuntimeFlavor::MultiThread)
                 );
+                let report = if on_multi_thread {
+                    tokio::task::block_in_place(|| {
+                        ContextCompressor::compress(
+                            &self.config,
+                            &state.entries,
+                            target_size,
+                            None,
+                            Utc::now(),
+                        )
+                    })
+                } else {
+                    ContextCompressor::compress(
+                        &self.config,
+                        &state.entries,
+                        target_size,
+                        None,
+                        Utc::now(),
+                    )
+                };
 
                 if report.algorithm == "none" {
                     // 无需压缩(原始大小 ≤ target_size):直接切换,不替换 entries
@@ -635,13 +657,31 @@ impl HcwWindow {
         let (original_size, compressed_size) = {
             let mut state = self.state.write().await;
             // SubTask 19.4:传 &state.entries 借用,消除 state.entries.clone() 全量 clone
-            let report = ContextCompressor::compress(
-                &self.config,
-                &state.entries,
-                target_size,
-                None,
-                Utc::now(),
+            // N-2(CPU 异构面审计):同 select_window —— compress 内部同步阻塞 rayon pool.scope,
+            // MultiThread 下用 block_in_place 让路,current_thread 直调(零行为漂移)。
+            let on_multi_thread = matches!(
+                tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()),
+                Ok(tokio::runtime::RuntimeFlavor::MultiThread)
             );
+            let report = if on_multi_thread {
+                tokio::task::block_in_place(|| {
+                    ContextCompressor::compress(
+                        &self.config,
+                        &state.entries,
+                        target_size,
+                        None,
+                        Utc::now(),
+                    )
+                })
+            } else {
+                ContextCompressor::compress(
+                    &self.config,
+                    &state.entries,
+                    target_size,
+                    None,
+                    Utc::now(),
+                )
+            };
 
             if report.algorithm == "none" {
                 // 无需压缩:entries 不变,直接返回当前大小
@@ -1019,6 +1059,32 @@ mod tests {
         // 降级到 L0(复杂度 0.1),应压缩到 L0 容量(4096)
         let tier = window.select_window(0.1).await.unwrap();
         // 50K > L0 容量 4K,压缩后应 ≤ 4K,降级成功
+        assert_eq!(tier, WindowTier::L0);
+        assert!(window.current_size().await <= 4096);
+    }
+
+    /// N-2 回归锁:同一条降级压缩路径在**多线程** runtime 上会命中 `block_in_place`
+    /// 分支(`current_thread` 走直调分支,已由 [`test_select_window_downgrade_with_compression`] 覆盖)。
+    /// worker_threads=1 是更锐利的形态:`block_in_place` 将当前任务移出 worker 后,
+    /// tokio 必须临时补一个线程才能让 runtime 继续推进 —— 证明让路不会死锁且不 panic
+    /// (`block_in_place` 仅对 MultiThread 合法)。断言结果与 current_thread 一致
+    /// (L0、size ≤ 4096)⇒ flavor 双分支零行为漂移。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_select_window_downgrade_with_compression_multi_thread() {
+        let bus = EventBus::new();
+        let window = HcwWindow::with_default_config(bus).unwrap();
+
+        window.select_window(0.9).await.unwrap(); // L3
+        for i in 0..50 {
+            window
+                .insert(make_entry(&format!("e-{i}"), 1000))
+                .await
+                .unwrap();
+        }
+        assert_eq!(window.current_size().await, 50_000);
+
+        // MultiThread:select_window 降级的 compress 命中 block_in_place 分支(不 panic + 结果正确)
+        let tier = window.select_window(0.1).await.unwrap();
         assert_eq!(tier, WindowTier::L0);
         assert!(window.current_size().await <= 4096);
     }

@@ -130,8 +130,13 @@ jobs:
           New-Item -ItemType Directory -Path $installDir -Force | Out-Null
 
           $versionArg = @()
-          if ('$env:STEPS_VERSION_OUTPUTS_VERSION' -ne 'latest') {
-            $versionArg = @('-Version', '$env:STEPS_VERSION_OUTPUTS_VERSION')
+          # WHY double quotes: PowerShell does not expand `$env:...` inside single
+          # quotes, so the previous form compared the literal string '$env:...' to
+          # 'latest' (always unequal) and always passed the literal text as
+          # -Version. The Windows leg therefore never tested the version it
+          # claimed to test -- a silently vacuous job, worse than a red one.
+          if ("$env:STEPS_VERSION_OUTPUTS_VERSION" -ne 'latest') {
+            $versionArg = @('-Version', "$env:STEPS_VERSION_OUTPUTS_VERSION")
           }
 
           # 执行安装脚本

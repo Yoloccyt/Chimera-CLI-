@@ -10,7 +10,8 @@
 //! A_i = (r_i - mean(r)) / (std(r) + eps)
 //! ```
 //!
-//! 本周为占位实现:基于规则的采样(不引入真实模型推理)。
+//! 当前为占位实现(ADR-042 冻结期刻意规则化,接入真实模型推理须 RL 闸门开启):
+//! 基于规则的采样(不引入真实模型推理)。
 //! // TODO(Week 7): 接入 MCP Mesh 真实模型
 
 use crate::types::{EvolutionPolicy, GrpoRollout};

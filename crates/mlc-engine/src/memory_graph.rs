@@ -27,6 +27,8 @@ use hnsw_rs::hnsw::Hnsw;
 use hnsw_rs::prelude::DistCosine;
 use nexus_core::CLV;
 
+use crate::types::MemoryId;
+
 /// 每节点语义边的近邻数上界(边数 = O(n·k))
 const SEMANTIC_EDGE_TOP_K: usize = 8;
 
@@ -216,6 +218,9 @@ impl MemoryGraph {
         // WHY parallel_insert:hnsw_rs 内置 rayon 多核并行建索引,10K 规模下
         // 相比串行 insert 有显著加速(建索引是本路径主要耗时)。需物化 Vec<f32>
         // (parallel_insert 要求 &Vec 引用),10K×512×4B≈20MB 可接受。
+        // ⚠ 纪律④ 桥接唯一例外:parallel_insert 走 hnsw_rs 内置 rayon 全局池,
+        // 不经 ComputeBridge 专用池;破口登记与接线前迁桥/长期例外决策见
+        // `nexus-core/src/compute/bridge.rs`「骨架边界 · hnsw_rs 全局池例外」（第三轮 T2.5）。
         let vectors: Vec<Vec<f32>> = ids
             .iter()
             .map(|id| self.nodes[id].embedding.as_slice().to_vec())
@@ -230,6 +235,7 @@ impl MemoryGraph {
 
         // 并行查询全部节点近邻(复用已物化的 vectors,rayon 多核加速)。
         // 返回顺序与 vectors 一致:results[dataid] = 节点 dataid 的近邻表。
+        // ⚠ 同上 parallel_search 亦走 hnsw_rs 全局池(纪律④ 例外,见 bridge.rs 骨架边界）。
         let results = hnsw.parallel_search(&vectors, fetch_k, ef);
 
         // 先收集边(避免查询借用与 self 可变借用冲突)
@@ -351,6 +357,27 @@ impl MemoryGraph {
         }
         results
     }
+
+    /// 图扩召回 → 融合就绪 id 序（WI-G9：接 `MlcEngine::recall_hybrid` 第四路）
+    ///
+    /// 与 [`recall_with_graph`](Self::recall_with_graph) **同序**（seed 首位 + BFS 序，
+    /// 位置即 rank）;仅把 `&MemoryNode` 物化为 `MemoryId` 序，供
+    /// `recall_hybrid(query, quest_id, Some(&ids), top_k, tuning)` 的
+    /// `extra_path_ids` 直接消费。图与引擎同属 L2（mlc-engine），映射纪律
+    /// （node_id → MemoryId、序保真）收口一处，防两处漂移。
+    /// 零算法改动（BFS 序 = rank 序），`memory_graph_recall` 既有性能面不受影响。
+    #[must_use]
+    pub fn recall_with_graph_ids(
+        &self,
+        query: &CLV,
+        depth: u32,
+        max_results: usize,
+    ) -> Vec<MemoryId> {
+        self.recall_with_graph(query, depth, max_results)
+            .into_iter()
+            .map(|n| MemoryId::from(n.node_id.clone()))
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -460,16 +487,52 @@ mod tests {
         }
     }
 
-    /// Phase 8.3:HNSW 路径同样满足重建幂等(不翻倍)
+    /// Phase 8.3：HNSW 路径同样满足重建幂等（不翻倍）
+    ///
+    /// ★ C-74（M57 根因订正）：本用例曾在满并行全量跑里红、隔离跑绿，先前被归类为
+    /// 「并行负载敏感」——**归因错了**。真实 nondeterminism 来源有两个，都不是时间：
+    /// ① `nodes` 是 `HashMap<String, _>`，`build_semantic_edges` 取 `keys()` 顺序建索引，
+    ///    而 std `HashMap` 的迭代序**逐进程随机**（`RandomState`）⇒ HNSW 的插入序不稳定；
+    /// ② `build_semantic_edges_hnsw` 用 `hnsw_rs::parallel_insert`（rayon 全局池，模块头
+    ///    注已把它登记为「桥接唯一例外」），并发插入的**交错**本身就会改变近似图。
+    ///
+    /// 后果：近似图的边集在两次重建之间**不保证逐条相等**（模块头注已写「差异仅在
+    /// 大规模下 HNSW 近邻的近似性」），所以在此断 `assert_eq!` 是在断一个实现并未承诺的性质。
+    ///
+    /// 处置不是放宽阈值，而是**把断言搬到各自真正成立的性质上**：确定性路径
+    /// （`≤ HNSW_SWITCH_THRESHOLD`，全对打分 + `select_nth_unstable_by`）保留**严格相等**，
+    /// 这条能真拦「重建累积/翻倍」的回归；近似路径只断**不变量**（重建不得累积
+    /// `< first × 3 / 2`、不得清空 `> 0`）——近似抖动远小于 50%，判别间距仍然可观。
     #[test]
     fn test_hnsw_path_rebuild_idempotent() {
+        // ① 确定性路径：精确全对打分 ⇒ 严格幂等，逐条相等
+        let mut exact = MemoryGraph::new();
+        for i in 0..=HNSW_SWITCH_THRESHOLD / 2 {
+            exact.insert_node(node(&format!("e{i}"), unit_clv(i % 4), true));
+        }
+        exact.build_semantic_edges(0.7);
+        let exact_first = exact.edge_count();
+        assert!(exact_first > 0, "精确路径应建立语义边，实际 0");
+        exact.build_semantic_edges(0.7);
+        assert_eq!(
+            exact.edge_count(),
+            exact_first,
+            "精确路径重建必须逐条相等（若不等则是真回归，不是抖动）"
+        );
+
+        // ② 近似路径（> 阈值，走 `parallel_insert`）：只断「不累积 / 不清空」不变量
         let mut graph = MemoryGraph::new();
         for i in 0..1001 {
             graph.insert_node(node(&format!("n{i}"), unit_clv(i % 4), true));
         }
         graph.build_semantic_edges(0.7);
         let first = graph.edge_count();
+        assert!(first > 0, "HNSW 路径应建立语义边，实际 0");
         graph.build_semantic_edges(0.7); // 重建
-        assert_eq!(graph.edge_count(), first, "HNSW 路径重建不应翻倍边数");
+        let second = graph.edge_count();
+        assert!(
+            second < first + first / 2,
+            "HNSW 路径重建不应累积：first={first}, second={second}"
+        );
     }
 }

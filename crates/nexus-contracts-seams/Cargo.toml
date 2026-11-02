@@ -1,0 +1,25 @@
+[package]
+name = "nexus-contracts-seams"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "NEXUS-OMEGA L0-A 契约域 — seams S1-S9 策略接缝契约（选择器 / 密度 / 记忆 / 预取 / 议会 / 衰减 / 配额 / RL）（ADR-222 D2）"
+
+[dependencies]
+# L0-A 依赖白名单（ADR-033 / G-99）；workspace 内部依赖仅限 ADR-222 D2
+# 分区 DAG 的向下方（sibling -> sibling 允许，回指 umbrella 由 G-99 直接判红）。
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+# 随组目录一并迁入的单元/proptest 用例所需（拆分前由 umbrella 的 dev-deps 提供）。
+serde_json = { workspace = true }
+proptest = { workspace = true }
+rmp-serde = { workspace = true }
+serde_yaml = { workspace = true }
+# doctest 仍举 facade 路径（`use nexus_contracts::{...}`）——它验的正是
+# ADR-222 D4 的向后兼容承诺。dev-dep 不进生产依赖面，G-99 只判 [dependencies]。
+nexus-contracts = { workspace = true }
+
+[lints]
+workspace = true

@@ -28,17 +28,30 @@
 # Re-keyed 2026-09-15 after merging main: the 2026-09-13 baseline moved the
 # nexus-app-server code (generic transport split + new send_decode_error
 # writer path). Entry semantics re-verified against the moved code, unchanged.
-crates/nexus-app-server/src/transport.rs:169   # DESIGN stdio reader: read_line must complete the line frame
-crates/nexus-app-server/src/transport.rs:186   # DESIGN stdio writer: NDJSON frame written as one atomic unit
-crates/nexus-app-server/src/transport.rs:206   # DESIGN stdio writer: NDJSON error frame as one atomic unit (send_decode_error)
+# Re-keyed again 2026-10-25 (C-02): the transport moved once more - the four
+# acquisition sites are now recv_op:221 (reader), send_event:238,
+# send_events:265 (own lock since the batch-pre-encode refactor; 3 keys -> 4)
+# and send_decode_error:284. Stale keys 169/186/206 deleted both tables.
+crates/nexus-app-server/src/transport.rs:221   # DESIGN stdio reader: read_line must complete the line frame
+crates/nexus-app-server/src/transport.rs:238   # DESIGN stdio writer: NDJSON frame written as one atomic unit (send_event)
+crates/nexus-app-server/src/transport.rs:265   # DESIGN stdio writer: batch NDJSON frames written as one atomic unit (send_events)
+crates/nexus-app-server/src/transport.rs:284   # DESIGN stdio writer: NDJSON error frame as one atomic unit (send_decode_error)
 crates/nexus-app-server/src/sse.rs:121         # DESIGN SSE writer: single-connection frame atomicity
 
 # --- (A) Per-key migration serialisation --------------------------------------
-crates/mlc-engine/src/engine.rs:912            # DESIGN migration_locks: one MemoryId migration = atomic txn incl. its completion event
 
 # --- (B) Scanner over-approximation: value extracted from the lock ------------
-crates/chimera-tui/src/data/pipeline.rs:892         # SCANNER `.take()` moves the EventSubscriber out; guard drops at stmt end. Covers both awaits it feeds (`sub.shutdown()` and `handle.await`); re-keyed 891->892 with the same 1-line shift that moved lock_await_freeze.txt
+# (REPAID 2026-10-08 / v3.5 W6-1 gate-debt batch) the former entry
+# `crates/chimera-tui/src/data/pipeline.rs:892` exempted a SCANNER
+# over-approximation on a multi-line `.lock()...take()` chain; the same site had
+# already been re-keyed twice (891 -> 892) purely because unrelated code above
+# shifted. The call site is now `DataPipeline::take_locked()` (guard dies at the
+# helper's return; no await statement contains a locking expression), so the
+# scanner no longer reports it and the exemption is deleted outright - a shrink,
+# not a re-key. Its twin key in lock_await_freeze.txt was deleted in the same
+# batch (G-27 machine-checks the two key sets 1:1).
+# Tooth check: revert shutdown() to the multi-line chain -> G-27/G-35 must redden.
 crates/decb-governor/src/governor.rs:564            # SCANNER `current_total` is `*total` copy; state guard already block-scoped
 crates/mcp-mesh/src/quantum/participant_client.rs:556 # SCANNER `pooled` is a TcpStream removed from the pool; guard dies in and_then
 crates/pvl-layer/src/producer.rs:123                # SCANNER `strategy` is `*read()` Copy value; read guard dies at stmt end
-crates/session-store/src/writer.rs:495              # SCANNER `has_pending` is a bool; flush deliberately runs outside the lock
+crates/session-store/src/writer.rs:577              # SCANNER `has_pending` is a bool; flush deliberately runs outside the lock (line moved 495->577 by R2 C-61; same site, scanner is lexical)

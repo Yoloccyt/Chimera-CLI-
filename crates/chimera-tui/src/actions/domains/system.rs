@@ -63,8 +63,8 @@ pub fn descriptors() -> Vec<ActionDescriptor> {
             )
         },
         // 超窗兜底检索(P1,ADR-072):经 TuiActionRequested → Action 编排器 → OverWindowBridge
-        // 真实执行两级检索(kvbsr→repo-wiki→hcw)。需 query 参数(命令栏 `:overwindow run <词>`),
-        // palette 选中后进入参数输入态(F-5),提交以 {"query": text} 派发。
+        // 真实执行两级检索(kvbsr→repo-wiki→hcw)。需 query 参数(命令面板 Ctrl+P 选中
+        // overwindow.run 后进入参数输入态(F-5)),提交以 {"query": text} 派发。
         ActionDescriptor {
             requires_query: true,
             ..ActionDescriptor::new(

@@ -141,7 +141,7 @@ async fn tui_renders_live_event_bus_data() {
     assert!(
         content.contains("Live Event Quest"),
         "Quest panel should render live quest title, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
 
     // 切换到 Budget 面板，应包含发布的预算指标。
@@ -150,7 +150,7 @@ async fn tui_renders_live_event_bus_data() {
     assert!(
         content.contains("Medium") && content.contains("4200.0"),
         "Budget panel should render live budget metrics, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
 
     // 事件也应出现在 Log 面板。
@@ -159,7 +159,7 @@ async fn tui_renders_live_event_bus_data() {
     assert!(
         content.contains("QuestListUpdated") && content.contains("BudgetMetricsUpdated"),
         "Log panel should render live events, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
 
     pipeline.shutdown().await;

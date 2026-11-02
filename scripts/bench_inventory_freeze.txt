@@ -61,7 +61,11 @@ event-bus|bus_credit_bench|dev-only|信用记账路径开发基准
 event-bus|bus_shard_bench|dev-only|分片职责 benchmark,无 KPI 目标
 event-bus|pattern_index_bench|dev-only|模式索引路径开发基准
 event-bus|tui_action_dispatch_bench|dev-only|TUI 动作分发基准,功能层无性能契约
-faae-router|faae_parallel_bench|dev-only|FA 亲和并行基准,实验探针
+# faae-router|faae_parallel_bench 行已删除(2026-10-04,静默窗口升格 registered):
+#   run_bench faae_parallel 两源登记(perf_thresholds.toml [[run_bench]] + bench_check.yml)
+#   + faae_scoring/faae_hot_scoring 两阈值键(静默 median ×2.5);
+#   并发组 faae_concurrent_route 阈值待 CI 首跑数据校准(不假锁)。
+#   删除一行 = 该 bench 升格为受门禁守护 —— 本文件自订约定。
 faae-router|operator_select|dev-only|算子选择开发基准
 faae-router|route|dev-only|路由热路径补充开发基准
 gsoe-evolution|channel_b_benchmark|dev-only|Channel-B 进化通道实验基准
@@ -73,6 +77,7 @@ hcw-window|window_affinity|dev-only|窗口亲和度开发基准
 kvbsr-router|route|dev-only|KVBSR 路由补充开发基准
 mcp-mesh|mesh_benchmark|dev-only|Mesh 消息吞吐开发基准
 mtpe-executor|predict|dev-only|MTPE 预测路径开发基准
+nexus-contracts|sparse_select_top_k|dev-only|L0 热路径掩码选择单元基线(select_top_k vs full_sort 回退哨兵),读数不入三表(无 clean-runner 不标定),ADR-217 D-36
 nexus-core|bridge_bench|dev-only|桥接层开发基准
 nexus-core|clv_bench|dev-only|CLV 客户生命周期价值计算开发基准
 nexus-core|clv_cosine|dev-only|CLV 余弦专项基准

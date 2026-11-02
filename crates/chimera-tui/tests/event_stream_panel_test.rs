@@ -74,26 +74,58 @@ fn event_stream_panel_renders_events() {
 // 测试 2:虚拟滚动 — 10000 条事件不 panic 且帧时间 < 16ms
 // ============================================================
 
+/// 虚拟滚动 — 10000 条事件不 panic，且渲染耗时**与大 N 无关**
+///
+/// ★ C-122/M78：原先断「单帧 < 16ms」（60fps 预算），但那条在满并行档实测
+/// **28.4ms 越阈**（单跑 2-5ms）——它量到的是本机负载，不是「虚拟滚动是否生效」。
+/// 虚拟滚动真正的承诺是「**只渲染可见行**」，其可观测形态就是「渲染耗时与大 N 无关」；
+/// 拿绝对毫秒数当代理量，会在任何满载机器上发假红（L63 同类教训）。
+/// ⇒ 改成**同一次运行内的自基准比值**：先量 64 条的渲染耗时（中位数），再量 10000 条的；
+/// 虚拟滚动在位时两者同阶（实测 1.0-1.5×），而退化成 O(n) 会让比值 ≥ 100×。
+/// 阈值取 20×（两侧余量 >6×）；绝对耗时只留一个「2s」级挂死看门狗。
 #[test]
 fn event_stream_panel_virtual_scroll_10000_events_no_panic() {
-    // 构造 10000 条事件,验证虚拟滚动不 panic 且帧时间 < 16ms
     let events: Vec<NexusEvent> = (0..10000).map(cache_hit_event).collect();
     let state = make_state_with_events(events);
+    let small_events: Vec<NexusEvent> = (0..64).map(cache_hit_event).collect();
+    let small_state = make_state_with_events(small_events);
 
     let mut panel = EventStreamPanel::new();
     let area = standard_area();
     let mut buf = Buffer::empty(area);
 
-    // 测量纯渲染时间(不含 Buffer::empty 的初始化开销)
-    let start = Instant::now();
-    panel.render(&state, area, &mut buf);
-    let elapsed = start.elapsed();
+    // 中位数取样：各渲染 5 次，抵消单次调度抖动
+    let mut t_small: Vec<std::time::Duration> = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let s = Instant::now();
+        panel.render(&small_state, area, &mut buf);
+        t_small.push(s.elapsed());
+    }
+    let mut t_big: Vec<std::time::Duration> = Vec::with_capacity(5);
+    for _ in 0..5 {
+        let s = Instant::now();
+        panel.render(&state, area, &mut buf);
+        t_big.push(s.elapsed());
+    }
+    t_small.sort();
+    t_big.sort();
+    let small_ms = t_small[2].as_secs_f64() * 1000.0;
+    let big_ms = t_big[2].as_secs_f64() * 1000.0;
+    let ratio = if small_ms > 0.0 {
+        big_ms / small_ms
+    } else {
+        1.0
+    };
 
-    // 60fps 对应 16.67ms,断言 < 16ms(虚拟滚动只渲染 ~50 行,应远低于此)
+    // 挂死看门狗：单帧超过 2s 不是「慢」而是「不返回」
     assert!(
-        elapsed.as_millis() < 16,
-        "render 10000 events took {:?}, expected < 16ms (virtual scroll should only render visible rows)",
-        elapsed
+        big_ms < 2000.0,
+        "render 10000 events 耗时异常（{big_ms:.2}ms），疑似挂死"
+    );
+    // 核心判据：渲染耗时与大 N 无关（虚拟滚动生效）
+    assert!(
+        ratio < 20.0,
+        "虚拟滚动失效：10000 条 {big_ms:.3}ms 是 64 条 {small_ms:.3}ms 的 {ratio:.1}×（阈值 20×，O(n) 退化会 ≥100×）"
     );
 }
 
@@ -284,7 +316,7 @@ fn event_stream_panel_zh_locale_renders_chinese_copy() {
     assert!(
         content.contains("暂无事件"),
         "Zh locale 下空状态应显示中文提示,实际: {}",
-        &content[..content.len().min(200)]
+        content.chars().take(200).collect::<String>()
     );
 }
 
@@ -299,7 +331,7 @@ fn event_stream_panel_empty_state_shows_no_events() {
     assert!(
         content.contains("No events") || content.contains("no events"),
         "empty state should show 'No events', got: {}",
-        &content[..content.len().min(200)]
+        content.chars().take(200).collect::<String>()
     );
 }
 
@@ -376,7 +408,7 @@ fn event_stream_panel_shows_new_events_indicator_when_auto_scroll_off() {
     assert!(
         content.contains("新事件") || content.contains("auto-scroll"),
         "should show new events indicator when auto_scroll=false, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -539,19 +571,21 @@ fn event_stream_panel_showing_and_footer_visible_at_bottom_with_10000_events() {
     assert!(
         content.contains("CacheHit"),
         "事件行应渲染, got: {}",
-        &content[..content.len().min(400)]
+        content.chars().take(400).collect::<String>()
     );
     // 修复前复算(R5):窗口 38 事件行 + 标题 2 + 提示 1 + 页脚 1 = 42 行
     // > inner 38 行,提示行(第 41)与页脚(第 42)被 Paragraph 系统性裁剪。
     assert!(
         content.contains("显示"),
         "总数提示行应渲染在视口内(F-22 修复前被系统性裁剪), got: {}",
-        &content[..content.len().min(400)]
+        content.chars().take(400).collect::<String>()
     );
+    // F-17 迁键后页脚走 panel.footer 键:断言与键表同源(本用例 pin Zh,
+    // 原字面断言 "Press Tab to switch panels" 依赖迁键前的硬编码英文,已失效)
     assert!(
-        content.contains("Press Tab to switch panels"),
+        content.contains(chimera_tui::t!("panel.footer")),
         "页脚应渲染在视口内(F-22 修复前被系统性裁剪), got: {}",
-        &content[..content.len().min(400)]
+        content.chars().take(400).collect::<String>()
     );
 }
 
@@ -586,7 +620,7 @@ fn event_stream_panel_showing_and_selected_visible_mid_scroll() {
     assert!(
         content.contains("显示"),
         "滚动中部总数提示行应渲染在视口内, got: {}",
-        &content[..content.len().min(400)]
+        content.chars().take(400).collect::<String>()
     );
     // 选中行可见(行级锚定,对齐 log_panel_test 范式):EventStream 过滤索引
     // 正序,filtered[60] = latest_events[60] = src-0060;带方括号标记全帧唯一

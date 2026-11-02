@@ -95,11 +95,29 @@ impl SelfAssessmentPanel {
 
         match latest_report {
             Some((tc, ce, cv, rd, ea, fc)) => {
-                lines.push(Self::dimension_line("Comprehension", tc));
-                lines.push(Self::dimension_line("Execution", ce));
-                lines.push(Self::dimension_line("Verification", cv));
-                lines.push(Self::dimension_line("Delivery", rd));
-                lines.push(Self::dimension_line("Experience", ea));
+                // F-29:五维标签消费既有 dim_* 键(原硬编码英文,键表双语齐备
+                // 但零消费——zh 模式下中英混排);dimension_line 形参 &'static str
+                // 与 t!() 返回类型直配,调用点即键表消费点。
+                lines.push(Self::dimension_line(
+                    crate::t!("panel.self_assessment.dim_comprehension"),
+                    tc,
+                ));
+                lines.push(Self::dimension_line(
+                    crate::t!("panel.self_assessment.dim_execution"),
+                    ce,
+                ));
+                lines.push(Self::dimension_line(
+                    crate::t!("panel.self_assessment.dim_verification"),
+                    cv,
+                ));
+                lines.push(Self::dimension_line(
+                    crate::t!("panel.self_assessment.dim_delivery"),
+                    rd,
+                ));
+                lines.push(Self::dimension_line(
+                    crate::t!("panel.self_assessment.dim_experience"),
+                    ea,
+                ));
                 lines.push(Line::from(
                     // 占位键:fc 为发现数(与 timeline event_summary 同 replacen 范式)
                     crate::t!("panel.self_assessment.findings_count").replacen(

@@ -2,9 +2,9 @@
 //! LAYER:    L6
 //! ROLE:     NEXUS-OMEGA L6 学习层 — omega-learner Bandit 六接缝
 //! BACKEND:  memory
-//! PRODUCERS: 3 ModelRouteSelected,RewardSignalReported,StreamSessionCompleted
+//! PRODUCERS: 1 RewardSignalReported
 //! CONSUMERS: 0 -
-//! MATURITY: NOT-IMPL-CN
+//! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! NEXUS-OMEGA L6 学习层 — omega-learner Bandit 六接缝
 //!
@@ -135,7 +135,7 @@ pub mod seam;
 /// S9 接缝 — 通道路由学习器(MCA M3,RouteLLM 落点,ADR-065)
 ///
 /// LinUCB 臂空间 = provider × model × thinking_mode(~40 臂),影子模式合规;
-/// 不触 R2 冻结面(不 import gsoe-evolution/auto-dpo,无 evolve/RL 训练路径)。
+/// 不触 R2 冻结面(不 import gsoe-evolution;auto-dpo 已退役 ADR-193;无 evolve/RL 训练路径)。
 pub mod s9_route;
 
 /// S9 会话集成 — 将 StreamSessionCompleted 事件桥接到 S9RouteLearner(P1-2)
@@ -147,8 +147,10 @@ pub mod s9_integration;
 
 /// Milestone C-1: 接缝奖励 → RewardSignal 桥接（各层 Reward 类型统一）
 ///
-/// 将 S9Reward 等接缝奖励转换为 L0 RewardSignal 统一载荷，
-/// 经 EventBus 奖励信号流传输（R1 数据面先接入，R2 解冻后训练消费）。
+/// 将 S9Reward 等接缝奖励转换为 L0 RewardSignal 统一载荷，并提供
+/// RewardSignalReported 事件构造函数。生产发布链未接线：reward_signal_event
+/// 在生产作用域零调用方（仅集成测试消费），接线议程登记 ADR-224，
+/// R2 解冻后由训练服务消费。
 pub mod reward_bridge;
 
 /// P4-W16.2.1: 经验回放池 — off-policy RL 训练的轨迹存储与采样基础设施

@@ -24,11 +24,19 @@ use crate::output;
 /// `json` flag(Task 1.7)控制输出格式:
 /// - `true`:输出 envelope schema JSON(`{ "status": "ok", "data": <payload> }`)
 /// - `false`:输出人类可读格式
-pub async fn execute(action: &ConfigAction, cfg: &ChimeraConfig, json: bool) -> Result<()> {
+///
+/// `explicit_path` 来自全局 `--config`；`init`/`path` 必须尊重它，
+/// 否则会与 `list`/`show` 实际加载的文件不一致。
+pub async fn execute(
+    action: &ConfigAction,
+    cfg: &ChimeraConfig,
+    json: bool,
+    explicit_path: Option<&Path>,
+) -> Result<()> {
     tracing::info!(?action, json, "配置管理操作");
     match action {
         ConfigAction::Init => {
-            let path = config::default_config_path();
+            let path = config::resolve_config_path(explicit_path.map(Path::to_path_buf))?;
             init_config(&path, json)?;
         }
         ConfigAction::List => {
@@ -38,9 +46,11 @@ pub async fn execute(action: &ConfigAction, cfg: &ChimeraConfig, json: bool) -> 
             show_config(cfg, json)?;
         }
         ConfigAction::Path => {
-            let path = config::default_config_path();
+            let path = config::resolve_config_path(explicit_path.map(Path::to_path_buf))?;
             if json {
-                let payload = serde_json::json!({ "path": path.display().to_string() });
+                let payload = PathPayload {
+                    path: path.display().to_string(),
+                };
                 output::print_json(&payload).context("序列化 config path 为 JSON 失败")?;
             } else {
                 println!("{}", path.display());
@@ -48,6 +58,12 @@ pub async fn execute(action: &ConfigAction, cfg: &ChimeraConfig, json: bool) -> 
         }
     }
     Ok(())
+}
+
+/// `config path` 的输出载荷（typed）。
+#[derive(Debug, Serialize)]
+struct PathPayload {
+    path: String,
 }
 
 /// `config init` 的输出载荷(Task 1.7 JSON schema)

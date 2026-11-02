@@ -27,6 +27,17 @@ name: Benchmark Check
 # ============================================================
 
 on:
+  # R2 C-68（登记册 M45，P1）：补 schedule 触发。
+  # WHY：原先 pull_request 的 paths 过滤只含 benches/**、*/Cargo.toml、
+  # 根 Cargo.toml、本 workflow 自身、chimera-cli/src/** 与 check_cli_startup.*，
+  # 且无 schedule/push-branch 触发 —— ⇒ **对其余 45 个 crate 的纯 src 改动，
+  # 本 workflow 根本不跑**，性能回退只在「碰了 benches 或 manifest」时才被发现；
+  # 而把 'crates/**/src/**' 加进 paths 会让几乎每个 PR 都跑全量 bench（本 job
+  # timeout 已给到 30min），成本与噪声都不可接受。日跑一次是覆盖「两次
+  # 运行之间已合入的全部 src 变更」的最低成本形状：不阻塞单个 PR，但回退
+  # 最长存活不超一天。仍保留原 paths 触发以便改 bench 时立即反馈。
+  schedule:
+    - cron: '0 3 * * *'   # 每日 03:00 UTC（避开 slo.yml nightly 与 coverage 窗口）
   pull_request:
     branches: [main, master]
     paths:
@@ -53,7 +64,13 @@ jobs:
   bench-check:
     name: Benchmark Threshold Check
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # WHY: 5 benchmark 编译+运行典型 3-8min,30min 兜底防卡死
+    timeout-minutes: 30
+    # WHY: 兜底防卡死。**不在此登记 bench 数与典型耗时**：原注写「5 benchmark
+    # 编译+运行典型 3-8min」已严重失真 —— 本 workflow 实有 47 个 run_bench 别名
+    # （R2 登记册 M66，可用 `grep -c '^[[:space:]]*run_bench ' 本文件` 现取）。
+    # 真实耗时只能在 CI 侧量（本地无 Linux runner 且全量 cargo 已被占），故本行
+    # 只声明它是 guard；若超时被 kill，本 job 是红不是静默通过 —— 但预算是否
+    # 够需首次 schedule 跑后用时长读数再定档（已列入待裁）。
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,6 +79,12 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@1.97.1
+
+      # WHY 钉解释器：本 job 的阈值断言步骤跑 scripts/*.py，与 ci.yml check job 同口径
+      # 钉 3.11（tomllib 下限 + 本地已验证），理由全文见 ci.yml。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2 # zizmor: ignore[cache-poisoning]
@@ -158,6 +181,10 @@ jobs:
           # 4ms redline，分层后 ≤2ms）。与 perf_thresholds.toml 三表同批（I7 机器断言兜底）；
           # 100k 档属 dev-only 手动取数（CHIMERA_HNSW_BENCH_FULL=1），不入 CI 日跑。
           run_bench hnsw_tiered        cargo bench -p mlc-engine --bench hnsw_tiered
+          # 静默窗口升格（2026-10-04,CPU 前置均值 6.8%）:faae_parallel_bench 由
+          # dev-only → registered。hot/scoring 组有绝对阈值守门（见下方 THRESHOLDS_NS）;
+          # concurrent 组随文件注册进 CI 运行,绝对阈值待 CI 首跑数据后校准（不假锁）。
+          run_bench faae_parallel      cargo bench -p faae-router --bench faae_parallel_bench
 
       - name: Assert thresholds
         # WHY 用 Python 解析 criterion 的 estimates.json:
@@ -232,6 +259,13 @@ jobs:
               # x3-8、ms 级约 x2-2.5，与 sigmoid 33ns→500ns 先例同原则）；数据与
               # 推导见 docs/reports/c6-kpi-threshold-calibration-report-2026-09-04.md。
               # 与 scripts/perf_thresholds.toml 的 [thresholds_ns] 逐键一致（I1）。
+              # 【2026-10-26 R2 订正（M44/M65）】上句是假的：I1 只断言
+              # set(thresholds_ns) == set(path_keywords)，即**只在 perf_thresholds.toml
+              # 内部两表之间比对**（check_perf_redlines.py:303-308），从不拿本 heredoc
+              # 去对那个表。实测已因此产生过一条静默差集：本 dict 曾缺 hnsw_tiered
+              # （下方已补），而该 bench 每轮都跑（L166 run_bench）且 TOML 有 2ms 阈值
+              # ⇒ 该阈值在 CI 永不被断言，且三道自证结构（I1/I7/compare）均看不见它。
+              # 真正的键集对拍不变式尚未实现，已登记为待落单（ADR-225 §5 / 交付物 03 C-86）。
               # gather 本地 median 305ms 为离群值（5 severe outliers；CI 侧 <100ms
               # 通过）→ 数据不可信，保留 100ms 兜底，calibration_pending 唯一存活项。
               "config_concurrency": 3_000_000,     # < 3ms（实测 1.21ms）
@@ -243,6 +277,13 @@ jobs:
               "hybrid_search":      20_000_000,    # < 20ms（实测 8.12ms）
               "debate":             100_000,       # < 100µs（实测 29.5µs）
               "l2_recall":          5_000_000,     # < 5ms（实测 1.86ms）
+              # ADR-192 mlc L2 分层检索 10k 档 Top-10 召回（R2 C-67 补齐）：
+              # 本键原仅存在于 scripts/perf_thresholds.toml:93（= 2_000_000），
+              # 而对应 bench 已在 L166 每轮跑 ⇒ 阈值在册却永不执行（M44）。
+              # 插入序安全：其关键词 `l2_knn_tiered/top10_recall/10000_tiered` 与既有任一键
+              # 均无子串关系（TOML 侧 I2 已核，且含 top10_recall 而非 l2_recall），
+              # 故放此处不改变任何 first-match-wins 归类。
+              "hnsw_tiered":        2_000_000,     # < 2ms（ADR-192 立项 ≤2ms）
               "compress":           50_000,        # < 50µs（实测 9.6µs）
               "compute_masks":      1_500_000,     # < 1.5ms（实测 583µs）
               "delegation":         40_000_000,    # < 40ms（实测 16.2ms）
@@ -288,6 +329,12 @@ jobs:
               "sigmoid_scalar":      500,
               "sigmoid_map":         200_000,
               "percentile_sorted":   1_000,
+              # 静默窗口重锁（2026-10-04）:faae 升格。依据 = 静默 release 单跑 median
+              # （docs/reports/cpu-plane-closeout-2026-10-04.md §4）:
+              #   faae_scoring/serial_24k 19.915ms（该键 max 组）→ ×2.5 余量 50ms
+              #   faae_hot_scoring/serial_24k 12.201ms（该键 max 组）→ ×2.5 余量 30ms
+              "faae_scoring":        50_000_000,
+              "faae_hot_scoring":    30_000_000,
           }
 
           # 路径关键词映射:criterion 目录名 → benchmark crate
@@ -381,6 +428,10 @@ jobs:
               "osa_sequential_baseline": ["sequential_compute_5_masks"],
               # (rhi_judge path_keyword 已随 auto-dpo 删除同步摘除，见 ADR-190)
               "bus_bench":           ["single_publish_latency", "concurrent_subscribe_throughput", "publish_batch_vs_serial"],
+              # 与 scripts/perf_thresholds.toml [path_keywords] 同步（faae 升格批次,
+              # I2 已核:与全部既有键双向互不为子串）
+              "faae_scoring":        ["faae_scoring/serial_24k", "faae_scoring/parallel_24k"],
+              "faae_hot_scoring":    ["faae_hot_scoring/serial_24k", "faae_hot_scoring/parallel_24k"],
           }
 
           criterion_dir = Path("target/criterion")

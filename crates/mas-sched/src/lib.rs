@@ -3,7 +3,7 @@
 //! ROLE:     mas-sched — 多代理调度器控制面（P3-T2，v4.0 WI-29）
 //! BACKEND:  memory
 //! PRODUCERS: 0 -
-//! CONSUMERS: 0 -
+//! CONSUMERS: 1 chimera-cli
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! mas-sched — 多代理调度器控制面（P3-T2，v4.0 WI-29）

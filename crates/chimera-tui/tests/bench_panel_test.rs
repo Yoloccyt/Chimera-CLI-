@@ -88,8 +88,12 @@ fn panel_id_and_honest_display_without_provider() {
     let mut panel = BenchPanel::new();
     assert_eq!(panel.id(), PanelId::Bench);
     // 未接线诚实展示(虚假数据治理红线:不渲染虚假基准数字)。
-    // WHY 双语 OR 而非 pin:本测试不写全局 locale,避免与并行测试的 locale
-    // 写点产生窗口竞态(log_panel_test i18n 纪律同源)。
+    // C-107/M77：原先「双语 OR」规避 locale 写入，但那把失败面变成了「撞语言」：
+    // 中文分支经 TestBackend 逐 cell 收字后变成「未 接 线」（宽字符续格拆开），
+    // contains("未接线") 恒假。现改为**自己 pin En** + 保留双语 OR，两路都不依赖
+    // 同 bin 他测遗留的全局 locale。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::En);
     let area = Rect::new(0, 0, 60, 12);
     let mut buf = Buffer::empty(area);
     panel.render(&TuiState::new(), area, &mut buf);
@@ -115,10 +119,11 @@ fn with_provider_renders_stats_end_to_end() {
     let mut panel = BenchPanel::with_provider(Arc::new(MockProvider {
         stats: BenchStats {
             total_benches: 117,
-            slo_breaches: 2,
-            retrieval_p99_ms: 2.11,
-            agreement_rate: 0.93,
-            certifiable_ratio: 0.88,
+            slo_thresholds_total: 46,
+            slo_breaches: Some(2),
+            retrieval_p99_ms: Some(2.11),
+            agreement_rate: Some(0.93),
+            certifiable_ratio: Some(0.88),
         },
     }));
     let area = Rect::new(0, 0, 60, 12);
@@ -139,6 +144,10 @@ fn with_provider_renders_stats_end_to_end() {
     assert!(
         content.contains("Benches registered: 117"),
         "应渲染基准总数行, got: {content}"
+    );
+    assert!(
+        content.contains("SLO thresholds total: 46"),
+        "应渲染阈值总数行, got: {content}"
     );
     assert!(
         content.contains("Retrieval P99 (ms): 2.11"),

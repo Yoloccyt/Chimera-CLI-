@@ -35,22 +35,29 @@
 # Re-keyed 2026-09-15 after the main merge: the 2026-09-13 baseline moved the
 # nexus-app-server code (generic transport split + new send_decode_error
 # writer path); acquisition sites re-verified one by one, semantics unchanged.
-crates/nexus-app-server/src/transport.rs:169  # DESIGN stdio reader: read_line must complete the line frame
-crates/nexus-app-server/src/transport.rs:186  # DESIGN stdio writer: NDJSON frame written as one atomic unit
-crates/nexus-app-server/src/transport.rs:206  # DESIGN stdio writer: NDJSON error frame written as one atomic unit (send_decode_error)
+# Re-keyed again 2026-10-25 (C-02): the transport moved once more - the four
+# acquisition sites are now recv_op:221 (reader), send_event:238,
+# send_events:265 (own lock since the batch-pre-encode refactor; 3 keys -> 4)
+# and send_decode_error:284. Stale keys 169/186/206 deleted in both tables.
+crates/nexus-app-server/src/transport.rs:221  # DESIGN stdio reader: read_line must complete the line frame
+crates/nexus-app-server/src/transport.rs:238  # DESIGN stdio writer: NDJSON frame written as one atomic unit (send_event)
+crates/nexus-app-server/src/transport.rs:265  # DESIGN stdio writer: batch NDJSON frames written as one atomic unit (send_events)
+crates/nexus-app-server/src/transport.rs:284  # DESIGN stdio writer: NDJSON error frame written as one atomic unit (send_decode_error)
 crates/nexus-app-server/src/sse.rs:121        # DESIGN SSE writer: single-connection frame atomicity
-crates/mlc-engine/src/engine.rs:912           # DESIGN migration_locks: one MemoryId migration = atomic txn incl. its completion event
 
 # --- (B) SCANNER-DEBT: value extracted from the lock, not a guard ------------
 # If check_lock_await.sh ever learns to see through value extraction, delete
 # these lines and re-run the gate.
-# (pipeline re-keyed 2026-09-15 with the main merge, same .take() shape;
-#  re-keyed again 2026-09-20: acquisition line 891 -> 892, one line of
-#  unrelated code above shifted it. Semantics re-verified: `.take()` at
-#  pipeline.rs:897 moves the EventSubscriber VALUE out and the MutexGuard is a
-#  temporary dropped at that statement's end, so the await at :899 holds no lock.)
-crates/chimera-tui/src/data/pipeline.rs:892   # SCANNER-DEBT `.take()` moves the EventSubscriber out; guard drops at stmt end
+# (REPAID 2026-10-08 / v3.5 W6-1 gate-debt batch: the long-lived
+#  `crates/chimera-tui/src/data/pipeline.rs:892` entry - re-keyed twice before,
+#  891 -> 892, purely because unrelated code above shifted - is gone. The call
+#  site was refactored into `DataPipeline::take_locked()`, so the guard dies at
+#  that helper's return and no await statement contains a locking expression.
+#  Both this line and its await_guard_allowlist.txt twin were deleted in the
+#  same batch (G-27 machine-checks the two key sets 1:1). Tooth check: reverting
+#  shutdown() to the multi-line ".lock()...take()" chain must redden
+#  G-27/G-35.)
 crates/decb-governor/src/governor.rs:564      # SCANNER-DEBT `current_total` is `*total` copy; state guard already block-scoped
 crates/mcp-mesh/src/quantum/participant_client.rs:556 # SCANNER-DEBT `pooled` is a TcpStream removed from the pool; guard dies in and_then
 crates/pvl-layer/src/producer.rs:123          # SCANNER-DEBT `strategy` is `*read()` Copy value; read guard dies at stmt end
-crates/session-store/src/writer.rs:495        # SCANNER-DEBT `has_pending` is a bool; flush deliberately runs outside the lock
+crates/session-store/src/writer.rs:577        # SCANNER-DEBT `has_pending` is a bool; flush deliberately runs outside the lock (line moved 495->577 by R2 C-61; same site, scanner is lexical)

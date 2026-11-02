@@ -26,7 +26,6 @@ step 内 `- name` → `continue-on-error: true` → `run:` 这一常见书写序
 import glob
 import os
 import re
-import subprocess
 import sys
 
 try:

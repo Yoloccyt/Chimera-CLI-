@@ -170,7 +170,7 @@ fn test_mcp_nodes_panel_renders_title() {
     assert!(
         content.contains("MCP Nodes"),
         "MCP Nodes panel title should be rendered, got: {}",
-        &content[..content.len().min(200)]
+        content.chars().take(200).collect::<String>()
     );
 }
 
@@ -196,7 +196,7 @@ fn test_mcp_nodes_panel_renders_node_list_when_non_empty() {
     assert!(
         content.contains("mcp-node-1"),
         "node 'mcp-node-1' should be rendered, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         content.contains("mcp-node-2"),
@@ -222,7 +222,7 @@ fn test_mcp_nodes_panel_renders_throughput_value() {
     assert!(
         content.contains("1250"),
         "throughput value 1250 should be rendered, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         content.contains("450"),
@@ -248,7 +248,7 @@ fn test_mcp_nodes_panel_renders_msg_per_second_unit() {
     assert!(
         content.contains("msg/s"),
         "throughput unit 'msg/s' should be rendered, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -270,7 +270,7 @@ fn test_mcp_nodes_panel_renders_last_seen_relative_time() {
     assert!(
         content.contains("ago"),
         "last_seen should be rendered as relative time with 'ago' suffix, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -296,7 +296,7 @@ fn test_mcp_nodes_panel_offline_alert_banner() {
     assert!(
         content.contains("[ALERT]"),
         "offline alert banner should be rendered, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         content.contains("mcp-node-down"),
@@ -310,7 +310,18 @@ fn test_mcp_nodes_panel_offline_alert_banner() {
 
 #[test]
 fn test_mcp_nodes_panel_no_alert_when_all_online() {
-    let now = Utc::now();
+    // C-113/M78：心跳锚点必须与「本用例被调度延迟多久」无关。
+    // 面板规则是 `HEARTBEAT_TIMEOUT_SECS = 5`：`last_seen` 距**渲染时的真实时钟**
+    // 超过 5s 即判心跳超时并画 `[ALERT]` 横幅（见 `panels/mcp_nodes.rs` 的 `is_timed_out`）。
+    // 本用例原先把锚点设为 `Utc::now()`，于是它同时断了两件事：「全在线不告警」
+    // +「这次进程调度快于 5 秒」——实测 1765 用例并跑下本用例耗 **7.8s**，节点被
+    // 面板**正确地**判成超时 ⇒ 断言假红（单跑 1.8s 则绿）。
+    // `content()` 不接时钟（Panel trait 无注入口，加一个属生产 API 变更，不在本单），
+    // 所以把锚点放到未来 1 小时：`now - last_seen > 5s` 对任何非负调度延迟恒假，
+    // 本用例回到它真正要测的命题「无 Offline 节点 ⇒ 不渲染告警横幅」。
+    // 心跳超时判定本身（含 `last_seen == None` 与差值边界）由同文件里**显式传 `now`**
+    // 的纯函数单测覆盖，不依赖这里。
+    let now = Utc::now() + chrono::Duration::hours(1);
     let snapshot = DataSnapshot {
         mcp_nodes: vec![
             McpNodeStatus {
@@ -344,7 +355,7 @@ fn test_mcp_nodes_panel_no_alert_when_all_online() {
     assert!(
         !content.contains("[ALERT]"),
         "no alert banner when no Offline nodes, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -371,7 +382,7 @@ fn test_mcp_nodes_panel_alert_shows_first_offline_node() {
     assert!(
         content.contains("down-1"),
         "first Offline node 'down-1' should appear in alert, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -398,7 +409,7 @@ fn test_mcp_nodes_panel_empty_state_shows_placeholder() {
     assert!(
         content.contains("No MCP nodes connected"),
         "empty state should show placeholder, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         !content.contains("[ALERT]"),
@@ -530,7 +541,7 @@ fn test_mcp_nodes_panel_content_with_nodes() {
     assert!(
         content.contains("node-x"),
         "content should contain node id, got: {}",
-        &content[..content.len().min(200)]
+        content.chars().take(200).collect::<String>()
     );
     assert!(content.contains("999"), "content should contain throughput");
     assert!(content.contains("msg/s"), "content should contain unit");
@@ -543,7 +554,7 @@ fn test_mcp_nodes_panel_content_empty_state() {
     assert!(
         content.contains("No MCP nodes connected"),
         "empty state should show placeholder, got: {}",
-        &content[..content.len().min(200)]
+        content.chars().take(200).collect::<String>()
     );
 }
 
@@ -564,7 +575,7 @@ fn test_mcp_nodes_panel_content_offline_alert() {
     assert!(
         content.contains("[ALERT] Node dead-node offline"),
         "alert banner should mention node id, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -701,7 +712,7 @@ fn test_mcp_nodes_panel_zh_locale_renders_chinese_copy() {
     assert!(
         content.contains("暂无 MCP 节点接入"),
         "Zh locale 下空状态应显示中文提示,实际: {}",
-        &content[..content.len().min(200)]
+        content.chars().take(200).collect::<String>()
     );
 }
 

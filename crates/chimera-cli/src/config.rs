@@ -8,9 +8,10 @@
 //!
 //! ## 配置优先级(后者覆盖前者)
 //! 1. 内置默认值(`ChimeraConfig::default`)
-//! 2. 配置文件(默认 `~/.chimera/omega.yaml`,可由 `--config` 覆盖)
+//! 2. 配置文件(默认 `~/.chimera/omega.yaml`)
 //! 3. 环境变量(前缀 `CHIMERA_`,嵌套用 `__` 分隔)
-//! 4. CLI 参数(目前仅 `--config` 影响加载路径)
+//!
+//! `--config` 只选择配置文件路径，不进入 Figment（CLI 参数不是第 4 源）。
 //!
 //! ## 配置样例
 //! - `examples/config.sample.yaml` 是本模板的**派生物**(由 G-69 `check_config_sample_parity.py` 断言等值),勿手改;`.toml` 只是指向本文件的指针(加载器只注册 `Yaml`)
@@ -192,7 +193,15 @@ fn normalize_path(path: &Path) -> PathBuf {
     result
 }
 
-/// 从多源加载配置(优先级:CLI > env > file > defaults)
+/// 只解析并校验路径，不加载 14 段配置；供 `config path` / `config init` 使用。
+///
+/// 语义：`--config` 显式路径优先；否则 `~/.chimera/omega.yaml`。
+pub fn resolve_config_path(config_path: Option<PathBuf>) -> Result<PathBuf> {
+    let raw = config_path.unwrap_or_else(default_config_path);
+    validate_config_path(&raw)
+}
+
+/// 从多源加载配置(优先级:defaults < file < env；CLI 仅影响路径)
 ///
 /// `config_path` 为 `None` 时使用 [`default_config_path`]。
 /// 配置文件不存在时不报错,仅使用默认值 + 环境变量。
@@ -207,18 +216,16 @@ fn normalize_path(path: &Path) -> PathBuf {
 ///
 /// 校验失败立即返回错误,阻止后续 figment 加载。
 pub fn load(config_path: Option<PathBuf>) -> Result<ChimeraConfig> {
-    let raw_path = config_path.unwrap_or_else(default_config_path);
-
     // P2-3: 路径安全校验(防路径穿越越权读取)
     // 在 figment 加载前完成校验,确保恶意路径不会触及文件 IO。
-    let path = validate_config_path(&raw_path)?;
+    let path = resolve_config_path(config_path)?;
 
-    // 优先级链:defaults -> file -> env(后者覆盖前者)
-    // 注:CLI 参数目前仅影响 config_path,未直接进入 Figment;
-    //     后续可扩展 CLI override provider 以支持 --strategy 等参数。
-    let figment = Figment::from(Serialized::defaults(ChimeraConfig::default()))
-        .merge(Yaml::file(&path))
-        .merge(Env::prefixed("CHIMERA_").split("__"));
+    // 优先级链:file -> env(后者覆盖前者);缺键由 `nexus-core` 容器级
+    // `#[serde(default)]` 回填内置默认值——与旧 `Serialized::defaults` **同源**
+    // (两者都调 `Default::default()`),但省去一次 14 段全量序列化 + Dict 深合并。
+    // WHY 不在此处再挂 defaults:serde 已能对缺失/部分/空文件逐段回填,
+    // 显式 `null`/类型错误两路径仍为 Err(坏配置 → exit 1 契约不变)。
+    let figment = Figment::from(Yaml::file(&path)).merge(Env::prefixed("CHIMERA_").split("__"));
 
     figment
         .extract::<ChimeraConfig>()
@@ -230,7 +237,7 @@ pub fn load(config_path: Option<PathBuf>) -> Result<ChimeraConfig> {
 /// 生成的文件与 §10.2 模板完全一致(含注释),便于用户编辑。
 /// 如果父目录不存在会自动创建。
 pub fn init_config_file(path: &Path) -> Result<()> {
-    // 确保父目录存在(如 ~/.aether/)
+    // 确保父目录存在(如 ~/.chimera/)
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
             std::fs::create_dir_all(parent)
@@ -421,7 +428,7 @@ monitoring:
 // === LazyConfig:14 section 按需懒加载(Task 4 / E1) ===
 //
 // WHY 懒加载:`load()` 通过 `figment.extract::<ChimeraConfig>()` 一次性反序列化
-// 全部 14 个顶层 section。实际 CLI 运行往往只用其中一部分(如 `aether quest list`
+// 全部 14 个顶层 section。实际 CLI 运行往往只用其中一部分(如 `chimera quest list`
 // 不需要 evolution/monitoring),启动期解析未使用 section 是纯浪费。
 // `LazyConfig` 仅在首次访问对应 getter 时,通过 `Figment::extract_inner` 按路径
 // 反序列化该 section,未访问 section 零解析开销。
@@ -505,7 +512,13 @@ impl LazyConfig {
     /// WHY 只构建 provider 不 extract:14 section 的反序列化推迟到首次访问,
     /// 消除启动期未使用 section 的解析开销。
     pub fn new(config_path: Option<PathBuf>) -> Result<Self> {
-        let path = config_path.unwrap_or_else(default_config_path);
+        // 与 `load` 共用路径校验（防 `..` 穿越），避免懒加载成为绕过路径安全的缺口。
+        let path = resolve_config_path(config_path)?;
+        // ⚠ 此处 `Serialized::defaults` **不可删**（与 `load` 不同）:
+        // 懒加载经 `extract_inner::<T>` 按 section 提取,figment 对缺失 key 直接
+        // 返回 `MissingField`（figment.rs extract_inner → de::Error::missing_field）,
+        // **不会**回退到 serde 容器级 `#[serde(default)]`;`enable_strategy_cap`
+        // 这类叶子 bool 更无字段级兜底。反向证据:`tests/config_lazy.rs`。
         let figment = Figment::from(Serialized::defaults(ChimeraConfig::default()))
             .merge(Yaml::file(&path))
             .merge(Env::prefixed("CHIMERA_").split("__"));

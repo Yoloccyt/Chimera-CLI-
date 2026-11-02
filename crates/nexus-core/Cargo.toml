@@ -21,6 +21,10 @@ tokio = { workspace = true }
 # WHY 合规: §2.2 同层互引允许 L(N)→L(N);event-bus 不依赖 nexus-core(零环,
 # payloads.rs ClvSummary::from_clv_slice 已解耦),故 nexus-core→event-bus 无环。
 event-bus = { workspace = true }
+# L0-B 同层：计算面遥测契约与上报编排（ADR-222 D3）。
+# WHY 单向 nexus-core → nexus-telemetry：KindCounters 引用 TaskKind/hts，
+# 反向依赖会形成 crate 环；G-125 守护该方向。
+nexus-telemetry = { workspace = true }
 # tracing: WS-4A ClvSnapshotReported 发布失败告警日志
 tracing = { workspace = true }
 # Task 3.10: L0 nexus-contracts 类型下沉(EventMetadata/TaskStatus/Checkpoint)

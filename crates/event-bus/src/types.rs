@@ -163,6 +163,44 @@ pub enum NexusEvent {
         hottest_kind: String,
     },
 
+    /// 遥测校准写表完成 (ADR-223 D2) — SPRT 校准在 apply 模式写入 HTS 阈值表时发布(广播级 Normal)。
+    ///
+    /// # 触发
+    /// 周期上报的一次 tick 中 `SaturationSource::apply_calibration()` 返回的写入行数 > 0。
+    /// 非 apply 模式恒为 0 ⇒ 不发布(不为零变化刷屏)。
+    ///
+    /// # 为何是 Normal 而非 Critical
+    /// 本事件只报告治理动作结果,不改变请求语义、不承载必须送达的否决/预算类信号;
+    /// 因此不进 `is_critical_mpsc_event` 与 `LANE_FORBIDDEN_SHARD` 两张清单。
+    ///
+    /// # 使用场景
+    /// - efficiency-monitor 订阅后把“阈值被改写”计入 RuntimeAuditor 治理证据
+    /// - 与 `tracing::info!` 同点发出:日志可读、总线可订阅,两条证据面不互斥
+    TelemetryCalibrationApplied {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 本轮写入 HTS 阈值表的行数(>0)
+        applied_rows: usize,
+    },
+
+    /// 遥测上报器启动期配置降级 (ADR-223 D2) — `period_secs == 0` 被钳到 1s 时发布一次。
+    ///
+    /// # 为何单独成事件
+    /// `clamped_period` 是本 crate 唯一一条“输入被静默改写”的规则;若只在 tracing 里写,
+    /// 运维无法通过事件面发现“配置写了 0、系统按 1s 跑”。本事件只在启动时发一次,
+    /// 不随 tick 刷屏。
+    ///
+    /// # 为何是 Normal
+    /// 配置降级是启动期可观测性信号,不改变对外结果语义,不进 mpsc 旁路与分片禁区。
+    TelemetryReporterDegraded {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 装配层传入的原始周期(秒)
+        requested_period_secs: u64,
+        /// 实际生效周期(秒)
+        effective_period_secs: u64,
+    },
+
     // ============================================================
     // L1 Core → L2 Memory:全局状态变更
     // ============================================================
@@ -780,6 +818,12 @@ pub enum NexusEvent {
     /// 与 `OperationTimedOut`(单操作超时)互补,二者构成双层超时防护:
     /// 单操作超时保护单个 future,全局超时保护整个 gather 流程不因单操作
     /// 超时累积而失控。供 efficiency-monitor 等订阅者记录全局超时指标。
+    ///
+    /// ADR-202 I5 扩展:并发上界(分批入流)引入 `not_started` —— 它标识
+    /// **从未入流、因而从未被 poll** 的操作,这类操作**不会触发 QEEP
+    /// `OrphanGuard`**(注册发生在 async 体首次执行),故若无本字段则只能静默消失。
+    /// `abandoned` 与 `not_started` 语义不可合并:前者已执行过(重试可能重复副作用),
+    /// 后者根本没跑(可安全重试)。
     GatherTimedOut {
         /// 事件元数据
         metadata: EventMetadata,
@@ -789,8 +833,14 @@ pub enum NexusEvent {
         elapsed_ms: u64,
         /// 本次 gather 的总操作数
         total: u32,
-        /// 被放弃(未完成)的操作数
+        /// 已入流被 poll、但因全局 deadline 放弃而未完成的操作数
         abandoned: u32,
+        /// 从未入流、因而从未被 poll 的操作数(并发上界下的 backlog 尾部)
+        ///
+        /// WHY `#[serde(default)]`:本字段是后继追加的,旧版本持久化/投递的
+        /// payload 里没有它;不标则反序列化直接失败。沿用本枚举内已有惯例。
+        #[serde(default)]
+        not_started: u32,
     },
 
     /// GQEP 检测到孤儿调用 `[Critical]` — 系统健康告警
@@ -1778,7 +1828,9 @@ pub enum NexusEvent {
         session_id: String,
         /// 用户查询原文
         query: String,
-        /// 若为斜杠命令,携带命令名(如 "plan"/"clear");纯对话为 None
+        /// 斜杠命令名(预留字段):当前 TUI 侧不填充(恒为 None),chat 内以
+        /// `/` 开头的输入按普通对话处理(B4-S F-57 契约收窄;生产代码无读取
+        /// 点,恢复填充需同步编排器消费与两端测试,消除只写不读的半途契约)
         slash_command: Option<String>,
     },
 

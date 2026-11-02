@@ -350,36 +350,39 @@ impl AccessPatternLearner {
     /// # 概率计算
     /// `P(next | current) = count(current → next) / Σ count(current → *)`
     pub fn predict_next(&self, current: &ContextId) -> Vec<(ContextId, f32)> {
-        // 锁内仅 collect 到 Vec,排序在锁外执行,缩短读锁持有时间。
-        // WHY:sort_by 是 O(n log n) CPU 密集操作,在读锁内执行会阻塞并发写请求
-        //(record_access)。将排序移到锁外后,读锁持有时间从 O(n log n) 降至 O(n),
-        // 显著降低写锁等待延迟。
-        let mut predictions: Vec<(ContextId, f32)> = {
-            let patterns = self.patterns.read().unwrap_or_else(|e| {
-                tracing::warn!("patterns RwLock poisoned, recovering");
-                e.into_inner()
-            });
-
-            let transitions = match patterns.get_transitions(current) {
-                Some(t) => t,
-                None => return Vec::new(),
-            };
-
-            let total: u32 = transitions.values().sum();
-            if total == 0 {
-                return Vec::new();
-            }
-
-            transitions
-                .iter()
-                .map(|(id, &count)| (id.clone(), count as f32 / total as f32))
-                .collect()
-        }; // 读锁在此释放
-
-        // 锁外排序:按概率降序(partial_cmp 安全处理 NaN)
+        let mut predictions = self.transition_probs(current);
+        // 锁外排序:按概率降序(partial_cmp 安全处理 NaN)。
+        // WI-G15① 复核(G-21 行转 GREEN):本函数保留**全序**契约(doc 声明 +
+        // 测试锁定,诊断/全序消费用);top-k 截断型消费路径已规范化到 L0
+        // `xts_top_k_by`(见 `prefetch_with_policy`),本行不再承担 top-k 选择职责。
         predictions.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
         predictions
+    }
+
+    /// 转移概率表 — 未排序内核（锁内仅 collect，排序/选择在锁外执行）
+    ///
+    /// `predict_next`(全序)与 `prefetch_with_policy`(过滤+Top-K)共用——WI-G15①
+    /// 抽出防两处漂移;读锁持有时间降至 O(n) collect,不阻塞并发写请求。
+    fn transition_probs(&self, current: &ContextId) -> Vec<(ContextId, f32)> {
+        let patterns = self.patterns.read().unwrap_or_else(|e| {
+            tracing::warn!("patterns RwLock poisoned, recovering");
+            e.into_inner()
+        });
+
+        let transitions = match patterns.get_transitions(current) {
+            Some(t) => t,
+            None => return Vec::new(),
+        };
+
+        let total: u32 = transitions.values().sum();
+        if total == 0 {
+            return Vec::new();
+        }
+
+        transitions
+            .iter()
+            .map(|(id, &count)| (id.clone(), count as f32 / total as f32))
+            .collect()
     }
 
     /// 获取指定上下文的访问模式快照
@@ -519,14 +522,23 @@ impl AccessPatternLearner {
             return Vec::new();
         }
 
-        let predictions = self.predict_next(current);
-
-        // 过滤概率 >= 策略阈值的上下文，并按 Top-K 截断
-        let to_prefetch: Vec<ContextId> = predictions
-            .into_iter()
-            .filter(|(_, prob)| *prob >= threshold)
-            .take(top_k)
-            .map(|(id, _)| id)
+        // WI-G15① 规范化：原「全序 predict_next + take(top_k)」→ 单源过滤 +
+        // L0 `xts_top_k_by`（O(n) select_nth;与 sort_by+truncate 语义等价,util.rs
+        // 等价性单测/ proptest 锁定）。消费者核实(2026-10-07)：mca-gateway
+        // `CacheAffinityIntegration` 不消费本预测序(仅 should_inject_cache_control
+        // 断点注入);top-k 截断消费方 = 本函数——原 G-21 DEFER 疑虑解除,行转 GREEN。
+        let mut candidates: Vec<(ContextId, f32)> = Vec::new();
+        for (id, prob) in self.transition_probs(current) {
+            if prob >= threshold {
+                candidates.push((id, prob));
+            }
+        }
+        let to_prefetch: Vec<ContextId> =
+            nexus_contracts::util::xts_top_k_by(&mut candidates, top_k, |a, b| {
+                b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .iter()
+            .map(|(id, _)| id.clone())
             .collect();
 
         if to_prefetch.is_empty() {

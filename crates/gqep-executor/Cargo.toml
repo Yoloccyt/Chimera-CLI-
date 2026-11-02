@@ -24,7 +24,7 @@ thiserror = { workspace = true }
 # 结构化日志(事件发布失败告警)
 tracing = { workspace = true }
 # FuturesUnordered 流式聚集(对应 A.2 设计决策:流式处理,内存占用更低)
-futures = "0.3"
+futures = { workspace = true }
 async-trait = { workspace = true }
 # UUIDv7 操作 ID 生成(时间有序,便于追溯)
 # 时间戳(聚集延迟计算)

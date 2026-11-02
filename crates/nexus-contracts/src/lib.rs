@@ -1,16 +1,22 @@
 //! CRATE-CONTRACT BEGIN
 //! LAYER:    L0
-//! ROLE:     NEXUS-OMEGA L0 契约层 — 纯类型定义，零逻辑，零 crate 依赖
+//! ROLE:     NEXUS-OMEGA L0-A 契约层 facade — 纯类型 + 受控纯逻辑，对 workspace 的依赖仅限 6 个 L0-A sibling
 //! BACKEND:  memory
 //! PRODUCERS: 0 -
 //! CONSUMERS: 34 chimera-cli,chimera-mas,chimera-tui,cmt-tiering,csn-substitutor…
-//! MATURITY: NOT-IMPL-CN
+//! MATURITY: TRUE
 //! CRATE-CONTRACT END
-//! NEXUS-OMEGA L0 契约层 — 纯类型定义，零逻辑，零 crate 依赖
+//! NEXUS-OMEGA L0-A 契约层 facade — 纯类型 + 受控纯逻辑，对 workspace 的依赖仅限 6 个 L0-A sibling
 //!
-//! 对应架构层: **L0 Contracts**（nexus-core 之下，十层架构新增最低层）
-//! 对应 ADR: **ADR-033**（L0 nexus-contracts 契约层建立）
-//! 对应设计源: `NEXUS-OMEGA_v5.0_系统性完整设计文档.md` §C6
+//! 对应架构层: **L0 Contracts / L0-A 纯契约亚层**（机器层号 0；nexus-core 之下，十层架构新增最低层）
+//! 对应 ADR: **ADR-033**（L0 nexus-contracts 契约层建立；其追加节 2026-10-09 把口径由
+//! 「零逻辑」量体订正为「受控纯逻辑」）/ **ADR-212**（边界 = 单 crate + 纯度门 G-99）/
+//! **ADR-218**（「受控」的逻辑量判据 G-119 与例外台账 `scripts/l0_logic_ledger.txt`）/
+//! **ADR-222**（部分 supersede ADR-212 D1/D2：本 crate 拆为 1+6，L0 分为 L0-A/L0-B 两个层名亚层，
+//! 机器层号 0/1 不重排；本 crate 作 facade 重导出 6 个 sibling，旧路径逐字不变）
+//! 对应设计源: `docs/architecture/CODE_WIKI.md`（架构权威源）+ `docs/architecture/adr_index.md`。
+//! 旧引用 `NEXUS-OMEGA_v5.0_系统性完整设计文档.md` 经全仓检索确认**不在盘**，与
+//! `AETHER_NEXUS_OMEGA_ULTIMATE.md` 同属悬空权威源，故改指在盘源而非在此复制其内容。
 //!
 //! # 核心职责
 //!
@@ -19,12 +25,35 @@
 //!
 //! # 设计约束（ADR-033）
 //!
-//! - **纯类型 + 零逻辑**: 仅类型定义与基础构造函数，不含业务逻辑
-//! - **零 crate 依赖**: 禁止依赖任何 workspace crate（含 `nexus-core` / `event-bus`）
-//! - **唯一外部依赖**: `serde`（仅 derive 宏，用于跨 crate 序列化）
+//! - **纯类型 + 受控纯逻辑**: 类型定义 + 契约自身语义的纯计算（校验/规范化/哈希/
+//!   参考实现/状态机/熵启发式），无 IO / 无 async / 无网络 / 无随机；含逻辑模块
+//!   逐条登记于 `ADR_033_EXCEPTION_MODULES`（口径见 ADR-033 追加节，**不得再整体引用「零逻辑」**）
+//! - **workspace 内部依赖受控**（ADR-222 D2/D4 订正，原口径为「零 workspace 内部依赖」）:
+//!   本 umbrella 仅允许依赖 6 个 L0-A sibling（`nexus-contracts-{core,sparse,safety,seams,mca,memory}`），
+//!   且**方向单向**：sibling 不得反向依赖本 crate（否则即 crate 环，G-99 已按此判红）；
+//!   两者都**禁止**依赖 `nexus-core` / `event-bus` 或任何层号 ≥ 2 的 crate（G-125 [PURITY-LEAK]/[UPWARD]）
+//! - **外部依赖白名单**: `serde`(derive) + `chrono` + `uuid` + `thiserror`（均无运行时业务
+//!   逻辑的基础类型/派生库，ADR-033 例外；G-99 `check_l0_purity.py` 机器锁）
 //! - **依赖铁律扩展**: `L(N) → L(0)` 恒允许（任何层均可依赖 L0）
 //!
-//! # 承载类型（按功能分组，41 个源文件 = 40 个功能模块 + lib.rs）
+//! # 承载类型（按功能分组；ADR-222 拆分后的 7-crate 实测结构，下述文件数为 2026-10-20 现取）
+//!
+//! L0-A 共 **70 个 `src/*.rs`**（G-99 扫描面同值）= 本 umbrella **20** + 6 个 sibling **50**：
+//!
+//! | crate | 保留组目录 | `src/*.rs` | 说明 |
+//! |---|---|---|---|
+//! | `nexus-contracts`（本 crate，facade） | `spec/` `vector_math/` `protocol/` `testutil/` | 20 | 4 组未拆 + facade 重导出 |
+//! | `nexus-contracts-core` | `core_domain/` | 10 | W3.1 首批，含 `is_schema_version_unset` 升 `pub` |
+//! | `nexus-contracts-sparse` | `sparse/` | 5 | W3.2 |
+//! | `nexus-contracts-safety` | `safety/` | 8 | W3.4 |
+//! | `nexus-contracts-seams` | `seams/` | 14 | W3.5（MATURITY=NOT-IMPL-CN 台账行随代码迁至本 crate） |
+//! | `nexus-contracts-mca` | `mca/` | 5 | W3.3 |
+//! | `nexus-contracts-memory` | `memory/` | 8 | W3.6（依赖 core + mca + seams） |
+//!
+//! 每个 sibling **保留原组目录名**（如 `nexus-contracts-core/src/core_domain/`），因此
+//! 消费方两条旧路径 `nexus_contracts::<leaf>::Type` 与 `nexus_contracts::<group>::<leaf>::Type`
+//! 逐字不变；旧口径「64 源文件 = 53 叶子模块 + 10 组 mod.rs + lib.rs」为拆分前单 crate 时点值，
+//! 现由上表取代（53 条根 re-export 计数未变，由 G-107 台账锁定）。（v3.5 W3 子模块化）
 //!
 //! ## 稀疏掩码体系
 //! | 类型 | 来源 | 消费层 |
@@ -75,7 +104,7 @@
 //! ## MCA 亲和与向量存储
 //! | 类型 | 来源 | 消费层 |
 //! |------|------|--------|
-//! | `ProviderId` / `ProtocolDialect` / `CapabilitySet` / `ModelAffinitySpec` | 新建（ADR-065 MCA 体系） | L10 mca-gateway / L1 model-router |
+//! | `ProviderId` / `ProtocolDialect` / `CapabilitySet` / `ModelAffinitySpec` | 新建（ADR-065 MCA 体系） | L10 mca-gateway / L6 omega-learner |
 //! | `AffinityRequest` / `AffinityResponse` / `ContentBlock` | 新建（ADR-065 MCA 体系） | L10 mca-gateway / L9 quest-engine |
 //! | `VectorStore` / `VectorHit` / `VectorBackend` | 新建（P2-W7.3 向量抽象） | L5 repo-wiki / L2 mlc-engine |
 //!
@@ -105,7 +134,7 @@
 //! | `TokenLedgerEntry` / `SegmentMetadata` / `SegmentCreationReason` | 新建（v3.4.0 §5.3 Dressage） | L1 event-bus token-ledger / L7 segment-validation |
 //! | `MemoryPyramidLevel` / `AtomicMemoryCard` / `SceneBlock` / `PersonaSummary` | 新建（v3.4.0 §5.4 MSCE + TencentDB） | L2 mlc-engine / L3 cmt-tiering |
 //! | `SkillLifecycleState` / `SkillLifecycleContract` | 新建（v3.4.0 §5.5 MSCE） | L5 skill-graph / L6 skills-loader |
-//! | `RLHook` / `SerializedPolicy` / `RLTrajectory` / `RLStateVector` / `RLActionVector` | 新建（v3.4.0 §5.7 RL 预留） | L1 rl-client / L2 memory-pyramid |
+//! | `RLHook` / `SerializedPolicy` / `RLTrajectory` / `RLStateVector` / `RLActionVector` | 新建（v3.4.0 §5.7 RL 预留） | L1 nexus-core(rl_client) / L10 chimera-cli(rl_client) |
 //! | `OperatorSelectionStrategy` / `StopStrategyConfig` + 六维 OpenMLE 扩展字段 | 扩展（v3.4.0 §5.6） | L6 Router / L9 Quest |
 //!
 //! ## 测试工具与纯函数（ADR-033 例外）
@@ -115,11 +144,19 @@
 //! | `assert_archive_monotonicity` | 新建（P0-2 INV-8 下沉，ADR-033 例外 2） | L2 mlc-engine / L3 cmt-tiering |
 //! | `CapabilityToken` EWMA 方法 | 新建（P4-W14.5 C4 合规，ADR-033 例外 3） | L4 decay-engine / L9 编排器 |
 //! | `ExperienceCard` 三因子/状态纯函数 | 新建（v3.4.0 §5.2，ADR-033 例外 4） | L1 event-bus / L5 three-factor-selector |
+//! | `HarnessSpec::validate` / `canonical_merkle_input` | 新建（P4-W13~16 DSL 校验，ADR-033 例外 5；2026-10-09 v3.5 量体后补登） | L5 gsoe-evolution / L9 quest-engine |
 //! | `PlatformGroundingSpec::from_doc/check` | 新建（Milestone B-4，纯函数先例） | L9 efficiency-monitor |
 //! | `BehaviorContract::enforce` / `ProceduralBlueprint::validate_plan` | 新建（polish-v2.7，纯函数先例） | L9 efficiency-monitor / L9 quest-engine |
 //!
 //! > 注：后两类为 ADR-033"纯类型零逻辑"约束的**纯函数先例**（无 IO 无状态变更），
 //! > 与 `archive_monotonicity` 同类；显式声明以消除审计误判（2026-08-16 修复 A2）。
+//! >
+//! > ⚠ 性质口径订正（2026-10-09 v3.5 W6-3）：本 crate 的**总括**性质不是「零逻辑」而是
+//! > 「**受控纯逻辑**」（无 IO / 无 async / 无网络 / 无随机，仅这五项为红线）。上方例外表
+//! > 就是证据：`capability_token` 27 个非测试有体函数（EWMA 灰度状态机）、`harness_spec`
+//! > 13 个（`validate` 143 行 + `canonical_merkle_input` 95 行）。而 `vector.rs` 的「零逻辑」
+//! > **依旧成立**（7 个微助手均 ≤7 行 + 8 个 trait 无体声明）——不得拿一个模块代表全 crate。
+//! > 完整量体数据与口径推导见 `ADR-033` 追加节；本结论无机器门，仍靠人工审计 + 单测（已如实登记）。
 //!
 //! # 示例
 //!
@@ -139,53 +176,82 @@
 #![doc(html_root_url = "https://docs.rs/nexus-contracts")]
 
 // ============================================================
-// 模块声明
+// 模块声明 —— v3.5 ADR-212 W3：53 平铺模块收敛为 10 内聚子模块组。
+// crate 根对每个叶子模块 re-export（`pub use <group>::<leaf>;`），使
+// `crate::<leaf>`（facade / prelude / 内部交叉引用）与
+// `nexus_contracts::<leaf>::Type`（外部消费方）旧路径逐字不变，并新增
+// `nexus_contracts::<group>::<leaf>` 分组路径。叶子文件头 `//!` 即各模块
+// 文档（满足 missing_docs）；下方 `pub use` re-export 上方的 `///` 原文注释
+// 转为对该 re-export 的文档说明（内容不变，仅声明点从 `pub mod` 改为 `pub use`）。
 // ============================================================
 
+// L0-A sibling（ADR-222 D2）：core_domain 领域契约。以 re-export 保持 `crate::core_domain::<leaf>`
+// 与 `nexus_contracts::core_domain::<leaf>::Type` 两条路径逐字不变（34 消费 crate 零改动）。
+pub use nexus_contracts_core::core_domain;
+// L0-A sibling（ADR-222 D2）：core re-export 保持 `crate::mca::<leaf>`
+// 与两条外部路径逐字不变（34 个消费 crate 零改动）。
+pub use nexus_contracts_mca::mca;
+// L0-A sibling（ADR-222 D2）：core re-export 保持 `crate::memory::<leaf>`
+// 与两条外部路径逐字不变（34 个消费 crate 零改动）。
+pub use nexus_contracts_memory::memory;
+pub mod protocol;
+// L0-A sibling（ADR-222 D2）：core re-export 保持 `crate::safety::<leaf>`
+// 与两条外部路径逐字不变（34 个消费 crate 零改动）。
+pub use nexus_contracts_safety::safety;
+// L0-A sibling（ADR-222 D2）：core re-export 保持 `crate::seams::<leaf>`
+// 与两条外部路径逐字不变（34 个消费 crate 零改动）。
+pub use nexus_contracts_seams::seams;
+// L0-A sibling（ADR-222 D2）：core re-export 保持 `crate::sparse::<leaf>`
+// 与两条外部路径逐字不变（34 个消费 crate 零改动）。
+pub use nexus_contracts_sparse::sparse;
+pub mod spec;
+pub mod testutil;
+pub mod vector_math;
+
 /// ID newtype 类型 — 五维度稀疏化的统一标识
-pub mod ids;
+pub use sparse::ids;
 
 /// 稀疏掩码容器 — 泛型 `SparseMask<T>`
-pub mod masks;
+pub use sparse::masks;
 
 /// 全维稀疏掩码 — 五维度掩码聚合体 `OmniSparseMasks`
-pub mod omni_masks;
+pub use sparse::omni_masks;
 
 /// Harness-as-Spec 契约类型 — P4 学习闭环规格
-pub mod harness_spec;
+pub use spec::harness_spec;
 
 /// 时间元数据 — P3 时间感知记忆扩展
-pub mod temporal;
+pub use core_domain::temporal;
 
 /// 命名空间配额 — chimera-mas 资源配额上提
-pub mod quota;
+pub use memory::quota;
 
 /// 向量存储契约 — 跨层向量检索抽象（VectorStore trait + VectorStoreExt 扩展）
-pub mod vector;
+pub use vector_math::vector;
 
 /// 选择器策略契约 — D1 病理修复（selector 权重外置，P3-W10.3）
-pub mod policy;
+pub use seams::policy;
 
 /// 密度档位策略契约 — S1 接缝（DDR/HCW 密度档位，P4-W13.2）
-pub mod density;
+pub use seams::density;
 
 /// 记忆策略契约 — S2 接缝（mlc-engine 记忆策略选择，P4-W14.1）
-pub mod strategy;
+pub use seams::strategy;
 
 /// OSA memory 维度自适应记忆策略契约 — S2 桥接层（Task 2）
 ///
 /// 承载 `MemoryTaskPhase` 任务阶段枚举与 `MemoryStrategyProvider` trait，
 /// 供 OSA memory 维度通过 L0 trait 调用 omega-learner S2（依赖铁律 §2.2 合规）。
-pub mod memory_strategy;
+pub use seams::memory_strategy;
 
 /// 预取策略契约 — S3 接缝（scc-cache 预取策略选择，P4-W14.2）
-pub mod prefetch;
+pub use seams::prefetch;
 
 /// Parliament 激活策略契约 — S5 接缝（Parliament 激活策略选择，P4-W14.3）
-pub mod parliament_policy;
+pub use seams::parliament_policy;
 
 /// 衰减参数策略契约 — S6 接缝（decay-engine 衰减档位选择，P4-W14.4）
-pub mod decay_profile;
+pub use seams::decay_profile;
 
 /// 能力场令牌契约 — 学习策略灰度授权载体（P4-W14.5 C4 合规）
 ///
@@ -193,85 +259,85 @@ pub mod decay_profile;
 /// 实现 C4 合规要求的"运行时灰度走能力场，而非散落运行时布尔旗"。
 /// ADR-033"纯类型 + 零逻辑"的第三个明确例外（EWMA 算法 + 灰度状态机），
 /// 详见模块级文档。
-pub mod capability_token;
+pub use seams::capability_token;
 
 /// 召回配额策略契约 — S7 接缝（R1 离线 RL，P4-W16.2.2）
 ///
 /// 承载 R1（召回配额 CQL/IQL）接缝的离散动作空间 `RecallQuota`
 /// 与灰度授权载体 `RecallQuotaPolicy`，供 L6 omega-learner 与 L9 编排器共享。
-pub mod recall_quota;
+pub use seams::recall_quota;
 
 /// 行为契约 — 类型使用规范契约(polish-v2.7 P1-3,ADR-049)
 ///
 /// 承载 BehaviorContract(前置/后置/不变量断言)与 ContractExample,
 /// 供 L9 RuntimeAuditor 审计与 L5 AEGIS Evolver 约束输入。
-pub mod behavior_contract;
+pub use spec::behavior_contract;
 
 /// 变体契约 — Harness 变体标识与性能契约(polish-v2.7 P3-2,ADR-051)
 ///
 /// 承载 VariantId(spec 主键复用)与 VariantContract(任务类型适用域 +
 /// 性能承诺),供 L8 parliament 变体池与 L5 AEGIS 变体登记共享。
-pub mod variant;
+pub use spec::variant;
 
 /// 流程蓝图契约 — 隐性流程经验载体(polish-v2.7 P4-7,ADR-049)
 ///
 /// 承载 ProceduralBlueprint(步骤/前置/成功率)与纯函数计划校验,
 /// 供 L5 repo-wiki 轨迹提取与 L9 quest-engine 计划预检共享。
-pub mod blueprint;
+pub use spec::blueprint;
 
 /// 形式化属性定义框架 — FormalVerifier L4 骨架基础类型(T6-2)
 ///
 /// 承载 PropertyCategory / VerificationResult / InvariantSpec / FormalProperty,
 /// 供各 owner crate 的 formal 验证器实现(7 个,聚合门 gsoe-evolution formal_gate)
 /// 与 L8 parliament 审议时查询属性满足状态共享。
-pub mod formal_props;
+pub use spec::formal_props;
 
 /// 工具计划契约 — 声明式 ToolPlan DSL + 校验 + 守卫常量（P3-T8,WI-16）
 ///
 /// 承载 ToolPlan / ToolNode / ToolOp / PlanEdge / PlanError / guards,
 /// 供 gqep-executor PlanRunner 解释执行（L0 纯类型契约层,零依赖）。
-pub mod tool_plan;
+pub use spec::tool_plan;
 
 /// 调度契约 — mas-sched 控制面类型先移 L0（P3-T2 补,ADR-033 先例）
 ///
 /// 承载 TodoClaim / Lease / Quota / Priority / DenyReason / RenewOutcome /
 /// ShouldRunVerdict / TaskId / HANDOFF,供 mas-sched PeerScheduler 与后续
 /// chimera-mas 拆出依赖时经本契约承接（strangler:类型先移、接口后接）。
-pub mod scheduler_contract;
+pub use spec::scheduler_contract;
 
 /// 事件元数据契约 — L0 共享的事件追踪元信息(Task 3.10,ADR-033 扩展)
 ///
 /// 承载 `EventMetadata`(event_id / timestamp / source),从 L1 `event-bus/src/payloads.rs`
 /// 上提至 L0,缓解 L1 上帝 crate 病理(被 100+ 文件依赖)。
 /// 依赖: chrono + uuid(ADR-033 Task 3.10 新增例外,基础类型库)。
-pub mod event_metadata;
+pub use core_domain::event_metadata;
 
 /// 任务状态契约 — L0 共享的 Task 生命周期枚举(Task 3.10,ADR-033 扩展)
 ///
 /// 承载 `TaskStatus`(Pending/Running/Completed/Failed),从 L1 `nexus-core/src/types.rs`
 /// 上提至 L0,缓解 L1 上帝 crate 病理(被 65+ 文件依赖)。纯 enum,仅 serde derive 依赖。
-pub mod task;
+pub use core_domain::task;
 
 /// 检查点契约 — L0 共享的 Quest 断点恢复快照(Task 3.10,ADR-033 扩展)
 ///
 /// 承载 `Checkpoint`(quest_id / checkpoint_id / memory_snapshot_hash / serialized_state / created_at),
 /// 从 L1 `nexus-core/src/types.rs` 上提至 L0,缓解 L1 上帝 crate 病理(被 42+ 文件依赖)。
 /// 依赖: chrono(ADR-033 Task 3.10 新增例外,基础类型库)。
-pub mod checkpoint;
+pub use core_domain::checkpoint;
 
 /// 预算档位契约 — DECB 三档枚举上提(ADR-054 决策 3,P9-T3)
 ///
 /// 承载 `BudgetTier`(HighTier/LowTier/Degraded),从 L8 `decb-governor` 上提至 L0,
 /// 消除 L9 `quest-engine` 对 L8 的生产依赖边(L9→L8 违规方向,ADR-054 裁决)。
 /// decb-governor 保留 re-export 保兼容;纯枚举,仅 serde derive 依赖(ADR-033)。
-pub mod budget_tier;
+pub use safety::budget_tier;
 
 /// 模型亲和契约 — MCA 体系 L0 类型(ADR-065,PANTHEON 计划)
 ///
 /// 承载 ProviderId / ProtocolDialect / CapabilitySet / ModelAffinitySpec /
 /// AffinityRequest / AffinityResponse 等"能力协商取代名字嗅探"（原则 P1）
-/// 契约类型,供 L10 mca-gateway / L1 model-router / L6 omega-learner 共享。
-pub mod affinity;
+/// 契约类型,供 L10 mca-gateway / L6 omega-learner 共享。
+pub use mca::affinity;
 
 /// 命令验证契约 — 攻击类型/命令/策略/trait 上提(ADR-054 决策 3,P9-T4)
 ///
@@ -280,14 +346,14 @@ pub mod affinity;
 /// 消除 L8 `parliament` 对 L4 `seccore` 的生产依赖违规边(ADR-054 裁决)。
 /// seccore 保留 re-export 保兼容 + 实现 `CommandValidator`;parliament 改 L0 trait
 /// 注入 + 未注入优雅降级(MemoryStrategyProvider 先例)。默认策略语义冻结迁移。
-pub mod command_validation;
+pub use safety::command_validation;
 
 /// 纯领域类型契约 — 用户意图/长期任务/思考模式上提(ADR-054 决策 6,P9-T7)
 ///
 /// 承载 `ThinkingMode` / `MultimodalInput` / `UserIntent` / `Quest` / `Task`,
 /// 从 L1 `nexus-core` 上提至 L0,缓解 D1 上帝 crate 病理(nexus-core 被 30 依赖方引用)。
 /// nexus-core 保留 re-export 保兼容;纯类型,仅 serde derive 依赖(ADR-033)。
-pub mod domain;
+pub use core_domain::domain;
 
 /// 事件载荷契约 — 纯载荷枚举下沉(ADR-054 决策 6,P9-T7 Task 2)
 ///
@@ -295,33 +361,36 @@ pub mod domain;
 /// 从 L1 `event-bus/src/payloads.rs` 下沉至 L0,缓解 L1 超级节点(34 依赖方)负担。
 /// **severity() 判定逻辑不迁移**(架构红线:Critical 事件 mpsc 保障,判定逻辑留在
 /// L1 event-bus);本模块仅承载纯枚举类型(变体/derive 与 L1 原定义逐字一致)。
-pub mod event_payload;
+pub use core_domain::event_payload;
 
 /// P9-T2 测试等待缩放工具 — CHIMERA_TEST_TIMEOUT_SCALE 协议
 ///
 /// 提供 `scale_timeout` / `scaled_timeout!` 宏,允许 PR fast 档通过环境变量
-/// 收敛硬编码 2s+ 等待。是 nexus-contracts "纯类型 + 零逻辑" 约束的**唯一例外**:
+/// 收敛硬编码 2s+ 等待。是 nexus-contracts "纯类型 + 零逻辑" 约束的**第一个例外**
+/// （后续例外逐条见本文件 `pub mod` 注释与顶部例外登记表，1-5）:
 /// 工具仅读 env,不引入任何领域逻辑;详见 module-level 文档。
-pub mod test_scale;
+/// （2026-10-09 v3.5 订正:旧措辞“唯一例外”与 `archive_monotonicity` 行的“第二个
+/// 明确例外”自相矛盾，已列于 WI-G1 审计报告 §6.1 建议但未落，本轮闭合。）
+pub use testutil::test_scale;
 
 /// RL 共享类型契约 — RLState/RLAction/RLExperience（ADR-049 修订补齐）
 ///
 /// 承载跨接缝 RL 训练共享类型: RLAction（S1-S9 接缝动作封闭枚举）/ RLState
 /// （上下文状态快照）/ RLExperience（经验四元组）。纯类型零逻辑（ADR-033）,
 /// 不含训练逻辑（R2 冻结面外,ADR-042）;接缝映射 = 枚举变体包装既有契约类型。
-pub mod rl_types;
+pub use seams::rl_types;
 
 /// 平台接地契约 — PlatformGroundingSpec（Milestone B-4，北大 NL2Pipeline gap 解）
 ///
 /// 承载平台/环境约束的可审计契约（Env/Toolchain/Path/Permission/Config 五类），
 /// 供 L9 efficiency-monitor RuntimeAuditor 第 0 维度（契约遵守）消费。纯类型零逻辑。
-pub mod platform_grounding;
+pub use spec::platform_grounding;
 
 /// 奖励函数统一框架契约（Milestone C-1）— RewardSpec/RewardSignal/SecuritySeverity
 ///
 /// 承载设计 §17 八维度权重表的 L0 契约：层权重 + 维度组件 + 奖励信号流载荷，
 /// R1 数据面先接入，R2 训练面解冻后激活（ADR-042）；L4 安全奖励仅观测。
-pub mod reward;
+pub use seams::reward;
 
 /// 归档单调性契约 — INV-8 独立公共 API（P0-2 审计修复）
 ///
@@ -329,9 +398,9 @@ pub mod reward;
 /// 判定函数（降级 + 同层保持合法，回升拒绝）。INV-8 判定此前仅存在于
 /// L9 `chimera-mas`，本模块将其下沉至 L0，使 mlc-engine（L2）/ cmt-tiering（L3）
 /// 的归档入口可独立执行单调性断言（依赖铁律 §2.2：L(N) → L(0) 恒允许）。
-/// ADR-033"纯类型 + 零逻辑"的第二个明确例外（首个为 `test_scale`），
-/// 详见模块级文档。
-pub mod archive_monotonicity;
+/// ADR-033"纯类型 + 受控纯逻辑"口径下的受控例外之一（旧口径"零逻辑"已由 ADR-033
+/// 2026-10-09 追加节量体订正；完整登记表见本文件 `ADR_033_EXCEPTION_MODULES`）。
+pub use memory::archive_monotonicity;
 
 /// 六维控制面契约 — MemoHarness D1-D6 融合（设计文档 §5.3.1）
 ///
@@ -339,7 +408,7 @@ pub mod archive_monotonicity;
 /// D3 生成控制 / D4 任务编排 / D5 Memory 管理 / D6 输出处理），
 /// 供 L6 Router / L9 Quest / L10 Interface 按统一契约调整 Harness 行为。
 /// 纯类型零逻辑（ADR-033）；RetryPolicy 复用 harness_spec（L0 同层引用）。
-pub mod harness_dimensions;
+pub use spec::harness_dimensions;
 
 /// OmniMessage 协议 — 模型-环境解耦统一消息协议（设计文档 §5.3.2）
 ///
@@ -347,40 +416,40 @@ pub mod harness_dimensions;
 /// ToolRequest / ToolResult / StateUpdate / TraceRecord），解耦 LLM 调用与环境执行。
 /// 纯类型零逻辑（ADR-033）；JSON 字段用 `Box<str>`（遵循 affinity.rs 先例，
 /// 保持 L0 零 crate 依赖铁律）。
-pub mod omni_message;
+pub use mca::omni_message;
 
 /// 经验卡片契约 — OpenMLE 核心数据结构（v3.4.0 §5.2）
 ///
 /// 承载 ExperienceCard / AtomicOperator / ThreeFactorScore / ErrorSignature /
 /// ExecutionStatus / CardMetadata。不可变契约（铁律3）+ 纯函数（铁律4）,
 /// ADR-033"纯类型 + 零逻辑"的第四个明确例外,详见模块级文档。
-pub mod experience_card;
+pub use memory::experience_card;
 
 /// Token 级证据契约 — Dressage 融合（v3.4.0 §5.3）
 ///
 /// 承载 TokenLedgerEntry / ToolCallRecord / SegmentMetadata /
 /// SegmentCreationReason。纯类型零逻辑（ADR-033）;铁律9 分段身份
 /// 不可篡改（parent_traj_id 共享 + anchor 承载终局 reward）。
-pub mod token_evidence;
+pub use memory::token_evidence;
 
 /// 记忆金字塔契约 — MSCE + TencentDB 融合（v3.4.0 §5.4）
 ///
 /// 承载 MemoryPyramidLevel / AtomicMemoryCard / SceneBlock / PersonaSummary。
 /// 纯类型 + 层级映射纯函数（ADR-033 先例）;同层引用 rl_hooks 向量类型。
-pub mod memory_pyramid;
+pub use memory::memory_pyramid;
 
 /// Skill 生命周期契约 — MSCE 融合（v3.4.0 §5.5）
 ///
 /// 承载 SkillLifecycleState / SkillLifecycleContract 三态状态机。
 /// 纯类型 + 状态转移纯函数（ADR-033 先例）。
-pub mod skill_lifecycle;
+pub use memory::skill_lifecycle;
 
 /// RL 预留钩子契约 — v4.0 升级路径（v3.4.0 §5.7 + §17）
 ///
 /// 承载 RLHook trait / SerializedPolicy / RLTrajectory / RLStateVector /
 /// RLActionVector。同步 trait（L0 零依赖铁律，不引入 async-trait）;
 /// 铁律6: 所有统计学习机制可导出为 RLTrajectory。
-pub mod rl_hooks;
+pub use seams::rl_hooks;
 
 // ============================================================
 // v4.0 统一执行总案 A0/WI-04/WI-05/WI-21 新增模块（2026-08-22）
@@ -389,36 +458,37 @@ pub mod rl_hooks;
 /// 图身份契约 — GIP 跨层成本归因三元组（WI-04）
 ///
 /// 承载 GraphIdentity（goal_id/run_id/node_id），经 EventMetadata 可选字段
-/// 渐进铺开；144 事件枚举本体不动（v4.0 §17 治理红线）。
-pub mod graph_identity;
+/// 渐进铺开；152 事件枚举本体不动（v4.0 §17 治理红线）。
+pub use core_domain::graph_identity;
 
 /// MCSM 流形约束信号守恒聚合 — Sinkhorn 双随机投影器（WI-05）
 ///
 /// 纯函数投影器（ADR-033 纯函数先例）：聚合权重矩阵行列归一化，
 /// 防单源 100× 音量淹没他源；含 identity() 直通回滚路径。
-pub mod mcsm;
+pub use vector_math::mcsm;
 
 /// 外部协议契约 — AppOp/AppEvent 与 Thread/Turn/Item 三原语（WI-01）
 ///
 /// 内闭外开（T6）：NexusEvent 永不进外部协议；本模块为转译层协议面类型。
-pub mod app;
+pub use protocol::app;
 
 /// 事件双轨契约 — DynamicEvent 注册表与 EventMetadataV2（WI-21）
 ///
-/// 轨一（内置 144 枚举）不动；轨二（动态注册）供 MCP/SubAgent/Hook 外部源。
-pub mod event_v2;
+/// 轨一（内置 152 枚举）不动；轨二（动态注册）供 MCP/SubAgent/Hook 外部源。
+pub use core_domain::event_v2;
 
 /// 公共 Top-K 收敛工具 — 红线 #8(WS-2 C1)
 ///
 /// 承载 `xts_top_k` / `xts_top_k_by`,以 O(n) `select_nth_unstable_by` +
 /// O(k log k) 局部排序取代"全排后截断"的 `sort_by` 全排序。
-/// ADR-033"纯类型 + 零逻辑"下的纯函数工具先例(与 test_scale / archive_monotonicity / mcsm 同级)。
-pub mod util;
+/// ADR-033"纯类型 + 受控纯逻辑"下的纯函数工具先例（旧口径"零逻辑"已于 2026-10-09
+/// 订正；与 test_scale / archive_monotonicity / mcsm 同级）。
+pub use vector_math::util;
 
 /// 统一错误层级契约 — NexusError 与 Recoverable（A0/WI-01 §6.6）
 ///
 /// 跨层边界结构化错误枚举 + 恢复策略五档；应用层 anyhow 包装。
-pub mod errors;
+pub use safety::errors;
 
 /// 裁决权与认识类型契约 — Claim/Certify/Declaim 语义分离 + MLC 二维认识标签
 ///
@@ -426,32 +496,98 @@ pub mod errors;
 /// `CertifyPayload` / `DeclaimPayload` / `FailureFixStatus` / `FailureRecord`，
 /// 供 L1 event-bus 新增 Claim/Certify/Declaim/FailureRegistry 变体消费
 /// （两段式落点：payload 在 L0，枚举本体在 L1，v2.3 §(b.1)）。纯类型零逻辑（ADR-033）。
-pub mod adjudication;
+pub use safety::adjudication;
 
 /// 写入敏感信息扫描引擎 — 记忆/上下文/会话持久化前的敏感载荷拦截（v2.3 §(b.5)）
 ///
 /// 承载 `scan`（纯函数扫描）/ `ScanPolicy` / `ScanVerdict` / `ScanHit` /
-/// `SensitiveKind` / `SensitiveDisposition` / `looks_high_entropy`。零 crate 依赖
+/// `SensitiveKind` / `SensitiveDisposition`（`looks_high_entropy` 经 ADR-215 D-24
+/// 收窄为模块私有、不在承载面）。零 crate 依赖
 /// （不用 `regex`，靠固定前缀/字面标记 + 熵启发式），供跨 L2–L10 写入口向下依赖（L0）。
-pub mod sensitive;
+pub use safety::sensitive;
 
 /// 统一价格向量契约 — 聚合分散模型单价为可路由消费向量（v2.3 §(b.6)/(c)）
 ///
 /// 承载 `PriceVector` / `ModelPrice`；价格数据已在（config / mca capability / cost.rs），
 /// 本模块补上"统一价格向量"聚合契约，供 `/bench` 可见性与成本感知路由（二期）消费。
-pub mod price_vector;
+pub use mca::price_vector;
 
 /// 人机一致率校准契约 — 评测层「一致率锤点」（v2.3 §(b.6)）
 ///
 /// 承载 `CalibrationSample` / `GateVerdict` / `HumanLabel` / `agreement_rate_milli` /
 /// `certifiable`：机评与人审对照的一致率与阈值（低于阈→自动化结果降级为 Claim）。
-pub mod calibration;
+pub use safety::calibration;
 
 /// 多路召回 RRF 融合原语 — 二期四路召回入口的 L0 共享算法（v2.3 §(b.3)/§(d)⑨）
 ///
 /// `fuse_ranked_lists`/`WeightedList`/`FusedItem`：与 repo-wiki `rrf_fuse` 同参
 /// （k=60、rank 1-based、f32）的泛化 N 路版；供 mlc-engine 四路召回融合启动。
-pub mod recall_fusion;
+pub use vector_math::recall_fusion;
+
+// ============================================================
+// ADR-033「受控纯逻辑」例外登记表（机器可读单一真值源）
+// ============================================================
+
+/// ADR-033「纯类型 + 受控纯逻辑」例外登记表（唯一机器可读源）。
+///
+/// 列出的模块在「纯类型」之外含有**实质性受控纯逻辑**（校验 / 拓扑判环 /
+/// 状态机 / 恢复策略决策表 / 安全策略 validate / 规范化 / 哈希 / 参考实现 /
+/// 熵启发式），红线仍只有四项：无 IO / 无 async / 无网络 / 无随机。
+///
+/// 与两份邻近记录的关系（刻意不复制事实，避免第二真值源）：
+/// - 本表是**模块粒度**的登记，唯一权威；项数不在此写死，由
+///   `tests/l0_exception_registry.rs` 的双向锁与 G-119 的 `registered=` 自报复核。
+/// - 本文件顶部「测试工具与纯函数（ADR-033 例外）」表是例外 1-5 的**来源登记**
+///   （provenance：谁、因何、被哪层消费），**不是**全量清单；新增模块不回填该表。
+/// - `scripts/l0_logic_ledger.txt`（G-119）是**函数粒度**的实况台账，键集取
+///   派生逻辑 ∪ 政策表 ∪ 本表，故两处视角互补而非互相抄录。
+/// - **ADR-222 拆分后的归属**：本表仍是 L0-A 唯一的**模块粒度**登记权威，但登记名对应的源文件
+///   已物理落在 6 个 sibling（如 `masks` → `nexus-contracts-sparse/src/sparse/masks.rs`）；
+///   故表内继续用**裸模块名**而不改成 crate 限定名——台账键不变是 D4 兼容承诺的一部分，
+///   可达性由 `tests/l0_exception_registry.rs` 跨 7 个 src 根解析（空集不得读作通过）。
+///
+/// 小型访问器 / 枚举 `as_str` 等平凡逻辑不登记（如 `vector.rs` 的 ≤7 行微助手 +
+/// 无体 trait 声明，其量体结论为「零逻辑仍成立」）。决策原语
+/// （`affinity::sampling_bucket` / `price_vector::cheapest_model` 等）曾挂
+/// 「D-待裁决」，已由 `ADR-218` 决策 1 逐条裁为受控纯逻辑并于下方补齐。
+///
+/// `tests/l0_exception_registry.rs` 交叉校验本表：① 每个登记名必须是 crate 根可达
+/// 声明模块；② 登记表与实质性逻辑集**双向相等**；③ W3 十个组声明均存在（结构锁）；
+/// ④ **已登记模块的头部不得再以项目符号句式自称「纯类型零逻辑」**（名实矛盾）。
+pub const ADR_033_EXCEPTION_MODULES: &[&str] = &[
+    "test_scale",
+    "archive_monotonicity",
+    "capability_token",
+    "experience_card",
+    "harness_spec",
+    "platform_grounding",
+    "behavior_contract",
+    "blueprint",
+    "util",
+    "mcsm",
+    "sensitive",
+    "calibration",
+    "recall_fusion",
+    // v3.5 深度复审补齐（B-P1-6：修正登记表与实况不符）：
+    "skill_lifecycle", // 三态状态机 next_state + 阈值（模块自声明例外，之前未登记）
+    "tool_plan",       // validate + Kahn 拓扑判环（O(V+E) 图算法）
+    "errors",          // Recoverable::recovery_strategy 恢复决策表 + to_nexus_error
+    "command_validation", // CommandValidator::validate 遍历 20 条拦截模式（ADR-054 决策 3 授权的安全策略）
+    // ADR-218 决策 1/2 补齐（承 ADR-033 追加节自陈缺口 → G-99 符号门 → G-119 逻辑量门）：
+    // 以下 11 个模块由 G-119 从源码派生现形（旧登记表与实况脱节 11 项），逐条裁决记于
+    // ADR-218 决策 1；逐函数读数见 scripts/l0_logic_ledger.txt，勿在此重复台账内容。
+    "affinity", // preferred_dialect 遍历选型 + sampling_bucket 分桶启发式（确定性，无随机源）
+    "price_vector", // cheapest_model min-scan + estimate_cost_micro 微单元成本算术
+    "quota",    // NamespaceQuota::validate 六段区间校验 + 生效上限折减
+    "token_evidence", // TokenLedgerEntry::new 三序列一一对应的证据完整性不变量
+    "density",  // from_rho 为 min_by 最近档搜索（名为查表、实非查表）+ actual_load 容量折减
+    "policy",   // is_valid 权重与策略形状校验
+    "reward",   // LAYER_WEIGHTS 八维奖励权重政策表（Milestone C-1 RewardSpec）
+    "masks",    // SparseMask::select_top_k（select_nth_unstable O(n)，ADR-213 D-7 本域裁决）
+    "formal_props", // collect_results 结果归并 + from_result_with_auto_confidence 置信度分档
+    "harness_dimensions", // default_contract 六维默认契约装配
+    "variant",  // VariantId::new 标识归一化构造
+];
 
 // ============================================================
 // 公开 API 导出
@@ -581,16 +717,18 @@ pub use app::{
     AppEvent, AppOp, AppTokenUsage, ApprovalDecision, ApprovalRequest, Item, ItemId, ItemStatus,
     PermissionMode, ReqId, Thread, ThreadId, ThreadStartParams, TurnId, UserInput,
 };
-pub use errors::{NexusError, Recoverable, RecoveryStrategy};
+pub use errors::{
+    ErrorLayer, EventFailure, NexusError, Recoverable, RecoveryStrategy, ToolFailure,
+};
 // v2.3 (b.1)/(b.3): 裁决权与认识类型契约（Claim/Certify/Declaim payload + EpistemicType）
 pub use adjudication::{
     CertifyPayload, CertifyVerdict, ClaimPayload, DeclaimPayload, EpistemicType, FailureFixStatus,
     FailureRecord, VerifierKind,
 };
 // v2.3 (b.5): 写入敏感信息扫描引擎（纯函数，零依赖，L0）
+// （looks_high_entropy 经 ADR-215 D-24 收窄为模块私有，不再进入根 re-export）
 pub use sensitive::{
-    looks_high_entropy, redact, scan, ScanHit, ScanPolicy, ScanVerdict, SensitiveDisposition,
-    SensitiveKind,
+    redact, scan, ScanHit, ScanPolicy, ScanVerdict, SensitiveDisposition, SensitiveKind,
 };
 // v2.3 (b.6): 统一价格向量聚合契约（纯类型 + 整数估算，L0）
 pub use event_v2::{
@@ -608,6 +746,15 @@ pub use calibration::{
 
 /// 预导出模块 — 常用类型的便捷导入
 ///
+/// # 与顶层的关系（口径，ADR-217 D-35）
+/// prelude = **顶层值级导出的高频子集**，两侧关系由 `tests/prelude_surface_test.rs`
+/// 锁成两条不变量：① **无孤儿**（prelude 的每个值名都必须在顶层出现）；② **同族完备**
+/// （某 leaf 模块只要在 prelude 有任一成员，该模块在两侧的成员集合必须相等）。
+/// 整族缺席（`tool_plan`/`blueprint`/`scheduler_contract`/`variant` 共 22 项）是**有意取舍**
+/// 而非漂移——这些模块含 `Quota`/`Priority`/`ToolOp` 等泛用名，进 glob 会扩大 36 个消费
+/// crate 的名字冲突面；需要者走两段式路径 `nexus_contracts::tool_plan::*`。
+/// 下面各分组注释里的"与顶层导出同集"是**分组级**陈述（受不变量②约束），不是全集陈述。
+///
 /// # 示例
 /// ```
 /// use nexus_contracts::prelude::*;
@@ -616,8 +763,11 @@ pub use calibration::{
 /// let mask: SparseMask<ToolId> = SparseMask::empty();
 /// ```
 pub mod prelude {
-    // Milestone B-3c: 强制层校验结果（与顶层导出同集）
-    pub use crate::behavior_contract::{ContractCheckOutcome, ContractContext, ContractExample};
+    // Milestone B-3c: 强制层校验结果（同族四类型齐，缺项由
+    // tests/prelude_surface_test.rs 的「同族完备」不变量锁住）
+    pub use crate::behavior_contract::{
+        BehaviorContract, ContractCheckOutcome, ContractContext, ContractExample,
+    };
     pub use crate::capability_token::{CapabilityToken, CapabilityTokenStatus, SeamId};
     // P4-W16.2.2: R1 召回配额（S7 接缝）
     pub use crate::density::{DensityPolicy, DensityTier};
@@ -647,9 +797,10 @@ pub mod prelude {
     pub use crate::vector::{
         VectorBackend, VectorHit, VectorStore, VectorStoreExt, VectorStoreStats,
     };
-    // T6-2: 形式化属性定义框架
+    // T6-2: 形式化属性定义框架（与顶层 8 项同族齐，缺项由 prelude_surface_test 锁）
     pub use crate::formal_props::{
-        FormalProperty, InvariantSpec, PropertyCategory, VerificationMethod, VerificationResult,
+        EmptyFormalProvider, FormalProperty, FormalResultProvider, InvariantSpec, PropertyCategory,
+        VerificationMethod, VerificationResult, VerifiedWithStrength,
     };
     // Task 3.10: L0 共享类型扩展(EventMetadata / TaskStatus / Checkpoint)
     pub use crate::checkpoint::Checkpoint;
@@ -714,7 +865,9 @@ pub mod prelude {
         AppEvent, AppOp, AppTokenUsage, ApprovalDecision, ApprovalRequest, Item, ItemId,
         ItemStatus, PermissionMode, ReqId, Thread, ThreadId, ThreadStartParams, TurnId, UserInput,
     };
-    pub use crate::errors::{NexusError, Recoverable, RecoveryStrategy};
+    pub use crate::errors::{
+        ErrorLayer, EventFailure, NexusError, Recoverable, RecoveryStrategy, ToolFailure,
+    };
     // v2.3 (b.1)/(b.3): 裁决权与认识类型契约（与顶层导出同集）
     pub use crate::adjudication::{
         CertifyPayload, CertifyVerdict, ClaimPayload, DeclaimPayload, EpistemicType,
@@ -722,8 +875,7 @@ pub mod prelude {
     };
     // v2.3 (b.5): 写入敏感信息扫描引擎（与顶层导出同集）
     pub use crate::sensitive::{
-        looks_high_entropy, redact, scan, ScanHit, ScanPolicy, ScanVerdict, SensitiveDisposition,
-        SensitiveKind,
+        redact, scan, ScanHit, ScanPolicy, ScanVerdict, SensitiveDisposition, SensitiveKind,
     };
     // v2.3 (b.6): 统一价格向量（与顶层导出同集）
     pub use crate::event_v2::{

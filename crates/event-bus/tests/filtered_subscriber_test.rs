@@ -384,6 +384,9 @@ fn test_topic_mapping_covers_all_variants() {
             elapsed_ms: 5012,
             total: 10,
             abandoned: 3,
+            // 四段守恒样本（ADR-202 I5）：total 10 = succeeded+failed 7 + abandoned 3
+            // + not_started 0（本例描述「已全部入流」的超时形态）
+            not_started: 0,
         },
         NexusEvent::OrphanCallDetected {
             metadata: EventMetadata::new("test-source"),

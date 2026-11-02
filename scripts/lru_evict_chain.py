@@ -6,7 +6,6 @@ RUSTSEC-2026-0253 不可达的结论 —— ADR-167 方案 A 的论证必须改�
 """
 import glob
 import io
-import os
 import re
 import sys
 

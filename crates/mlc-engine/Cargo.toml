@@ -22,7 +22,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 # 库层错误类型标准(4.1:库层用自定义 thiserror enum)
 thiserror = { workspace = true }
-# MemoryId/ProceduralEntry ID 生成(UUIDv7 时间有序)
+# MemoryId 为调用方供给的透明 String newtype(id_newtype!),ProceduralEntry 以 pattern_signature 为唯一键;
+# 本 crate 不生成 ID、无 uuid 依赖;ExperienceCard.card_id 的「约定 UUIDv7」由消费方生成(L0 契约 doc)
 # 时间戳:EpisodicMemory 时间索引、MemoryEntry 访问时间
 chrono = { workspace = true }
 # 异步运行时与 spawn_blocking(L3 ProceduralMemory SQLite 操作包装,避免阻塞 worker 线程)
@@ -42,6 +43,11 @@ tokio = { workspace = true }
 criterion = { workspace = true }
 # 属性测试框架(SubTask 15.12:L2 recall_by_clv 分数不变量验证)
 proptest = { workspace = true }
+# loom:并发 permutation 模型检验（ADR-226 D1 / 业主 T-2）
+# WHY 只进 dev 面：loom 只在 `--cfg loom` 的模型检验跑里拉起，不进生产二进制；
+# 首次落地只覆盖 `card_system`（`Arc<Mutex<ExperienceCardSystem>>`）的锁段协议，
+# 因为那是本 crate 唯一“纯同步锁 + 短临界区”的可建模面。
+loom = { workspace = true }
 
 [[bench]]
 name = "l2_recall"

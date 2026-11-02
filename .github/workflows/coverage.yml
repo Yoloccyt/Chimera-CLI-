@@ -55,6 +55,12 @@ jobs:
       # 表现为"覆盖率数字突变"这种最难归因的红。钉死后测量基线才可比。
       - uses: dtolnay/rust-toolchain@1.97.1
 
+      # WHY 钉解释器：coverage_gate.py 是覆盖率的单点裁决者，且依赖 tomllib（3.11+）
+      # 读 scripts/*.toml。与 ci.yml check job 同口径，理由全文见 ci.yml。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Cache cargo registry & target
         uses: Swatinem/rust-cache@v2
         with:

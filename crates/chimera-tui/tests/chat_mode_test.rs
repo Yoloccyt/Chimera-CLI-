@@ -479,3 +479,45 @@ fn input_history_persistence_roundtrip() {
     assert_eq!(loaded.history_pos, None, "导航位置不跨会话延续");
     std::fs::remove_file(&path).ok();
 }
+
+// ============================================================
+// H. Chat Insert 提交的 slash_command 契约(B4-S F-57 收窄)
+// ============================================================
+
+/// 将 EventBus 注入 TUI 并订阅返回的接收者(bidirectional_control_test 同范式)
+fn app_with_bus(app: TuiApp) -> (TuiApp, event_bus::EventReceiver) {
+    let bus = event_bus::EventBus::new();
+    // broadcast 先 subscribe 再注入:发布发生在事件注入前,避免订阅前丢事件
+    let rx = bus.subscribe();
+    let app = TuiApp::with_event_bus(app, bus);
+    (app, rx)
+}
+
+#[test]
+fn slash_prefix_submit_keeps_slash_command_none() {
+    // B4-S(F-57)契约收窄:TUI 侧不再填充 slash_command(下游编排器从未
+    // 消费,只写不读的半途契约已消除),chat 内以 `/` 开头的输入按普通对话
+    // 处理;query 原样携带斜杠前缀文本交 QuestEngine 分解。
+    let app = make_app();
+    let (mut app, mut rx) = app_with_bus(app);
+    press(&mut app, KeyCode::Char('i'));
+    assert_eq!(app.state().input_mode, InputMode::Insert);
+    type_str(&mut app, "/plan build tower");
+    press(&mut app, KeyCode::Enter);
+
+    let event = rx.try_recv().expect("should receive event").unwrap();
+    match event {
+        NexusEvent::TuiChatSubmitted {
+            query,
+            slash_command,
+            ..
+        } => {
+            assert_eq!(query, "/plan build tower", "query 应原样携带斜杠前缀文本");
+            assert!(
+                slash_command.is_none(),
+                "收窄契约:TUI 不填充 slash_command(恒 None), got {slash_command:?}"
+            );
+        }
+        other => panic!("expected TuiChatSubmitted, got {other:?}"),
+    }
+}

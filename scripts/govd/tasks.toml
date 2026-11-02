@@ -1,0 +1,77 @@
+# Non-gate task families for govd (ADR-228 §3.2).
+# These rows are NOT gates: they never appear in gate_manifest.toml. `release`
+# merges every family; the other lanes merge only the `external` rows that name
+# them in `profiles`, so the pr ledger keeps meaning "133 light + 7 heavy".
+# `source` is one of gate|rust|external|diagnostic (G-138 enforces it).
+
+[[task]]
+id = "R-01"
+profiles = ["release"]
+spec_ref = "ADR-228 §3.2 rust 只读族"
+cmd = "cargo fmt --all -- --check"
+expect = 0
+kind = "light"
+source = "rust"
+timeout_s = 300
+owner = "rust-owners"
+note = "格式只读门：cargo fmt --check 只读不写；release 前置。与 CI 的 fmt 步骤同判据，但由 govd 记录 rc/时长/日志。宿主限制（2026-10-29 实测）：在 Windows 长路径环境下 `cargo fmt --all` 不执行任何检查即中断（输出 `os error 206` + 用法横幅）并以 rc=1 退出——与“rustfmt 发现差异”的红码相同；classify.py 已把该形状归为环境失败（退 2，不记 mismatch），所以本任务的红判据只在其能真正执行的档（Linux CI）上才有意义。仓内另有 G-19 逐包 rustfmt 检查作为本机可用替代品。"
+
+[[task]]
+id = "R-02"
+profiles = ["release"]
+spec_ref = "ADR-228 §3.2 rust 只读族"
+cmd = "cargo metadata --no-deps --format-version 1"
+expect = 0
+kind = "light"
+source = "rust"
+timeout_s = 120
+owner = "rust-owners"
+note = "workspace 元数据可解析性：只读、不编译；用于在 release 前证明 Cargo.toml 图能被工具链消费。"
+
+[[task]]
+id = "R-03"
+profiles = ["release"]
+spec_ref = "ADR-228 §3.2 rust 只读族（编译类仍归 CI）"
+cmd = "cargo check --workspace --all-targets"
+expect = 0
+kind = "heavy"
+source = "rust"
+timeout_s = 1800
+disk_gb = 8
+owner = "rust-owners"
+note = "全 workspace 类型检查。本地磁盘 <8GB 时 govd 记 UNKNOWN 而不静默跳过；权威载体是 CI，release 机器足够磁盘时才真正执行。"
+[[task]]
+id = "E-01"
+profiles = ["nightly", "release"]
+spec_ref = "ADR-228 §3.2 external（Aegis 套件）/ Spec I9"
+cmd = "{python} -m unittest discover -s Aegis/tests/helpers -p \"test_aegis_[d]*.py\""
+expect = 0
+kind = "light"
+source = "external"
+timeout_s = 600
+owner = "aegis-owners"
+note = "Aegis 脚本单测（aegis-deferred-ledger + aegis-doctor）：实测 Ran 11 tests / rc 0（2026-10-29）。原写法 discover Aegis/tests 因 tests/helpers 不是包而只跑 0 tests + rc 0，是假绿，已改。"
+
+[[task]]
+id = "E-02"
+profiles = ["nightly", "release"]
+spec_ref = "ADR-228 §3.2 external（Aegis 套件）/ Spec I9"
+cmd = "{python} -m unittest discover -s Aegis/tests/helpers -p \"test_workspace_*.py\""
+expect = 0
+kind = "light"
+source = "external"
+timeout_s = 600
+owner = "aegis-owners"
+note = "workspace 证据收敛 + 文本写入兼容：实测 rc 0（2026-10-29）。"
+
+[[task]]
+id = "E-03"
+profiles = ["nightly", "release"]
+spec_ref = "ADR-228 §3.2 external（Aegis 套件）/ Spec I9"
+cmd = "{python} -m unittest discover -s Aegis/tests/helpers -p \"test_*.py\""
+expect = 0
+kind = "light"
+source = "external"
+timeout_s = 900
+owner = "aegis-owners"
+note = "全量 helpers 套件：实测 Ran 129 tests / OK (skipped=6) / rc 0（2026-10-29，py3.11 + Windows）。6 个 skip 是 benchmark 族的模块级 SkipTest（fcntl/resource//proc/PR_SET_CHILD_SUBREAPER 为 POSIX-only，Linux CI 仍全量跑）。原 2 failures 已修（is_junction 的 3.11 reparse-tag 回退、注册表单比较 canonical 形式）；原 1 error 已修（copilot-session-start.ps1 钉 UTF-8 输出 + 测试钉 encoding/errors）；原 1 error 是 `tests.helpers` 不是包导致的永久 ImportError，已按同目录写法改 top-level import。方向：expect=0 是棘轮——Aegis 侧任何回归立刻变红，不再把已知红冻结为期望。"

@@ -394,6 +394,51 @@ fn bench_paradox_dashboard_risk_level(c: &mut Criterion) {
     });
 }
 
+/// WI-D1 基准:跨厂商辩论激活对 deliberate 的开销(on-path vs off-path 同环境对照)
+///
+/// 证明激活仅新增 `prepare_debate` 的 O(角色数) HashMap 查询 + 1 次
+/// `publish_blocking`(`CrossVendorNegotiation` 留痕),对既有 Full 路径
+/// wall-clock 无显著回退(性能可证伪铁律)。off=默认 None,on=注入 CrossVendorDebate。
+fn bench_deliberate_cross_vendor_overhead(c: &mut Criterion) {
+    let mut group = c.benchmark_group("wid1_cross_vendor_overhead");
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let quest = make_quest(2, ThinkingMode::Fast);
+
+    // off-path:默认 Parliament(cross_vendor_debate = None)
+    let bus_off = EventBus::new();
+    let parliament_off = Parliament::new(ParliamentConfig::default(), bus_off);
+    group.bench_function("deliberate_off", |b| {
+        let mut idx = 0u64;
+        b.iter(|| {
+            let proposal = Proposal::new(format!("p-off-{idx}"), "q-bench", "低风险提案", 0.2);
+            idx += 1;
+            rt.block_on(parliament_off.deliberate(&quest, &proposal))
+                .unwrap()
+        });
+    });
+
+    // on-path:装配期注入 CrossVendorDebate(2 互异 provider)
+    let bus_on = EventBus::new();
+    let cvd = parliament::CrossVendorDebate::from_provider_names(
+        &["chan-a".to_string(), "chan-b".to_string()],
+        parliament::CrossVendorFallback::FallbackToSame,
+        bus_on.clone(),
+    )
+    .expect("2 互异应激活");
+    let parliament_on = Parliament::new(ParliamentConfig::default(), bus_on).with_cross_vendor(cvd);
+    group.bench_function("deliberate_with_cross_vendor", |b| {
+        let mut idx = 0u64;
+        b.iter(|| {
+            let proposal = Proposal::new(format!("p-on-{idx}"), "q-bench", "低风险提案", 0.2);
+            idx += 1;
+            rt.block_on(parliament_on.deliberate(&quest, &proposal))
+                .unwrap()
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default()
@@ -405,7 +450,7 @@ criterion_group! {
         bench_deliberate_simplified_with_subscriber, bench_publish_votecast_serial,
         bench_deliberate_full_50tasks, bench_deliberate_cache_hit, bench_adaptive_strategy,
         bench_quality_trend_analyzer, bench_paradox_dashboard_update,
-        bench_paradox_dashboard_risk_level
+        bench_paradox_dashboard_risk_level, bench_deliberate_cross_vendor_overhead
 }
 
 criterion_main!(benches);

@@ -12,6 +12,25 @@
 # chimera-mas Check D base 11/16). Regenerate with:
 #   python scripts/check_dep_edge_freeze.py --emit > scripts/dep_edge_freeze.txt
 # (then re-add this header block).
+#
+# COUNTING SCOPE (written down 2026-10-08 / v3.5 W6-2, C-51): this register holds
+#   `[dependencies]` edges ONLY -- the production assembly face, same scope as
+#   Check D (see check_dep_edge_freeze.py:59). `optional = true` edges (e.g.
+#   chimera-cli|mca-gateway / |mas-sched / |nexus-hook / |omega-learner /
+#   |decay-engine, and nexus-app-server|session-store when it is made optional)
+#   are deliberately NOT here; they are governed by gated_wiring_baseline.txt
+#   ★ 2026-10-12: chimera-cli|mas-sched flipped optional->production (ADR-211,
+#   P1 candidate-3); it is now a `[dependencies]` edge already counted in the
+#   baseline. The historical example list above keeps its wording per the
+#   only-append discipline; this note is the correction of record.
+#   (G-56/G-57) instead. Consequence, stated so nobody re-derives it wrongly:
+#   adding a NEW optional direct edge does not trip this ratchet -- that is a
+#   known gap, not a bug in this file.
+#   Do NOT hand-count edges into this header: the numbers 138 (initial baseline)
+#   and 143 (current line count) are snapshots of different dates, and a manual
+#   graph build that also counts optional edges lands on a third number (146).
+#   The only authoritative count is what `--emit` derives right now; G-33 stays
+#   green exactly while file == derived set.
 chimera-cli|chimera-mas
 chimera-cli|chimera-tui
 chimera-cli|cmt-tiering
@@ -33,6 +52,8 @@ chimera-cli|pvl-layer
 chimera-cli|quest-engine
 chimera-cli|repo-wiki
 chimera-cli|seccore
+chimera-cli|session-store      # L10->L3 down; C-63 composition.rs::build_app_server constructs CbmrWriter
+                                     # and injects it via AppServer::with_session_store (ADR-224 D1 / ADR-225 D4)
 chimera-mas|decay-engine
 chimera-mas|event-bus
 chimera-mas|gsoe-evolution
@@ -100,7 +121,7 @@ mtpe-executor|nmc-encoder
 nexus-app-server|event-bus
 nexus-app-server|nexus-contracts
 nexus-app-server|nexus-core
-nexus-app-server|nexus-subagent
+nexus-app-server|nexus-subagent  # 2026-10-27 M62/C-82 实测注记：边存在且非 optional（G-09 仅能证明 crate 图可达），但**装配点为零** —— 全仓 `SubAgentQuestEngine` 的构造点只在本文件的 #[cfg(test)] 段与重导出，唯一组合根 `chimera-cli` 内 `subagent`/`SubAgent` 0 命中。语义：GATED-UNWIRED，不是 wired。接线 or 退役见 ADR-225 §5 T-19；行保留（退役权限不在 R2）。
 nexus-app-server|quest-engine
 nexus-app-server|session-store
 nexus-core|event-bus
@@ -160,4 +181,36 @@ chimera-cli|scc-cache          # L10->L3 down; commands/doctor.rs:576 check_scc_
 chimera-mas|gea-activator      # L9->L9 same-layer allowed; delegation.rs:393 Option<Arc<gea_activator::..>> (5 files)
 efficiency-monitor|decb-governor # L9->L8 down; auditor.rs:47 use decb_governor::Dec.. (auditor reads governor state synchronously)
 gsoe-evolution|decay-engine    # L5->L4 DOWNWARD, lawful under agents.md 2.2 ten-layer law; registered per ADR-187 (alpha-prime: Check A retired, was a strict subset of Check B with zero unique detections). Engine reads ShadowModeCircuitBreaker synchronously (engine.rs:255 breaker.is_tripped()); event-ization rejected (would turn a fail-closed safety read fail-open). Ref docs/reports/Q3-adjudication-inner-ring-gate-2026-09-21.md
+# --- registered 2026-10-06: composition-root GATED / island-repayment wiring edges already in HEAD manifests but never frozen ---
+chimera-cli|chtc-bridge       # L10->L10 same-layer; composition-root optional GATED edge (r2_island_repayment, ADR-177)
+chimera-cli|csn-substitutor   # L10->L10 same-layer; composition-root optional GATED edge (island repayment, ADR-177)
+chimera-cli|mas-sched         # L10->L9 down; OPTIONAL edge declared in Cargo.toml:94 under feature r2_island_repayment (ADR-145/160/177). ★ 2026-10-09 v3.5 corrected: the previous wording claimed "composition-root wiring" — measurably false: `mas_sched` has ZERO references in crates/chimera-cli/src, CRATE-CONTRACT self-reports PRODUCERS 0/CONSUMERS 0, and scripts/gated_wiring_baseline.txt:13 holds this same dep as DECORATIVE. The row stays (edge retirement authority is ADR-188, which does NOT authorize deletion), but its semantics are now GATED-UNWIRED, not wired. ★ 2026-10-12 P1-candidate-3 (ADR-211 Accepted) CONNECTED: mas_sched referenced in crates/chimera-cli/src (agent.rs spawn pre-claim + sched_claim.rs), edge flipped optional->production (Cargo.toml no longer optional), gated_wiring row deleted, CRATE-CONTRACT CONSUMERS 1. WIRED, not GATED-UNWIRED.
+chimera-cli|mtpe-executor     # L10->L7 down; composition-root optional GATED edge (island repayment, ADR-177)
+chimera-cli|nexus-hook        # L10->L9 down; composition-root optional GATED edge (lifecycle hooks, ADR-146/177)
+chimera-cli|sesa-router       # L10->L6 down; composition-root optional GATED edge (island repayment, ADR-177)
+chimera-cli|ssra-fusion       # L10->L7 down; composition-root optional GATED edge (island repayment, ADR-177)
+mcp-mesh|nexus-contracts      # L10->L0 down; consumes nexus-contracts event/affinity contract types (ADR-033)
+# --- registered 2026-10-20: ADR-222 L0 dual sub-layer (L0-A 1+6 split + L0-B telemetry extraction) ---
+nexus-contracts|nexus-contracts-core  # L0-A -> L0-A, same machine layer 0; umbrella facade target after ADR-222 D2 moved `core_domain` out. Direction is umbrella -> sibling ONLY; the reverse would be a crate cycle and is rejected outright by check_l0_purity's allowlist branch (sibling must not depend on `nexus-contracts`).
+nexus-core|nexus-telemetry            # L0-B -> L0-B, same machine layer 1; ADR-222 D3 dependency inversion -- telemetry owns SaturationSource + the reporting loop, nexus-core implements the trait. Reverse edge would close a cycle through KindCounters/TaskKind.
+nexus-telemetry|event-bus             # L0-B -> L0-B, same machine layer 1; the reporter publishes ComputePoolSaturated over the existing bus channel (zero new NexusEvent variants).
+# --- registered 2026-10-20: ADR-222 D2 sibling edges created by the 1+6 split ---
+nexus-contracts|nexus-contracts-sparse  # L0-A -> L0-A, same layer 0; umbrella facade re-export edge (ADR-222 D4). Direction is umbrella -> sibling only; G-99 rejects the reverse (cycle).
+nexus-contracts|nexus-contracts-safety   # L0-A -> L0-A, same layer 0; umbrella facade re-export edge (ADR-222 D4).
+nexus-contracts|nexus-contracts-seams    # L0-A -> L0-A, same layer 0; umbrella facade re-export edge (ADR-222 D4).
+nexus-contracts|nexus-contracts-mca      # L0-A -> L0-A, same layer 0; umbrella facade re-export edge (ADR-222 D4).
+nexus-contracts|nexus-contracts-memory   # L0-A -> L0-A, same layer 0; umbrella facade re-export edge (ADR-222 D4).
+nexus-contracts-memory|nexus-contracts-core  # L0-A -> L0-A; measured edge from the module dependency DAG: memory/token_evidence -> core_domain/{checkpoint,graph_identity}, memory/memory_pyramid needs nothing from core. ADR-222 D2 lists memory -> core/mca/seams.
+nexus-contracts-memory|nexus-contracts-mca   # L0-A -> L0-A; memory/experience_card -> mca/omni_message (TokenUsage), ADR-222 D2 DAG.
+nexus-contracts-memory|nexus-contracts-seams # L0-A -> L0-A; memory/memory_pyramid -> seams/rl_hooks (RLActionVector/RLStateVector), ADR-222 D2 DAG.
+# --- registered 2026-10-25: M21 (l0l10-r1 C-08) pre-existing production edges
+# that --emit never emitted: both crates ALSO re-declared the dep in
+# [dev-dependencies], and parse_declared's last-write-wins classified the
+# production entry as dev-only, so the edge was invisible to G-32/33 (this
+# file) and G-75/76 alike. Both are REAL production edges (src references
+# below) and lawful downward L(N)->L(0) edges (ADR-033). The redundant
+# [dev-dependencies] re-declarations were removed in the same commit; they
+# bought nothing because tests/benches already see [dependencies].
+pvl-layer|nexus-contracts      # L7->L0 down; production edge since Phase 7 s12.1 (pvl-layer/Cargo.toml [dependencies]); src refs: card_generator.rs / dynamic_depth.rs / segment_validation.rs / trajectory_score.rs (ExperienceCard / ExecutionStatus / ErrorSignature contract types)
+quest-engine|nexus-contracts   # L9->L0 down; BudgetTier type source after the ADR-054 decision-3 lift (quest-engine/Cargo.toml [dependencies]); src refs: ttg.rs / arbitration.rs / checkpoint.rs / engine.rs / long_task_map.rs / long_term_credit.rs / search_tree.rs
 

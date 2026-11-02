@@ -59,8 +59,13 @@ pub struct SysMetricsCollector {
 impl SysMetricsCollector {
     /// 创建新的系统资源采集器
     pub fn new() -> Self {
-        let mut system = sysinfo::System::new_all();
-        system.refresh_all();
+        // 性能重构 W2：不再 `System::new_all()` + `refresh_all()`（两次全量扫描，
+        // 含全进程表/磁盘）。本采集器全部消费点仅 `cpus()`/`total_memory()`/…/
+        // `total_swap()`（见 `refresh_and_snapshot`），**零进程依赖**；构造期各刷一次
+        // CPU/内存，满足 sysinfo「至少两次采样才出非零 usage」前提。
+        let mut system = sysinfo::System::new();
+        system.refresh_cpu_all();
+        system.refresh_memory();
         let networks = sysinfo::Networks::new_with_refreshed_list();
         let total_rx: u64 = networks.values().map(|n| n.total_received()).sum();
         let total_tx: u64 = networks.values().map(|n| n.total_transmitted()).sum();
@@ -354,6 +359,19 @@ impl TuiDataSource for StubDataSource {
     }
 }
 
+/// 本 tick 是否需要用最新 deque 重建 `latest_events` 快照（性能重构 D6）。
+///
+/// 仅在有新事件时重建：无新事件的 tick，`latest_event_deque` 内容与上一
+/// 次替换时完全一致（长度只在 push 后增长、trim 只在有新事件入队后才可能触发），
+/// 直接复用上份 `Arc` 即可——避免注释承诺、但旧实现 `!deque.is_empty()`
+/// 失效（首次事件后 deque 永不为空 → 每 tick 全量 clone）的 O(N) 深拷贝。
+///
+/// WHY 抽为纯函数：`pipeline.rs` 的后台循环难以直接单测，把守卫条件下沉为可
+/// 表驱动断言的纯函数（事件驱动快照的**唯一判定入口**）。
+fn should_replace_event_snapshot(events_this_tick: usize) -> bool {
+    events_this_tick > 0
+}
+
 /// 数据管道 — 后台聚合事件并生成统一快照
 ///
 /// WHY:将事件订阅、去重、状态同步与快照生成封装为独立生命周期，
@@ -459,6 +477,10 @@ impl DataPipeline {
             let mut event_rate_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
             let mut decay_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
             let mut sys_metrics_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
+            // F-39 喂数接线:网络速率历史(重 tick 与 sysinfo 采集同节奏推进,
+            // KB/s —— 渲染端与瞬时值 /1024 口径一致)
+            let mut net_rx_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
+            let mut net_tx_history: VecDeque<u64> = VecDeque::with_capacity(max_history_len);
 
             let mut timeline_snapshots: VecDeque<crate::types::TimelineSnapshot> =
                 VecDeque::with_capacity(max_snapshots);
@@ -517,33 +539,13 @@ impl DataPipeline {
 
                 // Concord T1.6:块作用域限定 subscriber guard 生命周期(同快照
                 // guard 理由:历史回填 .await 要求循环内无存活 MutexGuard)。
-                let events = {
-                    let mut guard = subscriber_clone.lock().unwrap_or_else(|poisoned| {
-                        tracing::warn!(
-                            "TUI data pipeline subscriber mutex was poisoned; recovering state"
-                        );
-                        poisoned.into_inner()
-                    });
-                    let Some(sub) = guard.as_mut() else {
-                        break;
-                    };
-
-                    let mut events = Vec::new();
-                    while let Some(event) = sub.try_recv() {
-                        events.push(event);
-                    }
-                    events
+                // v3.5 G-48 分解:该形状收进 `Self::drain_events`（非 async 函数，
+                // guard 止于函数返回）⇒ 循环体内不再出现任何加锁表达式。
+                let Some(events) = Self::drain_events(&subscriber_clone) else {
+                    break;
                 };
 
-                let mut last_quest_idx = None::<usize>;
-                let mut last_budget_idx = None::<usize>;
-                for (idx, event) in events.iter().enumerate() {
-                    match event {
-                        NexusEvent::QuestListUpdated { .. } => last_quest_idx = Some(idx),
-                        NexusEvent::BudgetMetricsUpdated { .. } => last_budget_idx = Some(idx),
-                        _ => {}
-                    }
-                }
+                let (last_quest_idx, last_budget_idx) = Self::last_update_indices(&events);
 
                 let events_this_tick = events.len();
                 for (idx, event) in events.into_iter().enumerate() {
@@ -596,7 +598,10 @@ impl DataPipeline {
                 // (max_event_history 有界截断)+ 克隆替换:latest_events 始终
                 // =「最近 max_event_history 条事件」,与 EventStream 面板语义一致。
                 // WHY clone 而非 move:deque 残留继续累积(跨 tick 合并)。
-                if !latest_event_deque.is_empty() {
+                // 重建守卫：仅当本 tick 有新事件时替换快照（复用旧 Arc 避免 O(N)
+                // 深拷贝）；无新事件时 deque 不变。若未来引入时间淘汰（非仅随 push），
+                // 需改为 `events_this_tick > 0 || trimmed_this_tick`。
+                if should_replace_event_snapshot(events_this_tick) {
                     latest_events = Arc::new(latest_event_deque.clone());
                 }
 
@@ -667,6 +672,18 @@ impl DataPipeline {
                     push_history(
                         &mut sys_metrics_history,
                         (m.cpu.global_usage * 10.0) as u64,
+                        max_history_len,
+                    );
+                    // F-39:网络速率与 CPU 同点喂数(同一 sysinfo 采样内推入,
+                    // 节奏天然对齐;轻量 tick 复用上次采样故不重复推点)
+                    push_history(
+                        &mut net_rx_history,
+                        m.network.rx_bytes_per_sec / 1024,
+                        max_history_len,
+                    );
+                    push_history(
+                        &mut net_tx_history,
+                        m.network.tx_bytes_per_sec / 1024,
                         max_history_len,
                     );
                     last_sys_metrics = Some(m.clone());
@@ -792,6 +809,8 @@ impl DataPipeline {
                     recall_chain_success: osa_sync.recall_chain_success(),
                     sys_metrics,
                     sys_metrics_history: sys_metrics_history.iter().copied().collect(),
+                    net_rx_history: net_rx_history.iter().copied().collect(),
+                    net_tx_history: net_tx_history.iter().copied().collect(),
                     resource_cpu_backfill: cpu_backfill.clone(),
                     resource_mem_backfill: mem_backfill.clone(),
                     tick_mode,
@@ -831,31 +850,25 @@ impl DataPipeline {
                 // 高积压触发 1s 降频——events_this_tick 与旧 250ms 语义等价
                 // (250ms tick 下 latest_events.len() ≈ 本 tick drain 数)。
                 let backlog = events_this_tick;
-                match tick_mode {
-                    TickMode::Normal => {
-                        if backlog >= event_backlog_threshold {
-                            tick_mode = TickMode::Eco;
-                            current_tick_ms = eco_tick_ms;
-                            eco_countdown = 5;
-                            tracing::info!(
-                                "DataPipeline tick mode switched to Eco (backlog={backlog} >= threshold={event_backlog_threshold})"
-                            );
-                        }
+                let previous_mode = tick_mode;
+                let (next_mode, next_countdown) =
+                    eco_transition(tick_mode, eco_countdown, backlog, event_backlog_threshold);
+                tick_mode = next_mode;
+                eco_countdown = next_countdown;
+                match (previous_mode, tick_mode) {
+                    (TickMode::Normal, TickMode::Eco) => {
+                        current_tick_ms = eco_tick_ms;
+                        tracing::info!(
+                            "DataPipeline tick mode switched to Eco (backlog={backlog} >= threshold={event_backlog_threshold})"
+                        );
                     }
-                    TickMode::Eco => {
-                        if backlog >= event_backlog_threshold {
-                            eco_countdown = 5;
-                        } else {
-                            eco_countdown = eco_countdown.saturating_sub(1);
-                            if eco_countdown == 0 {
-                                tick_mode = TickMode::Normal;
-                                current_tick_ms = tick_ms;
-                                tracing::info!(
-                                    "DataPipeline tick mode switched back to Normal (backlog={backlog})"
-                                );
-                            }
-                        }
+                    (TickMode::Eco, TickMode::Normal) => {
+                        current_tick_ms = tick_ms;
+                        tracing::info!(
+                            "DataPipeline tick mode switched back to Normal (backlog={backlog})"
+                        );
                     }
+                    _ => {}
                 }
             }
         });
@@ -882,32 +895,71 @@ impl DataPipeline {
         &self.config
     }
 
+    /// 取走本 tick 已到达的事件；subscriber 已被 `shutdown()` 取走时返回 `None`（后台循环据此退出）。
+    ///
+    /// WHY 单独成函数：与 [`Self::take_locked`] 同款理由——guard 的生命周期止于本函数
+    /// 返回，且本函数非 async，调用点拿到的已是 owned `Vec`，词法门与编译器都能直接
+    /// 判定「不持锁跳 await」。毒化恢复语义与原逐处写法逐字一致（日志文本不变）。
+    fn drain_events(slot: &Mutex<Option<EventSubscriber>>) -> Option<Vec<NexusEvent>> {
+        let mut guard = slot.lock().unwrap_or_else(|poisoned| {
+            tracing::warn!("TUI data pipeline subscriber mutex was poisoned; recovering state");
+            poisoned.into_inner()
+        });
+        let sub = guard.as_mut()?;
+        let mut events = Vec::new();
+        while let Some(event) = sub.try_recv() {
+            events.push(event);
+        }
+        Some(events)
+    }
+
+    /// 求同一 tick 内「最后一次」Quest/Budget 批量更新事件的下标（去重依据）。
+    ///
+    /// WHY 纯函数：把“同一批内重复的批量更新只保留最后一次”这条规则从 900 行的
+    /// 事件循环里拿出来，既可单测，也不再随循环一起膨胀。
+    fn last_update_indices(events: &[NexusEvent]) -> (Option<usize>, Option<usize>) {
+        let mut quest = None::<usize>;
+        let mut budget = None::<usize>;
+        for (idx, event) in events.iter().enumerate() {
+            match event {
+                NexusEvent::QuestListUpdated { .. } => quest = Some(idx),
+                NexusEvent::BudgetMetricsUpdated { .. } => budget = Some(idx),
+                _ => {}
+            }
+        }
+        (quest, budget)
+    }
+
+    /// 取走 `Mutex<Option<T>>` 内的值；guard 的生命周期止于本函数返回。
+    ///
+    /// WHY 单独成函数：`shutdown()` 需要先取值再 `.await`。写成
+    /// `let v = self.field.lock()….take();` 时 guard 虽是语句级临时量
+    ///（编译器可证不跨 await），但本仓词法门 `check_await_across_guard.py` 对
+    /// 跨行方法链一律判为「guard 存活到后续 await」（SCANNER 过近似，同一处
+    /// 历史上已两次被迫 re-key 豁免行号）。把取值形状收进非 async 辅助函数后，
+    /// await 语句里不再出现任何加锁表达式，门与人都能直接判定「不持锁」，
+    /// 两处豁免条目（`await_guard_allowlist.txt` / `lock_await_freeze.txt`）随之整条删除。
+    /// 毒化恢复语义与原逐处写法逐字一致（仅把互斥体名字参数化，日志文本不变）。
+    fn take_locked<T>(slot: &Mutex<Option<T>>, site: &str) -> Option<T> {
+        slot.lock()
+            .unwrap_or_else(|poisoned| {
+                tracing::warn!("TUI data pipeline {site} mutex was poisoned; recovering state");
+                poisoned.into_inner()
+            })
+            .take()
+    }
+
     /// 关闭数据管道，中止并等待后台任务结束
     ///
     /// 取 `&self` 使外部 Arc 持有方可在不回收所有权的情况下清理后台任务。
     /// 先关闭 `EventSubscriber` 的转发任务，再中止数据聚合任务，避免 orphan task。
     pub async fn shutdown(&self) {
-        let sub = self
-            .subscriber
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("TUI data pipeline subscriber mutex was poisoned; recovering state");
-                poisoned.into_inner()
-            })
-            .take();
-        if let Some(mut sub) = sub {
+        // 加锁与 await 分处于不同语句：guard 在 `take_locked` 返回时已释放。
+        if let Some(mut sub) = Self::take_locked(&self.subscriber, "subscriber") {
             sub.shutdown().await;
         }
 
-        let Some(handle) = self
-            .task
-            .lock()
-            .unwrap_or_else(|poisoned| {
-                tracing::warn!("TUI data pipeline task mutex was poisoned; recovering state");
-                poisoned.into_inner()
-            })
-            .take()
-        else {
+        let Some(handle) = Self::take_locked(&self.task, "task") else {
             return;
         };
         handle.abort();
@@ -1027,5 +1079,87 @@ pub async fn backfill_resource_history(
             );
             None
         }
+    }
+}
+
+/// Eco 切换的纯状态转移 —— 把「backlog 越阈 ⇒ Eco / 连续 5 次低 backlog ⇒ 回 Normal」
+/// 从周期循环里抽出来，供确定性夹具直接驱动（ADR-222 R8-7：此前该规则零测试覆盖，
+/// 只知道 `TickMode` 的 display/serde 与配置默认值有测）。
+///
+/// 返回 `(mode, countdown)`；`current_tick_ms` 由调用方按 mode 派生，**不参与判定**——
+/// 模式是状态、时长是派生量，两者混在一起会让夹具只能靠 `sleep` 验证，从而重新变成
+/// 竞速测试（参见 data_test 里 1000 事件/秒 那条同型教训）。
+///
+/// 行为逐字等价于抽取前的内联 match：
+/// - Normal 且 `backlog >= threshold` → 切 Eco，倒计时重置为 5；否则模式与倒计时不动。
+/// - Eco 且 `backlog >= threshold` → 倒计时重置为 5（不退出）。
+/// - Eco 且 `backlog < threshold` → 倒计时减一；减到 0 才回 Normal（第 5 次才退出）。
+#[must_use]
+pub fn eco_transition(
+    mode: TickMode,
+    countdown: u32,
+    backlog: usize,
+    threshold: usize,
+) -> (TickMode, u32) {
+    match mode {
+        TickMode::Normal => {
+            if backlog >= threshold {
+                (TickMode::Eco, 5)
+            } else {
+                (TickMode::Normal, countdown)
+            }
+        }
+        TickMode::Eco => {
+            if backlog >= threshold {
+                (TickMode::Eco, 5)
+            } else {
+                let next = countdown.saturating_sub(1);
+                if next == 0 {
+                    (TickMode::Normal, 0)
+                } else {
+                    (TickMode::Eco, next)
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_replace_event_snapshot;
+
+    /// 性能重构 D6：仅当本 tick 有新事件时才重建快照；无新事件复用旧 Arc。
+    ///
+    /// WHY 锁住纯函数：后台循环难直接单测，而守卫的零拷贝语义完全由该判定决
+    /// 定——`events_this_tick==0` 必须为 false（不重建），否则为 true。
+    #[test]
+    fn snapshot_replaced_only_on_new_events() {
+        assert!(
+            !should_replace_event_snapshot(0),
+            "无新事件的 tick 不应重建快照（否则退化为每 tick 全量 clone）"
+        );
+        assert!(should_replace_event_snapshot(1));
+        assert!(should_replace_event_snapshot(256));
+    }
+
+    /// 性能重构 W2：采集器构造不再 `System::new_all()`（枚举全进程表）；CPU/内存仍可用。
+    ///
+    /// WHY `processes().is_empty()` 作为硬断言：`new_all()` 会填充全进程表，而本采集器
+    /// 零进程消费者；该断言直接锁住"不得退回全量枚举"。
+    #[test]
+    fn collector_uses_targeted_refresh_without_process_scan() {
+        let mut c = super::SysMetricsCollector::new();
+        assert!(
+            c.system.processes().is_empty(),
+            "定向构造不应枚举全进程表（旧 new_all() 会填充 processes）"
+        );
+        let m = c.refresh_and_snapshot();
+        assert!(m.cpu.core_count > 0, "CPU 列表未填充");
+        assert_eq!(
+            m.cpu.core_count,
+            m.cpu.per_core_usage.len(),
+            "core_count 与每核向量长度应一致"
+        );
+        assert!(m.memory.total_bytes > 0, "内存总量未填充");
     }
 }

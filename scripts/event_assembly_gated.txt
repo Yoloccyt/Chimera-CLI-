@@ -1,0 +1,33 @@
+# event_assembly_gated.txt -- G-66 第二轴「生产者装配可达性」的只减不增台账（C-79 / M59）
+#
+# 语义：本文件登记的事件**有生产态构造点**，但那些构造点全部落在「默认构建不可达」的
+#       crate 里（chimera-cli 的 optional 边，或 gated_wiring_baseline.txt 判为
+#       DECORATIVE/PARTIAL 的边）。也就是说：代码里有构造，但默认二进制里发不出来。
+#
+# 与 event_ownership_baseline.txt 的分工（一个事件只能落在其中一边）：
+#   * event_ownership_baseline.txt 记「prod_ctor = 0」——根本没写构造点；
+#   * 本文件记「prod_ctor > 0，但全在不可达 crate」——写了却不可达。
+# 混在一起会让 decide() 把另一边判成 STALE。
+#
+# 只减不增：修好一条（接可达生产者 / 让该 crate 真进默认构建）就删一行；新增必须先减后增。
+# 初始基线的来源：`py -3 scripts/check_event_ownership.py` 第一轴入册后首次跑出的
+# [GAP-A] 全量清单（2026-10-27，15 条），逐条按 producer crate 归类。
+#
+# 注意：M59 当初只点了 mca-gateway 的 2 条（AffinityQuotaExhausted / StreamSessionCompleted）；
+# 第二轴一次性把同类问题全量抖出来——15 条，跨 9 个非默认构建 crate。
+
+AffinityQuotaExhausted     # producer=mca-gateway（chimera-cli optional 边，需 --features mca；ADR-177 长期 GATED）
+ChtcAdapterStatus          # producer=chtc-bridge（gated_wiring_baseline.txt: DECORATIVE；ADR-188 B3-B4 债务）
+ChtcToolCallReceived       # producer=chtc-bridge（同上）
+CsnSubstitutionTriggered   # producer=csn-substitutor（gated_wiring_baseline.txt: DECORATIVE；ADR-188 B3-B4 债务）
+DecayMetricsReported       # producer=decay-engine（gated_wiring_baseline.txt: PARTIAL；ADR-188 B3-B4 债务）
+ModelAffinitySelected      # producer=mca-gateway（同 AffinityQuotaExhausted）
+PredictionMade             # producer=mtpe-executor（gated_wiring_baseline.txt: DECORATIVE；ADR-188 B3-B4 债务）
+PredictionRolledBack       # producer=mtpe-executor（同上）
+PredictionStatsReported    # producer=mtpe-executor（同上）
+RewardSignalReported       # producer=omega-learner（gated_wiring_baseline.txt: PARTIAL；ADR-188 B3-B4 债务）
+SemanticCacheHit           # producer=mca-gateway（同 AffinityQuotaExhausted）
+SesaActivationCompleted    # producer=sesa-router（gated_wiring_baseline.txt: DECORATIVE；ADR-188 B3-B4 债务）
+SsraFusionCompleted        # producer=ssra-fusion（gated_wiring_baseline.txt: DECORATIVE；ADR-188 B3-B4 债务）
+StreamSessionCompleted     # producer=mca-gateway（同 AffinityQuotaExhausted）
+WindowAffinityApplied      # producer=mca-gateway（同 AffinityQuotaExhausted）

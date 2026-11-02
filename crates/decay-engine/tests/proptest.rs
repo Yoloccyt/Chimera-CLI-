@@ -8,6 +8,10 @@
 //! 2. 衰减有界性 — 能力值始终在 [0.0, 1.0] 范围内
 //! 3. Freeze 语义 — 冻结后 level 为 0.0 且 frozen 为 true
 //! 4. ViolationPenalty 惩罚量正确性 — level 减少量 = penalty × severity
+//! 5. 衰减隔离性 — 衰减一个能力不影响另一个
+//! 6. 注册基准 — 注册后立即查询 level 等于初始值
+//! 7. Freeze 隔离性 — 冻结一个能力不影响另一个
+//! 8. ViolationPenalty severity 域校验(C-18) — 负值/NaN/±∞ 恒拒绝且无副作用
 //!
 //! # 语法约束(§4.4)
 //! proptest 1.11+ 用 block-named 语法: `fn name(arg in strategy) { body }`
@@ -16,7 +20,7 @@
 #![forbid(unsafe_code)]
 
 use decay_engine::types::DecayConfig;
-use decay_engine::{DecayEngine, DecayEvent};
+use decay_engine::{DecayEngine, DecayError, DecayEvent};
 use proptest::prelude::*;
 
 /// 创建测试用 DecayEngine(可控配置)
@@ -223,6 +227,46 @@ proptest! {
         prop_assert!(
             !engine.is_frozen("b")?,
             "'b' should not be frozen when only 'a' was frozen"
+        );
+    }
+
+    /// 不变量 8(C-18): ViolationPenalty severity 域校验 —
+    /// 负值/NaN/±∞ 恒被拒绝(Err(InvalidSeverity))且拒绝无副作用
+    ///
+    /// WHY: 负 severity 是不变量 1(单调性)的反例构造 ——
+    /// penalty × severity < 0 使 level 不降反升("越违规权限越大",
+    /// 权限提升攻击面,ADR-002 惩罚语义);NaN 则经浮点传播污染 level。
+    /// C-18 在惩罚计算前拒绝(不 clamp),formal.rs M2 属性 #6 由此获得
+    /// 运行时执行点。拒绝必须无副作用:level 保持原值,不被非法输入污染。
+    #[test]
+    fn prop_violation_invalid_severity_rejected(
+        initial in 0.1f32..1.0f32,
+        invalid in prop_oneof![
+            Just(f32::NAN),
+            Just(f32::INFINITY),
+            Just(f32::NEG_INFINITY),
+            // 任意负值(含 -∞;NaN 与 -0.0 被 < 0.0 过滤,-0.0 属合法域)
+            any::<f32>().prop_filter("negative", |v| *v < 0.0),
+        ],
+    ) {
+        let engine = make_engine(0.1, 0.0);
+        engine.register_capability("cap", "test", initial)?;
+
+        let result = engine.decay("cap", DecayEvent::ViolationPenalty {
+            capability_id: "cap".into(),
+            severity: invalid,
+        });
+
+        prop_assert!(
+            matches!(result, Err(DecayError::InvalidSeverity { .. })),
+            "invalid severity {invalid} must be rejected, got {result:?}"
+        );
+        // 拒绝而非 clamp:校验先于惩罚计算,level 必须保持初始值
+        let after = engine.get_level("cap")?;
+        prop_assert!(
+            (after.value() - initial).abs() < 1e-6,
+            "rejection must leave level untouched: expected ~{initial}, got {}",
+            after.value()
         );
     }
 }

@@ -4,7 +4,7 @@
 //! BACKEND:  sqlite
 //! PRODUCERS: 2 AffinityUnknownField,WikiUpdated
 //! CONSUMERS: 2 chimera-cli,chimera-mas
-//! MATURITY: DEFERRED|NOT-IMPL-CN
+//! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! 仓库知识沉淀 — 跨层共享索引的代码 Wiki 与知识图谱
 //!
@@ -19,7 +19,7 @@
 //!
 //! # 文档-代码偏差记录(《最新版》§10 对齐,P1-3 深度优化)
 //! - **P1-1 嵌入接入**(2026-08):`WikiGenerator::with_text_encoder` 接入 L2
-//!   nmc-encoder TextPerceptor,替换 DEFERRED(T8-3 Audit) 占位状态;
+//!   nmc-encoder TextPerceptor,替换此前的 T8-3 Audit 延迟占位状态;
 //!   默认路径(无编码器)保持 SHA-256 占位 512 维,向后兼容。
 //! - **P1-2 检索收敛**(2026-08):`WikiStore::hybrid_query` 为 L5 唯一融合
 //!   入口(HNSW dense + FTS5 sparse + RRF),chimera-mas WikiRetriever 与

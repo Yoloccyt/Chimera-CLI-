@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// - **`Array1<f32>` 而非 `Vec<f32>`**: 与 `nexus-core::CLV` 一致,避免转换开销
 /// - **`d: usize` 显式存储**: 防止维度漂移,构造后不可变
-/// - **`Copy` 未实现**: `Array1` 含堆分配,Copy 语义会浅拷贝,故 Clone 即可
+/// - **不提供 `Copy`**: `Array1` 含堆分配,Copy 语义会浅拷贝,故 Clone 即可
 /// - **归一化由调用方负责**: LinUCB 假设上下文有界(`||x|| ≤ 1`),
 ///   调用方应在构造前归一化,本类型不做强制(避免双重归一化)
 ///

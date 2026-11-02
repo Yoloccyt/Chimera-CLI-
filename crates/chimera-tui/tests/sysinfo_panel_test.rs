@@ -38,6 +38,16 @@ fn render_to_string(panel: &mut SysinfoPanel, state: &TuiState) -> String {
         .collect()
 }
 
+/// 取键值首个 {} 占位符之前的固定前缀(B6-M 断言范式:与键表同源的渲染行
+/// 特征,避免断言串与键值双源漂移)
+fn prefix_before_placeholder(key: &'static str) -> String {
+    chimera_tui::i18n::tr(key)
+        .split("{}")
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// 验证 Panel trait 7 方法签名对 SysinfoPanel 都可调用且不 panic。
 #[test]
 fn test_sysinfo_panel_id_and_title() {
@@ -64,53 +74,82 @@ fn test_sysinfo_panel_id_and_title() {
 /// 若未来 sysinfo 升级或平台优化使首次采集 < 1s,本测试仍会通过。
 #[test]
 fn test_host_info_displays_within_1s() {
-    let start = Instant::now();
+    // B6-M:正文行迁键;TestBackend 全帧逐 cell 收集下 zh 宽字符会被续格
+    // 空格碎裂,故 pin En 后经 t! 派生期望断言(guard 防 locale 竞争)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    chimera_tui::set_locale(chimera_tui::Locale::En);
+    let t_collect = Instant::now();
     let mut panel = SysinfoPanel::new();
+    let collect = t_collect.elapsed();
     let state = TuiState::new();
+    let t_render = Instant::now();
     let content = render_to_string(&mut panel, &state);
-    let elapsed = start.elapsed();
+    let render = t_render.elapsed();
 
-    // 1. 总耗时 < 3s(spec 1s + Windows 首次采集放宽 2s)
+    // 1a. 渲染本体必须不阻塞(< 250ms)。C-109：这条才是 spec「1s 内显示主机信息」
+    //     的可硬断言部分——面板设计承诺「构造即采集，render 时不阻塞」
+    //     (`sysinfo.rs` 头注)，所以把硬阈值钉在 render 上而不是钉在 OS 采集上。
     assert!(
-        elapsed.as_secs() < 3,
-        "host info render exceeded 3s budget (spec 1s + Windows 放宽 2s): {:?}",
-        elapsed
+        render.as_millis() < 250,
+        "render 应不阻塞（采集已在构造期完成）: {:?}",
+        render
     );
 
-    // 2. 渲染内容应包含"OS"或"Host"行 — 主机信息标题
-    // WHY 任一即可:SysinfoPanel 的实现可能在标题上选 "OS:" 或 "Host:",
-    // 只要包含其一即表示主机信息已被渲染。规避对实现细节的过度耦合。
+    // 1b. OS 级采集耗时**不设紧阈值**，只拦住「真回退」（上界 15s）。C-109 实测取证：
+    //     串行 1.3-1.7s、51 条并跑 4.24s、**1765 条全 crate 并跑 6.40s**——同一个
+    //     常量阈值无论取 3s（原值）还是 5s（C-107 曾改）都会被机器负载撞穿，
+    //     产出的只能是「负载红牌」而非缺陷（M57/T-20 同族）。因此改为：
+    //     量照旧采、上报照旧断言内容，时间只保留一个能拦住实现级回退的上界。
     assert!(
-        content.contains("OS") || content.contains("Host"),
-        "host info should contain OS or Host label, got: {content}"
+        collect.as_secs() < 15,
+        "host info collection exceeded 15s hard ceiling (负载实测 1.3-6.4s): {:?}",
+        collect
+    );
+
+    // 2. OS 行:键值经 panel 公开取值器按序回填(与 render 消费点完全同源)
+    let expected_os = chimera_tui::t!("panel.sysinfo.line_os")
+        .replacen("{}", &panel.host_name(), 1)
+        .replacen("{}", &panel.os_version(), 1)
+        .replacen("{}", &panel.cpu_arch(), 1);
+    assert!(
+        content.contains(&expected_os),
+        "host info should contain OS line, got: {content}"
     );
 
     // 3. 应包含 CPU 字段(主机的关键信息)
     assert!(
-        content.contains("CPU"),
+        content.contains(&prefix_before_placeholder("panel.sysinfo.line_cpu")),
         "host info should contain CPU label, got: {content}"
     );
+    chimera_tui::set_locale(chimera_tui::Locale::Zh);
 }
 
-/// 进程信息(Chimera PID/RSS)按 `refresh_interval_ms` 周期刷新。
+/// 进程信息（Chimera PID/RSS）按 `refresh_interval_ms` 周期刷新。
 ///
 /// 验证 spec §Scenario "系统信息面板启动加载" — "进程信息每 5s 刷新一次"。
-/// 通过注入短刷新间隔(50ms)加速测试,验证:
-/// 1. 构造后 `last_refresh_at` 已被设置(初次采集)
+/// 通过注入短刷新间隔加速测试，验证：
+/// 1. 构造后 `last_refresh_at` 已被设置（初次采集）
 /// 2. 短于间隔的连续 render 不触发二次刷新
-/// 3. 长于间隔的等待后再 render,进程信息被重新采集
+/// 3. 跨过间隔后进程信息被重新采集
+///
+/// ★ C-117/M78：原先一个 50ms 间隔同时供「不跨过」与「跨过」两条断言用，于是
+/// 「不跨过」那条把**本机调度延迟 < 50ms** 当成了前提——全仓并跑下两次 render 之间
+/// 可以被拉开 >50ms（实测本用例 6.55s），刷新按规则**正确地**发生，断言却红了。
+/// ⇒ 拆成两个夹具，各自只依赖自己能保证的事：
+/// - 负向用 **60s 间隔**（任何合理的调度拖拉跨不过 60s，因此该断言与负载无关）；
+/// - 正向用 **50ms 间隔 + 轮询至观察到时间戳前进**（而不是 `sleep(120ms)` 然
+///   后直接断「应当已刷新」），看门狗 5s；真不刷新仍会红。
 #[test]
 fn test_process_info_refreshes_every_5s() {
-    // 50ms 间隔,远小于默认 5s,便于在测试时间内验证刷新行为
-    let mut panel = SysinfoPanel::with_refresh_interval(50);
+    // — 负向：间隔远大于任何调度拖拉 ⇒ 「不刷新」不再依赖调度 —
+    let mut panel = SysinfoPanel::with_refresh_interval(60_000);
     let state = TuiState::new();
 
-    // 1. 首次 render:构造 → render 路径(包含 render 期间的 refresh_if_needed)。
-    //    构造后已过去 > 50ms,refresh_if_needed 触发刷新,last_refresh_at 更新。
+    // 1. 首次 render：构造 → render 路径（包含 render 期间的 refresh_if_needed）。
     let _ = render_to_string(&mut panel, &state);
     let initial_ts = panel.last_refresh_at();
 
-    // 2. 短间隔 render(< 50ms):不应触发刷新,时间戳保持不变
+    // 2. 短间隔 render（60s 间隔未跨过）：不应触发刷新，时间戳保持不变
     let _ = render_to_string(&mut panel, &state);
     assert_eq!(
         panel.last_refresh_at(),
@@ -118,14 +157,24 @@ fn test_process_info_refreshes_every_5s() {
         "no refresh expected before interval elapses"
     );
 
-    // 3. 等待 120ms(> 50ms × 2,确保跨过 tick 边界,避免 Windows 15.6ms
-    //    默认 timer 精度边界值)
-    std::thread::sleep(std::time::Duration::from_millis(120));
-    let _ = render_to_string(&mut panel, &state);
-    let after_sleep_ts = panel.last_refresh_at();
+    // — 正向：50ms 短间隔 + 轮询至收敛 —
+    let mut fast = SysinfoPanel::with_refresh_interval(50);
+    let _ = render_to_string(&mut fast, &state);
+    let fast_initial = fast.last_refresh_at();
+
+    // 3. 轮询直到跨过 50ms 间隔并观察到刷新发生（取代「睡 120ms 再直接断」）：
+    //    旧写法在 Windows 15.6ms timer 精度下本就接近边界，全仓并跑下更是必跨。
+    //    看门狗 5s = 间隔的 100 倍，真不刷新仍会红。
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut after_ts = fast.last_refresh_at();
+    while after_ts == fast_initial && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let _ = render_to_string(&mut fast, &state);
+        after_ts = fast.last_refresh_at();
+    }
     assert!(
-        after_sleep_ts > initial_ts,
-        "refresh should have happened after interval, {after_sleep_ts:?} <= {initial_ts:?}"
+        after_ts > fast_initial,
+        "refresh should have happened after interval, {after_ts:?} <= {fast_initial:?}"
     );
 
     // 4. 默认间隔必须为 5000ms(spec 默认值)

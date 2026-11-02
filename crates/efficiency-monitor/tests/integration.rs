@@ -218,8 +218,12 @@ async fn test_background_subscriber_full_chain() {
     // 启动后台订阅
     monitor.start_event_subscriber().expect("启动订阅失败");
 
-    // 给后台任务时间启动
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    // C-83（M63）：原为「固定 sleep(50ms) → 发布 → 固定 sleep(100ms) → 断精确计数」。
+    // 两个固定等待在满并行下都是赌博：等短了计数没到，等长了白费。
+    // 改为**轮询至收敛**（见下方有限截止循环）：仍是精确相等断言，没有放宽。
+    // 注意：`start_event_subscriber` 同步完成 subscribe（见其实现：subscribe 在
+    // spawn 之前，符合「broadcast 先 subscribe 再 spawn」红线）
+    // ⇒ 发布前不需要额外等待，否则反而是拿 sleep 当同步原语。
 
     // 通过 EventBus 发布 4 个 Critical 事件
     bus.publish(make_skeptic_veto()).await.expect("发布失败");
@@ -229,10 +233,32 @@ async fn test_background_subscriber_full_chain() {
         .expect("发布失败");
     bus.publish(make_budget_exceeded()).await.expect("发布失败");
 
-    // 给后台任务时间处理
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let c = monitor.collectors();
+        if c.event_count("SkepticVeto") == 1
+            && c.event_count("RedTeamAudit") == 1
+            && c.event_count("AsaIntervention") == 1
+            && c.event_count("BudgetExceeded") == 1
+            && c.alert_count("critical") == 4
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "后台订阅应在截止前收齐 4 个 Critical 事件与 4 条告警,实际: {:?}",
+            (
+                c.event_count("SkepticVeto"),
+                c.event_count("RedTeamAudit"),
+                c.event_count("AsaIntervention"),
+                c.event_count("BudgetExceeded"),
+                c.alert_count("critical"),
+            )
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
 
-    // 验证所有事件被记录
+    // 验证所有事件被记录（仍是精确相等，未放宽）
     assert_eq!(monitor.collectors().event_count("SkepticVeto"), 1);
     assert_eq!(monitor.collectors().event_count("RedTeamAudit"), 1);
     assert_eq!(monitor.collectors().event_count("AsaIntervention"), 1);

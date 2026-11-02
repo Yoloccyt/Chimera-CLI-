@@ -101,25 +101,37 @@ proptest! {
         })?;
     }
 
-    /// 不变量 3:融合延迟 ≤ deadline_ms(允许边界)
+    /// 不变量 3：融合延迟 ≤ deadline_ms（允许边界）
     ///
-    /// 纯内存融合操作应在 deadline(20ms)内完成。
-    /// 允许 latency_ms == deadline_ms(边界情况)。
+    /// 纯内存融合操作应在 deadline（20ms）内完成。
+    /// 允许 latency_ms == deadline_ms（边界情况）。
+    ///
+    /// ★ C-118/M78：本用例原先跑在**默认并行档**，但它的断言是**绝对 ms 阈值**——
+    /// 全仓 nextest 并跑下线程被调度拖拉就能越过 20ms（实测 2.8s/单例，单跑绿），
+    /// 产的是「负载红牌」而不是缺陷。仓内对这一类早有既定 doctrine：
+    /// 绝对 ms 阈值的延迟断言属 **slo 档**（`test-threads=1` + release），
+    /// 须入 `scripts/ignored_test_inventory_freeze.txt` 登记（同先例：
+    /// `cmt-tiering/tests/warm.rs#test_warm_query_latency_under_10ms` 等 20+ 行，
+    /// 以及 `repo-wiki/tests/hnsw_p95_test.rs` 的 slo-blocking 做法）。
+    /// 阈值同时改走 `perf_scale_ms`，使 slo 档在慢机上可由 `CHIMERA_PERF_SCALE`
+    /// 统一缩放（缺省 1.0 ⇒ 语义与原先一致）。
     #[test]
+    #[ignore = "绝对 ms 延迟阈值，需静默态单跑；由 slo.yml 每日 schedule 消费（scripts/ignored_test_inventory_freeze.txt）"]
     fn test_latency_within_deadline(
         template_count in 1usize..100,
     ) {
         let rt = tokio::runtime::Runtime::new().map_err(fail)?;
         rt.block_on(async {
             let engine = make_engine(template_count);
-            // deadline_ms = 20,与默认配置一致
+            // deadline_ms = 20，与默认配置一致（经 CHIMERA_PERF_SCALE 缩放，缺省不变）
+            let deadline_ms = nexus_contracts::util::perf_scale_ms(20_u64);
             let request = make_request(template_count, 8);
             let result = engine.fuse(request).await.map_err(fail)?;
 
             prop_assert!(
-                result.latency_ms <= 20,
-                "延迟({}ms)应 ≤ deadline(20ms),模板数={}",
-                result.latency_ms, template_count
+                result.latency_ms <= deadline_ms,
+                "延迟({}ms)应 ≤ deadline({}ms)，模板数={}",
+                result.latency_ms, deadline_ms, template_count
             );
 
             Ok::<(), TestCaseError>(())

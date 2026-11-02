@@ -306,7 +306,7 @@ impl LongTaskMap {
             task_nodes: self.task_nodes.clone(),
             task_edges: self.task_edges.clone(),
         };
-        rmp_serde::to_vec(&snapshot)
+        rmp_serde::to_vec_named(&snapshot)
             .map_err(|e| crate::error::QuestError::SerializationError(e.to_string()))
     }
 

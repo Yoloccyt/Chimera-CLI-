@@ -139,8 +139,10 @@ impl HybridSearchConfig {
 /// - `top_k`: 返回的 Top-K 数量
 ///
 /// # 返回
-/// 融合后的 Top-K 结果,按 RRF 分数降序排列。每条结果记录该文档在
-/// 两路检索中的排名(1-based,`None` 表示该路未命中)。
+/// 融合后的 Top-K 结果,按 (RRF 分数降序, doc_id 升序) **确定性全序**排列。
+/// 分数并列时按 doc_id 升序打破——消除 HashMap `into_values` 迭代序泄漏，
+/// 输出跨进程可复现（对齐 `nexus_contracts::recall_fusion::fuse_ranked_lists`
+/// 的同类不变量）。每条结果记录该文档在两路检索中的排名(1-based,`None` 表示该路未命中)。
 ///
 /// # 降级行为
 /// - `dense_results` 为空:仅用 sparse 排名计算 RRF 分数(`dense_rank = None`)
@@ -235,6 +237,8 @@ pub fn rrf_fuse(
             b.rrf_score
                 .partial_cmp(&a.rrf_score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                // 确定性全序：分数并列时按 doc_id 升序（doc_id 为 HashMap 键故唯一）
+                .then_with(|| a.doc_id.cmp(&b.doc_id))
         });
     }
 
@@ -246,6 +250,8 @@ pub fn rrf_fuse(
         b.rrf_score
             .partial_cmp(&a.rrf_score)
             .unwrap_or(std::cmp::Ordering::Equal)
+            // 与 select 比较器逐字一致：(分数降序, doc_id 升序) 全序
+            .then_with(|| a.doc_id.cmp(&b.doc_id))
     });
     results.truncate(k);
     results
@@ -288,4 +294,45 @@ pub fn hybrid_search(
     top_k: usize,
 ) -> Vec<HybridSearchResult> {
     rrf_fuse(dense_results, sparse_results, config, top_k)
+}
+
+#[cfg(test)]
+mod rrf_determinism_tests {
+    use super::*;
+
+    /// 回归：分数并列时 rrf_fuse 输出必须是确定性全序（doc_id 升序）且跨调用逐字节一致。
+    /// 修复前 select/sort 仅按 rrf_score → 并列由 HashMap into_values 迭代序决定，跨调用不确定。
+    #[test]
+    fn rrf_fuse_ties_are_deterministic_and_id_ordered() {
+        let cfg = HybridSearchConfig::default();
+        // a: dense#1 + sparse#2 ; b: dense#2 + sparse#1 → 分数相等（IEEE 加法可交换），构造并列
+        let dense = vec!["a".to_string(), "b".to_string()];
+        let sparse = vec!["b".to_string(), "a".to_string()];
+        let first = rrf_fuse(&dense, &sparse, &cfg, 2);
+        assert_eq!(first.len(), 2);
+        assert_eq!(
+            first[0].rrf_score.to_bits(),
+            first[1].rrf_score.to_bits(),
+            "构造的并列分数应逐位相等"
+        );
+        assert_eq!(
+            first.iter().map(|r| r.doc_id.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b"],
+            "并列须按 doc_id 升序（确定性全序）"
+        );
+        for _ in 0..32 {
+            let again = rrf_fuse(&dense, &sparse, &cfg, 2);
+            assert_eq!(
+                again
+                    .iter()
+                    .map(|r| (r.doc_id.clone(), r.rrf_score.to_bits()))
+                    .collect::<Vec<_>>(),
+                first
+                    .iter()
+                    .map(|r| (r.doc_id.clone(), r.rrf_score.to_bits()))
+                    .collect::<Vec<_>>(),
+                "重复调用输出必须逐字节一致（无 HashMap 迭代序泄漏）"
+            );
+        }
+    }
 }

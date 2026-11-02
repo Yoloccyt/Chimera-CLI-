@@ -244,6 +244,11 @@ impl EfficiencyMonitor {
     ///
     /// 该方法是同步的，适合在不便 await 的场景调用。
     ///
+    /// 注意:本方法不是后台订阅消费入口——`start_event_subscriber` 拉起的
+    /// 订阅循环走 `handle_broadcast_event`(直调 collectors 的同名
+    /// `record_event`,不走告警/落盘路径),不经过本方法;本方法仅供调用方
+    /// 同步直喂事件,勿与 collectors 的同名方法混同。
+    ///
     /// MCA 亲和事件(StreamSessionCompleted/AffinityCapabilityNegotiated/
     /// ProviderDegraded)同时喂入 affinity_metrics 采集器,更新每通道体验度量。
     pub fn record_event(&self, event: &NexusEvent) {
@@ -266,7 +271,9 @@ impl EfficiencyMonitor {
 
         // P2-1 后续增强:推理悖论风险告警
         // WHY 在 record_event 中处理:CoordinationRatioReported 由 quest-engine
-        // 通过 publish_blocking 发布,efficiency-monitor 作为订阅者在此入口消费。
+        // 通过 publish_blocking 发布;本方法非订阅消费入口(订阅循环走
+        // handle_broadcast_event,不经过此处),悖论告警与 JSONL 落盘仅当
+        // 事件经本方法直喂时才触发。
         // 当 ratio > threshold(is_paradox_risk=true) 时触发 Warning 级告警,
         // 供 TUI 事件流面板展示(三重悖论推理悖论红线度量闭环)。
         if let NexusEvent::CoordinationRatioReported {
@@ -702,7 +709,8 @@ fn handle_critical_event(
     critical_enabled: bool,
     event: &NexusEvent,
 ) {
-    // mpsc 旁路仅投递 4 类 Critical 安全告警事件，无需再判 is_critical_alert_event
+    // mpsc 旁路投递的是 bus.rs 侧 CRITICAL_MPSC_VARIANTS 全集（现取 18 类，不是 4 类）；本处对到达旁路的**每一个** Critical 事件都记一次 critical 告警并即时发布
+    // （C-64b 起 `SandboxViolation` 也在此列——沙箱拦截必须可观测，见 ADR-225 M49）。
     // WHY 不调用 record_event：避免与 broadcast 主流 double-count event 指标
     if critical_enabled {
         collectors.record_alert(AlertSeverity::Critical.as_str());

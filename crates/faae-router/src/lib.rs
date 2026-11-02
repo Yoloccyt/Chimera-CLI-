@@ -2,7 +2,7 @@
 //! LAYER:    L6
 //! ROLE:     Function-as-Expert 语义路由 — 工具即专家的语义化路由调度
 //! BACKEND:  memory
-//! PRODUCERS: 6 EntropyBalanced,ExpertRegistered,ExpertRouted,ExpertUnregistered,ParentSelected…
+//! PRODUCERS: 4 EntropyBalanced,ExpertRegistered,ExpertRouted,ExpertUnregistered
 //! CONSUMERS: 1 chimera-cli
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
@@ -95,7 +95,9 @@ pub use router::FaaeRouter;
 pub use routing_history::{
     ExpertCatalog, ExpertKind, ExpertMeta, MissedRecoveryTracker, RoutingHistory,
 };
-pub use types::{EntropyStats, ExpertProfile, ExpertProfileSnapshot, RoutingResult, ToolId};
+pub use types::{
+    EntropyStats, ExpertProfile, ExpertProfileSnapshot, ExpertScoring, RoutingResult, ToolId,
+};
 // Phase 10 Wave 4: §16.4 事件消费订阅器公开 API 重导出
 pub use variant_subscriber::{
     spawn_variant_event_subscriber, ApprovedVariant, ApprovedVariantRegistry,

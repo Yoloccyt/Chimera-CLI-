@@ -1,4 +1,4 @@
-//! TUI PVL 过程评分面板 — 九维度过程评分可视化（Task 3.7:L10 → L7 向下依赖）
+//! TUI PVL 过程评分面板 — 九维度过程评分可视化（Task 3.7:事件驱动待接线）
 //!
 //! 对应架构层:L10 Interface
 //! 对应 PanelId:PvlScore
@@ -100,7 +100,9 @@ impl Panel for PvlScorePanel {
     }
 
     fn title(&self) -> Line<'static> {
-        Line::from(PanelId::PvlScore.title()).style(
+        // B4-I(F-04):边框标题走键表(原 PanelId::PvlScore.title() 硬编码英文);
+        // panel.border.pvl_score 键本批补齐
+        Line::from(crate::t!("panel.border.pvl_score")).style(
             Style::default()
                 .fg(Color::Magenta)
                 .add_modifier(Modifier::BOLD),

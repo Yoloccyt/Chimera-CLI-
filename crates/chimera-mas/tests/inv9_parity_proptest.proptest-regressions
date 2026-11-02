@@ -1,0 +1,12 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+#
+# 来源注记（2026-10-10，v3.5 W6-5）：下面这条 seed **不是清洁树上的历史失败**，
+# 而是由 `tmp/inv9_teeth.py` 的**故意变异**（把 L5 邻接表构建改为跳过自环）跑出来的
+# 最小反例。保留它是为了让任何后续运行都先重放“自环在双源必须同判”这个形状
+# （详报告 §26.4；上一行的 cc 哈希未改动）。
+cc 083d026c6b8f3cb3667ea6e7155f1fc7fd6beec655c2eb32451b6193505a7eca # shrinks to graph = Graph { edges: [DelegationEdge { from: "n0", to: "n1" }, DelegationEdge { from: "n1", to: "n2" }, DelegationEdge { from: "n0", to: "n0" }] }

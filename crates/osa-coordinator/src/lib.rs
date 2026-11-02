@@ -2,7 +2,7 @@
 //! LAYER:    L6
 //! ROLE:     全维稀疏协调器 — 工具/上下文/记忆/审计/预算五维度稀疏化调度
 //! BACKEND:  memory
-//! PRODUCERS: 6 BudgetExceeded,EntropyBalanced,HcwRecallDegraded,OmniSparseMasksComputed,RouterStatsReported…
+//! PRODUCERS: 1 OmniSparseMasksComputed
 //! CONSUMERS: 2 chimera-mas,mca-gateway
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END

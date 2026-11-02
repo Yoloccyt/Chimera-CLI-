@@ -4,10 +4,13 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "NEXUS-OMEGA L0 契约层 — 纯类型定义，零逻辑，零 crate 依赖（仅 serde 派生）"
+description = "NEXUS-OMEGA L0-A 契约层 facade — 纯类型 + 受控纯逻辑；外部仅 serde/chrono/uuid/thiserror，workspace 内部仅 6 个 L0-A sibling（ADR-222 D2/D4，方向单向）"
 
 [dependencies]
-# ADR-033: nexus-contracts 禁止依赖任何 workspace crate（含 nexus-core）
+# ADR-033 + ADR-222 D2/D4：本 umbrella 禁止依赖 L0-B（nexus-core / event-bus / nexus-telemetry）
+# 与任何层号 >= 2 的 crate；**允许且仅允许**依赖 6 个 L0-A sibling（作 facade 重导出，
+# 方向单向：sibling 不得反向依赖本 crate，否则即 crate 环）——旧口径「禁止依赖任何
+# workspace crate」随 1+6 拆分订正；机器判据 = G-99（依赖白名单 + 禁用符号）+ G-125（[PURITY-LEAK]/[UPWARD]）。
 # Task 3.10 扩展例外清单: serde + chrono + uuid(基础类型库,无运行时业务逻辑)
 #
 # 例外说明:
@@ -24,7 +27,20 @@ serde = { workspace = true, features = ["derive"] }
 chrono = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }
+# L0-A sibling（ADR-222 D2）：core_domain 领域契约。umbrella 以 facade 保持旧路径；
+# sibling 内部仍保留 `src/core_domain/` 目录，故 G-105/G-115 等台账键逐字不变。
+nexus-contracts-core = { workspace = true }
 
+# ADR-222 D2 sibling（umbrella 仅作 facade 汇聚，不含业务逻辑）
+nexus-contracts-sparse = { workspace = true }
+# ADR-222 D2 sibling（umbrella 仅作 facade 汇聚，不含业务逻辑）
+nexus-contracts-safety = { workspace = true }
+# ADR-222 D2 sibling（umbrella 仅作 facade 汇聚，不含业务逻辑）
+nexus-contracts-seams = { workspace = true }
+# ADR-222 D2 sibling（umbrella 仅作 facade 汇聚，不含业务逻辑）
+nexus-contracts-mca = { workspace = true }
+# ADR-222 D2 sibling（umbrella 仅作 facade 汇聚，不含业务逻辑）
+nexus-contracts-memory = { workspace = true }
 [dev-dependencies]
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
@@ -53,13 +69,24 @@ harness = false
 name = "util_micro"
 harness = false
 
+# ADR-217 D-36:L0 唯一生产热路径函数(SparseMask::select_top_k)的单元基线 +
+# full_sort 回退对照组;dev-only 态登记(bench_inventory_freeze.txt),读数不入 SLO 三表
+[[bench]]
+name = "sparse_select_top_k"
+harness = false
+
 # ============================================================
 # ADR-033: L0 nexus-contracts 契约层
 #
 # 设计约束(C6 治理 L1 上帝 crate):
-# - 纯类型定义 + 零逻辑 + 零 crate 依赖（仅 serde 派生）
+# - 纯类型定义 + 受控纯逻辑；外部依赖仅 serde/chrono/uuid/thiserror，workspace 内部仅 6 个
+#   L0-A sibling（ADR-222 D2/D4；旧口径「零 workspace 内部 crate 依赖」已随 1+6 拆分订正）
+#   「受控」两字的判据史：原口径「零逻辑」自 ADR-033 追加节 2026-10-09 量体订正为
+#   「受控纯逻辑」；符号面由 ADR-212 决策 3 的 G-99 守护，逻辑量面由 ADR-218 的 G-119
+#   （scripts/l0_logic_ledger.txt 完备性对拍）守护——旧版此处写「零逻辑」属未随订正同步
 # - 依赖铁律扩展: L(N) → L(0) 恒允许
-# - nexus-contracts 禁止依赖任何 crate（含 nexus-core / event-bus）
+# - 禁止依赖 L0-B 与层号 >= 2 的 crate（含 nexus-core / event-bus）；仅允许 6 个 L0-A sibling
+#   ——旧句「禁止依赖任何 crate」在 ADR-222 拆分后与本文件自己的 [dependencies] 互斥，已订正
 #
 # 承载类型:
 # - OmniSparseMasks（从 osa-coordinator 上提）+ SparseMask<T> + 5 个 ID 类型

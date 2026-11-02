@@ -35,10 +35,11 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::task::spawn_blocking;
+use tokio::task::{spawn_blocking, JoinHandle};
 use tracing::{debug, warn};
 
 use crate::error::StoreError;
@@ -70,6 +71,18 @@ struct CbmrInner {
     /// 已确认）;重开后首个 flush 前为空 → [`CbmrWriter::last_offset`] 返回
     /// None,调用方应先 flush 再查询。
     last_offset_by_session: Mutex<HashMap<SessionId, Offset>>,
+    /// 关闭标志（M50）——置位后后台刷写循环在下一个窗口退出
+    ///
+    /// WHY 与 `Drop` 共用:Drop 不能 await,所以它只能“置标志 + abort”;
+    /// 想保证「最后一批也落盘」必须走可 await 的 [`CbmrWriter::shutdown`]。
+    closing: AtomicBool,
+    /// 后台刷写循环句柄（M50）——仅构造时写入一次,shutdown/Drop 取走并 abort
+    ///
+    /// WHY 放 `CbmrInner` 而不是 `CbmrWriter`:
+    /// `CbmrWriter` 是 `Clone`（廉价 Arc 克隆）,若把句柄/Drop 挂在它上面,
+    /// 任一副本析构就会误杀共享循环。挂在 `CbmrInner` 上则只有**最后一个**
+    /// Arc 释放时才会跑 Drop——与所有权的真实语义一致。
+    flush_loop: Mutex<Option<JoinHandle<()>>>,
 }
 
 /// 单会话的段写状态
@@ -115,12 +128,39 @@ where
 }
 
 impl CbmrWriter {
-    /// 创建微批写器（建数据目录 + 打开 SQLite 树索引 + 启动后台刷写循环）
+    /// 创建微批写器（同步路径）
+    ///
+    /// # 调用约束（M51/C-62）
+    /// 本函数内部是**真阻塞**的：`create_dir_all` + `TreeIndex::open`
+    /// （`Connection::open` / `PRAGMA` / `CREATE TABLE`）都在调用线程上执行。
+    /// 因此 **async 上下文必须用 [`CbmrWriter::open`]**（它把整段构建灌进
+    /// `run_blocking` 的阻塞池），否则会堵住 runtime worker（AGENTS §4.4-2）。
     ///
     /// # 后台循环
     /// `config.spawn_flush_loop` 为 true 且存在 tokio runtime 时启动
     /// 自适应窗口刷写任务;否则仅靠显式 `flush` / 满批触发（测试确定性）。
     pub fn new(config: StoreConfig) -> Result<Self, StoreError> {
+        Self::open_blocking(config)
+    }
+
+    /// 创建微批写器（async 入口）— 把打开/DDL 整段放进阻塞池（M51/C-62）
+    ///
+    /// # WHY 需要它
+    /// `Connection::open`、`PRAGMA journal_mode=WAL`、`CREATE TABLE ...` 与
+    /// `create_dir_all` 都是同步阻塞调用。此前它们直接跑在调用方的 async worker 上，
+    /// 与红线「SQLite 只经 spawn_blocking」不一致（该红线原文只写了「写入」，
+    /// 覆盖缺口就在打开/DDL 这一段）。
+    ///
+    /// # 与 `new` 的关系
+    /// 两者共用**同一个实现**（`open_blocking`），不存在第二套构建逻辑——
+    /// 刻意避开了 L46 双 `MtpeConfig` 那类「双构造面」。区别仅在调用上下文：
+    /// async 用 `open().await`，同步/测试用 `new()`。
+    pub async fn open(config: StoreConfig) -> Result<Self, StoreError> {
+        run_blocking(move || Self::open_blocking(config)).await
+    }
+
+    /// 构建的同步内核 — 建目录 + 开索引库（含 PRAGMA/DDL） + 启动后台循环
+    fn open_blocking(config: StoreConfig) -> Result<Self, StoreError> {
         std::fs::create_dir_all(&config.data_dir).map_err(|e| StoreError::Io {
             context: format!("创建数据目录 {} 失败", config.data_dir.display()),
             source: e,
@@ -133,6 +173,8 @@ impl CbmrWriter {
             pending: Mutex::new(PendingBatch::default()),
             ema_batch: Mutex::new(0.0),
             last_offset_by_session: Mutex::new(HashMap::new()),
+            closing: AtomicBool::new(false),
+            flush_loop: Mutex::new(None),
         });
         if inner.config.spawn_flush_loop {
             if tokio::runtime::Handle::try_current().is_ok() {
@@ -176,6 +218,34 @@ impl CbmrWriter {
         } else {
             Ok(())
         }
+    }
+
+    /// 优雅关闭 — 置关闭标志→冲刷 pending→回收后台循环（M50）
+    ///
+    /// # WHY 必须显式提供
+    /// 刷写循环原本是「永生任务」:它没有取消通道,也没有任何退出条件,只能随
+    /// runtime 整体关闭而消失。而 `append` 已经向调用方返回 Ok（入队成功）,
+    /// 一旦进程在最后一个窗口前退出,pending 里的事件**永不落盘**——与
+    /// `segment.rs` 红线「append 返回 Ok 前必须落盘」直接相悖。
+    ///
+    /// `impl Drop` 只能 abort + warn, 兜不住「最后一批还没刷」;
+    /// 因此关闭路径必须可 await,否则“不丢已确认事件”无法成立。
+    ///
+    /// # 幂等性
+    /// 重复调用安全:第二次 flush 无 pending 时为 no-op,句柄已取走也只跳过。
+    ///
+    /// # 返回
+    /// - `Ok(())`:pending 已全部尝试落盘且循环已回收
+    /// - `Err(StoreError)`:flush 失败（此时循环已回收,但数据风险由错误上报）
+    pub async fn shutdown(&self) -> Result<(), StoreError> {
+        self.inner.closing.store(true, Ordering::SeqCst);
+        let flushed = self.flush().await;
+        if let Ok(mut guard) = self.inner.flush_loop.lock() {
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
+        }
+        flushed
     }
 
     /// 显式冲刷 — 立即落盘 pending 全部事件（测试 / 关闭 / 崩溃前调用）
@@ -482,15 +552,27 @@ fn recover_session_state(
 }
 
 /// 后台刷写循环 — 自适应窗口到期检查 pending,非空即 flush
+///
+/// WHY 把句柄存回 `inner.flush_loop`（M50）:循环是构造期启动的,句柄不能只丢在
+/// 局部变量里——否则 `shutdown()` 与 `Drop` 无法收掉它,进程只能靠 runtime 关闭。
 fn spawn_flush_loop(inner: Arc<CbmrInner>) {
     let writer = CbmrWriter {
         inner: inner.clone(),
     };
     let mut window = Duration::from_millis(inner.config.base_window_ms);
-    tokio::spawn(async move {
+    // WHY 先 clone 一份给任务:`inner` 本体后面还要用来存句柄(E0382);
+    //      两个 Arc 指向同一个 CbmrInner,语义不变。
+    let loop_inner = inner.clone();
+    let handle = tokio::spawn(async move {
         loop {
             tokio::time::sleep(window).await;
-            let has_pending = inner
+            // M50:关闭标志优先于刷写——shutdown 已自行 flush 过,
+            // 循环只需退出,不再抢一次写
+            if loop_inner.closing.load(Ordering::SeqCst) {
+                debug!("后台刷写循环收到关闭标志,退出");
+                return;
+            }
+            let has_pending = loop_inner
                 .pending
                 .lock()
                 .map(|p| !p.events.is_empty())
@@ -506,6 +588,37 @@ fn spawn_flush_loop(inner: Arc<CbmrInner>) {
             }
         }
     });
+    // WHY 句柄存失败不报错:构造期那一次拿锁不可能中毒(刚建的空 Mutex),
+    // 真发生中毒也不影响主语义——shutdown 仍能靠 closing 标志让循环退出。
+    if let Ok(mut slot) = inner.flush_loop.lock() {
+        *slot = Some(handle);
+    }
+}
+
+/// 析构即回收（M50）——最后一个 Arc 释放时置关闭标志、abort 循环、并对未落盘队列发 warn
+///
+/// # WHY 必须 warn 而不是静默
+/// `append` 返回 Ok 的语义是「入队成功」(非 fsync 确认),所以析构时还有 pending
+/// 意味着**调用方已被告知写入成功的事件不会落盘**。静默丢弃会把这种丢数据变成不
+/// 可观测;warn 至少让它在日志里可被追。想彻底避免必须显式 [`CbmrWriter::shutdown`]。
+impl Drop for CbmrInner {
+    fn drop(&mut self) {
+        self.closing.store(true, Ordering::SeqCst);
+        if let Ok(mut guard) = self.flush_loop.lock() {
+            if let Some(handle) = guard.take() {
+                // WHY abort 而非 join:Drop 不能 await;此时已无合法调用方可 await
+                handle.abort();
+            }
+        }
+        let pending = self.pending.lock().map(|p| p.events.len()).unwrap_or(0);
+        if pending > 0 {
+            warn!(
+                pending,
+                "CbmrWriter 析构时仍有未落盘事件(append 曾返回 Ok 但未 fsync);\
+                 调用方应先 await shutdown() 再释放最后一个引用"
+            );
+        }
+    }
 }
 
 /// 数据目录辅助（测试/文档用:段文件命名推导）
@@ -571,6 +684,68 @@ mod tests {
         assert_eq!(w.pending_len(), 0);
         let stored = w.read_events(&sid, None).await.expect("read");
         assert_eq!(stored.len(), 1, "窗口到期后 1 条事件落盘");
+    }
+
+    /// M50：shutdown 必须把最后一批刷盘并让后台循环退出
+    ///
+    /// WHY 窗口拉到 60s：本测试要证的是 shutdown 自己刷（不是窗口到期刷），
+    /// 否则就变成在测窗口了。
+    #[tokio::test]
+    async fn shutdown_flushes_pending_and_stops_loop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut cfg = config(dir.path());
+        cfg.spawn_flush_loop = true;
+        cfg.base_window_ms = 60_000;
+        cfg.batch_size = 64;
+        let w = CbmrWriter::new(cfg).expect("new");
+        let sid = SessionId::new("shutdown");
+        for i in 0..3 {
+            w.append(&sid, ev(i)).await.expect("append");
+        }
+        assert_eq!(w.pending_len(), 3, "窗口未到期前事件应全部停在队列");
+        assert_eq!(w.transactions(), 0, "未 flush 不得产生 SQLite 事务");
+
+        w.shutdown().await.expect("shutdown");
+
+        assert_eq!(w.pending_len(), 0, "shutdown 后队列必须清空");
+        let stored = w.read_events(&sid, None).await.expect("read");
+        assert_eq!(stored.len(), 3, "shutdown 必须把最后一批落盘");
+    }
+
+    /// M50：shutdown 幂等 —— 第二次调用不报错、不多写事务
+    #[tokio::test]
+    async fn shutdown_is_idempotent() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut cfg = config(dir.path());
+        cfg.spawn_flush_loop = true;
+        cfg.base_window_ms = 60_000;
+        let w = CbmrWriter::new(cfg).expect("new");
+        let sid = SessionId::new("idem");
+        w.append(&sid, ev(0)).await.expect("append");
+
+        w.shutdown().await.expect("first shutdown");
+        let tx = w.transactions();
+        w.shutdown().await.expect("second shutdown");
+
+        assert_eq!(w.transactions(), tx, "无 pending 时不得产生额外事务");
+        assert_eq!(
+            w.read_events(&sid, None).await.expect("read").len(),
+            1,
+            "重复 shutdown 不得重复写入"
+        );
+    }
+
+    /// M51/C-62：async 上下文必须走 `open()`（打开/DDL 在阻塞池里）
+    #[tokio::test]
+    async fn open_runs_construction_in_blocking_pool() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let w = CbmrWriter::open(config(dir.path())).await.expect("open");
+        let sid = SessionId::new("open-async");
+        w.append(&sid, ev(0)).await.expect("append");
+        w.flush().await.expect("flush");
+        assert_eq!(w.read_events(&sid, None).await.expect("read").len(), 1);
+        assert!(index_path(dir.path()).exists(), "打开路径必须完成建库/DDL");
+        w.shutdown().await.expect("shutdown");
     }
 
     #[tokio::test]

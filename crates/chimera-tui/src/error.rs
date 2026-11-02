@@ -47,6 +47,17 @@ pub enum TuiError {
         detail: String,
     },
 
+    /// 敏感载荷拒写 — 落盘内容含私钥/云凭证/服务令牌类硬载荷
+    ///
+    /// WHY 独立变体(而非复用 `ConfigError`):"拒绝写入"与"配置非法"是两种
+    /// 处置语义——前者内容本身合法但不可落盘,调用方应保留既有文件并提示用户,
+    /// 而非引导用户改配置。口径对齐 `repo_wiki::WikiError::SensitiveContent`。
+    #[error("sensitive content refused: {detail}")]
+    SensitiveContent {
+        /// 拒写详情(不含原始敏感值)
+        detail: String,
+    },
+
     /// SQLite 持久化错误 — 指标历史存储的 I/O / SQL 错误
     ///
     /// WHY 独立变体:Task 2.3 引入 `MetricsHistory` SQLite 持久化后,

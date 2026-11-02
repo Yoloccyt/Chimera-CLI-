@@ -12,7 +12,7 @@
 /// 委托开销预测器 — 基于 EWMA 的预测模型
 ///
 /// # 公式
-/// ```
+/// ```text
 /// prediction = α × actual + (1-α) × previous_prediction
 /// ```
 /// 其中 α=0.3 适用于快速变化的工作负载。
@@ -65,12 +65,12 @@ impl DelegationOverheadPredictor {
     /// # 参数
     /// - `actual`: 实际开销(ms)
     pub fn record(&mut self, actual: f64) {
-        if self.sample_count == 0 {
-            self.current_prediction = actual;
-        } else {
-            self.current_prediction =
-                self.alpha * actual + (1.0 - self.alpha) * self.current_prediction;
-        }
+        // WHY 首样本也走 EWMA:构造器已用 default_value 播种 current_prediction,
+        // 若首样本直接覆盖,播种值与 alpha 在第一次调用时双双失效(原实现即如此,
+        // 使 test_predictor_record_updates_prediction 期望的 0.5*200+0.5*100=150
+        // 变成 200)。
+        self.current_prediction =
+            self.alpha * actual + (1.0 - self.alpha) * self.current_prediction;
         self.sample_count += 1;
     }
 

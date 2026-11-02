@@ -286,6 +286,27 @@ fn default_epistemic_type() -> nexus_contracts::EpistemicType {
     nexus_contracts::EpistemicType::Fact
 }
 
+/// 召回 token 预算 — WI-C1′（v2.3 §(d)⑨「检索预算裁剪（一期）」）
+///
+/// 语义:`recall_by_clv` 族的可选装包上限。`None`（默认）= 不裁剪,与接线前
+/// 逐位一致;`Some(budget)` = 按分数序贪心装包,装入后不超预算的条目保留,
+/// 装不下的**跳过继续**（保序;复用 RSB `ResidualStore::inject` 的预算检查
+/// 与按需合成的分数序贪心先例）。成本口径 = [`MemoryEntry::token_estimate`]
+/// （字符数/3+1,与 RSB `KeyFact` 同式）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenBudget {
+    /// 召回结果 token 上限
+    pub max_tokens: usize,
+}
+
+impl TokenBudget {
+    /// 新建预算（token）
+    #[must_use]
+    pub fn new(max_tokens: usize) -> Self {
+        Self { max_tokens }
+    }
+}
+
 impl MemoryEntry {
     /// 创建新记忆条目,`created_at` 与 `last_accessed_at` 自动设为当前 UTC
     ///
@@ -320,6 +341,16 @@ impl MemoryEntry {
     pub fn with_clv(mut self, clv: CLV) -> Self {
         self.clv = Some(clv);
         self
+    }
+
+    /// token 近似估算（WI-C1′ 召回预算成本口径）
+    ///
+    /// 口径 = 内容字符数/3 + 1（与 RSB `KeyFact::token_estimate` 同式,
+    /// 中文场景 3 字 ≈ 1 token;与既有压缩链路一致）。
+    /// 纯函数、O(字符数),不引入任何依赖。
+    #[must_use]
+    pub fn token_estimate(&self) -> usize {
+        self.content.chars().count() / 3 + 1
     }
 
     /// v2.3 §(b.3):设置认识类型标签(与 `tier` 正交的第二维)。

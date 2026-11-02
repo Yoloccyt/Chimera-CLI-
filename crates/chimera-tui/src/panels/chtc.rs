@@ -32,7 +32,6 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use crate::panels::list_state;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
-use crate::render::FOOTER_TEXT;
 use crate::types::{ChtcAdapterInfo, PanelId, TuiCommand, TuiState};
 
 /// 兼容性评分"需关注"阈值:低于此值显示黄色高亮警告
@@ -98,13 +97,15 @@ impl ChtcPanel {
     /// 无需启动 TestBackend。模式与 `QuestPanel::content` 一致。
     ///
     /// # 布局
-    /// - 标题行:"CHTC Adapters"
-    /// - 空状态:"No CHTC adapters connected" + 等待事件提示
+    /// - 标题行:复用 panel.border.chtc 键(trim 去边框空格,消除双源)
+    /// - 空状态:panel.chtc.no_adapters + panel.chtc.awaiting_events
     /// - 非空:每个适配器 3 行(ID/状态 + 进度条/评分 + 请求分布)
-    /// - 页脚:FOOTER_TEXT
+    /// - 页脚:panel.footer 键
     pub fn content(state: &TuiState) -> Text<'static> {
         let mut lines: Vec<Line<'static>> = vec![
-            Line::from("CHTC Adapters"),
+            // F-46/B6-M:正文表头与 fn title() 同源(panel.border.chtc 键),
+            // trim 去掉边框排版用的前后空格
+            Line::from(crate::t!("panel.border.chtc").trim()),
             Line::from("─────────────────────────────"),
         ];
 
@@ -112,19 +113,17 @@ impl ChtcPanel {
 
         if adapters.is_empty() {
             // 空状态:显示占位文本,避免面板内容空白
-            lines.push(Line::from("No CHTC adapters connected"));
+            lines.push(Line::from(crate::t!("panel.chtc.no_adapters")));
             lines.push(Line::from(""));
-            lines.push(Line::from(
-                "Waiting for ChtcAdapterStatus events from chtc-bridge...",
-            ));
+            lines.push(Line::from(crate::t!("panel.chtc.awaiting_events")));
         } else {
             let total = adapters.len();
             for (idx, adapter) in adapters.iter().enumerate() {
                 // 第 1 行:适配器 ID + [类型] + 在线状态
                 let status_text = if adapter.is_online {
-                    "online"
+                    crate::t!("panel.chtc.status_online")
                 } else {
-                    "offline"
+                    crate::t!("panel.chtc.status_offline")
                 };
                 let status_color = if adapter.is_online {
                     Color::Green
@@ -160,7 +159,7 @@ impl ChtcPanel {
         }
 
         lines.push(Line::from(""));
-        lines.push(Line::from(FOOTER_TEXT));
+        lines.push(Line::from(crate::t!("panel.footer")));
         Text::from(lines)
     }
 
@@ -170,30 +169,41 @@ impl ChtcPanel {
     /// 将详情字符串构造与渲染解耦,便于测试断言内容字段。
     fn detail_content(adapter: &ChtcAdapterInfo) -> String {
         let status_text = if adapter.is_online {
-            "online"
+            crate::t!("panel.chtc.status_online")
         } else {
-            "offline"
+            crate::t!("panel.chtc.status_offline")
         };
         let mut lines = vec![
-            format!("Adapter ID: {}", adapter.adapter_id),
-            format!("Type: {}", adapter.adapter_type),
-            format!("Compatibility Score: {}/100", adapter.compatibility_score),
-            format!("Status: {status_text}"),
+            // 单占位符键按 replacen 范式替换(B4-I 既有惯例)
+            crate::t!("panel.chtc.detail_id").replacen("{}", &adapter.adapter_id, 1),
+            crate::t!("panel.chtc.detail_type").replacen("{}", &adapter.adapter_type, 1),
+            crate::t!("panel.chtc.detail_score").replacen(
+                "{}",
+                &adapter.compatibility_score.to_string(),
+                1,
+            ),
+            crate::t!("panel.chtc.detail_status").replacen("{}", status_text, 1),
         ];
 
         if adapter.compatibility_score < COMPATIBILITY_SCORE_WARNING_THRESHOLD {
-            lines.push(format!(
-                "Warning: score below {} (compatibility risk)",
-                COMPATIBILITY_SCORE_WARNING_THRESHOLD
+            lines.push(crate::t!("panel.chtc.detail_score_warning").replacen(
+                "{}",
+                &COMPATIBILITY_SCORE_WARNING_THRESHOLD.to_string(),
+                1,
             ));
         }
 
         if adapter.recent_requests.is_empty() {
             lines.push(String::new());
-            lines.push("Recent Requests: (none)".into());
+            // "(none)" 复用 common.none(与 build_recent_requests_line 空态同词)
+            lines.push(format!(
+                "{} {}",
+                crate::t!("panel.chtc.detail_requests"),
+                crate::t!("common.none")
+            ));
         } else {
             lines.push(String::new());
-            lines.push("Recent Requests:".into());
+            lines.push(crate::t!("panel.chtc.detail_requests").to_string());
             for (req_type, count) in &adapter.recent_requests {
                 lines.push(format!("  - {req_type}: {count}"));
             }
@@ -229,18 +239,24 @@ fn build_score_bar_line(score: u8) -> Line<'static> {
 
 /// 构建最近请求类型分布行
 ///
-/// 有数据时显示为 `  Requests: type(count) / type(count) / ...`,
-/// 无数据时显示为 `  Requests: (none)`。
+/// 有数据时显示为 `  请求: type(count) / type(count) / ...`(En: `  Requests: ...`),
+/// 无数据时末尾追加 common.none。
 fn build_recent_requests_line(recent: &[(String, u32)]) -> Line<'static> {
     if recent.is_empty() {
         return Line::from(vec![
-            Span::styled("  Requests: ", Style::default().fg(Color::Gray)),
-            Span::styled("(none)", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                crate::t!("panel.chtc.requests_label"),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(
+                crate::t!("common.none"),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]);
     }
 
     let mut spans: Vec<Span<'static>> = vec![Span::styled(
-        "  Requests: ",
+        crate::t!("panel.chtc.requests_label"),
         Style::default().fg(Color::Gray),
     )];
 
@@ -280,9 +296,9 @@ impl Panel for ChtcPanel {
         let count = state.chtc_state.adapters.len();
         self.selected = list_state::clamp_selected(self.selected, count);
 
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" CHTC Adapters ");
+        // F-46:块标题改 self.title()(与 fn title() 同源 panel.border.chtc 键),
+        // 消除文件内 " CHTC Adapters " 双源
+        let block = Block::default().borders(Borders::ALL).title(self.title());
         let inner = block.inner(area);
         block.render(area, buf);
 
@@ -314,7 +330,11 @@ impl Panel for ChtcPanel {
                 if let Some(adapter) = adapters.get(self.selected) {
                     let content = Self::detail_content(adapter);
                     Some(TuiCommand::OpenPopup(PopupKind::Detail {
-                        title: format!("CHTC Adapter: {}", adapter.adapter_id),
+                        title: crate::t!("panel.chtc.detail_title").replacen(
+                            "{}",
+                            &adapter.adapter_id,
+                            1,
+                        ),
                         content,
                         scroll: 0,
                     }))
@@ -352,10 +372,7 @@ impl Panel for ChtcPanel {
     }
 
     fn shortcuts(&self) -> Vec<(&'static str, &'static str)> {
-        vec![
-            ("↑/↓", crate::t!("shortcut.navigate")),
-            ("R", crate::t!("shortcut.refresh")),
-        ]
+        vec![("↑/↓", crate::t!("shortcut.navigate"))]
     }
 }
 
@@ -404,20 +421,26 @@ mod tests {
 
     #[test]
     fn test_build_recent_requests_line_empty() {
+        // B6-M:文案迁键后断言经 t! 期望串与渲染同源(持 guard 防 locale 竞争)
+        let _locale_guard = crate::i18n::locale_test_guard();
         let line = build_recent_requests_line(&[]);
         let text = line.to_string();
-        assert!(text.contains("(none)"), "empty recent should show (none)");
         assert!(
-            text.contains("Requests"),
-            "should have Requests label even when empty"
+            text.contains(crate::t!("common.none")),
+            "empty recent should show none placeholder"
+        );
+        assert!(
+            text.contains(crate::t!("panel.chtc.requests_label")),
+            "should have requests label even when empty"
         );
     }
 
     #[test]
     fn test_build_recent_requests_line_with_data() {
+        let _locale_guard = crate::i18n::locale_test_guard();
         let line = build_recent_requests_line(&[("tool_call".into(), 42), ("hover".into(), 18)]);
         let text = line.to_string();
-        assert!(text.contains("Requests"));
+        assert!(text.contains(crate::t!("panel.chtc.requests_label")));
         assert!(text.contains("tool_call(42)"));
         assert!(text.contains("hover(18)"));
         assert!(text.contains("/"), "entries should be separated by /");
@@ -438,24 +461,43 @@ mod tests {
 
     #[test]
     fn test_detail_content_contains_all_fields() {
+        // B6-M:状态/警告文案迁键,断言经 t! 期望串与渲染同源
+        // WHY 期望串须先 replacen:键值原文含 {} 占位符,detail_content 产物
+        // 是替换后的文本,直接 contains 原文永假(验证轮 2 号失败根因)
+        let _locale_guard = crate::i18n::locale_test_guard();
         let adapter = sample_adapter("vscode-ext", 95, true);
         let content = ChtcPanel::detail_content(&adapter);
         assert!(content.contains("vscode-ext"));
         assert!(content.contains("vscode"));
         assert!(content.contains("95/100"));
-        assert!(content.contains("online"));
+        assert!(content.contains(crate::t!("panel.chtc.status_online")));
         assert!(content.contains("tool_call"));
-        assert!(!content.contains("Warning"), "score 95 should not warn");
+        let expected_warning = crate::t!("panel.chtc.detail_score_warning").replacen(
+            "{}",
+            &COMPATIBILITY_SCORE_WARNING_THRESHOLD.to_string(),
+            1,
+        );
+        assert!(
+            !content.contains(&expected_warning),
+            "score 95 should not warn"
+        );
     }
 
     #[test]
     fn test_detail_content_low_score_includes_warning() {
+        let _locale_guard = crate::i18n::locale_test_guard();
         let adapter = sample_adapter("vim-plugin", 45, false);
         let content = ChtcPanel::detail_content(&adapter);
+        // 同上:期望串先 replacen 与渲染产物同源(键值原文含 {},不可直比)
+        let expected_warning = crate::t!("panel.chtc.detail_score_warning").replacen(
+            "{}",
+            &COMPATIBILITY_SCORE_WARNING_THRESHOLD.to_string(),
+            1,
+        );
         assert!(
-            content.contains("Warning"),
+            content.contains(&expected_warning),
             "low score should include warning"
         );
-        assert!(content.contains("offline"));
+        assert!(content.contains(crate::t!("panel.chtc.status_offline")));
     }
 }

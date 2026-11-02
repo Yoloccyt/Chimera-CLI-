@@ -104,6 +104,15 @@ fn init_wal_store(config: &MeshConfig) -> Option<Arc<WalStore>> {
     Some(Arc::new(WalStore::new(path)))
 }
 
+/// 指数退避毫秒数：`base * 2^min(attempt, 6)`。
+///
+/// WHY 位移封顶 6：不封顶时 `1 << 64` 在 debug panic、release 回绕；
+/// 且默认 `transaction_timeout_ms=200` 下，超预算的退避只会把「可重试」
+/// 变成「必超时」。base=50 时单次上限 3200ms（50 × 2^6）。
+fn backoff_ms(base: u64, attempt: u32) -> u64 {
+    base * (1u64 << attempt.min(6))
+}
+
 impl McpMesh {
     /// 创建 MCP Mesh(无 EventBus,默认 InProcessClient)
     ///
@@ -338,11 +347,11 @@ impl McpMesh {
     /// Prepare 阶段 — 并发向所有参与者发送 prepare 请求(带 max_retries 重试)
     ///
     /// 通过 `ParticipantClient::prepare` 发送请求,用 `FuturesUnordered` 并发 fanout。
-    /// 任一参与者失败(Nack / 网络错误)按指数退避(200ms / 400ms)重试,达 `max_retries`
+    /// 任一参与者失败(Nack / 网络错误)按指数退避(50ms / 100ms)重试,达 `max_retries`
     /// 仍失败则整体失败,触发 Abort+Rollback。
     ///
     /// Task 0.7 v2.9.0-omega 新增:
-    /// - 指数退避重试(`max_retries` 控制,默认 2,退避 200ms / 400ms)
+    /// - 指数退避重试(`max_retries` 控制,默认 2,退避 50ms / 100ms)
     /// - Prepare 成功后写 WAL `Prepare` entry(含已 ACK 参与者列表)
     ///
     /// # 参数
@@ -355,38 +364,43 @@ impl McpMesh {
         // WHY 逐个参与者串行重试而非并发重试:并发重试需要复杂的状态机跟踪每个参与者的
         // 重试次数,且 prepare 阶段允许部分慢参与者。这里采用并发首次 + 失败者串行重试
         // 的混合策略:首次并发 fanout,失败的参与者按指数退避串行重试。
-        let mut futures: FuturesUnordered<_> = tx
-            .participant_servers
-            .iter()
-            .map(|sid| {
-                let sid = sid.clone();
-                async move {
-                    let server =
-                        self.registry
-                            .get(&sid)
-                            .ok_or_else(|| McpError::ServerNotFound {
-                                server_id: sid.clone(),
+        let mut futures: FuturesUnordered<_> =
+            tx.participant_servers
+                .iter()
+                .map(|sid| {
+                    let sid = sid.clone();
+                    async move {
+                        let sid_for_result = sid.clone();
+                        let result = async {
+                            let server = self.registry.get(&sid).ok_or_else(|| {
+                                McpError::ServerNotFound {
+                                    server_id: sid.clone(),
+                                }
                             })?;
-                    self.participant_client
-                        .prepare(&server, &tx.transaction_id, op)
-                        .await
-                        .map(|_| sid.clone())
-                }
-            })
-            .collect();
+                            self.participant_client
+                                .prepare(&server, &tx.transaction_id, op)
+                                .await
+                        }
+                        .await;
+                        // 错误必须携带真实 sid（P3-4）：旧实现 `map(|_| sid.clone())`
+                        // 在 Err 时丢掉 sid，调用方只能 `find(|(_, _)| true)` 恒取首错。
+                        (sid_for_result, result)
+                    }
+                })
+                .collect();
 
         // 收集首次失败的参与者(网络错误才重试;Nack 协议错误直接放弃)
         let mut failed_participants: Vec<(String, McpError)> = Vec::new();
-        while let Some(result) = futures.next().await {
+        while let Some((sid, result)) = futures.next().await {
             match result {
-                Ok(sid) => acked.push(sid),
+                Ok(()) => acked.push(sid),
                 Err(e) => {
                     // ProtocolError(Nack)不重试 — 参与者明确拒绝,重试无意义
                     if matches!(e, McpError::ProtocolError { .. }) {
                         return Err(e);
                     }
-                    // NetworkError 收集后重试
-                    failed_participants.push((String::new(), e)); // sid 在下面填回
+                    // NetworkError 收集后重试（携带真实 sid）
+                    failed_participants.push((sid, e));
                 }
             }
         }
@@ -404,7 +418,7 @@ impl McpMesh {
         for sid in failed_sids {
             let mut last_err = failed_participants
                 .iter()
-                .find(|(_, _)| true)
+                .find(|(s, _)| s == &sid)
                 .map(|(_, e)| e.clone())
                 .unwrap_or_else(|| McpError::NetworkError {
                     server_id: sid.clone(),
@@ -413,8 +427,9 @@ impl McpMesh {
                 });
 
             for attempt in 0..max_retries {
-                // 指数退避:200ms * 2^attempt(200ms / 400ms / 800ms...)
-                let backoff_ms = 200u64 * (1 << attempt);
+                // 指数退避(默认预算可完成一次重试):50ms * 2^min(attempt, 6)
+                // (50ms / 100ms / 200ms / 400ms / 800ms / 1600ms / 3200ms 封顶)
+                let backoff_ms = backoff_ms(50, attempt);
                 tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
 
                 let server = self
@@ -479,76 +494,92 @@ impl McpMesh {
     /// 任一参与者失败按指数退避重试;达 `max_retries` 仍失败则记录到待补偿队列
     /// (`pending_compensations`),由 `reconcile_pending_transactions()` 后续处理。
     ///
-    /// Task 0.7 v2.9.0-omega 新增:
-    /// - 指数退避重试
-    /// - 失败参与者入待补偿队列(2PC 经典问题:Commit 阶段失败需人工介入)
-    /// - Commit 成功后写 WAL `Commit` entry
+    /// 性能重构并行化(P1-1)：旧实现虽文档称「并发」但实为串行 `for`（每参与者
+    /// 内嵌 `sleep` 退避），commit 阶段墙钟 ≈ Σ 参与者 RTT。现与 `prepare`/`rollback`
+    /// 一致真并发扇出，墙钟降为 ≈ max RTT。保留：
+    /// - **失败范围最小化**（不立即 return，先试完所有参与者，最后统一报 CompensationFailed）；
+    /// - **输入序可观测顺序**：committed/failed 按 `participant_servers` 输入序展开（与旧串行一致）；
+    /// - 回滚开关：`CHIMERA_MCP_SERIAL_COMMIT=1` 走串行分支（含 `ServerNotFound`
+    ///   循环层短路，与旧行为**逐位等价**）；并发分支把 `ServerNotFound` 归一为
+    ///   `CompensationFailed` 并入待补偿台账（集合语义，失败范围最小化）。
+    ///
+    /// Task 0.7 v2.9.0-omega 新增：指数退避重试 / 失败入待补偿队列 / Commit 成功后写 WAL。
     async fn commit_phase(&self, tx: &QuantumTransaction) -> Result<(), McpError> {
-        let max_retries = self.config.max_retries;
-        let mut committed: Vec<String> = Vec::with_capacity(tx.participant_servers.len());
-        let mut failed_participants: Vec<String> = Vec::new();
+        let serial = std::env::var("CHIMERA_MCP_SERIAL_COMMIT").as_deref() == Ok("1");
+        self.commit_phase_with_mode(tx, serial).await
+    }
 
-        for sid in &tx.participant_servers {
-            let server = self
-                .registry
-                .get(sid)
-                .ok_or_else(|| McpError::ServerNotFound {
-                    server_id: sid.clone(),
-                })?;
+    /// `commit_phase` 的模式显式版本（`serial` 由环境开关或测试注入）。
+    ///
+    /// WHY 拆出参数而非常直接在测试里设 env：`CHIMERA_MCP_SERIAL_COMMIT` 是
+    /// 进程级变量，同二进制内的其它事务测试会被并行改成串行模式。
+    async fn commit_phase_with_mode(
+        &self,
+        tx: &QuantumTransaction,
+        serial: bool,
+    ) -> Result<(), McpError> {
+        let tx_id = tx.transaction_id.clone();
+        let n = tx.participant_servers.len();
 
-            let mut last_err: Option<McpError> = None;
-            for attempt in 0..=max_retries {
-                if attempt > 0 {
-                    // 指数退避:200ms * 2^(attempt-1)
-                    let backoff_ms = 200u64 * (1 << (attempt - 1));
-                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+        // 每参与者一个结果槽（None = 未回收，兼作防御）。按输入序 idx 存放，
+        // 使 committed/failed 重建时仍为输入序（与旧串行 for 的可观测顺序一致）。
+        let mut outcomes: Vec<Option<Result<(), McpError>>> = vec![None; n];
+        if serial {
+            for (idx, sid) in tx.participant_servers.iter().enumerate() {
+                // P1-3 逐位等价：旧实现在 **循环层** `registry.get(sid)?` 短路——
+                // 未注册（含校验后被并发摘除的竞态）立即 `ServerNotFound`，
+                // 且**不写**待补偿台账。此处显式复刻该语义。
+                if self.registry.get(sid).is_none() {
+                    return Err(McpError::ServerNotFound {
+                        server_id: sid.clone(),
+                    });
                 }
-                match self
-                    .participant_client
-                    .commit(&server, &tx.transaction_id)
-                    .await
-                {
-                    Ok(()) => {
-                        committed.push(sid.clone());
-                        last_err = None;
-                        break;
-                    }
-                    Err(e) => {
-                        warn!(
-                            transaction_id = %tx.transaction_id,
-                            server_id = %sid,
-                            attempt,
-                            max_retries,
-                            error = %e,
-                            "Commit 重试失败"
-                        );
-                        last_err = Some(e);
-                    }
-                }
+                outcomes[idx] = Some(self.commit_one(sid, &tx_id).await);
             }
+        } else {
+            // FuturesUnordered 并发扇出：每个 future 内嵌指数退避重试（复用 commit_one）。
+            let mut futures: FuturesUnordered<_> = tx
+                .participant_servers
+                .iter()
+                .enumerate()
+                .map(|(idx, sid)| {
+                    let sid = sid.clone();
+                    // 捕获 `&str`（Copy）而非 move 外层 `tx_id` String，避开 FnMut 闭包
+                    // 的所有权冲突；`tx_id` 在 commit_phase 作期间一直有效。
+                    let tx_ref = tx_id.as_str();
+                    async move { (idx, self.commit_one(&sid, tx_ref).await) }
+                })
+                .collect();
+            while let Some((idx, res)) = futures.next().await {
+                outcomes[idx] = Some(res);
+            }
+        }
 
-            if let Some(err) = last_err {
-                failed_participants.push(sid.clone());
-                // 入待补偿队列:Commit 阶段失败需人工介入或后续 reconcile
-                self.pending_compensations
-                    .entry(tx.transaction_id.clone())
-                    .or_insert_with(|| PendingCompensation {
-                        transaction_id: tx.transaction_id.clone(),
-                        failed_participants: Vec::new(),
-                        retries: 0,
-                        created_at: chrono::Utc::now(),
-                    })
-                    .failed_participants
-                    .push(sid.clone());
-                // 不立即返回 Err — 继续尝试其他参与者,让失败范围最小化
-                let _ = err;
+        // 按输入序展开为 committed / failed（集合语义，顺序与旧实现一致）。
+        let mut committed: Vec<String> = Vec::with_capacity(n);
+        let mut failed_participants: Vec<String> = Vec::new();
+        for (idx, sid) in tx.participant_servers.iter().enumerate() {
+            match outcomes[idx].take() {
+                Some(Ok(())) => committed.push(sid.clone()),
+                // None = 理论上不可达（每个 idx 必被回收）；防御性归为失败，不谎报成功。
+                Some(Err(_)) | None => failed_participants.push(sid.clone()),
             }
         }
 
         if !failed_participants.is_empty() {
-            // 部分参与者 Commit 失败:返回错误但已写入待补偿队列
+            // 入待补偿队列（Commit 阶段失败需人工介入或后续 reconcile），按输入序。
+            self.pending_compensations
+                .entry(tx_id.clone())
+                .or_insert_with(|| PendingCompensation {
+                    transaction_id: tx_id.clone(),
+                    failed_participants: Vec::new(),
+                    retries: 0,
+                    created_at: chrono::Utc::now(),
+                })
+                .failed_participants
+                .extend(failed_participants.iter().cloned());
             return Err(McpError::CompensationFailed {
-                transaction_id: tx.transaction_id.clone(),
+                transaction_id: tx_id.clone(),
                 retries: 0,
                 failed_participants,
             });
@@ -571,6 +602,50 @@ impl McpMesh {
         }
 
         Ok(())
+    }
+
+    /// 单个参与者的 commit（含指数退避重试），供 [`commit_phase`](Self::commit_phase) 并发/串行共用。
+    ///
+    /// WHY 拆出：串行与并发分支共享同一重试语义，避免两份潜在分叉（单一真值源）。
+    /// `ServerNotFound`（registry 未命中）立即返回不重试——该参与者不可达，重试无意义。
+    /// 串行分支在 `commit_phase_with_mode` 已做循环层短路（与旧行为逐位等价）；
+    /// 并发分支会把该错误收进 `outcomes`，最终归一为 `CompensationFailed`。
+    async fn commit_one(&self, sid: &str, tx_id: &str) -> Result<(), McpError> {
+        let max_retries = self.config.max_retries;
+        let mut last_err: Option<McpError> = None;
+        for attempt in 0..=max_retries {
+            if attempt > 0 {
+                // 指数退避(默认 transaction_timeout_ms=200 内可完成首次重试):
+                // 50ms * 2^(attempt-1)，位移封顶 6 → 单次 ≤ 3200ms。
+                // WHY 基数 50ms 而非旧 200ms：旧值 ≥ 默认超时预算，重试在生产是死码。
+                let backoff_ms = backoff_ms(50, attempt - 1);
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+            }
+            let server = self
+                .registry
+                .get(sid)
+                .ok_or_else(|| McpError::ServerNotFound {
+                    server_id: sid.to_string(),
+                })?;
+            match self.participant_client.commit(&server, tx_id).await {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    warn!(
+                        transaction_id = %tx_id,
+                        server_id = %sid,
+                        attempt,
+                        max_retries,
+                        error = %e,
+                        "Commit 重试失败"
+                    );
+                    last_err = Some(e);
+                }
+            }
+        }
+        // 循环结束仍有错误 = 重试耗尽（至少执行过一次 commit，last_err 必为 Some）。
+        Err(last_err.unwrap_or_else(|| McpError::ServerNotFound {
+            server_id: sid.to_string(),
+        }))
     }
 
     /// Rollback 阶段 — 并发向所有参与者发送 rollback 请求(best-effort)
@@ -1015,6 +1090,99 @@ impl McpMesh {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+    use std::future::Future;
+    use std::pin::Pin;
+    use std::sync::Mutex;
+
+    /// 首次 commit 失败、后续成功的客户端（P2-1 预算验证用）。
+    #[derive(Default)]
+    struct FlakyOnceClient {
+        failed: Mutex<HashSet<String>>,
+    }
+
+    impl ParticipantClient for FlakyOnceClient {
+        fn prepare<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _t: &'a str,
+            _op: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn commit<'a>(
+            &'a self,
+            s: &'a MeshServer,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            // insert 返回 true = 首次调用
+            let first = {
+                let mut guard = self.failed.lock().unwrap_or_else(|e| e.into_inner());
+                guard.insert(s.server_id.clone())
+            };
+            if first {
+                let sid = s.server_id.clone();
+                Box::pin(async move {
+                    Err(McpError::NetworkError {
+                        server_id: sid,
+                        endpoint: String::new(),
+                        reason: "flaky first commit".into(),
+                    })
+                })
+            } else {
+                Box::pin(async { Ok(()) })
+            }
+        }
+
+        fn rollback<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn query<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _q: &'a str,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+            Box::pin(async { Ok("ok".to_string()) })
+        }
+    }
+
+    /// P2-1：默认预算（200ms）内首次失败 + 50ms 退避重试必须能成功。
+    ///
+    /// 改前基数 200ms ≥ 预算 → 首次退避即被外层 timeout 取消（重试是死码）。
+    #[tokio::test]
+    async fn commit_retry_within_default_budget() {
+        let client = Arc::new(FlakyOnceClient::default());
+        let mesh = McpMesh::with_participant_client(
+            MeshConfig::default(),
+            None,
+            Arc::clone(&client) as Arc<dyn ParticipantClient>,
+        );
+        mesh.register_server(MeshServer::new("s-0", "203.0.113.1:80", vec![]))
+            .expect("注册失败");
+
+        let result = mesh
+            .execute_transaction(vec!["s-0".into()], "op".into())
+            .await
+            .expect("默认预算内应能完成首次失败 + 重试（改前必超时）");
+        assert!(result.success, "重试后 commit 应成功");
+    }
+
+    /// P2-1：位移封顶 6，极大 `max_retries` 不 panic/回绕，单次退避 ≤ 3200ms。
+    #[test]
+    fn backoff_is_bounded_for_large_max_retries() {
+        assert_eq!(backoff_ms(50, 0), 50);
+        assert_eq!(backoff_ms(50, 1), 100);
+        assert_eq!(backoff_ms(50, 6), 3200);
+        assert_eq!(backoff_ms(50, 70), 3200, "位移超 6 必被封印");
+        assert_eq!(backoff_ms(50, u32::MAX), 3200);
+    }
 
     fn make_mesh_with_servers(n: usize) -> McpMesh {
         // 事务超时用 30s 而非默认 200ms：16 线程全并行下 5 服务器 2PC
@@ -1032,6 +1200,56 @@ mod tests {
                 .expect("注册失败");
         }
         mesh
+    }
+
+    /// P1-3：serial 2PC 必须与旧实现的**循环层 `?` 短路**逐位等价——
+    /// 未注册参与者立即 `ServerNotFound`，且**不写**待补偿台账。
+    #[tokio::test]
+    async fn serial_commit_short_circuits_unregistered_participant() {
+        let mesh = make_mesh_with_servers(1); // 只注册 s-0
+        let tx = QuantumTransaction::with_id(
+            "tx-serial-short-circuit".to_string(),
+            vec!["s-0".into(), "s-missing".into()],
+        );
+
+        let err = mesh
+            .commit_phase_with_mode(&tx, true)
+            .await
+            .expect_err("未注册参与者应短路返回错误");
+        assert!(
+            matches!(err, McpError::ServerNotFound { .. }),
+            "serial 分支必须与旧短路一致（ServerNotFound），实际 {err:?}"
+        );
+        assert_eq!(
+            mesh.pending_compensations.len(),
+            0,
+            "短路路径不得写待补偿台账（旧行为零台账）"
+        );
+    }
+
+    /// 并发分支的差异必须被显式钉住：同一未注册场景归一为
+    /// `CompensationFailed` 并入台账（集合语义、失败范围最小化）。
+    #[tokio::test]
+    async fn concurrent_commit_normalizes_unregistered_to_compensation_failed() {
+        let mesh = make_mesh_with_servers(1);
+        let tx = QuantumTransaction::with_id(
+            "tx-concurrent-normalize".to_string(),
+            vec!["s-0".into(), "s-missing".into()],
+        );
+
+        let err = mesh
+            .commit_phase_with_mode(&tx, false)
+            .await
+            .expect_err("未注册参与者应使事务失败");
+        assert!(
+            matches!(err, McpError::CompensationFailed { .. }),
+            "并发分支应将 ServerNotFound 归一为 CompensationFailed，实际 {err:?}"
+        );
+        assert_eq!(
+            mesh.pending_compensations.len(),
+            1,
+            "并发分支须登记待补偿台账（可 reconcile）"
+        );
     }
 
     #[tokio::test]
@@ -1088,7 +1306,20 @@ mod tests {
     async fn test_publishes_mcp_mesh_transaction_completed() {
         let bus = EventBus::new();
         let mut rx = bus.subscribe();
-        let mesh = McpMesh::with_event_bus(MeshConfig::default(), bus);
+        // C-114/M78：本行原先用 `MeshConfig::default()`（事务超时 200ms），是全仓
+        // 已经收过的那类「把调度延迟当成被测属性」的漏网——16 线程满并行下 2PC 可以
+        // 跑过 200ms ⇒ 直接报 `TransactionTimeout{timeout_ms:200}`（实测并跑红、单跑绿）。
+        // 同文件 `make_mesh_with_servers` 已因 v2.21.0 同款教训改用 30_000ms，本用例
+        // 当时没跟着改。本测试的被测对象是**事件发布**，不是 200ms 预算；
+        // 生产默认 200ms 的语义与超时机制本身均不在本行调整范围内
+        // （`config.rs` 的默认值断言照引）。
+        let mesh = McpMesh::with_event_bus(
+            MeshConfig {
+                transaction_timeout_ms: 30_000,
+                ..Default::default()
+            },
+            bus,
+        );
         mesh.register_server(MeshServer::new("s-1", "203.0.113.1", vec![]))
             .expect("注册失败");
 

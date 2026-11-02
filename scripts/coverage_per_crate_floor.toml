@@ -10,6 +10,16 @@
 #
 # 校准状态：本文件为首版；coverage nightly 首次真实测量后，须把 defaults.floor 与
 #   各 [[crate]].floor 抬到"实测 - 3~5pp"附近（登记 RK-P45），禁止长期停在兜底值 45。
+#
+# 未闭债登记（2026-10-10 / v3.5 自查）：上述"首次真实测量"已于 2026-09-05 发生
+#   （`docs/reports/coverage-ratchet-calibration-2026-09-05.md`：聚合 92.97%，逐 crate
+#   floor 全过），但该报告**只公布了聚合值与"全过"结论，未留逐 crate 数值** ⇒ 本表
+#   无据可抬，仍停在首版兜底值。不得用估算或编造值填表（那正是本批在消除的假账形状）。
+#   出数地点：coverage.yml nightly（schedule + workflow_dispatch）产出 llvm-cov JSON 后，
+#   由 `coverage_gate.py --check` 的逐 crate 读数抬升（只升不降，下调需 ADR）。
+#   **本地不可代跑**：本机 rustc（stable-x86_64-pc-windows-gnu 1.97.1）缺 profiler runtime，
+#   `cargo llvm-cov` 在插桩构建阶段即 E0463（实测于 2026-10-10；与 2026-09-04
+#   phaseR-wave1 所记同因，至今未变）。详总账 §9 W6-7 行与 v3.5 执行报告 §32。
 
 [defaults]
 floor = 45

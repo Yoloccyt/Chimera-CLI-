@@ -147,6 +147,15 @@ verdict("T7 检查单条目数", "PROVEN" if rows >= 14 else "NOT PROVEN", f"{ro
 
 # --- 输出 ---
 bad = [r for r in RESULTS if r[1] != "PROVEN"]
+# G-10 是 expect=1 的门：本仓 `docs/reports/**.md` 被 .gitignore 排除（ADR 除外），
+# 所以在干净克隆上这些证据文件**全体缺失**，旧写法会得到 rc=1 —— 与“如期红”逐字节
+# 相同，于是“根本没判”被台账记成“判过了”。判据没跑完就必须退 2（F33/H7 同族），
+# 让人去修语料而不是去追一条不存在的红。只有“部分能判、部分未证”才是本门要报的真红。
+if not RESULTS or len(bad) == len(RESULTS):
+    print("[UNDECIDABLE] 0/%d item(s) judgeable: the evidence corpus is entirely "
+          "unreadable (docs are not in the clone, or paths drifted)" % len(RESULTS))
+    print("        not a verdict; put docs/reports/* back on disk and re-run.")
+    sys.exit(2)
 # 标记用 ASCII：Windows 默认控制台编码是 GBK，非 ASCII 符号会直接 UnicodeEncodeError
 # 把审计结果吹掉（本脚本写错一次已实证）。治理脚本不得依赖宿主编码。
 for item, st, ev in RESULTS:

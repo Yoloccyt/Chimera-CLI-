@@ -2,7 +2,7 @@
 //! LAYER:    L6
 //! ROLE:     SESA 子专家稀疏激活 — 对专家子集进行稀疏化激活以降低计算开销
 //! BACKEND:  memory
-//! PRODUCERS: 6 ConsensusReached,ExpertRouted,OmniSparseMasksComputed,QuestCreated,SesaActivationCompleted…
+//! PRODUCERS: 1 SesaActivationCompleted
 //! CONSUMERS: 0 -
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END

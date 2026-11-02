@@ -23,6 +23,7 @@ use chimera_tui::panels::MetricsDashboardPanel;
 use chimera_tui::types::TuiState;
 use chimera_tui::viz::VizChartKind;
 use chimera_tui::{Panel, PanelId};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
 use ratatui::layout::Rect;
@@ -199,4 +200,72 @@ fn test_unbind_removes_cell() {
             panel.render(&state, area, f.buffer_mut());
         })
         .expect("empty grid render should not panic");
+}
+
+#[test]
+fn test_selected_cell_border_highlighted_and_follows_navigation() {
+    // F-38:selected cell 叠加 accent 边框 —— 5×2 网格导航此前零视觉反馈
+    // (selected 被导航修改但渲染路径从不消费),本用例锁定"选中 cell 边框
+    // 带高亮色、非选中 cell 不带"两条样式差异。
+    let mut panel = MetricsDashboardPanel::new();
+    let mut state = TuiState::new();
+    let (mut buf, area) = make_buffer(100, 20);
+
+    // 初始 selected=0:首 cell(左列第 1 行)的左上角边框格应带高亮色。
+    // 布局算术:v_split 顶部 GQEP 摘要行恰占 1 行,5×2 网格自 y=1 起,
+    // cell(0,0) 左上角边框格 = (0, 1)(列宽/行高切分不影响该角点)。
+    panel.render(&state, area, &mut buf);
+    let corner = buf
+        .cell(Position::new(0, 1))
+        .expect("corner cell exists")
+        .style()
+        .fg;
+    assert_eq!(
+        corner,
+        Some(Color::Cyan),
+        "selected cell(0,0) 边框应为 accent 高亮色, got {corner:?}"
+    );
+
+    // 真实导航路径:Down(+GRID_COLS 跨行)后 selected=2,首 cell 高亮消失
+    panel.handle_key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE), &mut state);
+    assert_eq!(
+        panel.selected(),
+        2,
+        "Down should move selection down one row (+GRID_COLS)"
+    );
+    let (mut buf2, _) = make_buffer(100, 20);
+    panel.render(&state, area, &mut buf2);
+    let corner_after = buf2
+        .cell(Position::new(0, 1))
+        .expect("corner cell exists")
+        .style()
+        .fg;
+    assert_ne!(
+        corner_after,
+        Some(Color::Cyan),
+        "非选中 cell 不应残留高亮色, got {corner_after:?}"
+    );
+}
+
+#[test]
+fn test_selected_cell_highlight_consumes_injected_accent() {
+    // F-37:高亮色不再硬编码 Cyan,经 `Panel::set_accent` 注入
+    // (TuiApp 装配期 / cycle_theme_action 切主题时广播)。本用例锁定
+    // 面板消费注入值的路径:注入后选中格边框随注入色渲染。
+    let mut panel = MetricsDashboardPanel::new();
+    panel.set_accent(Color::Magenta);
+    let state = TuiState::new();
+    let (mut buf, area) = make_buffer(100, 20);
+
+    panel.render(&state, area, &mut buf);
+    let corner = buf
+        .cell(Position::new(0, 1))
+        .expect("corner cell exists")
+        .style()
+        .fg;
+    assert_eq!(
+        corner,
+        Some(Color::Magenta),
+        "注入 accent 后选中格边框应为注入色而非硬编码, got {corner:?}"
+    );
 }

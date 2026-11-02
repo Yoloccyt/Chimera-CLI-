@@ -91,6 +91,7 @@ impl DecbConfig {
     /// 避免运行时预算计算产生 NaN 或档位判定异常。
     ///
     /// # 校验规则
+    /// - 所有浮点字段必须有限(拒绝 NaN/±inf,置于校验链最前)
     /// - `base_budget` ∈ [0.0, 1.0]
     /// - `high_tier_threshold` > `low_tier_threshold`(阈值单调递增)
     /// - `total_budget_limit` > 0
@@ -99,6 +100,39 @@ impl DecbConfig {
     /// - 所有时间间隔 > 0
     /// - 所有成本单价 >= 0
     pub fn validate(&self) -> Result<(), DecbError> {
+        // WHY B3 加固:total_budget_limit 与四组因子(复杂度/紧急度/成本单价/
+        // 溢出阈值)参与预算算术——NaN 参与比较恒为 false,可穿透下方
+        // `<= 0.0`/`< 0.0`/倒挂比较;±inf 同理穿透上限类检查。NaN
+        // total_budget_limit 会使 check_overflow 恒走 Degraded 分支(服务
+        // 不可用 + Critical 事件风暴)。is_finite() 同时拒绝 NaN 与 ±inf,
+        // 置于校验链最前实现配置边界 fail-closed。base_budget 与双档位阈值
+        // 不在此列:[0.0, 1.0] 的 contains 检查已天然拒绝 NaN/±inf。
+        for (name, val) in [
+            ("total_budget_limit", self.total_budget_limit),
+            ("cost_per_token", self.cost_per_token),
+            ("cost_per_tool_call", self.cost_per_tool_call),
+            ("overflow_warn_ratio", self.overflow_warn_ratio),
+            ("overflow_degrade_ratio", self.overflow_degrade_ratio),
+            ("overflow_critical_ratio", self.overflow_critical_ratio),
+        ] {
+            if !val.is_finite() {
+                return Err(DecbError::ConfigError {
+                    detail: format!("{name} ({val}) must be finite"),
+                });
+            }
+        }
+        for (name, val) in [
+            ("complexity_factor_min", self.complexity_factor_min),
+            ("complexity_factor_max", self.complexity_factor_max),
+            ("urgency_factor_min", self.urgency_factor_min),
+            ("urgency_factor_max", self.urgency_factor_max),
+        ] {
+            if !val.is_finite() {
+                return Err(DecbError::ConfigError {
+                    detail: format!("{name} ({val}) must be finite"),
+                });
+            }
+        }
         if !(0.0..=1.0).contains(&self.base_budget) || self.base_budget.is_nan() {
             return Err(DecbError::ConfigError {
                 detail: format!(
@@ -177,15 +211,15 @@ impl DecbConfig {
         }
         // WHY 校验溢出阈值:三级阈值必须严格递增(warn < degrade < critical),
         // 否则 check_overflow 的 if-elif 链会失效(如 warn >= critical 时永不到达 critical 分支)。
-        // 同时禁止 NaN/负值,防止 ratio 比较产生未定义行为。
+        // 有限性已由前置 is_finite 门保证,此处只管符号。
         for (name, val) in [
             ("overflow_warn_ratio", self.overflow_warn_ratio),
             ("overflow_degrade_ratio", self.overflow_degrade_ratio),
             ("overflow_critical_ratio", self.overflow_critical_ratio),
         ] {
-            if val.is_nan() || val < 0.0 {
+            if val < 0.0 {
                 return Err(DecbError::ConfigError {
-                    detail: format!("{name} ({val}) must be finite and >= 0.0"),
+                    detail: format!("{name} ({val}) must be >= 0.0"),
                 });
             }
         }
@@ -376,6 +410,106 @@ mod tests {
             ..Default::default()
         };
         assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_total_budget_limit_non_finite() {
+        // WHY B3 加固:NaN 与 ±inf 穿透 `<= 0.0` 比较(NaN 参与比较恒为 false),
+        // NaN total_budget_limit 会使 check_overflow 恒走 Degraded 分支(服务不可用)
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let cfg = DecbConfig {
+                total_budget_limit: bad,
+                ..Default::default()
+            };
+            assert!(
+                cfg.validate().is_err(),
+                "total_budget_limit = {bad} 应被拒绝"
+            );
+        }
+    }
+
+    #[test]
+    fn test_validate_factor_groups_non_finite() {
+        // WHY B3 加固:四组因子(复杂度/紧急度/成本单价/溢出阈值)的非有限值
+        // 穿透既有符号与倒挂比较——NaN 比较恒 false,±inf 穿透上限类检查,
+        // 必须在配置边界显式拒绝(fail-closed)
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let cases = [
+                (
+                    "cost_per_token",
+                    DecbConfig {
+                        cost_per_token: bad,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "cost_per_tool_call",
+                    DecbConfig {
+                        cost_per_tool_call: bad,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "overflow_warn_ratio",
+                    DecbConfig {
+                        overflow_warn_ratio: bad,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "overflow_degrade_ratio",
+                    DecbConfig {
+                        overflow_degrade_ratio: bad,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "overflow_critical_ratio",
+                    DecbConfig {
+                        overflow_critical_ratio: bad,
+                        ..Default::default()
+                    },
+                ),
+            ];
+            for (field, cfg) in cases {
+                assert!(cfg.validate().is_err(), "{field} = {bad} 应被拒绝");
+            }
+        }
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let cases = [
+                (
+                    "complexity_factor_min",
+                    DecbConfig {
+                        complexity_factor_min: bad,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "complexity_factor_max",
+                    DecbConfig {
+                        complexity_factor_max: bad,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "urgency_factor_min",
+                    DecbConfig {
+                        urgency_factor_min: bad,
+                        ..Default::default()
+                    },
+                ),
+                (
+                    "urgency_factor_max",
+                    DecbConfig {
+                        urgency_factor_max: bad,
+                        ..Default::default()
+                    },
+                ),
+            ];
+            for (field, cfg) in cases {
+                assert!(cfg.validate().is_err(), "{field} = {bad} 应被拒绝");
+            }
+        }
     }
 
     #[test]

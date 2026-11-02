@@ -150,34 +150,10 @@ pub async fn spawn_experience_loop(
         };
 
     // 2b. 双流持久化订阅(broadcast + Critical;subscribe-before-spawn 红线)
-    let mut rx_broadcast = card_bus.subscribe();
-    let mut rx_critical = card_bus.subscribe_critical();
-    let storage_for_loop = Arc::clone(&storage);
-    join_handles.push(tokio::spawn(async move {
-        loop {
-            // 两通道任意到达即持久化(Critical 高分卡不再丢失)
-            // WHY 类型差异:broadcast 分流 recv 返回 Result(Lagged 可观测);
-            // Critical 分流为 mpsc::UnboundedReceiver,recv 返回 Option(None=关闭)。
-            let card = tokio::select! {
-                r = rx_broadcast.recv() => match r {
-                    Ok(c) => c,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        warn!(lag = n, "卡片持久化 broadcast Lagged,丢弃 {n} 张");
-                        continue;
-                    }
-                    Err(_) => break,
-                },
-                r = rx_critical.recv() => match r {
-                    Some(c) => c,
-                    None => break,
-                },
-            };
-            let card_id = card.card_id.to_string();
-            if let Err(e) = storage_for_loop.store(&card).await {
-                warn!(card_id, error = %e, "经验卡片持久化失败");
-            }
-        }
-    }));
+    join_handles.push(spawn_card_persistence_subscriber(
+        &card_bus,
+        Arc::clone(&storage),
+    ));
 
     // 3. L2 记忆引擎 + 卡片总线消费(with_card_bus 内部 subscribe 后 spawn)
     let mlc = Arc::new(
@@ -198,8 +174,12 @@ pub async fn spawn_experience_loop(
     // 5. RuntimeAuditor:事件计数订阅 + 周期五维报告(发布 HarnessReportGenerated)
     //    M13(decb 重路由):组合根构造共享 DecbGovernor 注入审计器——第 6 维
     //    budget_discipline 每次报告经 get_stats() 真实消费(L9→L8 向下非内环,
-    //    ADR-179 非空转生产调用路径)。DECB 默认配置零消耗,不发布任何事件,
-    //    报告事件面分毫不动(零行为变化)。
+    //    ADR-179 读侧真实)。
+    //    ⚠ 读侧真 ≠ 维度真(C-78/M58 实测):**写侧在生产为 0 调用**——
+    //    `DecbGovernor::record_consumption` 的唯一适配器 `DecbCostCallback`
+    //    无任何生产构造点,全仓 hit 只在测试与 `///` 文档行 ⇒ 利用率恒为 0。
+    //    因此 `budget_discipline()` 在零消耗时按证据纪律返回 NEUTRAL(0.5),
+    //    不再把"没记账"报成满分 1.0。接上写侧见 ADR-225 §5 T-19。
     let decb = Arc::new(
         decb_governor::DecbGovernor::with_event_bus(
             decb_governor::DecbConfig::default(),
@@ -318,6 +298,13 @@ pub async fn spawn_experience_loop(
         60,
     ));
 
+    // ADR-200 D1(V5): 因果归因 tap —— 订阅侧常驻,零发布路径改动。
+    // 触发集事件(SlowConsumerDropped/BudgetExceeded)到达时自动产出 5s 窗口
+    // 因果链诊断(可选 JSONL 经 CHIMERA_ATTRIBUTION_DUMP_PATH 门控)。
+    // subscribe-before-spawn 由 spawn_attribution_tap 内部保证;句柄收进
+    // join_handles 同报告器族生命周期纪律(反模式 #7,不 fire-and-forget)。
+    join_handles.push(event_bus::attribution::spawn_attribution_tap(&nexus_bus).into_task());
+
     Ok(ExperienceLoopHandles {
         card_bus,
         mlc,
@@ -326,6 +313,44 @@ pub async fn spawn_experience_loop(
         storage,
         sandbox,
         join_handles,
+    })
+}
+
+/// 2b. 卡片双流持久化订阅器：从 `spawn_experience_loop` 抽出入独立 fn 以守
+/// fn-length 棘轮(≤200)，行为与原内联逐字一致（先同步 subscribe 再 spawn，
+/// 遵 §4.4-3 红线；两个接收端均留在任务内，不上抛）。
+fn spawn_card_persistence_subscriber(
+    card_bus: &Arc<ExperienceCardBus>,
+    storage: Arc<ExperienceCardStorage>,
+) -> JoinHandle<()> {
+    let mut rx_broadcast = card_bus.subscribe();
+    let mut rx_critical = card_bus.subscribe_critical();
+    let storage_for_loop = Arc::clone(&storage);
+    tokio::spawn(async move {
+        loop {
+            // 两通道任意到达即持久化(Critical 高分卡不再丢失)
+            // WHY 类型差异:broadcast 分流 recv 返回 Result(Lagged 可观测);
+            // Critical 分流为 bounded mpsc::Receiver(容量 4096,满载时发布方
+            // 采样丢弃计数),recv 返回 Option(None=关闭)——消费端签名两态一致。
+            let card = tokio::select! {
+                r = rx_broadcast.recv() => match r {
+                    Ok(c) => c,
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(lag = n, "卡片持久化 broadcast Lagged,丢弃 {n} 张");
+                        continue;
+                    }
+                    Err(_) => break,
+                },
+                r = rx_critical.recv() => match r {
+                    Some(c) => c,
+                    None => break,
+                },
+            };
+            let card_id = card.card_id.to_string();
+            if let Err(e) = storage_for_loop.store(&card).await {
+                warn!(card_id, error = %e, "经验卡片持久化失败");
+            }
+        }
     })
 }
 

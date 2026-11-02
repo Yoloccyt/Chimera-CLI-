@@ -2,7 +2,7 @@
 //! LAYER:    L9
 //! ROLE:     长期任务引擎 — Quest 分解、检查点持久化与思考模式治理
 //! BACKEND:  fs
-//! PRODUCERS: 21 BudgetAdjusted,CacheHit,CheckpointLoaded,CheckpointSaved,CoordinationRatioReported…
+//! PRODUCERS: 12 CheckpointLoaded,CheckpointSaved,CoordinationRatioReported,ExecutionCompleted,NexusStateChanged…
 //! CONSUMERS: 2 chimera-cli,nexus-app-server
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
@@ -68,6 +68,7 @@ pub mod state_listener;
 pub mod trajectory_exporter;
 pub mod ttg;
 pub mod types;
+pub mod wal;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use arbitration::ArbitrationLayer;

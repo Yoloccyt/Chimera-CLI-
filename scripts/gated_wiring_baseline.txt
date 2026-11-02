@@ -10,7 +10,6 @@
 chtc-bridge|DECORATIVE  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
 csn-substitutor|DECORATIVE  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
 decay-engine|PARTIAL  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
-mas-sched|DECORATIVE  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
 mtpe-executor|DECORATIVE  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
 nexus-hook|DECORATIVE  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化
 omega-learner|PARTIAL  # r2_island_repayment/r2_unfreeze 在制品债务, B3-B4 消化

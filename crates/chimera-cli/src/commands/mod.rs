@@ -33,6 +33,8 @@ pub mod chat;
 pub mod completions;
 /// 配置管理子命令
 pub mod config;
+/// 价格向量一期可见性子命令（只读展示统一价格向量）
+pub mod cost;
 /// 系统健康检查子命令(Task 1.13)
 pub mod doctor;
 /// WI-02: 非交互执行契约（exec stdout 纪律 + 退出码四类语义）
@@ -76,19 +78,33 @@ pub mod wiki;
 pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
     // 从 Cli 构造 PermissionCtx(各命令按需消费,不破坏不需要 prompt 的命令签名)
     let perm = PermissionCtx::from_cli(cli);
-    // C12: 进程级唯一装配点 —— 六命令共享 bus/engine（见模块文档 M4-P1 节）。
-    let ctx = crate::composition::build(cfg)?;
+    // C12 单一装配点保留；只把调用时机下沉到 FullContext 命令。
+    // NoContext 命令（help/completions/config/cost/wiki/grep/audit/llm/mcp）
+    // 不再为 EventBus/64 分片/8 experts/SccCache 付费。
+    // D1：FullContext 按 spec::plan 选定的分片策略装配 —— one-shot（run/exec/…）
+    // 走 Off（不付 64 worker 启动税），长驻宿主（chat/tui/serve/acp/None）走 Auto。
+    let assemble_started = std::time::Instant::now();
+    let mut ctx = match crate::spec::plan(cli.command.as_ref()) {
+        crate::spec::CommandPlan::FullContext { sharding } => {
+            Some(crate::composition::build_with_sharding(cfg, sharding)?)
+        }
+        crate::spec::CommandPlan::NoContext => None,
+    };
+    tracing::info!(
+        assemble_ms = assemble_started.elapsed().as_secs_f64() * 1000.0,
+        "startup phase: assemble"
+    );
     match &cli.command {
         // Task 5 of spec: EXAMPLES 一级入口 — 顶级命令位置(Run 之前)
         // 不消费 json/perm(纯字符串输出)
         Some(Commands::Help { command }) => help::execute(command.as_deref(), cli).await,
         Some(Commands::Run { prompt }) => {
-            run::execute_with_ctx(&ctx, prompt, cli.json, &perm).await
+            run::execute_with_ctx(ctx_ref(&ctx)?, prompt, cli.json, &perm).await
         }
         // WI-02: exec 非交互契约 — 独立退出码语义（0/2/3/4）经 exec::exec_exit_code 映射；
         // std::process::exit 立即终止（exec 为 CI 管道场景，析构无业务依赖）
         Some(Commands::Exec { prompt }) => {
-            match exec::execute_with_ctx(&ctx, prompt, cli.json, &perm).await {
+            match exec::execute_with_ctx(ctx_ref(&ctx)?, prompt, cli.json, &perm).await {
                 Ok(()) => Ok(()),
                 Err(e) => {
                     if let Some(ce) = e.downcast_ref::<ChimeraCliError>() {
@@ -101,12 +117,12 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
             }
         }
         // WI-01: serve 协议宿主（不消费 json/perm——协议面自身是 JSON）
-        Some(Commands::Serve) => serve::execute(cfg).await,
+        Some(Commands::Serve) => serve::execute_with_ctx(ctx_owned(&mut ctx)?, cfg).await,
         // P2-T9: ACP 桥（转译层隔离,协议面自身是 JSON）
-        Some(Commands::Acp) => acp::execute(cfg).await,
+        Some(Commands::Acp) => acp::execute_with_ctx(ctx_owned(&mut ctx)?, cfg).await,
         // Task 1.5: chat REPL 不消费 json flag(REPL 内部统一人类可读),
         // 但消费 perm(--no-permission 自动允许 tool 调用,CI 友好)
-        Some(Commands::Chat) => chat::execute_with_ctx(&ctx, cli, cfg).await,
+        Some(Commands::Chat) => chat::execute_with_ctx(ctx_ref(&ctx)?, cli, cfg).await,
         // v3-engine M2(ADR-061):传递 `--no-v3-engine` flag 到 tui::execute_with_ctx,
         // 由其设置 CHIMERA_NO_V3_ENGINE 环境变量控制渲染路径回退。
         // WI-01: `--protocol` flag 传递协议模式开关（Quest 生命周期经协议面）
@@ -115,52 +131,108 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         Some(Commands::Tui {
             no_v3_engine,
             protocol,
-        }) => tui::execute_with_ctx(&ctx, cfg, *no_v3_engine, *protocol).await,
-        // Quest:全局 --json 优先,子命令级 --json 作为兼容回退(Task 1.7 统一前保留)
+        }) => tui::execute_with_ctx(ctx_ref(&ctx)?, cfg, *no_v3_engine, *protocol).await,
+        // Quest:全局 --json 优先,子命令级 --json 兼容保留（B4a 门禁红：
+        // 嵌套子命令 `list` 之后不接受全局 --json，故局部 flag 不能删）
         Some(Commands::Quest { action, json }) => {
-            quest::execute_with_ctx(&ctx, action, cli.json || *json, &perm, cli.dry_run).await
+            quest::execute_with_ctx(
+                ctx_ref(&ctx)?,
+                action,
+                cli.json || *json,
+                &perm,
+                cli.dry_run,
+            )
+            .await
         }
-        Some(Commands::Config { action }) => config::execute(action, cfg, cli.json).await,
-        // Wiki:全局 --json 优先,子命令级 --json 作为兼容回退(Task 1.7 统一前保留);
+        Some(Commands::Config { action }) => {
+            config::execute(action, cfg, cli.json, cli.config.as_deref()).await
+        }
+        // Wiki:全局 --json 优先,子命令级 --json 兼容保留（B4a 门禁同 Quest）;
         // --limit 由子命令参数传递(SubTask 1.3.3,默认 10)
         Some(Commands::Wiki { query, json, limit }) => {
             wiki::execute(query, cfg, cli.json || *json, *limit).await
         }
-        // Milestone B-5: Agent Grep 双通道检索 — 全局 --json 优先,子命令级 --json 回退
+        // Milestone B-5: Agent Grep 双通道检索 — 全局 --json 优先,子命令级兼容保留
         Some(Commands::Grep { pattern, json }) => {
             grep::execute(pattern, cfg, cli.json || *json).await
         }
-        // Parliament:全局 --json 优先,子命令级 --json 作为兼容回退;perm 预留供未来权限检查
+        // Parliament:全局 --json 优先,子命令级 --json 兼容保留;perm 预留供未来权限检查
         Some(Commands::Parliament { proposal, json }) => {
-            parliament::execute_with_ctx(&ctx, proposal, cli.json || *json, &perm).await
+            parliament::execute_with_ctx(ctx_ref(&ctx)?, proposal, cli.json || *json, &perm).await
         }
         // Task 1.8: MCP 量子网格管理 — 全局 --json 传递;perm 供 mcp call 使用;dry_run 供 mcp call 预览
         Some(Commands::Mcp { action }) => {
             mcp::execute(action, cfg, cli.json, &perm, cli.dry_run).await
         }
-        // Task 1.9: 红队安全审计 — 全局 --json 优先,子命令级 --json 作为兼容回退
+        // Task 1.9: 红队安全审计 — 全局 --json 优先,子命令级 --json 兼容保留
         Some(Commands::Audit { json, severity }) => {
             audit::execute(cfg, cli.json || *json, severity.as_deref()).await
         }
         // Task 1.10: Agent 生命周期管理 — 全局 --json 传递;perm 供 agent cancel 使用;dry_run 供 agent cancel 预览
         Some(Commands::Agent { action, parallel }) => {
-            agent::execute_with_ctx(&ctx, action, cli.json, *parallel, &perm, cli.dry_run).await
+            agent::execute_with_ctx(
+                ctx_ref(&ctx)?,
+                action,
+                cli.json,
+                *parallel,
+                &perm,
+                cli.dry_run,
+            )
+            .await
         }
-        // Task 1.13: 系统健康检查 — 全局 --json 优先,子命令级 --json 作为兼容回退
-        // M12 / ADR-185 D3:doctor 已迁共享 AppContext,9 探针(M13 起 +scc_cache)经 gqep 并行 gather
+        // Task 1.13: 系统健康检查 — 全局 --json 优先,子命令级 --json 兼容保留
+        // M12 / ADR-185 D3:doctor 已迁共享 AppContext,11 探针(M13 +scc_cache、W5-1 +model_assets)经 gqep 并行 gather
+        // W3-2:线程化 --config 显式路径,探针 0/2 复用已加载 cfg(不再重复 config::load)
         Some(Commands::Doctor { json, fix }) => {
-            doctor::execute_with_ctx(&ctx, cfg, cli.json || *json, *fix).await
+            doctor::execute_with_ctx(
+                ctx_ref(&ctx)?,
+                cfg,
+                cli.json || *json,
+                *fix,
+                cli.config.clone(),
+            )
+            .await
         }
         // Task 1.14: 生成 shell 补全脚本 — 不消费 json/perm,直接输出到 stdout
         Some(Commands::Completions { shell }) => completions::execute(*shell).await,
         // Task 2 of spec: LLM Provider 管理 — 全局 --json 传递;perm 供 set-default/strategy 使用
         Some(Commands::Llm { action }) => llm::execute(action, cfg, cli.json, &perm).await,
+        // 价格向量一期可见性：只读展示，无副作用；不消费 ctx/perm/dry_run。
+        // CHIMERA_LAZY_CONFIG=1 时走 LazyConfig pilot（只解析 model_router section）。
+        Some(Commands::Cost) => {
+            if std::env::var("CHIMERA_LAZY_CONFIG").ok().as_deref() == Some("1") {
+                cost::execute_lazy(cli.config.clone(), cli.json).await
+            } else {
+                cost::execute(cfg, cli.json).await
+            }
+        }
         None => {
             // 无子命令:默认启动 TUI 交互界面(默认启用 v3-engine,非协议模式)
             // --help/--version 由 Clap 在 Cli::parse() 阶段内置处理,不会进入此分支
-            tui::execute_with_ctx(&ctx, cfg, false, false).await
+            tui::execute_with_ctx(ctx_ref(&ctx)?, cfg, false, false).await
         }
     }
+}
+
+/// 取 FullContext 命令的共享上下文引用。
+///
+/// WHY 用 Result 而非 `expect`：NoContext 分支不会调用本函数；一旦分类错误，
+/// 返回结构化 EngineError（退出码 3），而不是 panic。
+fn ctx_ref(
+    ctx: &Option<crate::composition::AppContext>,
+) -> Result<&crate::composition::AppContext> {
+    ctx.as_ref().ok_or_else(|| {
+        ChimeraCliError::EngineError("内部装配错误：FullContext 命令缺少 AppContext".into()).into()
+    })
+}
+
+/// 取走 FullContext 命令的共享上下文（serve/acp 需要 move 进 AppServer）。
+fn ctx_owned(
+    ctx: &mut Option<crate::composition::AppContext>,
+) -> Result<crate::composition::AppContext> {
+    ctx.take().ok_or_else(|| {
+        ChimeraCliError::EngineError("内部装配错误：FullContext 命令缺少 AppContext".into()).into()
+    })
 }
 
 /// 测试专用共享工具 —— 供 serve.rs / acp.rs 的事件循环测试复用（杜绝重复 mock）。

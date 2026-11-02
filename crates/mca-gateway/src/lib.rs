@@ -24,6 +24,7 @@
 //! 任何 crate。跨层通信只走 EventBus;**流式数据面(per-token delta)走专用
 //! bounded mpsc 直连调用方,不进 event-bus**(ADR-065 决策 4:broadcast 1024
 //! 容量承载不了 per-token 流,Lagged 丢弃会破坏 TUI 体验)。
+//! (M1 未交付,规划态:stream() 流式面未实装,上述数据面走向为设计契约而非已实现行为)
 //!
 //! # 模块职责矩阵
 //! | 模块 | 职责 | 关键类型 |

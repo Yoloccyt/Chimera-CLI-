@@ -174,11 +174,17 @@ fn test_router_panel_renders_title() {
     app.update();
     app.switch_panel_to(PanelId::Router);
 
+    // i18n(B4-I):面板名随 locale 切换,期望串与渲染同源经 t! 求值、locale 无关;
+    // 持 guard 串行化但不写全局 locale——不新增 En 窗口,避免污染同二进制内
+    // 依赖默认中文的并行测试
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let panel_label = chimera_tui::t!(PanelId::Router.name_key());
     let content = render_to_string(&mut app, 100, 30);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("Router"),
+        compact.contains(panel_label),
         "Router panel title should be rendered, got: {}",
-        &content[..content.len().min(200)]
+        content.chars().take(200).collect::<String>()
     );
 }
 
@@ -206,7 +212,7 @@ fn test_router_panel_default_state_renders_three_routers() {
     assert!(
         content.contains("KVBSR"),
         "default state should display KVBSR router, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         content.contains("SESA"),
@@ -241,7 +247,7 @@ fn test_router_panel_default_state_zero_hit_rate() {
     assert!(
         content.contains("0.0%"),
         "default hit_rate 0.0 should display as 0.0%, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -268,7 +274,7 @@ fn test_router_panel_renders_hit_rates() {
     assert!(
         content.contains("87.0%"),
         "KVBSR hit_rate 0.87 should display as 87.0%, got: {}",
-        &content[..content.len().min(400)]
+        content.chars().take(400).collect::<String>()
     );
     // SESA 0.72 → 72.0%
     assert!(
@@ -301,7 +307,7 @@ fn test_router_panel_renders_latency_p50_p95_p99() {
     assert!(
         content.contains("120"),
         "KVBSR P50 latency 120 should be rendered, got: {}",
-        &content[..content.len().min(500)]
+        content.chars().take(500).collect::<String>()
     );
     assert!(
         content.contains("480"),
@@ -358,7 +364,7 @@ fn test_router_panel_renders_utilization_bar() {
     assert!(
         content.contains('[') && content.contains(']'),
         "utilization bar should render [====----] form, got: {}",
-        &content[..content.len().min(400)]
+        content.chars().take(400).collect::<String>()
     );
     assert!(
         content.contains('='),
@@ -390,7 +396,7 @@ fn test_router_panel_zero_hit_rate_renders_empty_bar() {
     assert!(
         content.contains("0.0%"),
         "zero hit rate should display 0.0%, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -416,7 +422,7 @@ fn test_router_panel_renders_hot_capabilities() {
     assert!(
         content.contains("search"),
         "hot capability 'search' should be rendered, got: {}",
-        &content[..content.len().min(500)]
+        content.chars().take(500).collect::<String>()
     );
     assert!(
         content.contains("read_file"),
@@ -448,9 +454,14 @@ fn test_router_panel_empty_hot_capabilities_renders_placeholder() {
     app.switch_panel_to(PanelId::Router);
 
     // 不应 panic
+    // i18n(B4-I):期望串与渲染同源经 t! 求值,locale 无关;不写全局 locale
+    // (WHY 见 test_router_panel_renders_title 注)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let panel_label = chimera_tui::t!(PanelId::Router.name_key());
     let content = render_to_string(&mut app, 120, 40);
+    let compact: String = content.chars().filter(|c| *c != ' ').collect();
     assert!(
-        content.contains("Router"),
+        compact.contains(panel_label),
         "Router panel should render title with empty hot capabilities"
     );
 }
@@ -479,7 +490,7 @@ fn test_router_panel_top_k_truncates_to_ten() {
     assert!(
         content.contains("cap-00"),
         "highest-frequency cap-00 should be in Top-10, got: {}",
-        &content[..content.len().min(500)]
+        content.chars().take(500).collect::<String>()
     );
     // cap-14 是最低频(10 次),应被截断
     // 注意:由于 content 是字符流,这里只能验证 cap-00 存在,无法精确验证 cap-14 不存在
@@ -539,7 +550,7 @@ fn test_router_panel_low_hit_rate_renders_without_panic() {
     assert!(
         content.contains("45.0%"),
         "low hit_rate 0.45 should display as 45.0%, got: {}",
-        &content[..content.len().min(400)]
+        content.chars().take(400).collect::<String>()
     );
     // SESA 0.50 → 50.0%
     assert!(
@@ -593,7 +604,7 @@ fn test_router_panel_threshold_boundary_60_percent() {
     assert!(
         content.contains("60.0%"),
         "hit_rate 0.6 should display as 60.0%, got: {}",
-        &content[..content.len().min(400)]
+        content.chars().take(400).collect::<String>()
     );
     assert!(
         content.contains("59.0%"),
@@ -643,7 +654,7 @@ fn test_router_panel_content_normal_state() {
     assert!(
         content.contains("KVBSR"),
         "content should contain KVBSR, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
     assert!(content.contains("SESA"), "content should contain SESA");
     assert!(content.contains("FaaE"), "content should contain FaaE");
@@ -665,7 +676,7 @@ fn test_router_panel_content_low_hit_rate() {
     assert!(
         content.contains("45.0%"),
         "low hit rate 45.0% should be in content, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         content.contains("30.0%"),
@@ -681,7 +692,7 @@ fn test_router_panel_content_empty_state() {
     assert!(
         content.contains("KVBSR"),
         "empty state should contain KVBSR, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
     assert!(content.contains("SESA"), "empty state should contain SESA");
     assert!(content.contains("FaaE"), "empty state should contain FaaE");

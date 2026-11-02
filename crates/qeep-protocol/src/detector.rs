@@ -56,6 +56,18 @@ impl OrphanDetector {
         &self.orphans
     }
 
+    /// 取走全部孤儿调用报告并清空队列(drain 语义)。
+    ///
+    /// 与 [`Self::detect_orphans`] 的只读视图不同,本方法**消费**报告:
+    /// 返回已积累的全部报告,同时将内部队列重置为空。
+    /// WHY drain 而非只读快照:发布方(如 gqep-executor 的
+    /// `publish_orphan_events`)需要「发布即清空」语义——否则孤儿队列
+    /// 只增不清,每轮发布都全量重发历史报告,形成 Critical 事件重复风暴
+    /// (M11)。
+    pub fn take(&mut self) -> Vec<OrphanReport> {
+        std::mem::take(&mut self.orphans)
+    }
+
     /// 获取孤儿调用数量。
     pub fn orphan_count(&self) -> usize {
         self.orphans.len()

@@ -62,13 +62,20 @@ impl RecallPath {
     }
 }
 
-/// 融合调参 — RRF 平滑常数与 Top-K（默认 k=60，与 repo-wiki 同参）。
+/// 融合调参 — RRF 平滑常数、Top-K（默认 k=60，与 repo-wiki 同参）+ 第四路权重。
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FusionTuning {
     /// RRF 平滑常数 k
     pub rrf_k: u32,
     /// 融合输出上限
     pub top_k: usize,
+    /// 第四路（图扩 graph 主用实例）权重（WI-G9;默认 1.0 = 等权现行为）。
+    ///
+    /// - `1.0`:与三路等权（接线前后逐位一致）;
+    /// - `>1.0`:hcw rerank/路质量接入点，高权重路 rank1 可胜出;
+    /// - `<=0.0`:**等效断路**（`MlcEngine::recall_hybrid` 直接移除第四路
+    ///   ——与不传 `extra_path_ids` 逐位一致，回滚锚）。
+    pub graph_weight: f32,
 }
 
 impl Default for FusionTuning {
@@ -76,6 +83,7 @@ impl Default for FusionTuning {
         Self {
             rrf_k: DEFAULT_RRF_K,
             top_k: 10,
+            graph_weight: 1.0,
         }
     }
 }

@@ -15,7 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(r"D:\Chimera CLI")
+ROOT = Path(__file__).resolve().parents[1]
 # cargo fmt 走 rustup 代理。⚠ PATH 顺序必须让 **toolchain bin 在前**：`.toolchain/cargo/bin`
 # 里也有一个 rustfmt 代理，它在无参数从 stdin 读时失败，会让所有文件变成“无法判定”。
 os.environ["PATH"] = (str(ROOT / ".toolchain" / "rustup" / "toolchains"

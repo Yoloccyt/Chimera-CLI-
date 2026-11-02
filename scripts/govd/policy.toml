@@ -1,0 +1,40 @@
+[profiles.pr]
+include_heavy = false
+jobs = 4
+allow_mutating = false
+reuse_ok = false
+
+[profiles.nightly]
+include_heavy = true
+jobs = 2
+allow_mutating = false
+reuse_ok = false
+
+[profiles.release]
+include_heavy = true
+jobs = 1
+allow_mutating = true
+reuse_ok = false
+
+[profiles.local]
+include_heavy = false
+jobs = 1
+allow_mutating = false
+reuse_ok = false
+
+[exec]
+whitelist = ["{python}", "bash", "pwsh", "cargo", "git"]
+default_timeout_s = 300
+heavy_timeout_s = 1800
+env_retry = 1
+mutating_prefixes = ["tmp/", "target/"]
+
+[roles.local-dev]
+profiles = ["pr", "nightly", "release", "local"]
+
+[roles.ci]
+profiles = ["pr", "nightly"]
+
+[roles.release-manager]
+profiles = ["release"]
+

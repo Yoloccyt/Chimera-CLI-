@@ -11,7 +11,7 @@
 //!
 //! # v3-engine M2 切换(ADR-061)
 //! 自研渲染路径默认启用,通过 `--no-v3-engine` flag 或 `CHIMERA_NO_V3_ENGINE=1`
-//! 环境变量可回退到 ratatui 路径。回退机制保留 2 个版本周期(v2.11.0-omega 移除)。
+//! 环境变量可回退到 ratatui 路径。兼容窗口已过期，当前保留（ADR-061 未修订）。
 //!
 //! # 超窗/RAG 链路生产接线(P1,ADR-072)
 //! `execute_with_ctx` 组合根创建 `OverWindowBridge`(挂 TUI 会话总线)并注入
@@ -108,14 +108,38 @@ fn assemble_quest_stack(
     ctx: &AppContext,
     checkpoint_dir: std::path::PathBuf,
 ) -> (Arc<quest_engine::QuestEngine>, tokio::task::JoinHandle<()>) {
-    let engine = Arc::new(quest_engine::QuestEngine::with_checkpoints(
-        ctx.bus.clone(),
-        quest_engine::QuestConfig::default(),
-        checkpoint_dir,
-    ));
+    let engine = crate::composition::build_checkpoint_engine(&ctx.bus, checkpoint_dir);
     let control_handle =
         quest_engine::spawn_control_subscriber(Arc::clone(&engine), ctx.bus.clone());
     (engine, control_handle)
+}
+
+/// TUI 后台任务句柄集合 —— 统一 abort，避免漏清 orphan task（§4.4 #7）。
+///
+/// WHY 不实现 `Drop`：清理需要先 abort 再 `pipeline.shutdown().await`，
+/// `Drop` 不能 async；用显式 `abort_all()` 保持顺序可见、可测。
+#[derive(Default)]
+struct RuntimeHandles {
+    control: Option<tokio::task::JoinHandle<()>>,
+    quest: Option<tokio::task::JoinHandle<()>>,
+    handshake: Option<tokio::task::JoinHandle<()>>,
+    action: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl RuntimeHandles {
+    fn abort_all(&mut self) {
+        for handle in [
+            self.control.take(),
+            self.quest.take(),
+            self.handshake.take(),
+            self.action.take(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            handle.abort();
+        }
+    }
 }
 
 /// 执行 tui 命令 — 兼容层 thin wrapper（M9 装配收敛，同 M4 六臂先例）
@@ -150,16 +174,7 @@ pub async fn execute_with_ctx(
     no_v3_engine: bool,
     protocol: bool,
 ) -> Result<()> {
-    // v3-engine M2(ADR-061):CLI flag 优先,设置 env var 让 TuiApp 在渲染时
-    // 通过 `v3_engine_disabled_by_env()` 检测到回退意图。WHY env var 而非直接
-    // 传参:TuiApp 已封装好双路径分发,env var 是最小侵入式回退通道,且支持
-    // 不修改 CLI 时通过环境变量回退(CI/运维场景友好)。
-    if no_v3_engine {
-        std::env::set_var("CHIMERA_NO_V3_ENGINE", "1");
-        tracing::info!("v3-engine 已通过 --no-v3-engine flag 禁用,回退到 ratatui 路径");
-    } else {
-        tracing::info!("启动 TUI 交互界面(v3-engine 默认启用)");
-    }
+    apply_v3_engine_fallback_flag(no_v3_engine);
 
     // M9: bus 取自 dispatch 级共享装配 AppContext(C12),tui 臂不再自建总线;
     // Quest 编排器/经验闭环/Action 编排等均订阅此同一共享总线,
@@ -169,58 +184,7 @@ pub async fn execute_with_ctx(
     // 遵循 subscribe-before-spawn 规则(§4.4 反模式 #3)。
     let subscriber = chimera_tui::EventSubscriber::new(bus.clone());
 
-    // 加载 TUI 专用持久化配置(~/.chimera/tui.yaml)
-    // WHY 必须在 DataPipeline 构造前加载: `DataSourceConfig::from_tui_config`
-    // 需读取 tui_config.tick_interval_ms(P1 tick 配置修复,ADR-072;原实现用
-    // DataSourceConfig::default() 导致该配置生产断线)。
-    // (theme/colors/main_panel_ratio/tick_interval_ms),覆盖默认值;
-    // 文件不存在时 load_from_file 静默返回默认配置(首次启动场景)。
-    let tui_config = {
-        let tui_path = chimera_tui::TuiConfig::default_path();
-        match chimera_tui::TuiConfig::load_from_file(&tui_path) {
-            Ok(persisted) => {
-                tracing::debug!(
-                    path = %tui_path.display(),
-                    "Loaded persisted TuiConfig"
-                );
-                persisted
-            }
-            Err(e) => {
-                tracing::warn!(
-                    path = %tui_path.display(),
-                    error = %e,
-                    "Failed to load TuiConfig, using defaults"
-                );
-                chimera_tui::TuiConfig::default()
-            }
-        }
-    };
-
-    // Concord T1.5(P4① 接线):TuiBible 四源 Figment 合并(默认→
-    // ~/.chimera/tui_bible.yaml→CHIMERA_BIBLE_* 环境变量→CLI),在 TuiConfig
-    // 持久化加载之后、DataPipeline/TuiApp 构造之前应用,使下游全部消费
-    // 合并后的配置。WHY 损坏文件回退默认而非阻断启动:TuiBible 是体验增强
-    // 配置,不应成为启动单点故障;回退经 warn 日志可观测(错误处理准则)。
-    let tui_config = {
-        let mut cfg = tui_config;
-        match chimera_tui::TuiBible::load() {
-            Ok(bible) => {
-                cfg.apply_bible_overrides(&bible);
-                tracing::info!(
-                    theme = ?bible.theme,
-                    key_bindings = bible.key_bindings.len(),
-                    "TuiBible 四源合并完成并已应用到 TuiConfig"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "TuiBible 加载失败(文件损坏或环境变量非法),回退默认配置"
-                );
-            }
-        }
-        cfg
-    };
+    let tui_config = load_merged_tui_config();
     // B2:策展配置在 tui_config 被 move 进 TuiApp 前提取(编排器 compact 消费)
     let curation_cfg = tui_config.curation.clone();
 
@@ -239,52 +203,34 @@ pub async fn execute_with_ctx(
         let mut app = chimera_tui::TuiApp::with_data_source(tui_config, Box::new(protocol_ds))
             .context("TUI 初始化失败")?;
         app = chimera_tui::TuiApp::with_event_bus(app, bus.clone());
+        // /bench 一期：安装 build.rs 静态计数 provider（总基准数/阈值总数真实，
+        // 运行时性能指标诚实 N/A）；未安装则面板维持 awaiting 态。
+        app.install_bench_provider(std::sync::Arc::new(
+            crate::bench_provider::StaticBenchProvider,
+        ));
 
         // Quest 编排器保留(EventBus 双向控制: TUI ↔ 编排器回环)
-        let engine = Arc::new(quest_engine::QuestEngine::new(bus.clone()));
-        let control_handle =
-            quest_engine::spawn_control_subscriber(Arc::clone(&engine), bus.clone());
-        let quest_handle = crate::orchestrator::spawn_quest_orchestrator(
-            bus.clone(),
-            Arc::clone(&engine),
-            orchestrator_config_from_env(),
-        );
+        let engine = crate::composition::build_engine(&bus);
+        let mut handles = RuntimeHandles {
+            control: Some(quest_engine::spawn_control_subscriber(
+                Arc::clone(&engine),
+                bus.clone(),
+            )),
+            quest: Some(crate::orchestrator::spawn_quest_orchestrator(
+                bus.clone(),
+                Arc::clone(&engine),
+                orchestrator_config_from_env(),
+            )),
+            ..Default::default()
+        };
 
         let run_result = app.run().context("TUI 协议模式运行失败");
-        control_handle.abort();
-        quest_handle.abort();
+        handles.abort_all();
         tracing::info!("TUI 协议模式退出");
         return run_result;
     }
 
-    // 构建数据管道：将事件聚合为 TUI 可消费的统一快照。
-    // tick 间隔来自持久化 TuiConfig(修复 F-4:SetTickInterval 持久化后
-    // 下次启动经 from_tui_config 生效;运行时改值见 event_loop 提示语义)。
-    // Concord T1.6(P4②):接入指标历史持久化层——打开失败(磁盘/权限)时
-    // 降级为无持久化管道并 warn,不阻断启动(错误处理准则)。
-    let pipeline = match chimera_tui::MetricsHistory::open_default().await {
-        Ok(history) => {
-            tracing::debug!(
-                path = %history.db_path().display(),
-                "MetricsHistory 已接线到 DataPipeline(慢同步 1s + 回填 30s)"
-            );
-            Arc::new(chimera_tui::DataPipeline::new_with_history(
-                subscriber,
-                chimera_tui::DataSourceConfig::from_tui_config(&tui_config),
-                Arc::new(history),
-            ))
-        }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "MetricsHistory 打开失败,降级为无持久化管道(趋势图无跨重启回填)"
-            );
-            Arc::new(chimera_tui::DataPipeline::new(
-                subscriber,
-                chimera_tui::DataSourceConfig::from_tui_config(&tui_config),
-            ))
-        }
-    };
+    let pipeline = build_data_pipeline(subscriber, &tui_config).await;
 
     // 创建 TUI 应用，使用实时数据管道而非空桩。
     let mut app =
@@ -317,6 +263,11 @@ pub async fn execute_with_ctx(
         Arc::clone(&engine),
         orchestrator_config_from_env(),
     );
+    let mut handles = RuntimeHandles {
+        control: Some(control_handle),
+        quest: Some(quest_handle),
+        ..Default::default()
+    };
 
     // §16.1 经验卡片闭环装配(Phase 10 审计修复 Wave 1):组合根接线
     // ExperienceCardBus 主链 — L3 SQLite 双流持久化(含 Critical 高分卡) +
@@ -369,20 +320,167 @@ pub async fn execute_with_ctx(
     // Concord W10 T10.2(ADR-082):启动协议握手应答器 — 响应 TUI 启动时
     // 发布的 TuiHello,协商兼容级别并回 TuiHelloAck(SEC-4 一次性);
     // 必须在 TUI run() 前 spawn(subscribe-before-spawn,不错过启动瞬间握手)。
-    let handshake_handle = crate::handshake::spawn_handshake_responder(bus.clone());
+    handles.handshake = Some(crate::handshake::spawn_handshake_responder(bus.clone()));
 
-    // P1(ADR-072):构造超窗兜底桥并注入 Action 编排器。
-    // 桥挂 TUI 会话总线——触发时发布 OverWindowFallbackTriggered,经 subscriber
-    // → pipeline 进入 latest_events,由 OverWindow 面板结构化展示(闭环断点 F-3 修复)。
-    // WHY 会话级桥而非全局共享总线:保持 TUI 会话隔离(总线共享见 ADR-072 结论,
-    // 避免大爆炸式改造);桥的 provider 闭包由 overwindow_bridge 内部组装。
-    let overwindow_bridge =
-        Arc::new(OverWindowBridge::new(bus.clone()).context("OverWindowBridge 初始化失败")?);
+    let overwindow = build_overwindow_handle(bus.clone(), Arc::clone(&pipeline))?;
+
+    // FC-2(ADR-081):/compact 策展的结构化会话消息提供者 —— 与超窗语料闭包
+    // 同源(DataPipeline 快照),但保留 ChatMessage 角色(Pinned 保护段判定依赖),
+    // 供编排器 compact 分支执行 RuleCurationPolicy 并回写历史。
+    let pipeline_for_compact = Arc::clone(&pipeline);
+    let chat_provider: crate::action_orchestrator::ChatMessagesProvider = Arc::new(move || {
+        chimera_tui::TuiDataSource::snapshot(&*pipeline_for_compact)
+            .map(|snapshot| snapshot.chat_messages.clone())
+            .unwrap_or_default()
+    });
+
+    // P0 交互链:启动 Action 编排器,消费命令面板/斜杠/面板派发的 TuiActionRequested,
+    // 按 action_id 域前缀路由:quest.* 驱动同一 engine 真实执行,回发 TuiActionCompleted/Failed。
+    // UI 本地态动作由 TUI 本地 dispatch_action 处理,不到达此处(误达则回 Failed)。
+    handles.action = Some(crate::action_orchestrator::spawn_action_orchestrator(
+        bus.clone(),
+        Arc::clone(&engine),
+        Some(overwindow),
+        Some(chat_provider),
+        // B2:/compact 策展配置随 TuiConfig 四源合并后透传编排器
+        curation_cfg,
+    ));
+
+    // 启动 TUI 事件循环(阻塞直到用户退出)
+    // WHY 先保存结果再 shutdown:即使 run() 返回 Err,也必须清理 DataPipeline
+    // 后台任务,避免 orphan task(§4.4 反模式 #7)。
+    let run_result = app.run().context("TUI 运行失败");
+
+    // 中止受管的四个后台句柄（控制订阅者/编排器/握手/Action 编排）；
+    // `_quest_loop`/`_ambient_handle` 未纳入 RuntimeHandles，持有至函数结束
+    // （TUI 后即进程终止，属进程 teardown 语义；若未来 TUI 可重入需纳入 abort 集）。
+    handles.abort_all();
+
+    // 中止并清理数据管道后台任务。
+    pipeline.shutdown().await;
+
+    tracing::info!("TUI 已退出");
+    run_result
+}
+
+/// v3-engine M2(ADR-061):CLI flag 优先,设置 env var 让 TuiApp 在渲染时
+/// 通过 `v3_engine_disabled_by_env()` 检测到回退意图。WHY env var 而非直接
+/// 传参:TuiApp 已封装好双路径分发,env var 是最小侵入式回退通道,且支持
+/// 不修改 CLI 时通过环境变量回退(CI/运维场景友好)。
+fn apply_v3_engine_fallback_flag(no_v3_engine: bool) {
+    if no_v3_engine {
+        std::env::set_var("CHIMERA_NO_V3_ENGINE", "1");
+        tracing::info!("v3-engine 已通过 --no-v3-engine flag 禁用,回退到 ratatui 路径");
+    } else {
+        tracing::info!("启动 TUI 交互界面(v3-engine 默认启用)");
+    }
+}
+
+/// 加载 TUI 专用持久化配置(~/.chimera/tui.yaml)并叠加 TuiBible 四源合并。
+///
+/// WHY 必须在 DataPipeline 构造前加载: `DataSourceConfig::from_tui_config`
+/// 需读取 tui_config.tick_interval_ms(P1 tick 配置修复,ADR-072;原实现用
+/// DataSourceConfig::default() 导致该配置生产断线)。
+/// (theme/colors/main_panel_ratio/tick_interval_ms),覆盖默认值;
+/// 文件不存在时 load_from_file 静默返回默认配置(首次启动场景)。
+///
+/// Concord T1.5(P4① 接线):TuiBible 四源 Figment 合并(默认→
+/// ~/.chimera/tui_bible.yaml→CHIMERA_BIBLE_* 环境变量→CLI),在 TuiConfig
+/// 持久化加载之后、DataPipeline/TuiApp 构造之前应用,使下游全部消费
+/// 合并后的配置。WHY 损坏文件回退默认而非阻断启动:TuiBible 是体验增强
+/// 配置,不应成为启动单点故障;回退经 warn 日志可观测(错误处理准则)。
+fn load_merged_tui_config() -> chimera_tui::TuiConfig {
+    let tui_config = {
+        let tui_path = chimera_tui::TuiConfig::default_path();
+        match chimera_tui::TuiConfig::load_from_file(&tui_path) {
+            Ok(persisted) => {
+                tracing::debug!(
+                    path = %tui_path.display(),
+                    "Loaded persisted TuiConfig"
+                );
+                persisted
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %tui_path.display(),
+                    error = %e,
+                    "Failed to load TuiConfig, using defaults"
+                );
+                chimera_tui::TuiConfig::default()
+            }
+        }
+    };
+    let mut cfg = tui_config;
+    match chimera_tui::TuiBible::load() {
+        Ok(bible) => {
+            cfg.apply_bible_overrides(&bible);
+            tracing::info!(
+                theme = ?bible.theme,
+                key_bindings = bible.key_bindings.len(),
+                "TuiBible 四源合并完成并已应用到 TuiConfig"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "TuiBible 加载失败(文件损坏或环境变量非法),回退默认配置"
+            );
+        }
+    }
+    cfg
+}
+
+/// 构建数据管道：将事件聚合为 TUI 可消费的统一快照。
+///
+/// tick 间隔来自持久化 TuiConfig(修复 F-4:SetTickInterval 持久化后
+/// 下次启动经 from_tui_config 生效;运行时改值见 event_loop 提示语义)。
+/// Concord T1.6(P4②):接入指标历史持久化层——打开失败(磁盘/权限)时
+/// 降级为无持久化管道并 warn,不阻断启动(错误处理准则)。
+async fn build_data_pipeline(
+    subscriber: chimera_tui::EventSubscriber,
+    tui_config: &chimera_tui::TuiConfig,
+) -> Arc<chimera_tui::DataPipeline> {
+    match chimera_tui::MetricsHistory::open_default().await {
+        Ok(history) => {
+            tracing::debug!(
+                path = %history.db_path().display(),
+                "MetricsHistory 已接线到 DataPipeline(慢同步 1s + 回填 30s)"
+            );
+            Arc::new(chimera_tui::DataPipeline::new_with_history(
+                subscriber,
+                chimera_tui::DataSourceConfig::from_tui_config(tui_config),
+                Arc::new(history),
+            ))
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "MetricsHistory 打开失败,降级为无持久化管道(趋势图无跨重启回填)"
+            );
+            Arc::new(chimera_tui::DataPipeline::new(
+                subscriber,
+                chimera_tui::DataSourceConfig::from_tui_config(tui_config),
+            ))
+        }
+    }
+}
+
+/// P1(ADR-072):构造超窗兜底桥并返回注入 Action 编排器所需的 [`OverWindowHandle`]。
+///
+/// 桥挂 TUI 会话总线——触发时发布 OverWindowFallbackTriggered,经 subscriber
+/// → pipeline 进入 latest_events,由 OverWindow 面板结构化展示(闭环断点 F-3 修复)。
+/// WHY 会话级桥而非全局共享总线:保持 TUI 会话隔离(总线共享见 ADR-072 结论,
+/// 避免大爆炸式改造);桥的 provider 闭包由 overwindow_bridge 内部组装。
+fn build_overwindow_handle(
+    bus: event_bus::EventBus,
+    pipeline: Arc<chimera_tui::DataPipeline>,
+) -> Result<OverWindowHandle> {
+    let bridge = Arc::new(OverWindowBridge::new(bus).context("OverWindowBridge 初始化失败")?);
     // 会话语料提供者 = Chat 消息 + Quest 标题(pipeline 快照派生;空语料时
     // overwindow.run 由编排器明确失败,不空跑)。
     let pipeline_for_corpus = Arc::clone(&pipeline);
-    let overwindow = OverWindowHandle::new(
-        Arc::clone(&overwindow_bridge),
+    Ok(OverWindowHandle::new(
+        Arc::clone(&bridge),
         Arc::new(move || {
             chimera_tui::TuiDataSource::snapshot(&*pipeline_for_corpus)
                 .ok()
@@ -400,49 +498,7 @@ pub async fn execute_with_ctx(
                 })
                 .unwrap_or_default()
         }),
-    );
-
-    // FC-2(ADR-081):/compact 策展的结构化会话消息提供者 —— 与超窗语料闭包
-    // 同源(DataPipeline 快照),但保留 ChatMessage 角色(Pinned 保护段判定依赖),
-    // 供编排器 compact 分支执行 RuleCurationPolicy 并回写历史。
-    let pipeline_for_compact = Arc::clone(&pipeline);
-    let chat_provider: crate::action_orchestrator::ChatMessagesProvider = Arc::new(move || {
-        chimera_tui::TuiDataSource::snapshot(&*pipeline_for_compact)
-            .map(|snapshot| snapshot.chat_messages.clone())
-            .unwrap_or_default()
-    });
-
-    // P0 交互链:启动 Action 编排器,消费命令面板/斜杠/面板派发的 TuiActionRequested,
-    // 按 action_id 域前缀路由:quest.* 驱动同一 engine 真实执行,回发 TuiActionCompleted/Failed。
-    // UI 本地态动作由 TUI 本地 dispatch_action 处理,不到达此处(误达则回 Failed)。
-    let action_handle = crate::action_orchestrator::spawn_action_orchestrator(
-        bus.clone(),
-        Arc::clone(&engine),
-        Some(overwindow),
-        Some(chat_provider),
-        // B2:/compact 策展配置随 TuiConfig 四源合并后透传编排器
-        curation_cfg,
-    );
-
-    // 启动 TUI 事件循环(阻塞直到用户退出)
-    // WHY 先保存结果再 shutdown:即使 run() 返回 Err,也必须清理 DataPipeline
-    // 后台任务,避免 orphan task(§4.4 反模式 #7)。
-    let run_result = app.run().context("TUI 运行失败");
-
-    // 中止上游控制订阅者;EventBus 仍由 pipeline 等持有,不会提前关闭。
-    control_handle.abort();
-    // 中止 Quest 编排器后台任务(避免 orphan task,§4.4 #7)。
-    quest_handle.abort();
-    // 中止握手应答器后台任务(Concord W10,避免 orphan task)。
-    handshake_handle.abort();
-    // 中止 Action 编排器后台任务(避免 orphan task,§4.4 #7)。
-    action_handle.abort();
-
-    // 中止并清理数据管道后台任务。
-    pipeline.shutdown().await;
-
-    tracing::info!("TUI 已退出");
-    run_result
+    ))
 }
 
 #[cfg(test)]

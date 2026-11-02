@@ -106,7 +106,7 @@ pub use mem_con::{MemConConfig, MemConController};
 pub use storage_impl::PragmaConn;
 pub use types::{
     assert_archive_monotonicity, ExecutionStats, MemoryEntry, MemoryId, MemoryTier,
-    PatternSignature, ProceduralEntry, QuestId, SharedCLV,
+    PatternSignature, ProceduralEntry, QuestId, SharedCLV, TokenBudget,
 };
 
 // L2-P1-1 事件驱动化: 原 Task 3.2 的进程级全局快照(GLOBAL_MEMORY_STAGE /
@@ -142,7 +142,7 @@ pub mod prelude {
     pub use crate::mem_con::{MemConConfig, MemConController};
     pub use crate::types::{
         assert_archive_monotonicity, ExecutionStats, MemoryEntry, MemoryId, MemoryTier,
-        PatternSignature, ProceduralEntry, QuestId,
+        PatternSignature, ProceduralEntry, QuestId, TokenBudget,
     };
     // Phase 2 L2 记忆层五大组件（§7.1-7.5，与顶层导出同集）
     pub use crate::dual_experience_bank::{

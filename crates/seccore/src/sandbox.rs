@@ -353,6 +353,24 @@ impl Sandbox {
                 detail,
             }) => {
                 self.publish_violation(&format!("{attack_type:?}"), detail.clone());
+                // C-64a(M49):拦截必须上 Merkle 审计链。在这一步之前只有计数与
+                // 可丢的 broadcast 事件 ⇒ 「拒了就无痕」。必须在这里写而不是在
+                // `publish_violation` 里写:该方法持 `&self`,而 append_rejection 需 `&mut`。
+                // WHY 写失败不替换掉拦截结果:命令已被拒绝执行,这是安全决定;
+                //      把 CommandBlocked 降级成 AuditError 会让调用方误判为「策略引擎
+                //      故障」而可能重试/绕过。留痕失败的可见性走 warn(与同文件
+                //      `:194-196`「未注入 EventBus 时静默跳过、发布失败仅 warn」同一取舍),
+                //      并由 C-65 的启动侧 `verify()` 在下一轮暴露块数与拦截计数的偏差。
+                if let Err(audit_err) = self.audit_chain.append_rejection(
+                    &command,
+                    &format!("{attack_type:?}"),
+                    &detail,
+                ) {
+                    warn!(
+                        error = %audit_err,
+                        "拦截记录写入 Merkle 审计链失败(命令仍按拦截处理)"
+                    );
+                }
                 self.stats.record_blocked();
                 return Err(SecCoreError::CommandBlocked {
                     attack_type,
@@ -370,6 +388,19 @@ impl Sandbox {
                     "env_blocked",
                     format!("env var '{name}' matched pattern '{pattern}'"),
                 );
+                // C-64a(M49):同上——环境变量过滤拦截也必须在返回前上链。
+                // 分类用 `"env_blocked"` 与 publish_violation 里的字面同一口径,
+                // 避免观测面与审计面对同一次拦截给出两个不同的原因标签。
+                if let Err(audit_err) = self.audit_chain.append_rejection(
+                    &command,
+                    "env_blocked",
+                    &format!("env var '{name}' matched pattern '{pattern}'"),
+                ) {
+                    warn!(
+                        error = %audit_err,
+                        "环境变量拦截记录写入 Merkle 审计链失败(命令仍按拦截处理)"
+                    );
+                }
                 self.stats.record_blocked();
                 return Err(SecCoreError::EnvVarBlocked { name, pattern });
             }
@@ -385,7 +416,7 @@ impl Sandbox {
         // WHY Span::current().record:instrument fields 表达式只能引用函数参数,不能引用
         // 局部变量 `spec.risk_score` / `tier`。声明空占位字段后用 record 填充是 tracing
         // 处理"运行时才能确定的 span 字段"的惯用法,确保 span 元信息完整可用。
-        // WHY tracing::field::debug:&tier 是自定义 enum,未实现 tracing::Value,
+        // WHY tracing::field::debug:&tier 是自定义 enum,不满足 tracing::Value 约束,
         // 用 debug() 包装为 Debug Value(?value 是宏语法,record 方法不接受)
         tracing::Span::current()
             .record("risk_score", spec.risk_score)
@@ -733,6 +764,17 @@ impl Sandbox {
                     )));
                 }
                 Err(_) => {
+                    // WHY: 此分支与降级路径(路径 B)的超时清理语义不同,系刻意差异非遗漏:
+                    // - 降级路径超时后显式调 kill_process_tree(见本文件该函数注释:
+                    //   Windows 上 cmd /C 的孙进程不随 kill_on_drop 退出,须遍历进程树);
+                    // - gVisor 路径不做显式清理,依赖 GvisorRuntime::spawn 内
+                    //   kill_on_drop(true)(gvisor.rs):超时 drop 本 future 时 runsc
+                    //   子进程随 Child drop 被 kill。runsc 以前台模式运行(runsc run,
+                    //   非 detach),主进程即沙箱宿主,被 kill 时 sentry 随之终止、
+                    //   沙箱内全部进程(含任意嵌套)一并回收,故无需遍历进程树。
+                    // SandboxTimeout「已强制终止」承诺(error.rs)由此隐式路径兑现;
+                    // 若线上观测到 runsc 残留进程,再升级为显式清理(l0l10-r1 L11 处置:
+                    // 否决修复、仅注差异,残留观测驱动升级)。
                     return Err(SecCoreError::SandboxTimeout {
                         timeout: self.timeout,
                         program: spec.program.clone(),

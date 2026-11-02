@@ -1,0 +1,60 @@
+# L0 root re-export surface ledger (G-107, ADR-213 R5). Only-DECREASE.
+# Key = <group>::<leaf> for each `pub use <group>::<leaf>;` in
+# crates/nexus-contracts/src/lib.rs, i.e. every name reachable as `nexus_contracts::<leaf>`.
+# W3 kept both paths on purpose for the 34 consumer crates; this ledger stops the double-path
+# set from GROWING (new leaves should be reachable via their group path only) and makes any
+# collapse an explicit review act. Format: GROUP::LEAF  [# optional reason]
+# Bootstrap: full-registration state, emitted 2026-10-13 from the live facade.
+core_domain::checkpoint
+core_domain::domain
+core_domain::event_metadata
+core_domain::event_payload
+core_domain::event_v2
+core_domain::graph_identity
+core_domain::task
+core_domain::temporal
+mca::affinity
+mca::omni_message
+mca::price_vector
+memory::archive_monotonicity
+memory::experience_card
+memory::memory_pyramid
+memory::quota
+memory::skill_lifecycle
+memory::token_evidence
+protocol::app
+safety::adjudication
+safety::budget_tier
+safety::calibration
+safety::command_validation
+safety::errors
+safety::sensitive
+seams::capability_token
+seams::decay_profile
+seams::density
+seams::memory_strategy
+seams::parliament_policy
+seams::policy
+seams::prefetch
+seams::recall_quota
+seams::reward
+seams::rl_hooks
+seams::rl_types
+seams::strategy
+sparse::ids
+sparse::masks
+sparse::omni_masks
+spec::behavior_contract
+spec::blueprint
+spec::formal_props
+spec::harness_dimensions
+spec::harness_spec
+spec::platform_grounding
+spec::scheduler_contract
+spec::tool_plan
+spec::variant
+testutil::test_scale
+vector_math::mcsm
+vector_math::recall_fusion
+vector_math::util
+vector_math::vector

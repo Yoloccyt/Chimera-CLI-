@@ -13,13 +13,15 @@
 #![forbid(unsafe_code)]
 
 use chimera_tui::{
-    current_locale, set_locale, InputMode, Locale, PanelId, PopupKind, TuiApp, TuiConfig,
+    current_locale, set_locale, DataPipeline, DataSourceConfig, EventSubscriber, InputMode, Locale,
+    PanelId, PopupKind, TuiApp, TuiConfig,
 };
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use event_bus::{ActionSource, EventBus, EventReceiver, NexusEvent};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
+use std::time::{Duration, Instant};
 
 fn make_app() -> TuiApp {
     TuiApp::new(TuiConfig {
@@ -420,6 +422,8 @@ fn task_manager_terminate_publishes_terminate_source() {
 fn action_timeout_reports_orchestrator_unavailable() {
     // standalone 场景:EventBus 无消费者,派发后无 Completed/Failed 回发;
     // 超过 ACTION_TIMEOUT 后 update 应在状态栏提示编排器未接线并清除计时。
+    // B5-G(评审 #2):状态文案断言经 t! 取值仍有 locale 翻转窗口,持 guard 互斥
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
     let app = make_app();
     let (mut app, _bus, _rx) = app_with_bus(app);
     // palette 派发无参动作 quest.pause → 立即发布 TuiActionRequested 并启动计时
@@ -440,34 +444,129 @@ fn action_timeout_reports_orchestrator_unavailable() {
         .as_ref()
         .expect("超时应产生状态栏提示");
     assert!(
-        msg.contains("orchestrator not connected"),
+        // B4-I(F-04):断言经 t! 取值;读值仍随当前 locale,非与 locale 无关
+        // (B5-G 已在测试入口补 locale_test_guard 消除翻转窗口)
+        msg.contains(chimera_tui::t!("status.action_timeout")),
         "提示应说明编排器未接线,got: {msg}"
     );
     assert_eq!(*sev, chimera_tui::Severity::Warning);
 }
 
-#[test]
-fn action_timeout_cleared_when_feedback_received() {
-    // 收到 TuiActionCompleted 终态反馈(seq 增量)后,超时计时应被清除(不误报)
-    let app = make_app();
-    let (mut app, _bus, _rx) = app_with_bus(app);
+#[tokio::test]
+async fn action_timeout_cleared_when_feedback_received() {
+    // B5-V(F-63)重写为真实回执链(旧实现手工 pending_actions.clear() 是
+    // 同义反复):palette 派发 → TuiActionRequested(bus)→ 测试扮演编排器
+    // 回发 TuiActionFailed(同 request_id,is_error)→ DataPipeline 消费 →
+    // app.update() → 按 request_id 精准移除 + 错误级状态栏反馈,未回执请求
+    // 保留计时。与 app/tests.rs 强不变量 feedback_removes_only_matching_request
+    // 互补:此处走 event→bus→pipeline→app 真管道,并补上 app 级
+    // is_error=true→Severity::Error 分支的集成覆盖(R5 收窄的净缺口)。
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
+    let bus = EventBus::new();
+    // WHY subscribe 先于 publish:broadcast 不缓存历史消息(§4.4 #3 红线)
+    let mut rx = bus.subscribe();
+    let pipeline = std::sync::Arc::new(DataPipeline::new(
+        EventSubscriber::new(bus.clone()),
+        DataSourceConfig {
+            tick_interval_ms: 25,
+            ..Default::default()
+        },
+    ));
+    // pipeline 兼作 app 数据源(impl TuiDataSource for Arc<DataPipeline>),
+    // app.update() 拉取的快照即真管道产物(而非手工构造的 snapshot)
+    let app = TuiApp::with_data_source(
+        TuiConfig {
+            default_view_mode: chimera_tui::ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        },
+        Box::new(pipeline.clone()),
+    )
+    .unwrap();
+    let mut app = TuiApp::with_event_bus(app, bus.clone());
+
+    // palette 黑盒派发两个动作(不硬编码 request_id 计数器实现)
     open_palette_select(&mut app, "quest.pause");
     app.handle_key_event(key(KeyCode::Enter));
-    assert_eq!(app.state().pending_actions.len(), 1);
+    open_palette_select(&mut app, "quest.pause");
+    app.handle_key_event(key(KeyCode::Enter));
+    assert_eq!(
+        app.state().pending_actions.len(),
+        2,
+        "两次派发应各挂起超时计时"
+    );
+    let mut request_ids: Vec<String> = Vec::new();
+    while let Ok(Some(ev)) = rx.try_recv() {
+        if let NexusEvent::TuiActionRequested { request_id, .. } = ev {
+            request_ids.push(request_id);
+        }
+    }
+    assert_eq!(
+        request_ids.len(),
+        2,
+        "两次派发应发布两个 TuiActionRequested"
+    );
 
-    // 直接清除计时模拟 feedback 到达后的 update 行为(反馈经 DataPipeline 消费,
-    // 本测试不构建 pipeline,故直接验证 deadline 清除路径的状态)
-    app.state_mut().pending_actions.clear();
+    // 测试扮演编排器:仅对第一个请求回发失败回执
+    let failed_rid = request_ids[0].clone();
+    bus.publish(NexusEvent::TuiActionFailed {
+        metadata: event_bus::EventMetadata::new("test-orchestrator"),
+        request_id: failed_rid.clone(),
+        action_id: "quest.pause".into(),
+        error: "orchestrator rejected: quest.pause".into(),
+    })
+    .await
+    .unwrap();
+
+    // 轮询等待 DataPipeline 异步消费(同 compact_closure_test 真管道范式)
+    // WHY 1.5s 必须短于 ACTION_TIMEOUT(2s,key_dispatch.rs):update() 的
+    // check_action_timeout() 先于回执同步执行,若派发→update 之间进程停滞
+    // ≥2s,超时路径会把幸存请求一并移除,下文 contains_key(surviving_rid)
+    // 对正确实现误报红(假阳性 flake);正常回执消费为 ms 级,收窄后"超时
+    // 路径可达"在本测试域内不可能,管线真卡死时本循环确定性变红。
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    loop {
+        if pipeline.snapshot().action_feedback_request_id.as_deref() == Some(failed_rid.as_str()) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "等待 DataPipeline 消费失败回执超时"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
     app.update();
-    assert!(app.state().pending_actions.is_empty());
-    // 无超时提示(deadline 已清除,检测不触发)
-    let has_timeout_msg = app
+    assert!(
+        !app.state().pending_actions.contains_key(&failed_rid),
+        "已回执请求应按 request_id 精准移除超时计时"
+    );
+    let surviving_rid = &request_ids[1];
+    assert!(
+        app.state().pending_actions.contains_key(surviving_rid),
+        "未回执请求必须保留超时兜底计时(否则静默失败)"
+    );
+    let (msg, sev) = app
         .state()
         .status_message
         .as_ref()
-        .map(|(m, _)| m.contains("orchestrator"))
-        .unwrap_or(false);
-    assert!(!has_timeout_msg, "反馈后不应出现编排器未接线提示");
+        .expect("失败回执应产生状态栏反馈");
+    assert_eq!(
+        *sev,
+        chimera_tui::Severity::Error,
+        "is_error=true 应映射 Error 级反馈"
+    );
+    assert!(
+        msg.contains("orchestrator rejected"),
+        "状态栏应展示回执错误原文, got: {msg}"
+    );
+    // 旧测试语义保留:回执到达不误报超时提示(deadline 随精准移除而消失)
+    assert!(
+        !msg.contains(chimera_tui::t!("status.action_timeout")),
+        "反馈后不应出现编排器未接线提示, got: {msg}"
+    );
+
+    pipeline.shutdown().await;
 }
 
 // ============================================================

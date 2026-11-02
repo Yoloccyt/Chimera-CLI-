@@ -10,6 +10,7 @@
     "redis@qoder-marketplace": true,
     "research-copilot@qoder-marketplace": true,
     "qmind-knowledge-cn@qoder-marketplace": true,
-    "qmind-knowledge-cn-vpc@qoder-marketplace": true
+    "qmind-knowledge-cn-vpc@qoder-marketplace": true,
+    "moonbit-skills@qoder-marketplace": true
   }
 }

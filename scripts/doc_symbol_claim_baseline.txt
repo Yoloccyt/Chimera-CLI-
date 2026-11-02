@@ -23,4 +23,14 @@ UsagePattern                 # CODE_WIKI:517  acb-governor  RETIRED-CRATE-ADR-18
 ApprovalGate                 # CODE_WIKI:711  nexus-app-server  RENAMED-IN-DOC->ApprovalArbiter
 SseTransport                 # CODE_WIKI:711  nexus-app-server  RENAMED-IN-DOC->SseServer+AppTransport
 SubAgentEngine               # CODE_WIKI:711  nexus-app-server  RENAMED-IN-DOC->SubAgentQuestEngine
-ThreadActor                  # CODE_WIKI:711  nexus-app-server  RENAMED-IN-DOC->SessionActor
+ThreadActor                   # CODE_WIKI:711  nexus-app-server  RENAMED-IN-DOC->SessionActor
+# --- router-traits 退役回声（RETIRED-CRATE; 2026-10-07 W4-0 增录）---
+# 来源：ADR-193 批次一（1ead632, 2026-09-27）整 crate 退役后，CODE_WIKI §3.10
+# 保留的退役前快照行；属“既存未登记红”（既有红非本批引入），W4-0 收口
+# 复跑 G-41 时发现并登记为可见债（永久类 RETIRED-CRATE，同 acb-governor 先例）。
+SparseMaskProvider           # CODE_WIKI:390  router-traits   RETIRED-CRATE-ADR-193
+RouterConfig                 # CODE_WIKI:390  router-traits   RETIRED-CRATE-ADR-193
+RouterId                     # CODE_WIKI:390  router-traits   RETIRED-CRATE-ADR-193
+SparseMaskError              # CODE_WIKI:390  router-traits   RETIRED-CRATE-ADR-193
+# --- omega-learner 旧设计名（RENAMED-IN-DOC; 2026-10-07 W4-0 增录）---
+OmegaLearner                 # CODE_WIKI:446  omega-learner   RENAMED-IN-DOC->S1..S9 Learner 族/RecallQuotaLearner

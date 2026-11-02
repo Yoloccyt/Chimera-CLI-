@@ -12,13 +12,12 @@
 //!        → build_app_server() → AppServer（真实 QuestBackend，C3 旁路由 build 保证）
 //! ```
 //!
-//! 装配收敛实况（M4 P1+P2 + M9，2026-09 批次）：chat/run/exec/quest/parliament/
-//! agent/tui 七命令已迁离自建 `EventBus::new()`，经 dispatch 共享本模块装配的
-//! AppContext（命令保留原签名 thin wrapper，内部转组合根 ephemeral 装配；
-//! tui 臂的带检查点引擎基于共享 bus 臂内构造，B1 行为零变化，
-//! 见 commands/tui.rs `assemble_quest_stack`）。
-//! 生产代码命令级自建总线装配点已清零；doctor 的
-//! `check_event_bus` 是健康探针（验证总线可构造），非命令装配，有意保留。
+//! 装配收敛实况（M4 P1+P2 + M9 + wave-1，2026-10 批次）：chat/run/exec/quest/
+//! parliament/agent/tui 等 FullContext 命令已迁离自建 `EventBus::new()`，经
+//! dispatch 共享本模块装配的 AppContext（serve/acp 走 `build_app_server`；
+//! tui 的带检查点引擎经 `assemble_quest_stack` 基于共享 bus 装配）。
+//! 生产代码命令级自建总线装配点已清零；doctor 的 `check_event_bus` 消费
+//! 组合根共享 bus 并统计订阅者数（健康探针，非命令装配，有意保留）。
 
 use crate::config::ChimeraConfig;
 use anyhow::{Context, Result};
@@ -102,16 +101,33 @@ pub struct AppContext {
     pub gea: Arc<gea_activator::GeaActivator>,
     /// GQEP 聚集执行器（M12 / ADR-185 D3；doctor 探针并行 gather 复用）
     pub gqep: Arc<gqep_executor::GqepExecutor>,
+    /// 多代理调度控制面（P1 候选③ / ADR-211 Accepted 2026-10-12；
+    /// `agent spawn` 前 claim 准入——claim/lease/quota，单任务即有真实语义）。
+    /// `with_rate_limit` 护栏随批装配（ephemeral 进程内生效；跨进程留待常驻宿主）。
+    pub sched: Arc<mas_sched::SimplePeerScheduler>,
     /// 推测上下文缓存（M13 / ADR-161 路径①；SccCache Clone=Arc 共享,
     /// doctor scc_cache 探针经此真实消费 stats()）
     pub scc: scc_cache::SccCache,
+    /// WI-D1：跨厂商辩论激活输入。`None`=未启用（默认，主干恒绿）；
+    /// `Some(names)`=组合根从 `config.model_router` 解析出的去重 provider 通道名，
+    /// 供 `chimera parliament` 命令经 `CrossVendorDebate::from_provider_names` 注入。
+    pub cross_vendor_providers: Option<Vec<String>>,
     /// R2 解冻阶段③ 前置：进化编排器（封装 evolve_with_formal_verification 主路径）
     #[cfg(feature = "r2_unfreeze")]
     pub evolution_orchestrator: Option<EvolutionOrchestrator>,
     /// 非 r2_unfreeze 构建下的字段占位(保持元组尺寸一致,无运行时足迹)
+    ///
+    /// WHY `fn() -> ()` 而非 `*const u8`：裸指针使 AppContext 变成 `!Send + !Sync`，
+    /// 任何未来 `tokio::spawn(dispatch)` 都会编译失败。函数指针是 Send+Sync 的零尺寸占位。
     #[cfg(not(feature = "r2_unfreeze"))]
-    pub _evolution_orchestrator_placeholder: std::marker::PhantomData<*const u8>,
+    pub _evolution_orchestrator_placeholder: std::marker::PhantomData<fn() -> ()>,
 }
+
+// 编译期断言：AppContext 必须可跨任务共享（防止未来 spawn 才暴露 !Send/!Sync）。
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<AppContext>();
+};
 
 /// 装配 AppContext（唯一组合根入口，C12）
 ///
@@ -137,7 +153,28 @@ pub struct AppContext {
 /// `#[tokio::test]`）满足此前置；同步上下文（如 proptest 闭包）须先建
 /// runtime 再 `block_on` 驱动（见 tests/composition_root_e2e.rs 范式）。
 pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
+    // 库调用方默认保 Auto：保持与既有 `EventBus::new()`+leaf opt-in 完全一致的语义
+    // （9 crate 10 处 try_enable_sharding 调用点零行为变更）。CLI 路径经
+    // `commands/mod.rs` 按 `spec::plan` 选定的策略调 `build_with_sharding`。
+    build_with_sharding(config, crate::spec::ShardingPolicy::Auto)
+}
+
+/// 装配 AppContext，并按宿主类型注入事件分片策略（性能重构 D1）。
+///
+/// 与 [`build`] 的唯一差异：`ShardingPolicy::Off` 时在 `EventBus::new()` 之后、
+/// 任何 leaf 组件（`GqepExecutor::new` / `SccCache::new`）构造之前调用
+/// `bus.without_sharding()`，屏蔽后续 `try_enable_sharding` 的 64 worker spawn。
+/// `Critical` mpsc 旁路、单流 broadcast、漏发率语义均不变（仅关并行扇出）。
+pub fn build_with_sharding(
+    config: &ChimeraConfig,
+    sharding: crate::spec::ShardingPolicy,
+) -> Result<AppContext> {
     let mut bus = EventBus::new();
+    // D1：one-shot 命令在此关闭分片 opt-in，必须早于任何触发 try_enable_sharding
+    // 的组件构造（gqep/scc）；显式 enable_sharding(n) 不受此开关影响（逃生门/测试）。
+    if sharding == crate::spec::ShardingPolicy::Off {
+        bus = bus.without_sharding();
+    }
     // O-1 (ADR-191 D1): 挂载 L1 BusLogger，激活全套 Prometheus 计数器。
     // 此前 `EventBus::new()` 置 logger=None（bus.rs）⇒ logging.rs 指标生产死码。
     // BusLogger 自带 per-instance Registry（非全局默认），多次构造不冲突；
@@ -171,6 +208,11 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
     // E01-E08 静态编制 → gea 动态画像(幂等,启动期一次性)
     chimera_mas::gea_bridge::register_mas_experts(&gea);
     let gqep = gqep_executor::GqepExecutor::new(gqep_executor::GqepConfig::default(), bus.clone());
+    // P1 候选③（ADR-211 Accepted 2026-10-12）:mas-sched claim 准入调度器。
+    // WHY with_rate_limit: broker 护栏（防轮询风暴）随批携带；ephemeral 进程内
+    // 单次 claim 不触发阈值，跨进程防护留待常驻宿主（serve/tui）复用同一实例。
+    // 运行期开关为 env 三态 CHIMERA_SCHED_CLAIM（off 默认），非 feature。
+    let sched = mas_sched::SimplePeerScheduler::with_rate_limit(60, 60_000);
     // M13(ADR-161 路径①):scc-cache 组合根装配——默认配置(容量 256,零 IO 轻构造),
     // 与 bus 同生命周期;doctor scc_cache 探针每次运行经 ctx.scc 真实消费
     // stats()(非"构造即丢弃");CacheHit/Miss 事件仅由真实缓存访问触发,
@@ -195,18 +237,81 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
         version = %config.nexus.version,
         "AppContext assembled at composition root (C12, critical bypass wired, gea+gqep+scc wired)"
     );
+    // 性能重构 P2-3：细分启动段——把「本命令实际是否分片」显式化，使 one-shot Off
+    // 与长驻 Auto 的差异可归因（`assemble_ms` 只覆盖整段，不足以证明分片税已去掉）。
+    // 必须在 `bus` 移入 AppContext 之前读 `sharding_enabled()`。
+    tracing::info!(
+        sharding_policy = ?sharding,
+        sharding_enabled = bus.sharding_enabled(),
+        "startup phase: shard"
+    );
+    // WI-D1：跨厂商辩论激活输入（opt-in，默认 None）。
+    // 启用条件：config.model_router.cross_vendor_debate == true 且去重后 provider >= 2；
+    // 否则保持 None（Parliament 走默认，行为与本字段引入前一致）。
+    // 仅在此存名字列表（provider id 字符串），把 ProviderId 亲和映射留在 parliament(L8)。
+    let cross_vendor_providers = if config.model_router.cross_vendor_debate {
+        let mut names: Vec<String> = Vec::new();
+        for p in &config.model_router.providers {
+            if !names.iter().any(|n| n == &p.id) {
+                names.push(p.id.clone());
+            }
+        }
+        if names.len() >= 2 {
+            Some(names)
+        } else {
+            tracing::warn!(
+                distinct = names.len(),
+                "cross_vendor_debate 已启用但去重 provider 不足 2，本次不激活"
+            );
+            None
+        }
+    } else {
+        None
+    };
     Ok(AppContext {
         bus,
         engine,
         server_config: AppServerConfig::default(),
         gea: Arc::new(gea),
         gqep: Arc::new(gqep),
+        sched: Arc::new(sched),
         scc,
+        cross_vendor_providers,
         #[cfg(feature = "r2_unfreeze")]
         evolution_orchestrator,
         #[cfg(not(feature = "r2_unfreeze"))]
         _evolution_orchestrator_placeholder: std::marker::PhantomData,
     })
+}
+
+/// 会话持久化数据目录：`~/.chimera/sessions/`（C-63）
+///
+/// WHY 与 [`crate::experience_loop::experience_db_path`] 同族（同目录、同 home 展开）：
+/// 两个 SQLite 面必须落在同一处，否则备份/清理脚本要记两套路径。
+///
+/// # Q-2：环境变量覆盖（C-63 附带发现）
+/// `CHIMERA_SESSION_DIR` 优先，空值等同未设。WHY 需要它：组合根接上双写后，
+/// **测试与生产会共用同一个目录**（跑 `composition_root_e2e` 就真写进了用户主目录）。
+/// 有覆盖后，集成测试/CI 可指到 tempdir，不必给别人家的 `~/.chimera/sessions/`
+/// 塞垃圾；本地也能用一行 env 做隔离复现。
+///
+/// 默认路径抽成纯函数 `session_dir_from`，使“有/无覆盖”两条分支都能被单测
+/// 直接驱动——改 env 的测试在并行下是竞态源，不能靠它测。
+pub fn session_store_dir() -> std::path::PathBuf {
+    session_dir_from(std::env::var_os("CHIMERA_SESSION_DIR"))
+}
+
+/// 纯函数：给定覆盖值算出会话目录（`None` / 空串 ⇒ 走默认 `~/.chimera/sessions`）。
+fn session_dir_from(override_dir: Option<std::ffi::OsString>) -> std::path::PathBuf {
+    if let Some(dir) = override_dir.filter(|d| !d.is_empty()) {
+        return std::path::PathBuf::from(dir);
+    }
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home)
+        .join(".chimera")
+        .join("sessions")
 }
 
 /// 装配协议宿主 AppServer（真实核心后端，C1）
@@ -215,12 +320,67 @@ pub fn build(config: &ChimeraConfig) -> Result<AppContext> {
 /// `QuestBackend::with_engine` 包装真实 L9 QuestEngine——`TurnSubmit`
 /// 产出含真实 `quest_id` 的 `quest_state` Item。
 ///
-/// Critical 旁路订阅由 [`build`] 标准装配保证（M4-P2 上提），本函数不再重复
-/// 注册（避免双消费者）；engine/bus 移入 `QuestBackend` 后旁路订阅者仍存活
+/// Critical 旁路订阅由 [`build`] 标准装配保证（M4-P2 上提），本函数不再重
+/// 复注册（避免双消费者）；engine/bus 移入 `QuestBackend` 后旁路订阅者仍存活
 /// （EventBus Clone = Arc 共享内核，move 不丢订阅）。
-pub fn build_app_server(ctx: AppContext) -> AppServer {
+///
+/// # CBMR 会话双写（C-63 / ADR-224 D1 / ADR-225 D4）
+/// 本函数是 **组合根**：在此构造 `CbmrWriter` 并交给
+/// `AppServer::with_session_store`，使 `turn_submit` 落盘（段文件 + SQLite 索引）
+/// 从 DORMANT 转为 PRODUCTION-WIRED。构造走 [`CbmrWriter::open`]（async）而不是
+/// `new()`：打开/建库/PRAGMA/DDL 都是阻塞调用，必须进阻塞池（M51/C-62）。
+///
+/// # N-4 降级姿态（必须先定义才能接线的那个前置）
+/// **存储不可用时服务照常启动**：`CbmrWriter::open` 失败只 `warn!` 并退回
+/// [`AppServer::with_backend`]（双写关闭），不让会话持久化变成服务启动的
+/// 单点失败。WHY：本 crate 的旧文档已自陈「现仅 Err 无降级」——若把 Err 向
+/// 上传，磁盘不可写就会把整个协议宿主打死，而持久化的业务语义是
+/// **best-effort 可观测**（replay 能力降级，但 turn 不失败）。
+pub async fn build_app_server(ctx: AppContext) -> AppServer {
     let backend = Box::new(QuestBackend::with_engine(ctx.engine, ctx.bus));
-    AppServer::with_backend(ctx.server_config, backend)
+    let store_dir = session_store_dir();
+    match session_store::CbmrWriter::open(session_store::StoreConfig::with_dir(&store_dir)).await {
+        Ok(store) => AppServer::with_session_store(ctx.server_config, backend, store),
+        Err(e) => {
+            tracing::warn!(
+                dir = %store_dir.display(),
+                error = %e,
+                "会话持久化不可用，已降级为不双写启动（N-4 best-effort）"
+            );
+            AppServer::with_backend(ctx.server_config, backend)
+        }
+    }
+}
+
+/// 轻量 QuestEngine 的唯一合法派生构造点（TUI 协议模式使用）。
+///
+/// WHY 放在组合根：`QuestEngine::new` 属于装配动作；命令层直接调用会被
+/// `check_composition_root.py` 记为绕过。
+pub fn build_engine(bus: &EventBus) -> Arc<QuestEngine> {
+    Arc::new(QuestEngine::new(bus.clone()))
+}
+
+/// TUI 检查点引擎的唯一合法派生构造点（供组合根门禁归零）。
+///
+/// WHY 放在组合根：`QuestEngine::with_checkpoints` 属于装配动作；
+/// 命令层直接调用会被 `check_composition_root.py` 记为绕过。
+pub fn build_checkpoint_engine(
+    bus: &EventBus,
+    checkpoint_dir: std::path::PathBuf,
+) -> Arc<QuestEngine> {
+    Arc::new(QuestEngine::with_checkpoints(
+        bus.clone(),
+        quest_engine::QuestConfig::default(),
+        checkpoint_dir,
+    ))
+}
+
+/// MCP 网格的唯一合法派生构造点（当前唯一调用方：doctor 的 MCP 探针）。
+///
+/// 注：`chimera mcp` 命令不走本构造点（旧注释「mcp 命令与 doctor 探针共用」是错的）；
+/// 此处使用 `MeshConfig::default()`，未来需要配置透传时在此扩展。
+pub fn build_mesh() -> mcp_mesh::McpMesh {
+    mcp_mesh::McpMesh::new(mcp_mesh::MeshConfig::default())
 }
 
 /// 注册 Critical 旁路订阅者并 spawn 后台日志消费者（C1 配套，C3 接线；M4-P2 由 build() 标准调用）
@@ -281,12 +441,39 @@ mod tests {
         build(&ChimeraConfig::default()).expect("装配应成功")
     }
 
+    /// WI-D1 验收：默认（cross_vendor_debate off）→ cross_vendor_providers 为 None，
+    /// 行为与字段引入前完全一致（主干恒绿）。
+    /// #[tokio::test]：`build()` 内部 `spawn_critical_subscriber` 调 `tokio::spawn`，需运行时上下文。
+    #[tokio::test]
+    async fn composition_cross_vendor_opt_in_default_off() {
+        let ctx = build(&ChimeraConfig::default()).expect("装配应成功");
+        assert!(
+            ctx.cross_vendor_providers.is_none(),
+            "默认 off → 不应激活跨厂商"
+        );
+    }
+
+    /// WI-D1 验收：启用且默认 5 provider（去重 >=2）→ Some(去重名列表)。
+    #[tokio::test]
+    async fn composition_cross_vendor_opt_in_on_produces_names() {
+        let mut cfg = ChimeraConfig::default();
+        cfg.model_router.cross_vendor_debate = true;
+        let ctx = build(&cfg).expect("装配应成功");
+        let names = ctx
+            .cross_vendor_providers
+            .expect("启用且有 >=2 provider 应 Some");
+        assert!(
+            names.len() >= 2,
+            "应解析出去重后 >=2 provider，实际 {names:?}"
+        );
+    }
+
     /// 构造已装配的 AppServer，并返回 bus 探针（Clone 共享内核状态，
     /// 用于断言 Critical 旁路订阅者存在性——C1×C3 接线证据）。
-    fn make_running_server() -> (AppServer, EventBus) {
+    async fn make_running_server() -> (AppServer, EventBus) {
         let ctx = make_ctx();
         let probe = ctx.bus.clone();
-        let server = build_app_server(ctx);
+        let server = build_app_server(ctx).await;
         (server, probe)
     }
 
@@ -294,7 +481,7 @@ mod tests {
     /// Item（`quest_state` + 真实 quest_id）——InMemory 桩无此 kind。
     #[tokio::test]
     async fn composition_server_routes_turns_to_real_engine() {
-        let (server, _probe) = make_running_server();
+        let (server, _probe) = make_running_server().await;
         // 完整两步协议流：ThreadStart → TurnSubmit
         let events = server
             .handle_op(&AppOp::ThreadStart(ThreadStartParams::new(
@@ -344,7 +531,7 @@ mod tests {
     /// mpsc 送达保障在协议宿主真实生效（has_critical_subscribers 为 true）。
     #[tokio::test]
     async fn composition_server_subscribes_critical_bypass() {
-        let (server, probe) = make_running_server();
+        let (server, probe) = make_running_server().await;
         let _ = server;
         assert!(
             probe.has_critical_subscribers(),
@@ -391,5 +578,58 @@ mod tests {
         let stats = ctx.scc.stats();
         assert_eq!(stats.entry_count, 0);
         assert!((stats.hit_rate - 0.0).abs() < f32::EPSILON);
+    }
+
+    /// 性能重构 D1 验收：`ShardingPolicy::Off` 装配的 AppContext，其 bus 不应启用分片——
+    /// `without_sharding()` 应在 gqep/scc 构造前屏蔽其 `try_enable_sharding`。
+    #[tokio::test]
+    async fn composition_build_with_sharding_off_keeps_single_stream() {
+        let ctx = build_with_sharding(&ChimeraConfig::default(), crate::spec::ShardingPolicy::Off)
+            .expect("Off 装配应成功");
+        assert!(
+            !ctx.bus.sharding_enabled(),
+            "one-shot 策略下 gqep/scc 的 try_enable_sharding 应被 without_sharding 屏蔽"
+        );
+    }
+
+    /// 性能重构 D1 验收：`ShardingPolicy::Auto`（= `build` 默认）应启用分片，
+    /// 与既有 leaf opt-in 语义一致（长驻宿主保留扇出）。
+    #[tokio::test]
+    async fn composition_build_default_still_enables_sharding() {
+        let ctx = build(&ChimeraConfig::default()).expect("默认(Auto) 装配应成功");
+        assert!(
+            ctx.bus.sharding_enabled(),
+            "长驻宿主默认应启用分片（与既有 leaf opt-in 语义一致）"
+        );
+        // 优雅清理：避免 64 worker 残留到测试 runtime（guard 也会在 drop 时 abort）
+        ctx.bus.shutdown_sharding().await;
+    }
+
+    /// C-63 附带发现 / Q-2：会话目录必须有 env 覆盖，否则测试与生产共用用户主目录。
+    ///
+    /// WHY 测纯函数而不是改 env：env 是进程级全局，并行测试里改它本身就制造竞态，
+    /// 所以把“有/无覆盖”两条分支抽成 `session_dir_from` 直接驱动。
+    #[test]
+    fn session_dir_honours_env_override_and_falls_back_to_home() {
+        use std::ffi::OsString;
+
+        // 有覆盖（非空）⇒ 原样用
+        let overridden = session_dir_from(Some(OsString::from("/tmp/chimera-sess-probe")));
+        assert_eq!(overridden.to_string_lossy(), "/tmp/chimera-sess-probe");
+
+        // 空串等同未设 ⇒ 回落到 ~/.chimera/sessions（不把空值当成根目录！）
+        let empty = session_dir_from(Some(OsString::from("")));
+        assert!(
+            empty.ends_with("sessions"),
+            "空覆盖值应回落默认目录，实际: {empty:?}"
+        );
+        assert!(
+            empty.components().count() >= 2,
+            "回落路径不应退化成单段相对路径，实际: {empty:?}"
+        );
+
+        // 未设 ⇒ 同样回落
+        let none = session_dir_from(None);
+        assert_eq!(none, empty, "未设与空串应得到同一个默认目录");
     }
 }

@@ -19,7 +19,7 @@ use proptest::prelude::*;
 #[tokio::test]
 async fn composition_root_replaces_inmemory_stub_on_protocol_hosts() {
     let ctx = build(&ChimeraConfig::default()).expect("装配应成功");
-    let server = build_app_server(ctx);
+    let server = build_app_server(ctx).await;
     let events = server
         .handle_op(&AppOp::ThreadStart(ThreadStartParams::new(
             "goal-1", "run-1",
@@ -73,7 +73,7 @@ async fn critical_bypass_registered_by_build_and_preserved_by_server() {
         probe.has_critical_subscribers(),
         "build() 应已注册 Critical 旁路订阅者（M4-P2：标准装配步骤）"
     );
-    let _server = build_app_server(ctx);
+    let _server = build_app_server(ctx).await;
     assert!(
         probe.has_critical_subscribers(),
         "build_app_server() 移交后 Critical 旁路订阅者仍应存在（不随 ctx move 丢失）"
@@ -99,7 +99,7 @@ proptest! {
                 "build() 后必须已注册 Critical 旁路（M4-P2 标准装配步骤）"
             );
             // build_app_server 内含 engine/bus 移交，驱动后旁路订阅者应保持存在
-            let server = build_app_server(ctx);
+            let server = build_app_server(ctx).await;
             let _ = server;
             Ok::<_, TestCaseError>(probe)
         })?;
@@ -146,7 +146,7 @@ fn drive_two_step_turn_async(user_text: &str) -> impl std::future::Future<Output
     let text = user_text.to_string();
     async move {
         let ctx = build(&ChimeraConfig::default()).expect("装配应成功");
-        let server = build_app_server(ctx);
+        let server = build_app_server(ctx).await;
         let events = server
             .handle_op(&AppOp::ThreadStart(ThreadStartParams::new("g", "r")))
             .await

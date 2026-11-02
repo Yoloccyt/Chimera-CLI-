@@ -17,6 +17,7 @@ import glob
 import json
 import os
 import re
+import sys
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPTS)
@@ -108,4 +109,5 @@ def main():
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import gate_rc  # crash exits 2, never borrows 1 (F32/F33)
+    sys.exit(gate_rc.run(main))

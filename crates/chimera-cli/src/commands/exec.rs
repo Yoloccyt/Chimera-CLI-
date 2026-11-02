@@ -22,6 +22,7 @@
 
 use anyhow::Result;
 use nexus_core::{MultimodalInput, UserIntent};
+use serde::Serialize;
 use uuid::Uuid;
 
 use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET};
@@ -36,8 +37,8 @@ use tokio_util::sync::CancellationToken;
 ///
 /// WHY 与 run.rs 的全局映射不同:exec 是独立退出码契约(0/2/3/4),
 /// 预算/引擎类故障归 3(经 EngineError,见 exec_exit_code);若映射全局
-/// `Timeout` 变体,会被 exec_exit_code 归入"工具失败"4(exec.rs:139-146
-/// 的 `_ => 4` 分支)——分解预算耗尽≠工具执行超时,语义错配。
+/// `Timeout` 变体,会被 `exec_exit_code` 归入"工具失败"4(见
+/// `error.rs::exit_code_for` 的 `ExitProfile::Exec` 分支)——分解预算耗尽≠工具执行超时,语义错配。
 /// `Cancelled` 非预算/引擎类,按 UserCancelled 落契约 catch-all 4。
 fn call_budget_to_exec_error(e: CallBudgetError) -> ChimeraCliError {
     match e {
@@ -110,36 +111,34 @@ pub async fn execute_with_ctx(
     .await
     {
         Ok(Ok(q)) => q,
-        Ok(Err(e)) => {
-            let msg = build_error_reply(&e);
-            eprintln!("{msg}");
-            return Err(ChimeraCliError::EngineError(msg).into());
-        }
-        Err(e) => {
-            let err = call_budget_to_exec_error(e);
-            eprintln!("{err}");
-            return Err(err.into());
-        }
+        Ok(Err(e)) => return Err(ChimeraCliError::EngineError(build_error_reply(&e)).into()),
+        Err(e) => return Err(call_budget_to_exec_error(e).into()),
     };
 
     // 4. 输出纪律（WI-02 核心）
     if json {
         // JSONL 模式: 每行一 AppEvent（ThreadStarted / TurnCompleted 骨架流，
         // 后续挂接真实 AppEvent 流——协议面类型已就绪 nexus-contracts::app）
-        let mut lines = serde_json::Map::new();
-        lines.insert("event".into(), serde_json::json!("quest_created"));
-        lines.insert("quest_id".into(), serde_json::json!(quest.quest_id));
-        lines.insert("task_count".into(), serde_json::json!(quest.tasks.len()));
-        println!(
-            "{}",
-            serde_json::to_string(&serde_json::Value::Object(lines))?
-        );
+        let payload = ExecEventPayload {
+            event: "quest_created",
+            quest_id: &quest.quest_id,
+            task_count: quest.tasks.len(),
+        };
+        println!("{}", serde_json::to_string(&payload)?);
     } else {
         // 纯净模式: stdout 仅最终结果（单行回复，无流式动画）
         println!("{}", build_quest_reply(&quest));
     }
 
     Ok(())
+}
+
+/// `exec --json` 的单行事件载荷（JSONL，每行一个）。
+#[derive(Debug, Serialize)]
+struct ExecEventPayload<'a> {
+    event: &'static str,
+    quest_id: &'a str,
+    task_count: usize,
 }
 
 /// exec 退出码映射 — WI-02 四类语义（0/2/3/4）
@@ -151,14 +150,7 @@ pub async fn execute_with_ctx(
 ///
 /// 返回 `u8`；`Ok` 路径的 0 由调用方直接返回（dispatch 层）。
 pub fn exec_exit_code(err: &ChimeraCliError) -> u8 {
-    match err {
-        // 审批拒否（权限策略拒绝）
-        ChimeraCliError::PermissionDenied(_) => 2,
-        // 预算耗尽/引擎故障
-        ChimeraCliError::EngineError(_) => 3,
-        // 其余一律按工具失败
-        _ => 4,
-    }
+    err.exit_code_for(crate::error::ExitProfile::Exec)
 }
 
 // ============================================================

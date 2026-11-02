@@ -147,7 +147,7 @@ fn test_tui_layout_rendering() {
         assert!(
             content.contains("Quest") || content.contains("Panels"),
             "rendered layout should contain panel tabs, got: {}",
-            &content[..content.len().min(200)]
+            content.chars().take(200).collect::<String>()
         );
 
         // 验证:渲染内容包含状态栏(底部)
@@ -629,7 +629,7 @@ fn test_budget_panel_shows_critical_state() {
         assert!(
             content.contains("EXCEEDED"),
             "Budget panel should render EXCEEDED status when budget is exceeded, got: {}",
-            &content[..content.len().min(300)]
+            content.chars().take(300).collect::<String>()
         );
     });
 }
@@ -691,28 +691,28 @@ fn test_quest_panel_renders_real_quest_data() {
         assert!(
             content.contains("Panel Data Quest"),
             "Quest panel should render quest title, got: {}",
-            &content[..content.len().min(300)]
+            content.chars().take(300).collect::<String>()
         );
         assert!(
             content.contains("quest-panel-test-001"),
             "Quest panel should render quest_id, got: {}",
-            &content[..content.len().min(300)]
+            content.chars().take(300).collect::<String>()
         );
         assert!(
             content.contains("Deep"),
             "Quest panel should render thinking mode, got: {}",
-            &content[..content.len().min(300)]
+            content.chars().take(300).collect::<String>()
         );
         let compact: String = content.chars().filter(|c| *c != ' ').collect();
         assert!(
             compact.contains("3总"),
             "Quest panel should render task summary, got: {}",
-            &content[..content.len().min(300)]
+            content.chars().take(300).collect::<String>()
         );
         assert!(
             compact.contains("1执行中"),
             "Quest panel should include Running count, got: {}",
-            &content[..content.len().min(300)]
+            content.chars().take(300).collect::<String>()
         );
     });
 }
@@ -766,17 +766,17 @@ fn test_parliament_panel_renders_recent_events() {
         assert!(
             content.contains("unsafe shell injection detected"),
             "Parliament panel should render SkepticVeto reason, got: {}",
-            &content[..content.len().min(300)]
+            content.chars().take(300).collect::<String>()
         );
         assert!(
             content.contains("q-1"),
             "Parliament panel should render quest_id, got: {}",
-            &content[..content.len().min(300)]
+            content.chars().take(300).collect::<String>()
         );
         assert!(
             content.contains("prompt_injection") || content.contains("RedTeamAudit"),
             "Parliament panel should render RedTeamAudit info, got: {}",
-            &content[..content.len().min(300)]
+            content.chars().take(300).collect::<String>()
         );
         assert!(
             !content.contains("No recent parliament events"),
@@ -829,12 +829,12 @@ fn test_log_panel_renders_events() {
     assert!(
         content.contains("CacheHit"),
         "Main Log panel should render event type, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
     assert!(
         content.contains("BudgetExceeded"),
         "Main Log panel should render critical event type, got: {}",
-        &content[..content.len().min(300)]
+        content.chars().take(300).collect::<String>()
     );
 }
 
@@ -853,7 +853,7 @@ fn test_memory_panel_switch_and_render() {
         assert!(
             content.contains("Memory"),
             "Memory panel should render title, got: {}",
-            &content[..content.len().min(300)]
+            content.chars().take(300).collect::<String>()
         );
     });
 }
@@ -869,7 +869,7 @@ fn test_security_panel_switch_and_render() {
         assert!(
             content.contains("Security"),
             "Security panel should render title, got: {}",
-            &content[..content.len().min(300)]
+            content.chars().take(300).collect::<String>()
         );
     });
 }
@@ -885,7 +885,7 @@ fn test_health_panel_switch_and_render() {
         assert!(
             content.contains("Health"),
             "Health panel should render title, got: {}",
-            &content[..content.len().min(300)]
+            content.chars().take(300).collect::<String>()
         );
     });
 }
@@ -942,7 +942,7 @@ fn test_search_mode_filters_log_panel() {
         assert!(
             compact.contains("关键字:alpha"),
             "Log panel title should show active keyword filter, got: {}",
-            &content[..content.len().min(300)]
+            content.chars().take(300).collect::<String>()
         );
     });
 }
@@ -1016,6 +1016,9 @@ fn test_refresh_command_publishes_request() {
     let bus = EventBus::new();
     let mut rx = bus.subscribe();
     let mut app = TuiApp::with_event_bus(app, bus);
+    // B5-G(评审 #2):断言经 t! 取值仍有 locale 翻转窗口,持 guard 全程互斥
+    // (先例:src/app/tests.rs dispatch_viz_switch_dimension_osa_honest_no_toggle)
+    let _locale_guard = chimera_tui::i18n::locale_test_guard();
 
     app.state_mut().filter_keyword = Some("old".into());
     app.state_mut().filter_topic = Some("security".into());
@@ -1039,7 +1042,13 @@ fn test_refresh_command_publishes_request() {
         .as_ref()
         .unwrap()
         .0
-        .contains("RefreshStateRequested request published"));
+        // B4-I(F-04):断言经 t! 键期望串构造;读值仍随当前 locale,非与 locale 无关
+        // (B5-G 已在测试入口补 locale_test_guard 消除翻转窗口)
+        .contains(&chimera_tui::t!("status.request_published").replacen(
+            "{}",
+            "RefreshStateRequested",
+            1
+        )));
     // 过滤器保持原状,由上游订阅者决定是否响应刷新请求
     assert!(app.state().filter_keyword.is_some());
     assert!(app.state().filter_topic.is_some());
