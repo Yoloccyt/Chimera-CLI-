@@ -389,3 +389,31 @@ selftest 加两条植入（env 读取点改名 / 窗口默认改 0），断言�
 1. **MCP 真实装配与能力发现**：另立 ADR，范围 = JSON-RPC 编解码 + `initialize`/`tools/list` 握手 + stdio 与 HTTP/SSE 两传输 + `readOnlyHint → SideEffectDecl` 映射 + "server 不可达则跳过并 warn、不阻塞启动"。前置条件：先决定 `McpServerConfig` 是否加 capabilities 覆盖字段（那是 `nexus-core` L1 结构变更）。
 2. `mcp.rs:3-5` 头注里"capability 名不能证明只读 ⇒ 一律 Write"的说明**保持原样**（它仍然准确）；只有发现协议落地后才按 Step 6 改写。
 3. mesh 外层 200 ms 与内层 50 ms 的双层超时**未动**（计划 Step 7）：数值是运维契约，且本批没有改变任何请求的时序；"谁应当更小"这条裁决要随真实装配一起定——在没有真实链路可测的时候定数值口径，等于凭感觉改运维参数。
+
+## 追加节七（2026-11-02）— 第三波 A 批：把"验收底座"本身修成可判的
+
+本节对象不是计划路径，而是**验收面**：A1–A4 修的四条红全部来自上一波终验判据的**跑点偏置**（同一批门在主检出 rc=0、在工作树判红，我却拿工作树读数宣布"无退化"）。判据不可信时，后面每一波的"绿"都不成立，所以它排在能力项之前。
+
+**D31 — 覆盖率本地不可判，且判读规则在跑之前写死。**
+`cargo llvm-cov --summary-only -p nexus-contracts --ignore-filename-regex tests --jobs 2` → rc=101，`error[E0463]: can't find crate for 'profiler_builtins'`，崩在 `quote` / `proc-macro2` 的 build script（尚未触及被测 crate）⇒ 这是**工具链面缺插桩运行时**（host `x86_64-pc-windows-gnu`，rustc 1.97.1），与具体 crate 无关；无 `coverage/*.json` 产出。规则事先写死、不许事后改判读：出现 E0463/缺 `profiler_builtins` ⇒ 维持 `coverage_per_crate_floor.toml` 的本地不可判声明，逐 crate 真数仍归 `coverage.yml` nightly；只有真产出 JSON 才继续 `coverage_gate.py --check`，且首份数值只落报告、抬 floor 另立批。零成本自证：`coverage_gate.py --validate-config` rc=0（R1 棘轮单调，last=85）。⇒ 对用户"新增功能覆盖率 ≥85%"这条要求，本地的诚实回答是**不可判**，本波只承诺测试面（用例 + proptest 属性），不拿估算充数。日志 `tmp/w3-llvmcov-probe.log`（含命令、`rustc -vV`、原文输出与 rc）。
+
+**D32 — 终验改双口径，"投影限制"由两条同时成立的机械判据派生。**
+- 修订：上一波的"非绿成员集合逐条相同"改为**逐成员分类相同**（真债集 / 投影限制集各自逐条相同），报告两栏并列，禁止互迁，禁止写"等价于全量绿"。
+- 判据（两条都成立才算投影限制）：① 门输出点名的路径在**工作树工作区不存在、主检出工作区存在**；② 同一道门在**主检出跑为绿**。只有 ① 而 ② 不成立 ⇒ 落回真债（否则任何"缺文件"症状都能替真债作保）。
+- **批准计划的写法已被实测否证**：原用 `git ls-files --error-unmatch` 判"仅一侧缺"。实测九个被点名文件在主检出**同样是 untracked**（`.gitignore:68 *.md`、`.gitignore:64 .trae/`）⇒ `git ls-files` 两侧都失败，测不出不对称，会把投影限制误判成真债。判据改为两侧 `test -f`。
+- 本波实测（A 批收尾时点）：九条点名路径（`docs/architecture/adr_index.md`、`docs/governance/RK-P_risk_register.md`、`.claude/CLAUDE.md`、`docs/reports/phaseR-wave1-closure.md`、`docs/reports/phaseR-release-checklist-v2.28.0.md`、`docs/architecture/README.md`、`docs/architecture/INDEX.md`、`CHANGELOG.md`、`docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md`）全部 main=Y / wt=N；六条非绿门（G-04/G-06/G-11/G-17/G-18/G-72）在主检出逐门现跑**全部 rc=0** ⇒ **真债集为空**。
+- 双条件核对用的是**逐门现跑**（六条），不是主检出全量 144 重跑；全量在主检出的口径留到波次终态跑，两类读数不得互相冒充。主检出是用户的在途工作区（17 改 + 4 未跟踪），跑完以 `git status --short` 前后逐字节比对确认未被改动。
+- 顺带抖出的门内病理：G-18 的"实算 id 不达下限"在两侧同时存在但方向相反——主检出 ps1 6类/14id、sh 4类/7id（均达下限，rc=0），工作树 ps1 5类/11id、sh 3类/5id（均不达下限，rc=1）。**下限不许降**：它正是抓"检查被静默去掉"的牙，工作树的少跑是缺语料的衍生品，降下限等于把投影问题洗成绿灯。
+
+**D33 — 自造分类器必须先被允许"拒绝出结论"。**
+第一版分类探针把 subprocess 的 GBK 解码崩溃吞成 rc=99，然后照常输出"真债集 = 全部七条"——一份完全致盲的读数，长得像一份结论。第二版加两道守卫：任一门未能真正执行 ⇒ `[PROBE-ERROR]` + 退 2、不出分类；`gate_manifest.toml` 解析条数低于地板 ⇒ 判为解析器致盲并退 2。守卫随即在第二个真实缺陷上生效：数组名按 `[[gates]]` 切（实为 `[[gate]]`）⇒ 解析出 0 条 ⇒ 退 2，而不是把七条门全记成"查不到 cmd"再给一份看似结论的表。教训入规：**探针的 rc 不编码判定 ⇒ "探针跑过"与"探针给出结论"是两件事**；凡求和/分类/聚合型工具必须有一条"我没能真正测到"的显式出口，且该出口要在一次真实缺陷上被触发过才算有牙。探针本体 `tmp/w3_projection_classifier.py`（波次工件，不进 `scripts/` 受治面；若日后跨波复用再按"新门四件同批"接线）。
+
+### A 批台账（红→绿均现取，日志落 `tmp/a*.log`）
+
+| 批 | commit | 判据 | 改前 → 改后 | 反事实 |
+|---|---|---|---|---|
+| A1 | `3c3167a` | G-27 / G-35 | rc=1（`[STALE] participant_client.rs:556`）→ rc=0（16 finding / 8 key，"tables in parity: 8 key(s)"） | 单侧多一键 → `[STALE]+[PARITY] allowlist=9,freeze=8`；单侧少一**活**键 → 只报 `[PARITY] allowlist=8,freeze=7`，rc=1（parity 轴独立有牙） |
+| A2 | `67143d4` | G-05 | rc=1（`[GAP-B1] … current crate count (46)`）→ rc=0（整门转绿，`[B1] 2/4`） | 头值改回 `**39 crates**` → rc=1，同条 GAP 复现；`39→**46**（…）` 里的 46 不接名词故不判命中 ⇒ 判据认语义邻接 |
+| A3 | `d5ac09e` | G-53 | rc=1（`chimera-cli.SIMPLIFIED-CN = 1`，markers 84）→ rc=0（markers 83 = 主检出口径） | 原句种回 → rc=1、84、点名新行号 :354（第一次植入锚未命中而门仍 rc=0＝空跑与通过同形，assert 先 abort 才发现，重做） |
+| A3′ | `e2e93f8` | G-59 | 全量门跑出 `G-59 mismatch`（`MATURITY says …|SIMPLIFIED-CN, disk says …`）→ `--install` 后 rc=0（46/46 有效） | 该红由本会话 A3 造成、由门自己抓出；`--install` 只动 1 文件 1 行，其余 45 份逐字节相同（写入幂等） |
+| A4 | `268000d` | doc 三门 | `check_doc_drift` / `check_crate_reachability` / `check_doc_consistency` 各 rc=0；表格行 3 个转义 `\|` 逐字仍在 | 见报告 §5.1/§5.5 与 ADR-232 D6 的现取订正 |
