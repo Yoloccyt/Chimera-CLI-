@@ -10,8 +10,10 @@ import tempfile
 import unittest
 from unittest import mock
 import xml.etree.ElementTree as ET
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from concurrent.futures import ThreadPoolExecutor as _RealPool
 from pathlib import Path
+from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -1068,6 +1070,140 @@ class MutatingGuardTests(TempDirTest):
         self.assertEqual(rc, 0, out)
         self.assertNotIn("UNDECIDABLE", out)
         self.assertEqual(calls, [])
+
+class JobsAndDiskSamplingTests(TempDirTest):
+    """ADR-234 S6: `profile.jobs` must have a consumer, and the disk budget must
+    be read where it is applied.
+
+    Two defects, both invisible to any single-gate test:
+
+    * `policy.toml` declared pr=4 / nightly=2 / release=1 / local=1, but the run
+      loop only ever looked at `args.jobs` (default 0) -- so every lane was
+      serial and the declared numbers were a decorative surface. A flag that is
+      parsed and ignored never goes red on its own, hence these cases drive
+      `cmd_run` and observe the executor that actually got constructed.
+    * the free-disk reading was taken once, before the loop. Serially that is
+      indistinguishable from sampling per gate; concurrently, later gates judge
+      against a stale snapshot, which turns UNKNOWN ("this gate genuinely cannot
+      be decided here") into "we did not look in time". The discriminator below
+      feeds two different readings and requires the second gate to see the
+      second number.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.pol = policy.load(str(POLICY))
+
+    def _attempt(self, task):
+        return Attempt(task.id, 1, Verdict.OK, 0, 0.01, "rc=0")
+
+    def drive(self, tasks, flags, profile, disk_free_gib=None, pool_spy=None):
+        """Run `cmd_run` over stubbed execution; return (rc, stdout, executed ids)."""
+        calls = []
+
+        def execute(task, _policy, bash_path, logs, n):
+            calls.append(task.id)
+            return self._attempt(task)
+
+        args = cli.build_parser().parse_args(["run", "--profile", profile] + flags)
+        patches = [
+            mock.patch.object(cli, "ROOT", self.tmp),
+            mock.patch.object(cli, "load_all", lambda name="": (tasks, self.pol)),
+            mock.patch.object(policy, "snapshot", side_effect=[set(), set()]),
+            mock.patch.object(cli, "_execute_one", side_effect=execute),
+        ]
+        if disk_free_gib is not None:
+            readings = iter([g * 1024 ** 3 for g in disk_free_gib])
+            counter = {"n": 0}
+
+            def fake_usage(_path):
+                counter["n"] += 1
+                return SimpleNamespace(free=next(readings))
+
+            patches.append(mock.patch.object(cli.shutil, "disk_usage",
+                                             side_effect=fake_usage))
+            self.disk_calls = counter
+        if pool_spy is not None:
+            patches.append(mock.patch.object(cli, "ThreadPoolExecutor",
+                                             lambda *a, **kw: pool_spy(a, kw)))
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.cmd_run(args)
+        return rc, buf.getvalue(), calls
+
+    # -- judgement 1: which worker count does the pool actually get? -----------
+
+    def recorded_pools(self):
+        seen = []
+
+        def spy(args, kwargs):
+            workers = kwargs.get("max_workers", args[0] if args else None)
+            seen.append(workers)
+            return _RealPool(workers)
+
+        self.pools = seen
+        return spy
+
+    def test_unspecified_jobs_falls_back_to_the_profile_number(self):
+        """`--jobs` absent (0 = "unspecified") must land on profile.jobs, not on serial."""
+        tasks = tuple(make_task(id="J-%d" % i) for i in range(3))
+        rc, out, calls = self.drive(tasks, [], "pr", pool_spy=self.recorded_pools())
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(sorted(calls), sorted(t.id for t in tasks), out)
+        self.assertEqual(self.pools, [self.pol.profiles["pr"].jobs],
+                         "profile pr declares jobs=4; the pool must be sized by it")
+
+    def test_explicit_jobs_wins_over_the_profile(self):
+        tasks = tuple(make_task(id="J-%d" % i) for i in range(3))
+        rc, _out, _calls = self.drive(tasks, ["--jobs", "2"], "pr",
+                                      pool_spy=self.recorded_pools())
+        self.assertEqual(rc, 0, _out)
+        self.assertEqual(self.pools, [2], "explicit CLI must override the profile")
+
+    def test_jobs_one_stays_serial_even_when_the_profile_is_concurrent(self):
+        """The parity leg depends on this: `--jobs 1` must not quietly become pr's 4."""
+        tasks = tuple(make_task(id="J-%d" % i) for i in range(3))
+        rc, out, calls = self.drive(tasks, ["--jobs", "1"], "pr",
+                                    pool_spy=self.recorded_pools())
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(sorted(calls), sorted(t.id for t in tasks))
+        self.assertEqual(self.pools, [], "jobs=1 must take the serial branch")
+
+    def test_local_profile_jobs_one_is_serial(self):
+        tasks = (make_task(id="J-1"),)
+        rc, out, calls = self.drive(tasks, [], "local",
+                                    pool_spy=self.recorded_pools())
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(calls, ["J-1"])
+        self.assertEqual(self.pools, [], "local declares jobs=1")
+
+    # -- judgement 2: the disk budget is read per gate, not per run ------------
+
+    def test_disk_budget_sampled_at_the_gate_that_uses_it(self):
+        """Two heavies, generous then stingy: only the second may go UNKNOWN.
+
+        Under run-level sampling both gates read the *first* number, so both
+        execute and the stale-reading bug is undetectable in-process. Here the
+        second gate must be UNKNOWN("disk") -- which is only possible if its own
+        reading was taken.
+        """
+        tasks = (make_task(id="H-1", kind="heavy", disk_gb=20.0),
+                 make_task(id="H-2", kind="heavy", disk_gb=20.0))
+        rc, out, calls = self.drive(tasks, [], "release", disk_free_gib=[100.0, 10.0])
+        self.assertEqual(calls, ["H-1"], "gate 2 must not execute on a 10 GiB disk")
+        self.assertIn("H-2 unknown", out)
+        self.assertIn("H-1 ok", out)
+        self.assertEqual(self.disk_calls["n"], 2,
+                         "one reading per disk-gated gate; a single call means the "
+                         "sample was taken outside the executor")
+        self.assertEqual(rc, 2,
+                         "unknown is undecidable, and undecidable never exits 0 "
+                         "(the lane's own dialect: a gate that could not be judged "
+                         "must not be reported as a pass)")
+
 
 if __name__ == "__main__":
     # F30 dialect: an uncaught crash must exit 2, never borrow the interpreter's 1
