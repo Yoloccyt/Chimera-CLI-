@@ -25,11 +25,12 @@ MANIFEST = ROOT / "scripts" / "gate_manifest.toml"
 POLICY = ROOT / "scripts" / "govd" / "policy.toml"
 
 # Single pinned census of gate_manifest.toml. Adding or removing a gate must
-# update these three numbers in the same commit (G-143..G-146 wiring: 144 =
-# 137 light + 7 heavy). Every other assertion in this file derives from here
+# update these three numbers in the same commit (G-147 wiring: 145 =
+# 138 light + 7 heavy). Every other assertion in this file derives from here
 # instead of repeating the literals -- on the wiring day three separate
 # assertions failed for what is one fact, which is the cost of duplicating it.
-CENSUS_TOTAL, CENSUS_LIGHT, CENSUS_HEAVY = 144, 137, 7
+# 自锁已实测：只加门不改这三值 ⇒ 本文件自己的 test_real_census 先红（145 != 144）。
+CENSUS_TOTAL, CENSUS_LIGHT, CENSUS_HEAVY = 145, 138, 7
 PR_SUM_LINE = f"selected={CENSUS_LIGHT} total={CENSUS_TOTAL} skipped={CENSUS_HEAVY}"
 
 def make_task(**kw):

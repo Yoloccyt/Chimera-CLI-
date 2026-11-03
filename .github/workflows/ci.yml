@@ -160,6 +160,15 @@ jobs:
           python3 scripts/check_ci_manifest_parity.py --selftest
           python3 scripts/check_ci_manifest_parity.py
 
+      # WHY: govd（验证调度器）的 84 条行为断言此前只存在于手跑面——把 jobs 解析、
+      # 磁盘余额取数位置、重试/取消/普查计数任何一条改坏，PR 都能全绿合入(ADR-234 S6/S9)。
+      # 接在本组之后：G-137 方向 B 要求"cmd 指名脚本且非 ci_exempt 的门必须出现在某个
+      # workflow"，所以门与这一步必须同批落——只登记门会判红，只加这一步则成孤儿步骤判
+      # [UNMATCHED]。放 check job(阻塞面)，不进下面 governance-shadow 的 continue-on-error
+      # 语境：expect=0 的门在 COE 下运行正是 audit_gate_parity(G-25) 要抓的病。
+      - name: govd scheduler self-tests (G-147)
+        run: python3 scripts/govd/tests/test_govd.py
+
       # WHY: ADR-229 的三层倒置与 ADR-232 的四条默认值承诺,都是编译期与既有测试
       # 看不见的那类约束——给 L7 加一条 chimera-cli 依赖照样编译,把 max_turns 从 8
       # 改成 800、给 LlmLoopOutcome 加 #[derive(Default)]、把启用面扩成 `_ => true`
@@ -989,11 +998,13 @@ jobs:
 
   # ============================================================
   # governance-shadow — govd pr profile, deliberately non-blocking (ADR-228 §3.6 / I7)
-  # WHY: the 108 hard-coded steps above are the legacy execution surface. Before
-  # retiring any of them, run the same 133 light gates through govd for 3 green
-  # runs (continue-on-error) and compare [SUM]/JUnit artifacts. Only then flip
-  # this job to blocking and delete steps in batches. `--report junit` is
+  # WHY: the hard-coded steps above are the legacy execution surface. Before
+  # retiring any of them, run the whole pr-profile light set through govd for 3
+  # green runs (continue-on-error) and compare [SUM]/JUnit artifacts. Only then
+  # flip this job to blocking and delete steps in batches. `--report junit` is
   # accepted for forward compatibility; govd always writes report.json/junit.xml.
+  # 计数不在此登记(ADR-234 S9 顺带订正：旧文案钉死过 "133 light gates"，而现值是
+  # 清单自报数——门数每次增减都会让这句话变陈旧，故改为不写数)。
   # ============================================================
   governance-shadow:
     name: govd pr shadow (non-blocking)
@@ -1009,7 +1020,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: govd pr profile (133 light gates)
+      - name: govd pr profile (all light gates, non-blocking shadow)
         run: python3 -m scripts.govd run --profile pr --jobs 4 --report junit
 
       - name: Upload govd run artifacts
