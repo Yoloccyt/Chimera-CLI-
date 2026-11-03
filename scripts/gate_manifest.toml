@@ -11,6 +11,15 @@
 #   expect      期望退出码（0=绿；1=按设计为红，例如未提交前的耦合审计）
 #   kind        light（秒级，可随手跑） | heavy（需编译/长时间，跑前查磁盘）
 #   disk_gb     heavy 项要求的最低 D 盘空闲 GB（低于则跳过并判"不可判定"，不判通过）
+#   needs       前置门 id 列表（v2 字段）。它只买得到两件事：planner.toposort 的
+#               **入列顺序**，以及"声明了 needs 的计划拒绝 --shard 切分"。
+#               它**不是互斥锁**：jobs>1 时执行环把 pending 整批 submit 进线程池，
+#               全程不读 needs ⇒ 被依赖者与依赖者可以同时在跑。实测锁见
+#               scripts/govd/tests/test_govd.py::NeedsSemanticsTests
+#               （jobs=2 断言区间重叠；jobs=1 作阳性对照断言不重叠，
+#               否则"重叠"可能只是仪器分辨不出串行的空转）。
+#               因此"给 cargo 类 heavy 门彼此加 needs 以免互踩包锁"是无效缓解 ——
+#               那条互斥本来就由 cargo 自己的 target-dir 锁提供（后来者等待而非损坏）。
 #   test_kind   评测生命周期标注（v2.3 §(b.6)，与 39 分层对齐，渐进回写）：
 #               crate_unit（单 crate 内单测门）| cross_crate（跨 crate 集成/静态审计门）。
 #               缺省视为未标注（不判红）；新增/改动门应就近标齐。run_gate_manifest.py

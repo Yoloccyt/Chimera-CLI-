@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 import xml.etree.ElementTree as ET
@@ -1204,6 +1205,84 @@ class JobsAndDiskSamplingTests(TempDirTest):
                          "unknown is undecidable, and undecidable never exits 0 "
                          "(the lane's own dialect: a gate that could not be judged "
                          "must not be reported as a pass)")
+
+
+class NeedsSemanticsTests(TempDirTest):
+    """What `needs` actually buys: ordering, **not** mutual exclusion.
+
+    立项时假设"给 cargo 类 heavy 门彼此建 needs 边，就能避免它们互踩包锁/内存"。
+    读码否证了它：`needs` 只有两个消费者 —— `manifest.py`(目标存在性校验) 与
+    `planner.toposort`(排序)。`cli.cmd_run` 的执行环把 pending **整批** submit 进
+    `ThreadPoolExecutor(max_workers=jobs)`，之后再 `as_completed` 收 —— 全程不查
+    `needs`。所以并发档下，被依赖者与依赖者可以同时在跑，边只提供"排队序"。
+
+    这两条测试是**特征锁**（描述现状，不是先红后绿）：
+    - jobs=2 ⇒ 区间重叠（证明 needs 不是互斥；若哪天实现了真正的依赖门控，本条
+      必须被有意识地改写，而不是让人以为加了边就安全）；
+    - jobs=1 ⇒ 区间不重叠（阳性对照：缺了它，"重叠"断言可能只是因为仪器根本
+      分辨不出串行）。
+    两条都另外断言 `start_A < start_B`：needs 提供的、也是唯一可依赖的保证。
+    """
+
+    SLEEP = '"import time;time.sleep(0.25)"'
+
+    def drive(self, flags):
+        """Run two real (subprocess) gates where B needs A; return (intervals, start order)."""
+        order = []
+        intervals = {}
+        tick = {"n": 0}
+        lock = threading.Lock()
+        real_execute_one = cli._execute_one
+        tasks = (
+            make_task(id="T-A", cmd="{python} -c " + self.SLEEP),
+            make_task(id="T-B", cmd="{python} -c " + self.SLEEP, needs=("T-A",)),
+        )
+
+        def spy(task, policy_arg, bash_path, logs, n):
+            with lock:
+                tick["n"] += 1
+                start = tick["n"]
+                order.append(task.id)
+            attempt = real_execute_one(task, policy_arg, bash_path, logs, n)
+            with lock:
+                tick["n"] += 1
+                intervals[task.id] = (start, tick["n"])
+            return attempt
+
+        args = cli.build_parser().parse_args(["run", "--profile", "pr"] + flags)
+        with mock.patch.object(cli, "ROOT", self.tmp), \
+             mock.patch.object(cli, "load_all", lambda name="": (tasks, policy.load(str(POLICY)))), \
+             mock.patch.object(policy, "snapshot", side_effect=[set(), set()]), \
+             mock.patch.object(cli, "_execute_one", side_effect=spy):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.cmd_run(args)
+        self.assertEqual(rc, 0, buf.getvalue())
+        self.assertEqual(set(intervals), {"T-A", "T-B"}, "两道门都应真跑出 attempt")
+        return intervals, order
+
+    def test_needs_orders_but_does_not_mutually_exclude_under_jobs_two(self):
+        intervals, order = self.drive(["--jobs", "2"])
+        self.assertEqual(order[0], "T-A", "needs 必须让被依赖者先入队")
+        start_a, end_a = intervals["T-A"]
+        start_b, _end_b = intervals["T-B"]
+        self.assertLess(start_a, start_b, "排队序：A 先于 B 开始")
+        self.assertLess(
+            start_b, end_a,
+            "并发档下 B 在 A 结束前就开始了 ⇒ needs 只提供排序，**不是**互斥锁。"
+            "别把'加了边'当成'它们不会同时跑'",
+        )
+
+    def test_needs_is_serial_under_jobs_one_the_control_that_makes_the_above_non_vacuous(self):
+        intervals, order = self.drive(["--jobs", "1"])
+        self.assertEqual(order, ["T-A", "T-B"])
+        _start_a, end_a = intervals["T-A"]
+        start_b, _end_b = intervals["T-B"]
+        self.assertLess(
+            end_a, start_b,
+            "串行腿必须测出'A 完全结束后 B 才开始'。若这里也重叠，说明区间仪器"
+            "分辨不出串行，上一条测试的重叠断言就是空转（恒真）",
+        )
 
 
 if __name__ == "__main__":
