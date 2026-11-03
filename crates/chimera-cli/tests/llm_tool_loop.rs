@@ -7,6 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test code idiom
 #![forbid(unsafe_code)]
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -706,6 +707,173 @@ async fn one_yes_does_not_endorse_later_writes() {
         obs.fed[2],
         ("w2".to_string(), ASK_REQUIRED_MARKER.to_string(), true),
         "未获批的 w2 按 ask_required 回填，且位置仍在 w1 之后"
+    );
+}
+
+// ============================================================
+// 第四波 S2 —— 问人与执行解耦（只读不得等人类回答）
+// ============================================================
+
+/// 病形（`ADR-233` 追加节九 D1）：`dispatch` 的审批循环**全部走完**才开始派发，
+/// 于是一条待答的写调用会把同批三条只读调用一起按住，人的思考时长被计入批启动延迟。
+///
+/// 判据形状＝在**票据到手、尚未回答**的窗口内观察 provider 侧是否已留下只读调用记录。
+/// 旧结构下该集合恒空（执行段还没开始）⇒ 轮询到时限后红。
+#[tokio::test]
+async fn readonly_calls_run_while_write_is_still_awaiting_human() {
+    let (runtime, provider) = runtime();
+    let observed = provider.clone(); // ProbeProvider 的计数器是 Arc 共享，clone 即可旁观
+    let client = Arc::new(MockLlmClient::new([
+        MockLlmClient::tool_use(&[
+            ("r1", "probe.echo", "{}"),
+            ("w1", "probe.write", r#"{"path":"a"}"#),
+            ("r2", "probe.echo", r#"{"i":2}"#),
+            ("r3", "probe.echo", r#"{"i":3}"#),
+        ]),
+        MockLlmClient::final_text("收敛"),
+    ]));
+    let descriptors = provider.descriptors();
+    let (gate, mut rx) = tokio::sync::mpsc::unbounded_channel::<ApprovalTicket>();
+    let asker = TuiApproval::new(gate.clone());
+
+    let chain = LlmToolLoop::new(client, runtime, EventBus::new(), loop_config());
+    let run = tokio::spawn(async move {
+        chain
+            .run("三读一写", &descriptors, &CancellationToken::new(), &asker)
+            .await
+    });
+
+    let (request, reply) = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("写调用应在超时内发票")
+        .expect("通道未断");
+    assert_eq!(request.call_id, "w1", "本批唯一的写调用");
+
+    // 票据与回执都在手上、**尚未 send** ⇒ 此刻仍是"等人回答"的窗口。
+    let mut seen_while_waiting: Vec<String> = Vec::new();
+    for _ in 0..20 {
+        seen_while_waiting = observed.calls();
+        if !seen_while_waiting.is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        seen_while_waiting.iter().any(|c| c == "probe.echo"),
+        "写调用 w1 的票据已到手但未回答，400ms 内 provider 只收到 {:?} ⇒ \
+         只读调用仍被'先问完再执行'的结构按住（本批的三条 probe.echo 一条也没开始）",
+        seen_while_waiting
+    );
+
+    drop(request);
+    reply.send(false).expect("回执通道应仍在");
+    let outcome = run.await.expect("任务不 panic").expect("循环应正常收敛");
+    assert_eq!(outcome.denied_tool_calls, 1, "w1 答 No ⇒ 记一次拒");
+    assert_eq!(outcome.tool_calls, 4, "四条都算派发");
+    assert_eq!(
+        observed
+            .calls()
+            .iter()
+            .filter(|c| c.as_str() == "probe.write")
+            .count(),
+        0,
+        "被拒的写调用绝不能进 provider"
+    );
+}
+
+/// 窗口形状判据（用户裁决：同时在问的弹窗 ≤8）。**两端都要钉住。**
+///
+/// 下界 `≥2` 才是有牙的那一半：旧结构串行问人 ⇒ 峰值恒 1；把窗口整个删掉 ⇒ 峰值=批长。
+/// 只断"≤8"是恒不了一条反例的弱断言，故与上界同时断。
+#[tokio::test]
+async fn ask_window_bounds_outstanding_popups_on_both_sides() {
+    const N_WRITE: usize = 20;
+    let (runtime, provider) = runtime();
+    // 参数逐条不同 + 抬高重复阈值：否则先撞 `max_repeat_tool_calls` 的重复检测，
+    // 测到的会是"循环提前收敛"，不是问人窗口。
+    let calls: Vec<(String, String, String)> = (0..N_WRITE)
+        .map(|i| {
+            (
+                format!("w{i}"),
+                "probe.write".to_string(),
+                format!(r#"{{"path":"p{i}"}}"#),
+            )
+        })
+        .collect();
+    let refs: Vec<(&str, &str, &str)> = calls
+        .iter()
+        .map(|c| (c.0.as_str(), c.1.as_str(), c.2.as_str()))
+        .collect();
+    let client = Arc::new(MockLlmClient::new([
+        MockLlmClient::tool_use(&refs),
+        MockLlmClient::final_text("收敛"),
+    ]));
+    let descriptors = provider.descriptors();
+    let (gate, mut rx) = tokio::sync::mpsc::unbounded_channel::<ApprovalTicket>();
+
+    let tally = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let (t, p) = (Arc::clone(&tally), Arc::clone(&peak));
+
+    // 应答端：**攒票不放**，直到静默期才整批答 No。
+    //
+    // WHY 必须攒：若"收到就答"，收票与计票在同一个顺序循环里 —— 答完上一条才收下一条，
+    // 在问数永远是 1，这条"峰值"断言结构上不可能 >1（自证空转的假断言，ADR-234 A2 禁止的形状）。
+    // 攒住不回 ⇒ 在问数只能由 ask 窗口的额度决定，实测峰值才真的是窗口宽度。
+    let responder = tokio::spawn(async move {
+        let mut asked = 0usize;
+        let mut held: Vec<ApprovalTicket> = Vec::new();
+        loop {
+            tokio::select! {
+                biased;
+                maybe = rx.recv() => match maybe {
+                    Some(ticket) => {
+                        let now = t.fetch_add(1, Ordering::SeqCst) + 1;
+                        p.fetch_max(now, Ordering::SeqCst);
+                        asked += 1;
+                        held.push(ticket);
+                    }
+                    None => break,
+                },
+                // 静默 ⇒ 在问的就是窗口能容纳的全部，先归零计数再放行
+                // （顺序反了会把"上一批未清"与"下一批新到"叠成 2×窗口，误判成不限流）
+                _ = tokio::time::sleep(Duration::from_millis(60)) => {
+                    let batch: Vec<ApprovalTicket> = std::mem::take(&mut held);
+                    t.fetch_sub(batch.len(), Ordering::SeqCst);
+                    for (_request, reply) in batch {
+                        let _ = reply.send(false);
+                    }
+                }
+            }
+        }
+        for (_request, reply) in held {
+            let _ = reply.send(false);
+        }
+        asked
+    });
+
+    let asker = TuiApproval::new(gate.clone());
+    let mut cfg = loop_config();
+    cfg.max_repeat_tool_calls = 99;
+    cfg.max_tool_calls = 99;
+    let chain = LlmToolLoop::new(client, runtime, EventBus::new(), cfg);
+    let outcome = chain
+        .run("二十条写", &descriptors, &CancellationToken::new(), &asker)
+        .await
+        .expect("全拒也应正常收敛");
+
+    // 交出全部发送端克隆，应答端才会退出
+    drop(gate);
+    drop(asker);
+    let asked = responder.await.expect("应答端不 panic");
+
+    let observed_peak = peak.load(Ordering::SeqCst);
+    assert_eq!(asked, N_WRITE, "每条写各问一次（R3：不得复用答处）");
+    assert_eq!(outcome.tool_calls, N_WRITE);
+    assert_eq!(outcome.denied_tool_calls, N_WRITE, "全部答 No ⇒ 全部记拒");
+    assert!(
+        (2..=8).contains(&observed_peak),
+        "在问峰值应落在 2..=8（窗口生效且未退化成串行或不限流），实测 {observed_peak}"
     );
 }
 

@@ -22,6 +22,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
+use futures::stream::{FuturesUnordered, StreamExt};
 use gqep_executor::tool_plane::{
     ToolDescriptor, ToolInvocation, ToolOrigin, ToolOutcome, ToolPriority, ToolRuntime, ToolStatus,
 };
@@ -30,6 +31,7 @@ use nexus_contracts::affinity::{
     MessageRole, OutputFormat, SamplingParams, ThinkingPreference, UsageReport,
 };
 use nexus_contracts::tool_plan::SideEffectDecl;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
@@ -55,7 +57,9 @@ pub struct LlmToolLoopConfig {
     pub max_turns: usize,
     /// 整个循环最多派发多少个工具调用
     pub max_tool_calls: usize,
-    /// 单轮内的分批宽度（批间是屏障，批内由 L7 调度器并发）
+    /// 单轮的两个并发窗口宽度：同时在问的弹窗数 ≤ 此值，同时在飞的执行数 ≤ 此值。
+    /// 两窗口各自独立计数（不共享额度），且**不是批次屏障** —— 一条调用在等人回答
+    /// 不会按住同批里不需要等人的那些。
     pub max_parallel_tools: usize,
     /// 同一 `(tool, args)` 允许的重复次数上限（超出即判模型打转）
     pub max_repeat_tool_calls: usize,
@@ -250,7 +254,20 @@ impl LlmToolLoop {
 
     /// 派发一批工具调用，返回与调用同序的结果块
     ///
-    /// 未获审批的调用**不进 runtime**：直接合成 `ask_required` 错误结果回填。
+    /// 未获审批的调用**不进 runtime**：合成 `AskRequired` 结果，与执行结果一起交给同一个
+    /// `attribute_results` 按 `call_id` 归位（那条函数与它的两条锁都不动）。
+    ///
+    /// # 两个独立窗口（第四波 S2，`ADR-233` 追加节九 D1）
+    /// 旧写法是"审批 for 循环全部走完 → 再 `chunks(window)` 分批执行"，把问人与执行
+    /// 写成前后两段：一批里一条待答的写调用会按住同批其余调用，而 `TuiApproval` 的回执
+    /// await 没有超时（等人答才是正确语义），于是人的思考时长被计入整批启动延迟。
+    /// 现在每条调用是一个独立 future：问人前取 **ask 窗口**、答完立刻归还；执行前取
+    /// **exec 窗口**。两把闸互不相干 ⇒ "谁在等人"不再阻塞"不需要等人的那些"。
+    ///
+    /// WHY exec 窗口必须留着、不能整批交给 L7 自己限流：L7 `acquire` 在等待者超过
+    /// `max_waiters` 时返回 `Overloaded`（`tool_plane/scheduler.rs`），一次交出整批会把
+    /// **延后变成拒绝** —— 那是削减而非优化。窗口额度与今天的 chunk 尺寸同值
+    /// （`max_parallel_tools`），故同时在飞的调用数逐位不变。
     async fn dispatch(
         &self,
         calls: &[(String, String, String)],
@@ -259,63 +276,90 @@ impl LlmToolLoop {
         approval: &dyn ToolApproval,
         outcome: &mut LlmLoopOutcome,
     ) -> Result<Vec<ContentBlock>, LlmLoopError> {
-        let mut slots: Vec<Option<ContentBlock>> = vec![None; calls.len()];
-        // 审批阶段就把 invocation 留在它自己的槽位上，`approved` 只记"哪些槽过了审批"。
-        // WHY:旧写法把 `(usize, ToolInvocation)` 收进一个紧凑 vec，再对每个 chunk
-        // `group.iter().map(|(_, inv)| inv.clone())`——于是每个窗口都把整批调用又拷
-        // 一遍（每条 4 个 String）。留槽之后派发时是**交出所有权**，零拷贝，且槽位
-        // 天然带着结果该回填的下标。
-        let mut invocations: Vec<Option<ToolInvocation>> = (0..calls.len()).map(|_| None).collect();
-        let mut approved: Vec<usize> = Vec::with_capacity(calls.len());
+        let window = self.cfg.max_parallel_tools.max(1);
+        let ask_sem = Arc::new(Semaphore::new(window));
+        let exec_sem = Arc::new(Semaphore::new(window));
+        // 计数发生在派发之前、逐条累加 ⇒ "派发了几条"与旧结构逐位相同（不是"执行了几条"）。
+        outcome.tool_calls = outcome.tool_calls.saturating_add(calls.len());
 
+        let mut futures = FuturesUnordered::new();
         for (index, (id, name, input_json)) in calls.iter().enumerate() {
-            outcome.tool_calls = outcome.tool_calls.saturating_add(1);
-            let mut invocation = ToolInvocation {
-                call_id: id.clone(),
-                tool: name.clone(),
-                args_json: input_json.clone(),
-                timeout_ms: None,
-                priority: ToolPriority::Normal,
-                origin: ToolOrigin::Llm,
-                quest_id: None,
-                task_id: None,
-                approved: false,
-            };
+            let (ask_sem, exec_sem) = (Arc::clone(&ask_sem), Arc::clone(&exec_sem));
+            let (id, name, input_json) = (id.clone(), name.clone(), input_json.clone());
             // 未在工具表里(＝未知工具)按最严口径处理：写路径要审批
             let side_effect = side_effects
                 .get(name.as_str())
                 .copied()
                 .unwrap_or(SideEffectDecl::Write);
-            if !approval.approve(&invocation, side_effect).await {
-                outcome.denied_tool_calls = outcome.denied_tool_calls.saturating_add(1);
-                slots[index] = Some(error_result(id, ASK_REQUIRED_MARKER));
-                continue;
-            }
-            invocation.approved = true;
-            invocations[index] = Some(invocation);
-            approved.push(index);
+            futures.push(async move {
+                let mut invocation = ToolInvocation {
+                    call_id: id.clone(),
+                    tool: name,
+                    args_json: input_json,
+                    timeout_ms: None,
+                    priority: ToolPriority::Normal,
+                    origin: ToolOrigin::Llm,
+                    quest_id: None,
+                    task_id: None,
+                    approved: false,
+                };
+                // WHY permit 跨 await 不触犯 §6.2「禁止持锁跨 await」：那条红线针对
+                // Mutex/DashMap/RwLock 的**写锁**（持锁期间不得阻塞），而 Semaphore 的
+                // permit 是设计上可持有的额度，只在本窗口内共享，不与其他路径互踩。
+                let _ask = match ask_sem.acquire_owned().await {
+                    Ok(permit) => permit,
+                    // 闭包内两把闸随 dispatch 存活，理论上不可达；仍按拒收口而不 unwrap
+                    Err(_) => return (index, denied_result(&invocation), true),
+                };
+                let allowed = approval.approve(&invocation, side_effect).await;
+                drop(_ask); // 立刻归还问人额度 ⇒ 下一条可以同时在问
+                if !allowed {
+                    return (index, denied_result(&invocation), true);
+                }
+                invocation.approved = true;
+                let _exec = match exec_sem.acquire_owned().await {
+                    Ok(permit) => permit,
+                    Err(_) => return (index, denied_result(&invocation), true),
+                };
+                let executed = self.runtime.invoke(invocation, cancel).await;
+                drop(_exec);
+                (index, executed, false)
+            });
         }
 
-        let window = self.cfg.max_parallel_tools.max(1);
-        for group in approved.chunks(window) {
-            let batch: Vec<ToolInvocation> = group
-                .iter()
-                .filter_map(|&slot| invocations[slot].take())
-                .collect();
-            let executed = tokio::select! {
+        // 逐条收齐而不是 `collect`：与旧写法一样保留"取消优先"（biased）的语义。
+        let mut executed: Vec<ToolOutcome> = Vec::with_capacity(calls.len());
+        let mut denied = 0usize;
+        for _ in 0..calls.len() {
+            let next = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(cancelled(outcome)),
-                results = self.runtime.invoke_batch(batch, cancel) => results,
+                item = futures.next() => item,
             };
-            debug_assert_eq!(
-                executed.len(),
-                group.len(),
-                "invoke_batch 返回的结果数与派发数不等 ⇒ 有调用没有结果（本仓红线：结果不许丢）"
-            );
-            attribute_results(&executed, group, calls, &mut slots);
+            match next {
+                Some((_index, result, was_denied)) => {
+                    executed.push(result);
+                    denied += usize::from(was_denied);
+                }
+                // 每条 future 必产出一个结果。拿到 None 说明有调用凭空消失 ——
+                // 这是「结果不许丢」的破口，走下面 attribute_results 的显式标记分支
+                // （运行时可见），不用 debug_assert（release 档会被编译掉 ⇒ 假绿）。
+                None => break,
+            }
         }
+        outcome.denied_tool_calls = outcome.denied_tool_calls.saturating_add(denied);
 
-        Ok(slots.into_iter().flatten().collect())
+        let mut slots: Vec<Option<ContentBlock>> = vec![None; calls.len()];
+        let all: Vec<usize> = (0..calls.len()).collect();
+        attribute_results(&executed, &all, calls, &mut slots);
+        // attribute_results 已保证每槽有内容；这里是防御性收尾，缺位显式标记而非静默丢。
+        Ok(slots
+            .into_iter()
+            .enumerate()
+            .map(|(i, slot)| {
+                slot.unwrap_or_else(|| error_result(&calls[i].0, ATTRIBUTION_MISMATCH_MARKER))
+            })
+            .collect())
     }
 
     /// 发布既有 `BudgetExceeded`（Critical ⇒ `publish_critical` 走 mpsc 旁路）
@@ -467,6 +511,25 @@ fn error_result(tool_use_id: &str, content: &str) -> ContentBlock {
 }
 
 /// `ToolOutcome` → `ToolResult` 块（非 Ok 一律 `is_error`，内容取 provider 错误文本）
+/// 合成"未获审批"的结果 —— 该调用**从未进 runtime**，故 provider 记成本层、attempts=0。
+///
+/// WHY 造 `ToolOutcome` 而不是直接造 `ContentBlock`：新结构下被拒结果与执行结果走同一条
+/// `attribute_results` 归位路径，两条锁（无 debug_assert、缺位有显式标记）因此继续有效；
+/// 模型侧看到的仍是 `is_error` + `ask_required` 标记，与旧结构逐位相同。
+fn denied_result(inv: &ToolInvocation) -> ToolOutcome {
+    ToolOutcome {
+        call_id: inv.call_id.clone(),
+        tool: inv.tool.clone(),
+        provider: "approval".to_string(),
+        status: ToolStatus::AskRequired,
+        payload: None,
+        error: Some(ASK_REQUIRED_MARKER.to_string()),
+        duration_ms: 0,
+        attempts: 0,
+        truncated: false,
+    }
+}
+
 fn result_block(executed: &ToolOutcome) -> ContentBlock {
     let ok = executed.status == ToolStatus::Ok;
     let content = if ok {

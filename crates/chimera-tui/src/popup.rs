@@ -551,6 +551,20 @@ impl PopupStack {
         })
     }
 
+    /// 栈上待批审批弹窗的条数（**全栈**计数，与 [`Self::has_approval`] 同一查找口径）
+    ///
+    /// WHY 渲染需要它：问人窗口并发到 8 之后，最多 8 张审批弹窗叠在栈上，而键派发
+    /// 只作用于栈顶、默认选中仍是 Yes —— 连按 Enter 会在类型上合法地逐条批掉一叠写
+    /// 调用（每条确实各有一票，R3 未破），代价是人的注意力被摊薄，那正是"批量背书"
+    /// 的行为学版本。把"现在有几条在等你"显示出来，是把并发度还给人的唯一入口。
+    /// 本方法只读栈深，不改变任何审批语义。
+    pub fn pending_approvals(&self) -> usize {
+        self.stack
+            .iter()
+            .filter(|popup| matches!(popup, PopupKind::Approval { .. }))
+            .count()
+    }
+
     /// 移动动作菜单选中项(down=true 下移,false 上移;钳制边界不环绕)
     ///
     /// 仅对栈顶 `ActionMenu` 生效;空列表或非菜单弹窗忽略。
@@ -626,6 +640,8 @@ impl PopupStack {
     /// 只有渲染时才知道该宽度;在渲染点钳制并写回 `scroll` 状态,使状态随每帧
     /// 收敛 —— 用户连按 Down 越过内容末尾后,单次 Up 即可回看,且不会渲染空白。
     pub fn render(&mut self, area: Rect, buf: &mut Buffer) {
+        // 待批条数在进入 `current_mut()` 的可变借用前取好（借用量在两处不能重叠）。
+        let pending = self.pending_approvals();
         let Some(popup) = self.current_mut() else {
             return;
         };
@@ -676,26 +692,14 @@ impl PopupStack {
                 );
             }
             // 与 Confirm 同一套 Yes/No 呈现，只多两行"要批准的是什么"的数据。
-            // 提示语刻意用 ASCII 英文而非新增 i18n 键：与既有 Confirm 的脚注行同源，
-            // 新增键要 en/zh 两份齐备并过 locale 完备性测试，而那与本次能力无关。
+            // 渲染体单独成函数：`render` 的逐臂展开已超 200 行红线（棘轮在册），
+            // 在这里内联会让既有欠债继续增长。
             PopupKind::Approval {
                 tool,
                 args_preview,
                 selected_yes,
                 ..
-            } => {
-                draw_yes_no(
-                    popup_area,
-                    buf,
-                    " Tool approval ",
-                    vec![
-                        Line::from(format!("tool: {tool}")),
-                        Line::from(format!("args: {args_preview}")),
-                        Line::from("Allow this write call?"),
-                    ],
-                    *selected_yes,
-                );
-            }
+            } => draw_approval(popup_area, buf, tool, args_preview, *selected_yes, pending),
             PopupKind::HelpOverlay { entries, scroll } => {
                 // WHY 使用深色背景 + 标题栏与 Notification 区分:
                 // Help overlay 是覆盖在当前面板上的临时上下文帮助,
@@ -856,6 +860,37 @@ fn draw_notification(popup_area: Rect, buf: &mut Buffer, message: &str, severity
 /// 脚注键位（Left/Right 切换、Enter 确认、Esc 取消）由本函数统一给，两处不再各写一遍。
 /// WHY 高亮规则必须单点：Yes/No 哪个被选中是**唯一的用户可见反馈**，两份实现迟早分叉，
 /// 而分叉的表现是"看着选中 No 却按 Yes 放行"——对写工具审批这是安全侧缺陷，不是样式问题。
+/// 审批弹窗的呈现 —— 与 [`draw_yes_no`] 共用 Yes/No 骨架，只多两行"要批准的是什么"。
+///
+/// WHY 提示语用 ASCII 英文而非新增 i18n 键：与既有 Confirm 的脚注行同源，且本文件不在
+/// i18n 硬编码门的扫描域内（那门管 `panels/`、`actions/`、`app/`、`render.rs`）；
+/// 新增键要 en/zh 两份齐备并过 locale 完备性测试，而那与本次能力无关。
+///
+/// `pending` 是栈上待批弹窗的总条数（ADR-234 D1b①）：并发问人窗口下键派发只作用于栈顶，
+/// 而默认选中仍是 Yes —— 人必须能看见"后面还压着几条"，否则连按 Enter 会在毫无提示的
+/// 情况下逐条批掉一叠写调用。每条确实各有一票（R3 未破），被摊薄的是注意力，
+/// 所以这一处只补可见性，不改任何审批语义。
+fn draw_approval(
+    popup_area: Rect,
+    buf: &mut Buffer,
+    tool: &str,
+    args_preview: &str,
+    selected_yes: bool,
+    pending: usize,
+) {
+    draw_yes_no(
+        popup_area,
+        buf,
+        &format!(" Tool approval [{pending} pending] "),
+        vec![
+            Line::from(format!("tool: {tool}")),
+            Line::from(format!("args: {args_preview}")),
+            Line::from("Allow this write call?"),
+        ],
+        selected_yes,
+    );
+}
+
 fn draw_yes_no(
     popup_area: Rect,
     buf: &mut Buffer,
@@ -1170,6 +1205,52 @@ mod tests {
                 .unwrap_or(0)
                 < 100,
             "渲染应把越界 scroll 收敛到内容上限附近,而非保留 500"
+        );
+    }
+
+    // ========================================================
+    // D1b①：并发问人窗口下，"后面还压着几条待批"必须对人可见
+    // ========================================================
+
+    fn approval_popup(id: &str) -> PopupKind {
+        PopupKind::Approval {
+            call_id: id.to_string(),
+            tool: "fs.write".to_string(),
+            args_preview: "{\"path\":\"src/main.rs\"}".to_string(),
+            selected_yes: true,
+        }
+    }
+
+    /// 栈内压 N 条审批 ⇒ 栈顶渲染文本含 `N pending`。
+    ///
+    /// WHY 渲染两个不同的 N：只测一个值时，"把字符串写死成 3"也能过。2 与 3 各测一次
+    /// 才证明这个数字是从栈里数出来的，而不是标题的一部分。
+    #[test]
+    fn approval_popup_renders_pending_count_from_stack() {
+        let area = Rect::new(0, 0, 80, 24);
+        let mut stack = PopupStack::new();
+        stack.push(approval_popup("c1"));
+        stack.push(approval_popup("c2"));
+
+        let mut buf = Buffer::empty(area);
+        stack.render(area, &mut buf);
+        let two: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            two.contains("2 pending"),
+            "两条待批时栈顶应显示 `2 pending`（并发问人窗口下人必须知道后面还压着几条）"
+        );
+
+        stack.push(approval_popup("c3"));
+        let mut buf3 = Buffer::empty(area);
+        stack.render(area, &mut buf3);
+        let three: String = buf3.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            three.contains("3 pending"),
+            "三条待批时应随栈变成 `3 pending`；若仍显示 2 说明计数被写死"
+        );
+        assert!(
+            !three.contains("2 pending"),
+            "旧计数不得残留在同一帧里（渲染必须整帧反映当前栈深）"
         );
     }
 }
