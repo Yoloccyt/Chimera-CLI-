@@ -25,7 +25,7 @@ use event_bus::{logging::BusLogger, EventBus};
 use gqep_executor::tool_plane::ToolProvider as _;
 use nexus_app_server::{AppServer, AppServerConfig, QuestBackend};
 use quest_engine::QuestEngine;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 // R2 解冻阶段③ 前置：进化编排器（T3.1,feature-gated）
 #[cfg(feature = "r2_unfreeze")]
@@ -285,7 +285,10 @@ pub fn build_with_sharding(
     })
 }
 
-/// 装配工具执行面（Phase 3 / ADR-229）— 仅供 `chimera tool` 与 LLM/Quest 入口使用。
+/// 取工具执行面（Phase 3 / ADR-229）— 仅供 `chimera tool` 与 LLM/Quest 入口使用。
+///
+/// ADR-234 S4 起它是一条**取用**而非一次装配：进程内只装配一次，后续返回同一实例
+/// （见 [`shared_tool_plane`]）。
 ///
 /// WHY 不塞进 [`AppContext`]：one-shot 命令不应为工具执行面付装配税。
 /// WHY 不收 `EventBus` 参数：执行面的可观测承诺是 `ToolMetrics` 快照 + tracing
@@ -297,6 +300,59 @@ pub fn build_with_sharding(
 pub fn build_tool_runtime(
     _config: &ChimeraConfig,
 ) -> Result<Arc<gqep_executor::tool_plane::ToolRuntime>> {
+    Ok(Arc::clone(shared_tool_plane()?.runtime()))
+}
+
+/// 进程内共享的工具执行面（ADR-234 S4）。
+///
+/// WHY 连描述符全集一起缓存：`ToolRegistry::descriptors()` 是"整表 clone + sort_by"
+/// 的冷路径列举（它自己的文档就这么自述），而 `llm_answer_with` 原先每次应答调一次
+/// —— TUI 每轮 chat 都在为一张不会变的表重复印票。缓存后调用方拿到的是**借用**，
+/// 不再是新分配的 Vec。
+///
+/// WHY 这份快照不会与真注册集漂移：`ToolRuntime::new` 收走 `Arc<ToolRegistry>` 之后，
+/// 对外只暴露 `&Arc<ToolRegistry>`，而 `ToolRegistry::register` 需要 `&mut self`
+/// ⇒ 装配之后不存在晚注册通道，工具集合按构造即冻结。
+pub(crate) struct SharedToolPlane {
+    runtime: Arc<gqep_executor::tool_plane::ToolRuntime>,
+    descriptors: Vec<gqep_executor::tool_plane::ToolDescriptor>,
+}
+
+impl SharedToolPlane {
+    pub(crate) fn runtime(&self) -> &Arc<gqep_executor::tool_plane::ToolRuntime> {
+        &self.runtime
+    }
+
+    pub(crate) fn descriptors(&self) -> &[gqep_executor::tool_plane::ToolDescriptor] {
+        &self.descriptors
+    }
+}
+
+/// 唯一实例槽。`OnceLock` 而非 `Mutex<Option<..>>`：装配是一次性的，读多写零，
+/// 且失败时**不写入**（见 [`shared_tool_plane`]），所以不存在"缓存了错误"的形态。
+static SHARED_TOOL_PLANE: OnceLock<SharedToolPlane> = OnceLock::new();
+
+/// 取共享执行面；首次调用时装配，之后返回同一份。
+///
+/// WHY 只在成功时落缓存：装配失败（如 MCP provider 注册被拒）若被固化，进程余生
+/// 都会拿着一个 `Err` —— 那是把一次性故障升级成永久故障。
+/// WHY `get_or_init` 而不是先 `set` 再读：并发首调可能各装配一份，`get_or_init`
+/// 让其中一个胜出、另一个随作用域释放 —— 多装配一次是良性浪费，而不是两个实例
+/// 同时存活（那才会让限额与指标口径分裂）。
+///
+/// 语义变更（如实登记）：执行面限额读的是**首次装配时**的 `CHIMERA_TOOL_*`。
+/// 全仓无任何进程内 `set_var("CHIMERA_TOOL…")` 调用点（现取 0 命中），而 `chimera`
+/// 的进程生命周期就是命令生命周期，故实际行为不变。
+pub(crate) fn shared_tool_plane() -> Result<&'static SharedToolPlane> {
+    if let Some(existing) = SHARED_TOOL_PLANE.get() {
+        return Ok(existing);
+    }
+    let built = assemble_tool_plane().context("assemble tool execution plane")?;
+    Ok(SHARED_TOOL_PLANE.get_or_init(|| built))
+}
+
+/// 真正的装配体（原 `build_tool_runtime` 的函数体，逐语句搬移，语义未改）。
+fn assemble_tool_plane() -> Result<SharedToolPlane> {
     let plane = crate::tool_plane::ToolPlaneConfig::from_env();
     let mut registry = gqep_executor::tool_plane::ToolRegistry::new();
     registry.register(Arc::new(crate::tool_plane::EchoToolProvider::new()))?;
@@ -325,12 +381,21 @@ pub fn build_tool_runtime(
         max_payload_bytes: plane.max_payload_bytes,
         max_batch: 1024,
     };
-    Ok(Arc::new(gqep_executor::tool_plane::ToolRuntime::new(
+    let runtime = Arc::new(gqep_executor::tool_plane::ToolRuntime::new(
         Arc::new(registry),
         None,
         scheduler,
         runtime_config,
-    )))
+    ));
+    // 描述符在装配点取一次（排序后的全集），此后各轮应答只借用同一段内存。
+    // WHY 这里不违反「Top-K 必须 select_nth_unstable」：Top-K 铁律针对的是
+    // 「从 N 里取前 K」，本处是 N==K 的全量列举，`sort_by` 是为报告/模型的
+    // 稳定顺序，不是被误用的选择。
+    let descriptors = runtime.registry().descriptors();
+    Ok(SharedToolPlane {
+        runtime,
+        descriptors,
+    })
 }
 
 /// 装配 Quest 引擎（Phase 5 / ADR-231 D1）—— 唯一 sanctioned 的 `QuestEngine` 构造点。
@@ -746,5 +811,44 @@ mod tests {
         // 未设 ⇒ 同样回落
         let none = session_dir_from(None);
         assert_eq!(none, empty, "未设与空串应得到同一个默认目录");
+    }
+
+    /// ADR-234 S4：共享执行面的描述符是装配点取好的**借用**，不是每次重列。
+    ///
+    /// 三条断言各管一件事，缺一即退化成空转：
+    /// ① 非空 —— 空 `slice` 的 `as_ptr()` 是同一个对齐的 dangling 指针，
+    ///    那时候"两次地址相等"比什么都能成立；
+    /// ② 两次取用同址 —— 证明调用方拿到的不是各克隆一份的新 Vec；
+    /// ③ 与注册表实况同名同序 —— 证明 ①② 缓存的是真内容而非一份空东西。
+    #[test]
+    fn shared_tool_plane_descriptors_are_a_snapshot_not_a_relist() {
+        let cached = shared_tool_plane()
+            .expect("assemble shared tool plane")
+            .descriptors();
+        assert!(
+            !cached.is_empty(),
+            "空描述符会让下面的指针等值断言恒真（dangling 指针彼此相等）"
+        );
+        let again = shared_tool_plane().expect("second access").descriptors();
+        assert!(
+            std::ptr::eq(cached.as_ptr(), again.as_ptr()),
+            "两次取用必须返回同一段内存，而不是每次重新 clone + sort 一张新表"
+        );
+        let fresh = shared_tool_plane()
+            .expect("access")
+            .runtime()
+            .registry()
+            .descriptors();
+        assert_eq!(
+            cached
+                .iter()
+                .map(|descriptor| descriptor.name.as_str())
+                .collect::<Vec<_>>(),
+            fresh
+                .iter()
+                .map(|descriptor| descriptor.name.as_str())
+                .collect::<Vec<_>>(),
+            "快照必须与注册表实况逐位相同（两侧都已按名排序）"
+        );
     }
 }

@@ -14,6 +14,25 @@ use chimera_cli::ChimeraConfig;
 use nexus_contracts::app::{AppEvent, AppOp, ThreadStartParams, UserInput};
 use proptest::prelude::*;
 
+/// ADR-234 S4 —— 工具执行面在进程内只装配一次。
+///
+/// 立项实测（B5）：`chimera-cli/src/commands/run.rs::llm_answer_with` 每次应答都
+/// 重跑 `build_tool_runtime` —— registry + 三个 provider + McpMesh（含一次
+/// `descriptors()` 试探）+ 调度器全部重建，TUI 每轮 chat 都要付这笔钱。
+///
+/// 判据取**身份**而不是取时间：同一进程内两次装配必须返回同一个实例
+/// （`Arc::ptr_eq`）。墙钟判据在本仓属禁止形状（ADR-234 A2）。
+#[test]
+fn tool_plane_is_assembled_once_per_process() {
+    let cfg = ChimeraConfig::default();
+    let first = chimera_cli::composition::build_tool_runtime(&cfg).expect("first assembly");
+    let second = chimera_cli::composition::build_tool_runtime(&cfg).expect("second assembly");
+    assert!(
+        std::ptr::eq(&*first, &*second),
+        "两次 build_tool_runtime 必须返回同一个实例（当前是各建一套 ⇒ 每轮应答都在重建执行面）"
+    );
+}
+
 /// C1 验收（bin 可达路径）：组合根装配的 AppServer 处理 TurnSubmit 产出真实引擎
 /// 特征 Item（`quest_state` + 真实 quest_id）——InMemory 桩无此 kind。
 #[tokio::test]

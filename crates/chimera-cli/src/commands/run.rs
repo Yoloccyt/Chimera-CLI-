@@ -22,6 +22,7 @@
 //! v2.9.0-omega Task 1.7:接受 `json` flag(JSON 成功 envelope 在本命令输出)
 //! v2.9.0-omega Task 1.11:接受 `perm`(Task 1.1 真实接入外部命令执行时使用)
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -263,17 +264,27 @@ pub async fn llm_answer_with(
 ) -> Result<crate::llm::LlmLoopOutcome> {
     use crate::llm::tool_loop::{LlmToolLoop, LlmToolLoopConfig};
 
-    // WHY 默认配置：build_tool_runtime / build_llm_client 的口径都走 env + 内置默认，
+    // WHY 默认配置：build_llm_client 的口径走 env + 内置默认，
     // chat 的 repl_loop 与 TUI 编排器都只持 bus（Arc 廉价共享，同源事件面）
     let config = ChimeraConfig::default();
     let client = crate::composition::build_llm_client(&config)?;
-    let runtime = crate::composition::build_tool_runtime(&config)
+    // ADR-234 S4：执行面进程内只装配一次，这里取的是共享实例；工具声明全集
+    // 也是装配点取好的**借用**，不再每次应答重跑一遍 clone + sort。
+    let plane = crate::composition::shared_tool_plane()
         .map_err(|e| ChimeraCliError::EngineError(format!("工具执行面装配失败: {e}")))?;
-    // 暴露给模型的工具集 = 运行时已注册全集（单一真相源，避免 CLI 侧另列清单）
-    let tools = runtime.registry().descriptors();
-    let chain = LlmToolLoop::new(client, runtime, bus.clone(), LlmToolLoopConfig::from_env());
+    let chain = LlmToolLoop::new(
+        client,
+        Arc::clone(plane.runtime()),
+        bus.clone(),
+        LlmToolLoopConfig::from_env(),
+    );
     let outcome = chain
-        .run(prompt, &tools, &CancellationToken::new(), approval)
+        .run(
+            prompt,
+            plane.descriptors(),
+            &CancellationToken::new(),
+            approval,
+        )
         .await
         .map_err(llm_loop_to_cli_error)?;
     Ok(outcome)
