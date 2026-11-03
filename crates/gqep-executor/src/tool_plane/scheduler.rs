@@ -145,16 +145,25 @@ impl ToolScheduler for BoundedToolScheduler {
         let lane = self.lane(inv.priority);
         let provider = self.provider_semaphore(&desc.provider);
 
-        let lane_permit = tokio::select! {
-            permit = lane.acquire_owned() => permit.map_err(|_| {
+        // WHY 取序是 provider 先、lane 后（`ADR-234` A2-1 / `ADR-233` 追加节九 D3）：
+        // 车道是**全局**槽位，provider 槽位只约束它自己那个 provider。反过来取
+        // （旧写法）时，慢 provider 的等待者会先占满全局车道再去等自己的 provider 许可，
+        // 于是"别的 provider 明明有空位却一条也进不去"——实测完成序
+        // `["p-slow","p-slow","p-fast",…]`（`tests/scheduler_permit_order.rs`）。
+        // 两个否决项留此备查：① 换回 lane 先取＝现状；② `futures::join!` 两把许可
+        // 也不解决问题——lane 一就绪就被取得并持有到 provider 就绪，钉槽位的行为一模一样。
+        // 固定全局顺序（provider→lane）不存在环路，故无死锁；残留代价是"持 provider
+        // 许可等车道"会挡住同 provider 的后来者，但那时车道本就是全局瓶颈，它们照样得等。
+        let provider_permit = tokio::select! {
+            permit = provider.acquire_owned() => permit.map_err(|_| {
                 ToolError::Cancelled(inv.call_id.clone())
             })?,
             _ = cancel.cancelled() => {
                 return Err(ToolError::Cancelled(inv.call_id.clone()));
             }
         };
-        let provider_permit = tokio::select! {
-            permit = provider.acquire_owned() => permit.map_err(|_| {
+        let lane_permit = tokio::select! {
+            permit = lane.acquire_owned() => permit.map_err(|_| {
                 ToolError::Cancelled(inv.call_id.clone())
             })?,
             _ = cancel.cancelled() => {
