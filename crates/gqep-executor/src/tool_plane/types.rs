@@ -187,7 +187,14 @@ pub struct ToolDescriptor {
     pub side_effect: SideEffectDecl,
     /// Default timeout (ms; `0` = runtime default).
     pub timeout_ms: u64,
-    /// Provider-side concurrency hint (runtime still enforces its own bound).
+    /// `NOT-ENFORCED` —— 这个声明值在全库没有任何读取方：per-provider 的并发额度
+    /// 只来自 `ToolRuntimeConfig::max_provider_inflight`（见 `scheduler.rs` 的
+    /// `provider_semaphore`，它以 provider id 作键、以 config 值作容量）。
+    /// WHY 把它写成机器可见的标记而不是"提示"：文档-代码偏差只会诱使后来者以为
+    /// 声明即生效（写 provider 的人尤其容易这么假设）。阳性对照锁见
+    /// `tests/tool_descriptor_concurrency_not_enforced.rs`；启用它属**收紧**
+    /// （实测声明值 echo=8 / mcp=4 / proc=2，均 ≤ 现额度 8），须经 ADR-234 D4
+    /// 的治理裁决，并显式改写那条对照测试 —— 不允许让它静默腐烂。
     pub max_concurrency: usize,
     /// Optional JSON-schema text for the input.
     #[serde(default)]
