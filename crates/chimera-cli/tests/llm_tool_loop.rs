@@ -33,11 +33,15 @@ use chimera_tui::approval_gate::{ApprovalGate, ApprovalTicket};
 // ============================================================
 
 /// 三个工具：`probe.echo`(只读) / `probe.write`(写) / `probe.slow`(只读、长耗时)
+/// / `probe.hold`(只读、时长按 call_id 末位递减 —— 供在飞窗口与归位形状判据取执行区间)
 #[derive(Clone)]
 struct ProbeProvider {
     live: Arc<std::sync::atomic::AtomicUsize>,
     peak: Arc<std::sync::atomic::AtomicUsize>,
     calls: Arc<Mutex<Vec<String>>>,
+    /// 每条调用的 `(call_id, 进入序号, 离开序号)` —— 区间重叠判据的无时钟源
+    intervals: Arc<Mutex<Vec<(String, u64, u64)>>>,
+    tick: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl ProbeProvider {
@@ -46,6 +50,8 @@ impl ProbeProvider {
             live: Arc::default(),
             peak: Arc::default(),
             calls: Arc::default(),
+            intervals: Arc::default(),
+            tick: Arc::default(),
         }
     }
 
@@ -55,6 +61,10 @@ impl ProbeProvider {
 
     fn calls(&self) -> Vec<String> {
         self.calls.lock().unwrap().clone()
+    }
+
+    fn intervals(&self) -> Vec<(String, u64, u64)> {
+        self.intervals.lock().unwrap().clone()
     }
 }
 
@@ -78,6 +88,7 @@ impl ToolProvider for ProbeProvider {
             descriptor("echo", SideEffectDecl::ReadOnly),
             descriptor("write", SideEffectDecl::Write),
             descriptor("slow", SideEffectDecl::ReadOnly),
+            descriptor("hold", SideEffectDecl::ReadOnly),
         ]
     }
 
@@ -87,18 +98,37 @@ impl ToolProvider for ProbeProvider {
         cancel: CancellationToken,
     ) -> Result<String, ToolError> {
         use std::sync::atomic::Ordering;
+        let start = self.tick.fetch_add(1, Ordering::SeqCst);
         let now = self.live.fetch_add(1, Ordering::SeqCst) + 1;
         self.peak.fetch_max(now, Ordering::SeqCst);
         self.calls.lock().unwrap().push(inv.tool.clone());
-        if inv.tool == "probe.slow" {
+        match inv.tool.as_str() {
             // 长耗时且必须响应取消（真实进程面靠 kill_on_drop，这里等价用 select）
-            tokio::select! {
-                _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-                _ = cancel.cancelled() => {}
+            "probe.slow" => {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(5)) => {}
+                    _ = cancel.cancelled() => {}
+                }
             }
-        } else {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            // 时长按 call_id 末位数字递减（h0 最慢 → h7 最快），使**完成序恰为派发序的逆序**
+            // 且可复现：等长计时器在单线程 runtime 上可能按入队序到期，那时"逐位 zip"的
+            // 退化形状会碰巧全绿，判据就成了无牙的空转。判据本身不测时长，只测落位。
+            "probe.hold" => {
+                let delay = match inv.call_id.chars().last().and_then(|c| c.to_digit(10)) {
+                    Some(d) => Duration::from_millis(90 - u64::from(d) * 10),
+                    None => Duration::from_millis(120),
+                };
+                tokio::time::sleep(delay).await;
+            }
+            _ => {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
         }
+        let finish = self.tick.fetch_add(1, Ordering::SeqCst);
+        self.intervals
+            .lock()
+            .unwrap()
+            .push((inv.call_id.clone(), start, finish));
         self.live.fetch_sub(1, Ordering::SeqCst);
         Ok(format!("{}:{}", inv.tool, inv.args_json))
     }
@@ -875,6 +905,229 @@ async fn ask_window_bounds_outstanding_popups_on_both_sides() {
         (2..=8).contains(&observed_peak),
         "在问峰值应落在 2..=8（窗口生效且未退化成串行或不限流），实测 {observed_peak}"
     );
+}
+
+// ============================================================
+// S3 —— 有界在飞窗口：延后 ≠ 拒绝
+// ============================================================
+
+/// 300 条只读调用、执行窗口 8 ⇒ **一条都不许变成 `Overloaded`**。
+///
+/// WHY 这条判据存在：L7 调度器在 `waiters > max_waiters` 时直接回
+/// `Err(ToolError::Overloaded)`（延后被当成拒绝）。若派发侧没有有界窗口、
+/// 把整批一次交出，就会击穿它 —— 那是削减（结果凭空变错误），不是并行。
+/// 窗口 8 ⇒ 同时排队者 ≤8，远低于 256，本条即把这条边界钉成断言。
+///
+/// WHY 用 cfg 字段而不是环境变量：`CHIMERA_LLM_MAX_TOOL_CALLS` 只在
+/// `LlmToolLoopConfig::from_env()` 里解析一次，解析正确性与派发形状无关
+/// （该 env 键目前无测试覆盖，属另一条腿，登记在波次报告的缺口清单里）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn batch_of_300_readonly_yields_zero_overloaded() {
+    const N: usize = 300;
+    let (runtime, provider) = runtime();
+    // 参数逐条不同：否则先撞 max_repeat_tool_calls 的重复检测，测不到派发
+    let calls: Vec<(String, String, String)> = (0..N)
+        .map(|i| {
+            (
+                format!("c{i}"),
+                "probe.echo".to_string(),
+                format!(r#"{{"i":{i}}}"#),
+            )
+        })
+        .collect();
+    let refs: Vec<(&str, &str, &str)> = calls
+        .iter()
+        .map(|c| (c.0.as_str(), c.1.as_str(), c.2.as_str()))
+        .collect();
+    let client = Arc::new(MockLlmClient::new([
+        MockLlmClient::tool_use(&refs),
+        MockLlmClient::final_text("300 done"),
+    ]));
+    let mut cfg = loop_config();
+    cfg.max_tool_calls = N;
+    cfg.max_repeat_tool_calls = N;
+    cfg.max_parallel_tools = 8;
+    let chain = LlmToolLoop::new(client.clone(), runtime, EventBus::new(), cfg);
+
+    let outcome = chain
+        .run(
+            "三百条只读",
+            &provider.descriptors(),
+            &CancellationToken::new(),
+            &DenyWrites,
+        )
+        .await
+        .expect("300 条只读应正常收敛");
+
+    assert_eq!(outcome.tool_calls, N, "派发了多少条就要记多少条");
+    let fed = fed_results(client.seen_requests().last().expect("第二轮请求存在"));
+    assert_eq!(
+        fed.len(),
+        N,
+        "每条调用都必须有回执交回模型，一条不许凭空消失"
+    );
+    assert_eq!(
+        fed.iter()
+            .filter(|(_, _content, is_error)| *is_error)
+            .count(),
+        0,
+        "任何 is_error 都说明有调用没被执行 —— 超界即削减。样例：{:?}",
+        fed.iter()
+            .filter(|(_, _, e)| *e)
+            .take(3)
+            .collect::<Vec<_>>()
+    );
+    // 回执的 id 集合必须与派发集合相同（不只是数量相同 —— 防"张冠李戴"式补齐）
+    let mut ids: Vec<&str> = calls.iter().map(|c| c.0.as_str()).collect();
+    let mut fed_ids: Vec<&str> = fed.iter().map(|r| r.0.as_str()).collect();
+    ids.sort_unstable();
+    fed_ids.sort_unstable();
+    assert_eq!(ids, fed_ids, "回执 id 集合应与派发 id 集合逐一咬合");
+}
+
+/// 窗口 2、批 8 ⇒ 在飞峰值**恰等于 2**，且确有两调用的执行区间重叠。
+///
+/// 两端各钉一件事：
+/// - `>2` ⇒ 窗口没生效（派发侧不再限流，全压给 L7）；
+/// - `==1` ⇒ 窗口退化成串行屏障（chunk 屏障的另一种写法，等于没并行）。
+///
+/// WHY 判据取 provider 侧的在飞计数而不是墙钟：本仓 `runtime()` 的车道与
+/// provider 额度都是 16，所以"≤2"只可能来自派发窗口 —— 归因是干净的。
+/// WHY 还要区间重叠：在飞峰值是一个标量高水位，重叠判据把它翻译成
+/// "确实存在两条同时在执行"这一形状事实。**禁止**用"总墙钟 < 串行长和"
+/// 当判据 —— 那是 flaky 计时断言，不是形状断言。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dispatch_window_bounds_inflight_without_barrier() {
+    const N: usize = 8;
+    const WINDOW: usize = 2;
+    let (runtime, provider) = runtime();
+    let calls: Vec<(String, String, String)> = (0..N)
+        .map(|i| {
+            (
+                format!("h{i}"),
+                "probe.hold".to_string(),
+                format!(r#"{{"i":{i}}}"#),
+            )
+        })
+        .collect();
+    let refs: Vec<(&str, &str, &str)> = calls
+        .iter()
+        .map(|c| (c.0.as_str(), c.1.as_str(), c.2.as_str()))
+        .collect();
+    let client = Arc::new(MockLlmClient::new([
+        MockLlmClient::tool_use(&refs),
+        MockLlmClient::final_text("hold done"),
+    ]));
+    let mut cfg = loop_config();
+    cfg.max_tool_calls = N;
+    cfg.max_repeat_tool_calls = N;
+    cfg.max_parallel_tools = WINDOW;
+    let chain = LlmToolLoop::new(client.clone(), runtime, EventBus::new(), cfg);
+
+    let outcome = chain
+        .run(
+            "八条慢只读",
+            &provider.descriptors(),
+            &CancellationToken::new(),
+            &DenyWrites,
+        )
+        .await
+        .expect("八条只读应正常收敛");
+
+    assert_eq!(outcome.tool_calls, N);
+    assert_eq!(
+        provider.peak(),
+        WINDOW,
+        "在飞峰值必须恰等于窗口宽度 {WINDOW}（>{WINDOW} 说明窗口未生效，==1 说明退化成串行屏障）"
+    );
+
+    // 区间重叠：进入/离开各取一个单调 tick，不读墙钟
+    let intervals = provider.intervals();
+    assert_eq!(intervals.len(), N, "每条调用各记录一段执行区间");
+    let overlapped = intervals.iter().any(|(a, s1, f1)| {
+        intervals
+            .iter()
+            .any(|(b, s2, f2)| a != b && *s1 < *f2 && *s2 < *f1)
+    });
+    assert!(
+        overlapped,
+        "必须存在两条调用的执行区间互相重叠（否则窗口只是排队，不是并行）"
+    );
+
+    let fed = fed_results(client.seen_requests().last().expect("第二轮请求存在"));
+    assert_eq!(fed.len(), N, "限流只延后，不丢弃");
+    assert_eq!(
+        fed.iter().filter(|(_, _, is_error)| *is_error).count(),
+        0,
+        "窗口内不得出现 Overloaded/Timeout 之类的错误回执"
+    );
+}
+
+/// 并发完成下，第 k 条调用的结果必须落在第 k 个槽位（按 `call_id` 归位，不是按到达序）。
+///
+/// WHY 这条判据补在这里：本仓从未存在计划里点名的 `dispatch_order_is_preserved`
+/// target（全库 0 命中，属幽灵名），而 LLM 侧的归位逻辑此前只有源码结构锚点
+/// `attribution_behavior_is_not_debug_only` 守 —— 锚点证的是"没用 debug_assert"，
+/// 不证"归位真的按 call_id"。行为面此前无人认领，这里补上。
+///
+/// provider 的返回值里带自己的 `args_json`，于是"结果内容与调用参数逐条咬合"
+/// 是一个不依赖完成顺序的确定性判据：完成顺序被调度器打乱时它才真正有牙，
+/// 完成顺序恰好同序时它也不会 flaky。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn results_are_attributed_by_call_id_under_concurrent_completion() {
+    const N: usize = 8;
+    let (runtime, provider) = runtime();
+    let calls: Vec<(String, String, String)> = (0..N)
+        .map(|i| {
+            (
+                format!("a{i}"),
+                "probe.hold".to_string(),
+                format!(r#"{{"seq":{i}}}"#),
+            )
+        })
+        .collect();
+    let refs: Vec<(&str, &str, &str)> = calls
+        .iter()
+        .map(|c| (c.0.as_str(), c.1.as_str(), c.2.as_str()))
+        .collect();
+    let client = Arc::new(MockLlmClient::new([
+        MockLlmClient::tool_use(&refs),
+        MockLlmClient::final_text("attributed"),
+    ]));
+    let mut cfg = loop_config();
+    cfg.max_tool_calls = N;
+    cfg.max_repeat_tool_calls = N;
+    // 全批同时在飞：完成顺序由调度器与计时器决定，正是归位逻辑的压力条件
+    cfg.max_parallel_tools = N;
+    let chain = LlmToolLoop::new(client.clone(), runtime, EventBus::new(), cfg);
+
+    chain
+        .run(
+            "八条并发完成",
+            &provider.descriptors(),
+            &CancellationToken::new(),
+            &DenyWrites,
+        )
+        .await
+        .expect("八条只读应正常收敛");
+
+    let fed = fed_results(client.seen_requests().last().expect("第二轮请求存在"));
+    assert_eq!(fed.len(), N, "八条各一份回执");
+    for (i, (call_id, content, is_error)) in fed.iter().enumerate() {
+        // 请求里的历史顺序 = 槽位顺序（第二轮请求只带一份 Tool 消息）
+        let expect = format!(r#"probe.hold:{{"seq":{i}}}"#);
+        assert_eq!(
+            (call_id.as_str(), content.as_str()),
+            (format!("a{i}").as_str(), expect.as_str()),
+            "第 {i} 槽位应是自己那条调用的结果（键是 call_id，不是到达序）；\
+             出现张冠李戴说明归位退化成逐位 zip"
+        );
+        assert!(!is_error, "第 {i} 条不应是错误回执：{content}");
+        assert!(
+            !content.contains(ASK_REQUIRED_MARKER) && !content.contains("attribution_mismatch"),
+            "第 {i} 条不得落在任何缺位/拒收标记上：{content}"
+        );
+    }
 }
 
 // ============================================================
