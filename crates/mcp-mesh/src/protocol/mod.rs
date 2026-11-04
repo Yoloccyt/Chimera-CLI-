@@ -27,7 +27,7 @@ pub use discovery::{McpTool, ToolAnnotations};
 pub use jsonrpc::{
     decode_incoming, encode_frame, Incoming, Notification, Request, RequestId, Response, RpcError,
 };
-pub use transport::{DuplexTransport, McpTransport, MAX_FRAME_BYTES};
+pub use transport::{CommandGate, DuplexTransport, McpTransport, StdioTransport, MAX_FRAME_BYTES};
 
 /// 客户端在 `initialize` 里请求的协议版本。
 pub const MCP_PROTOCOL_VERSION: &str = "2025-03-26";
