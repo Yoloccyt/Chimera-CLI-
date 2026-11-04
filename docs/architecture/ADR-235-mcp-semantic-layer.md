@@ -133,7 +133,7 @@ WHY 不把组合根改成 async：会波及 `OnceLock` 缓存与全部调用点�
 1. **HTTP / Streamable HTTP 未交付**：配置了 `url` 的 server 一律跳过；"MCP 客户端"在本波的含义仅限 stdio。
 2. **真实 MCP 服务器默认不可用**：`npx` / `node` / `python` 不在 SecCore 白名单 ⇒ 现网配置会得到 `Denied` + warn。可用路径是：在 `enabled = true` 且命令落在白名单内时，手工验证（本波用 `bash` 假服务器覆盖了同一传输路径）。
 3. **CI 侧未跑**：本波所有读数来自本地工作树；`bench_check.yml` 的 I10/I11 与 hnsw 阈值首跑在 CI，本地不可判定。
-4. **heavy 门与 workspace 全量回归仍受磁盘约束**（D 盘现取约 9.5 GiB < 20/25），本波同前几波只能由 CI 判定。
+4. **heavy 门与 workspace 全量回归仍受磁盘约束**（D 盘 2026-11-04 现取 **1.4 GiB free / 273.3 GiB used**，远低于 `disk_gb` 20/25；第四波收口时为 9.5 GiB，本波更紧），本波同前几波只能由 CI 判定。
 5. **不证明审批面"更安全"**：只证明**未削减**（默认全 Write、未审批一律 `AskRequired`、fence 先于 spawn）。真正的收紧（例如把 `readOnlyHint` 写进策略）不在本波。
 
 ---
