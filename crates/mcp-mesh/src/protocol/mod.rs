@@ -23,7 +23,9 @@ pub mod jsonrpc;
 pub mod transport;
 
 pub use client::{ClientConfig, McpClient, ServerInfo, DEFAULT_REQUEST_TIMEOUT_MS, MAX_TOOL_PAGES};
-pub use discovery::{McpTool, ToolAnnotations};
+pub use discovery::{
+    side_effect_for, DiscoveredServer, DiscoverySnapshot, McpTool, ToolAnnotations,
+};
 pub use jsonrpc::{
     decode_incoming, encode_frame, Incoming, Notification, Request, RequestId, Response, RpcError,
 };

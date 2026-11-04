@@ -359,10 +359,12 @@ fn assemble_tool_plane() -> Result<SharedToolPlane> {
     registry.register(Arc::new(crate::tool_plane::ProcessToolProvider::new(
         plane.max_payload_bytes,
     )))?;
-    // MCP provider is registered only when the mesh has servers; an empty
-    // provider would be rejected by the registry (all-or-nothing).
-    let mcp_mesh = Arc::new(mcp_mesh::McpMesh::new(mcp_mesh::MeshConfig::default()));
-    let mcp_provider = Arc::new(crate::tool_plane::McpToolProvider::new(mcp_mesh));
+    // MCP provider 走"装配期发现快照"（ADR-235 S5）：本波尚未接配置驱动发现，
+    // 故这里给空快照 ⇒ descriptors 为空 ⇒ provider 不注册（与旧行为一致）。
+    // WHY 不再构造 `McpMesh`：那份自研 2PC 注册表从来不是 MCP 能力来源，装配出的
+    // mesh 恒为空、provider 恒被丢弃；留着只会让读代码的人以为 MCP 已经接上。
+    let mcp_snapshot = Arc::new(mcp_mesh::protocol::DiscoverySnapshot::default());
+    let mcp_provider = Arc::new(crate::tool_plane::McpToolProvider::new(mcp_snapshot));
     if !mcp_provider.descriptors().is_empty() {
         registry.register(mcp_provider)?;
     }

@@ -50,47 +50,124 @@ fn default_assembly_exposes_echo_and_proc_only() {
     );
 }
 
-/// MCP 工具名的形状（`mcp:<server>/<capability>`）即使当前不在场也要钉住：
-/// 它由 `McpToolProvider::descriptors` 单方面决定，接入后 CLI 侧解析依赖这个形状，
-/// 而形状变了会让 `tool call mcp:...` 静默解析失败。
+/// MCP 工具名/描述/schema/副作用由**发现快照**单方面决定（ADR-235 S5）。
 ///
-/// WHY 在 provider 缺席时仍能测：这里直接构造 provider（不经装配），断言的是
-/// **命名规则**而不是**在场性**——两条判据不该绑在一个测试里，否则接入 MCP 后
-/// 这条命名锁会跟着上一条一起被改掉。
-#[test]
-fn mcp_tool_names_are_prefixed_and_server_scoped() {
-    let mesh = std::sync::Arc::new(mcp_mesh::McpMesh::new(mcp_mesh::MeshConfig::default()));
-    // 端点必须是非保留地址：`register_server` 自己就 enforce SSRF（实测用
-    // `127.0.0.1:9` 直接被 `SsrfBlocked` 拒），所以这里用 TEST-NET-3（203.0.113.0/24，
-    // RFC 5737 文档专用段，永不路由到真实主机）。本例只断言命名与副作用语义，
-    // 不产生任何流量。
-    mesh.register_server(mcp_mesh::MeshServer::new(
-        "filesrv".to_string(),
-        "203.0.113.7:4430".to_string(),
-        vec!["read".to_string()],
-    ))
-    .expect("register a non-reserved endpoint");
+/// WHY 保留原断言口径：命名 `mcp:<server>/<tool>` 与"默认全 Write"是接入侧
+/// （CLI 解析 / 审批面）依赖的两条事实；换后端（mesh 注册表 → `tools/list` 快照）
+/// 不该改它们。旧夹具用 mesh 的 `capabilities: Vec<String>`；现在用真实发现的
+/// `McpTool`，描述与 `inputSchema` 才有来源可断言。
+#[tokio::test]
+async fn mcp_descriptors_come_from_the_discovery_snapshot() {
+    use mcp_mesh::protocol::{
+        ClientConfig, DiscoveredServer, DiscoverySnapshot, DuplexTransport, McpClient, McpTool,
+    };
+    use std::sync::Arc;
 
-    let provider = chimera_cli::tool_plane::McpToolProvider::new(std::sync::Arc::clone(&mesh));
-    let names: Vec<String> = provider
-        .descriptors()
-        .iter()
-        .map(|d| d.name.clone())
-        .collect();
+    // 客户端只是"可调用"的类型占位：本用例只断言描述符，不产生任何调用。
+    // 对端立刻丢弃 ⇒ 若将来有人误在 descriptors 里发请求，会立刻 Closed 而不是静默挂住。
+    let (transport, peer) = DuplexTransport::pair(1024);
+    drop(peer);
+    let client = Arc::new(McpClient::spawn(transport, ClientConfig::default()));
+    let snapshot = Arc::new(DiscoverySnapshot {
+        servers: vec![DiscoveredServer {
+            id: "filesrv".to_string(),
+            tools: vec![McpTool {
+                name: "read".to_string(),
+                description: String::new(),
+                input_schema: Some(serde_json::json!({"type": "object"})),
+                annotations: None,
+                extra: serde_json::Map::new(),
+            }],
+            trust_readonly_hints: false,
+            client,
+        }],
+    });
 
+    let provider = chimera_cli::tool_plane::McpToolProvider::new(snapshot);
+    let descriptors = provider.descriptors();
+    let names: Vec<String> = descriptors.iter().map(|d| d.name.clone()).collect();
     assert_eq!(names, vec!["mcp:filesrv/read".to_string()]);
-    // 副作用语义：能力名不携带读写信息 ⇒ 一律按 Write（fail-closed 方向，见 mcp.rs 头注）。
-    // 真实发现（readOnlyHint）落地后这条要改成"显式只读才降级"。
-    let sides: Vec<bool> = provider
-        .descriptors()
+
+    // 默认副作用：能力名不携带读写信息 ⇒ 一律 Write（fail-closed，ADR-235 D1）。
+    let sides: Vec<bool> = descriptors
         .iter()
         .map(|d| format!("{:?}", d.side_effect) == "Write")
         .collect();
-    assert_eq!(sides, vec![true], "MCP 能力默认必须是 Write（fail-closed）");
+    assert_eq!(sides, vec![true], "MCP 工具默认必须是 Write（fail-closed）");
 
-    // 同一条注册路径必须拒绝保留地址：本波接不了真实发现，但"将来接的时候不能把
-    // 内网端点放进来"这条界现在就钉住（真实发现会遍历 config.mcp.servers 逐个注册，
-    // 少这道界就等于把 SSRF 的守门推给尚未存在的代码）。
+    // 描述兜底与 inputSchema 透传都来自快照（不是写死的模板串）。
+    assert!(
+        descriptors[0].description.contains("filesrv"),
+        "空描述应回落成包含 server id 的兜底文案，实得 {}",
+        descriptors[0].description
+    );
+    assert_eq!(
+        descriptors[0].input_schema.as_deref(),
+        Some(r#"{"type":"object"}"#),
+        "inputSchema 必须原样透传（模型据此填参）"
+    );
+}
+
+/// 同时钉住"开了信任才降级"的另一半（默认档的反向）。
+#[tokio::test]
+async fn trusting_readonly_hints_only_downgrades_non_destructive_tools() {
+    use mcp_mesh::protocol::{
+        ClientConfig, DiscoveredServer, DiscoverySnapshot, DuplexTransport, McpClient, McpTool,
+        ToolAnnotations,
+    };
+    use std::sync::Arc;
+
+    let (transport, peer) = DuplexTransport::pair(1024);
+    drop(peer);
+    let client = Arc::new(McpClient::spawn(transport, ClientConfig::default()));
+    let tool = |name: &str, read_only: bool, destructive: bool| McpTool {
+        name: name.to_string(),
+        description: String::new(),
+        input_schema: None,
+        annotations: Some(ToolAnnotations {
+            read_only_hint: Some(read_only),
+            destructive_hint: Some(destructive),
+            idempotent_hint: None,
+            open_world_hint: None,
+        }),
+        extra: serde_json::Map::new(),
+    };
+    let snapshot = Arc::new(DiscoverySnapshot {
+        servers: vec![DiscoveredServer {
+            id: "trusted".to_string(),
+            tools: vec![
+                tool("safe_read", true, false),
+                tool("sneaky_write", true, true),
+            ],
+            trust_readonly_hints: true,
+            client,
+        }],
+    });
+    let provider = chimera_cli::tool_plane::McpToolProvider::new(snapshot);
+    let sides: Vec<(String, bool)> = provider
+        .descriptors()
+        .iter()
+        .map(|d| (d.name.clone(), format!("{:?}", d.side_effect) == "ReadOnly"))
+        .collect();
+    assert_eq!(
+        sides,
+        vec![
+            ("mcp:trusted/safe_read".to_string(), true),
+            // readOnlyHint + destructiveHint 同时出现 ⇒ 按 Write 处理（fail-closed）。
+            ("mcp:trusted/sneaky_write".to_string(), false),
+        ],
+        "开信任只降\"只读且非破坏\"的工具"
+    );
+}
+
+/// mesh 的注册路径仍拒绝保留地址。
+///
+/// WHY 单列：这条守的是 2PC `register_server`（ADR-230），**不在** MCP provider 的
+/// 调用链上；HTTP 传输与端点 SSRF 校验随该传输一起交付（ADR-235 D2）。把它与 MCP
+/// 描述符断言分开，避免"改了 MCP 后端就以为 SSRF 也覆盖到了"。
+#[test]
+fn mesh_registration_still_rejects_reserved_endpoints() {
+    let mesh = mcp_mesh::McpMesh::new(mcp_mesh::MeshConfig::default());
     let reserved = mcp_mesh::MeshServer::new(
         "internal".to_string(),
         "127.0.0.1:9".to_string(),

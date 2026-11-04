@@ -80,12 +80,12 @@ pub struct ServerInfo {
 
 /// 一条 MCP 连接上的客户端。
 pub struct McpClient {
-    tx: mpsc::Sender<Vec<u8>>,
+    tx: mpsc::Sender<Option<Vec<u8>>>,
     pending: Pending,
     next_id: AtomicU64,
     timeout: Duration,
     closed: Arc<AtomicBool>,
-    reader: JoinHandle<()>,
+    reader: Mutex<Option<JoinHandle<()>>>,
 }
 
 fn lock_pending(
@@ -162,7 +162,7 @@ impl McpClient {
     /// 对 `StdioTransport` 即"子进程随之终止"（`kill_on_drop`）。
     #[must_use]
     pub fn spawn<T: McpTransport>(mut transport: T, config: ClientConfig) -> Self {
-        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(64);
+        let (tx, mut rx) = mpsc::channel::<Option<Vec<u8>>>(64);
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let closed = Arc::new(AtomicBool::new(false));
         let timeout = config.timeout();
@@ -173,7 +173,7 @@ impl McpClient {
             loop {
                 tokio::select! {
                     outgoing = rx.recv() => match outgoing {
-                        Some(frame) => {
+                        Some(Some(frame)) => {
                             if let Err(error) = transport.send(&frame).await {
                                 task_closed.store(true, Ordering::SeqCst);
                                 fail_all(&task_pending, error);
@@ -181,7 +181,7 @@ impl McpClient {
                             }
                         }
                         // 所有发送端已丢弃（客户端被 drop 或 shutdown）⇒ 收工。
-                        None => break,
+                        Some(None) | None => break,
                     },
                     incoming = transport.recv() => match incoming {
                         Ok(Some(frame)) => match dispatch(&frame, &task_pending) {
@@ -216,7 +216,7 @@ impl McpClient {
             next_id: AtomicU64::new(0),
             timeout,
             closed,
-            reader,
+            reader: Mutex::new(Some(reader)),
         }
     }
 
@@ -254,7 +254,7 @@ impl McpClient {
             params,
             extra: Map::new(),
         })?;
-        if self.tx.send(frame).await.is_err() {
+        if self.tx.send(Some(frame)).await.is_err() {
             self.remove_pending(&id);
             return Err(McpError::Closed);
         }
@@ -283,7 +283,10 @@ impl McpClient {
             params,
             extra: Map::new(),
         })?;
-        self.tx.send(frame).await.map_err(|_| McpError::Closed)
+        self.tx
+            .send(Some(frame))
+            .await
+            .map_err(|_| McpError::Closed)
     }
 
     /// `initialize` 握手 + `notifications/initialized` 通知。
@@ -379,14 +382,26 @@ impl McpClient {
         .await
     }
 
-    /// 关闭连接：丢发送端（后台任务随之退出并 drop 传输），最多等 5s 收尾。
+    /// 关闭连接：投递一个"停止帧"（`None`）让读端退出，最多等 5s 收尾。
     ///
-    /// 幂等性由类型保证：消费 `self`，第二次调用不可能发生；对已 EOF 的连接
-    /// 调用也不阻塞（任务已退出，join 立即返回）。
-    pub async fn shutdown(self) {
+    /// WHY 按引用（`&self`）而不是消费 `self`：调用方通常把客户端放进
+    /// `Arc` 由发现快照共享（`DiscoveredServer.client`），`shutdown(self)` 根本
+    /// 取不出来。代价是"发送端不能靠 drop 关闭" ⇒ 用通道哨兵表达停止意图。
+    /// 幂等：第二次调用时 join 句柄已被 take 走，直接返回。
+    pub async fn shutdown(&self) {
         self.closed.store(true, Ordering::SeqCst);
-        drop(self.tx);
-        let _ = tokio::time::timeout(Duration::from_secs(5), self.reader).await;
+        // 读端可能已退出 ⇒ send 失败属正常，忽略。
+        let _ = self.tx.send(None).await;
+        let handle = {
+            let mut slot = self
+                .reader
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            slot.take()
+        };
+        if let Some(handle) = handle {
+            let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+        }
     }
 }
 
