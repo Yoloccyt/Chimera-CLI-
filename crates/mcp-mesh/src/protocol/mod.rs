@@ -17,9 +17,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod client;
+pub mod discovery;
 pub mod jsonrpc;
 pub mod transport;
 
+pub use client::{ClientConfig, McpClient, ServerInfo, DEFAULT_REQUEST_TIMEOUT_MS, MAX_TOOL_PAGES};
+pub use discovery::{McpTool, ToolAnnotations};
 pub use jsonrpc::{
     decode_incoming, encode_frame, Incoming, Notification, Request, RequestId, Response, RpcError,
 };
