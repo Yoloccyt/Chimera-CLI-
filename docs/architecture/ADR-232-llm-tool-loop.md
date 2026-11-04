@@ -157,3 +157,55 @@ TUI 弹窗审批不再属于"未实施"：本波 B 批已接线（`TuiApproval` 
 buffer 断言）；人在环时延，以及 `call_with_budget` 是否覆盖弹窗等待这一段；`--features mca` 下本路径
 端到端（零用例）；**入口分档表本身没有门守**——`check_llm_loop_defaults.py` 与
 `check_tool_plane_contract.py` 对审批档零命中，本波不擅自立门（新门需四件同批且要 CI 授权）。
+
+## 追加节二（2026-11-04）— 第四波：问人窗口与执行窗口的边界，以及"延后 ≠ 拒绝"
+
+本 ADR 的 D6 定了"要不要问人"（入口分档 + R3 per-invocation），没定"问人时别人能不能干活"。
+第四波补的是后者。改的只有 `dispatch` 的形状，档位语义一条未动。
+
+### 决策 8：一条调用一个 future，两把互不相干的 Semaphore
+
+| 窗口 | 包住什么 | 额度 | 为什么必须有 |
+|---|---|---|---|
+| ask | 仅 `approve()` 这一次 await | `max_parallel_tools`（默认 8，用户裁决⑤） | 同时问人 ≤8；只读/自动放行档几乎不持有它，不被慢的写档拖累 |
+| exec | 仅 `runtime.invoke()` | 同值 | 在飞 ≤8，与旧 chunk 尺寸等量 ⇒ **永不**击穿 L7 的 `max_waiters=256` |
+
+两把闸都**在 `dispatch` 入口就地创建**，不进结构体（避免跨轮状态）。计数与档位逐位守恒：
+`tool_calls` 派发前逐条 `saturating_add`（"派发了几条"而非"执行了几条"），
+`denied_tool_calls` 只在 verdict=false 时增，未获批准的调用**不进 runtime**（合成
+`ASK_REQUIRED_MARKER` 结果回填，与旧结构同口径）。
+
+### 决策 9：执行窗口是安全语义，不是冗余限流
+
+L7 调度器在 `waiters > max_waiters` 时返回 `Err(ToolError::Overloaded)` —— 即"排队不上"
+被实现成"拒绝"。若派发侧一次交出整批（彻底去屏障），300 条只读就会凭空变错误。
+这条不是推演：去掉执行窗口的变异实测产出 `"overloaded: 257 waiters"`（三条样例被
+`batch_of_300_readonly_yields_zero_overloaded` 打印出来）。
+
+⇒ 本 ADR 的边界补一条：**"并行优先"不得把延后变成拒绝**。任何"去掉在飞上界"的提议
+都必须同时给出 L7 侧 `Overloaded` 语义的改法，否则即为削减。
+
+### 决策 10：并发弹窗对人的可见性（并只做了前一半）
+
+窗口 1→8 带来一个 D6/R3 都没覆盖的后果：最多 8 张审批弹窗叠在栈上，而键派发只作用于
+**栈顶**、默认选中仍是 Yes ⇒ 连按 Enter 在类型上合法地逐条批掉一叠写调用。每条各有一票
+（R3 未破），被摊薄的是注意力——这是"批量背书"的行为学版本。
+
+- 已落地：弹窗标题 `[N pending]`（N = 栈上待批条数，全栈计数，与 `has_approval` 同口径；
+  被 HelpOverlay 盖住时仍计入，理由同该函数注释：层叠不是安全决策）。
+  判据 `approval_popup_renders_pending_count_from_stack` 断言 N 随栈变化（2→3），
+  并断言旧值不残留 —— 只测一个数字会放过"把标题写死"。
+- **待裁**：默认选中 Yes→No。它改 B2 已定语义与一条既有测试的期望值，本波不动。
+
+### 与实施期发现的口径差
+
+- 计划预判"新 UI 文案必须走 `crate::t!()` 且中英各一条键"。实测扫描域：i18n 双门只覆盖
+  `panels/`、`actions/`、`app/`、`render.rs`，`popup.rs` 不在其内 ⇒ 走 ASCII，与既有
+  Confirm 脚注同源。**不要**据此推广为"popup.rs 永远可以硬编码"：那只是当前的门论域。
+- `attribute_results` 保留且每批调一次（单条 `invoke` 形状下它仍是唯一归位点），故
+  其源码结构锚点 `attribution_behavior_is_not_debug_only` 未悬空；计划里"锚点需要先更新"
+  的担心被现实消解，但**行为面**归位此前无人认领 ⇒ 由
+  `results_are_attributed_by_call_id_under_concurrent_completion` 补，且用 zip 变异证牙。
+- 本 ADR 的验证表现在还依赖：`cargo test -p chimera-cli --test llm_tool_loop`（22 条）
+  含三条本波新增判据；红线六条一字未改。CI 侧新增阻塞步 `govd scheduler self-tests (G-147)`
+  不覆盖本 ADR（它守的是调度器自测面），"入口分档表无门守"这条残余**依旧成立**。

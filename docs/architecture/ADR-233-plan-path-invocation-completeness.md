@@ -542,3 +542,155 @@ run1 在 `/1` 上比后三轮高 29–33%——冷启动态足以伪造一个"�
 6. **帧路径成本**：`poll_approvals()` 每帧多做的量**未测**（上一节说明为何现有 bench 测不到、
    以及为何不为测量而扩公开面）。关闭前提＝先决定"是否为帧驱动提供一个可 bench 的入口"，
    与 `bench_inventory_freeze` 同批。
+
+## 追加节九（2026-11-04）— 第四波：工具链执行面并行化（D1–D6 决策账 + 复测账 + 被否证的前提）
+
+本节只记**实施期才知道**的事实。计划正文（`grounded-quarry-finch.md`，批准于 2026-11-03）
+里的 D1–D6 是决策，本节是决策落地时被现实修正的部分——九片全部提交完毕：
+`7f2ccb1 S1` / `8b643b5 S2` / `28bc081 S3` / `bcee1d9 S5` / `00e1b88 S6` /
+`9549a84 S9` / `633d9e2 S4` / `81496bc S7` / `81f9a3a S8`。
+
+### D-39 `dispatch` 拆成两把独立 Semaphore（S2，计划 D1 落地）
+
+批内每条调用一个 future：ask 窗口只包住 `approve()`，答完立刻归还；exec 窗口包住
+`runtime.invoke()`。两窗额度都取 `max_parallel_tools`（默认 8，用户裁决⑤），
+**互不相干** ⇒ 一条写调用等人类时，同批只读照常执行（判据
+`readonly_calls_run_while_write_is_still_awaiting_human`，改前实测 provider 收到 `[]`）。
+
+exec 窗口不是冗余限流而是**必需的**：L7 在 `waiters > max_waiters(256)` 时直接回
+`Err(Overloaded)`，把整批一次交出会把"延后"变成"拒绝"。这条不是推测——去掉执行窗口
+的变异实测产出 `"overloaded: 257 waiters"` ×3（`batch_of_300_readonly_yields_zero_overloaded`
+的红因）。⇒ 计划 D1 的"双窗口"这一半被现实加强：**去屏障必须配窗口**。
+
+计数与档位语义逐位守恒：`tool_calls` 派发前逐条 `saturating_add`、`denied_tool_calls`
+只在 verdict=false 增、归位仍走 `attribute_results`（键 = `call_id`），缺位落
+`ATTRIBUTION_MISMATCH_MARKER`（运行时可见，非 `debug_assert`）。红线测试六条一字未改全绿；
+`oneshot::Sender::send(self)` 未动（R3 的类型级保证，两文件 `git diff` 为空）。
+
+### D-40 并发窗口的行为学代价与只做了前一半的处置（计划 D1b）
+
+窗口从 1 变 8 ⇒ 最多 8 张审批弹窗叠在栈上，而键派发只作用于栈顶、默认选中仍是 Yes。
+每条确实各有一票（R3 未破），被摊薄的是**注意力**——这是"批量背书"的行为学版本。
+
+- 已做（D1b①）：弹窗标题渲染 `[N pending]`（N=栈上待批条数，全栈计数，与
+  `has_approval` 同口径），并断言 N 随栈变化（2→"2 pending"、3→"3 pending"，
+  且旧值不得残留）。文案走 ASCII 且本文件不在 i18n 硬编码门的扫描域内
+  （那门管 `panels/`、`actions/`、`app/`、`render.rs`），故无需新增双语键——
+  这条与计划里"必须走 `crate::t!()` 且中英各一条"的预判不同，是计划把扫描域记错了。
+- **未做（D1b②，仍待裁）**：默认选中是否由 Yes 改 No。它动 B2 已定语义与一条既有
+  测试的期望值，本波不擅自改。
+
+### D-41 峰值仪器自己就是假断言的高发地（S2/S3 各一次）
+
+两处"看起来在测并发、实则恒真/恒假"的仪器，都是写完才发现的：
+
+1. 应答端"收到就答" ⇒ 收票与计票在同一条顺序循环里，在问峰值**结构上恒为 1**，
+   `2..=8` 那条断言永远不可能通过。它的"改前红"因此不算证据。改为攒票不放＋静默期
+   整批答 No 之后，两端各有牙：窗口=1 ⇒ 实测 1 红；窗口=32 ⇒ 实测 20 红；窗口=8 ⇒ 绿。
+2. S1 判据最初想用 `SchedSnapshot::peak_in_flight`，但该字段是**两车道合并**的高水位，
+   且 LLM 路径的 `ToolPriority::Normal` 落在 background 车道 ⇒ 用分解不了的量去证
+   "车道没被钉住"是假证据。改用完成序判据（任一条 fast 在首条 slow 之前完成）＋
+   阳性对照（车道 16 时首完成必须是 fast）。
+
+登记为通则见 ADR-234 追加节的 A6。
+
+### D-42 `max_concurrency` 走"登记 + 阳性对照锁"，不走启用（用户裁决③，S5）
+
+`scheduler.rs::provider_semaphore` 以 provider id 作键、以 `ToolRuntimeConfig
+.max_provider_inflight` 作容量 ⇒ 描述符上的声明值零读取（实测声明 echo=8 / mcp=4 / proc=2，
+启用即把进程面从 8 收到 2，属削减）。注释落 `NOT-ENFORCED` 可机检词，配三条判据的对照锁：
+①两个峰值都 >1（否则"相等"只是两边都被按住）；②声明 1 与声明 8 峰值相同；③该值恰等于
+config 额度。变异（对 p-tight 按声明收紧）⇒ 红在 ①（打印 峰值 1/4）。
+本片不引用 S1 新增符号 ⇒ 回滚 S1 不会因 `dead_code` 撞 `-D warnings`（B 批同类耦合的教训）。
+
+### D-43 govd 的 `jobs` 与磁盘采样（S6）；以及一条**方向写反**的验收判据
+
+`policy.toml` 声明的 pr=4/nightly=2/release=1/local=1 全仓零消费者（执行环只读 `args.jobs`，
+默认 0 ⇒ 恒串行）。改为 `--jobs` 显式优先、0 落 profile.jobs；`run_gate_manifest.py` 的
+`--jobs 1` parity 腿保留。磁盘余额从循环外移进 `execute`（并发下越靠后读数越旧，会把
+UNKNOWN 的"真的判不了"退化成"来不及看"）。
+
+同树两条腿实测：并发腿 `sum=845.3s wall=229.3s ratio=3.687`（jobs=4 理论上限 4 ⇒ 装箱
+~92%），串行腿 `sum=497.3s wall=505.1s ratio=0.984`，加速比 **0.454**；逐门 verdict 对照
+common=137、单边 0、差集 0。**但计划把这条判据写成"改后 sum/wall ≤ 0.75"—— 方向是反的**：
+串行时该比值≈0.986，并发生效只会上升趋近 jobs；`≤0.75` 不仅会把成功的并行判成失败，还
+奖励空转（比值低＝墙钟被拉长）。属 ADR-234 A2 禁的"判据静默取反"。本波替换为
+`sum/wall ≥ 2` 与 `wall_并/wall_串 < 1` 两条，并在报告里以原命令复现。
+
+### D-44 `needs` 不是互斥锁（S7 的立项理由被否证）
+
+计划风险表写"给 cargo 类 heavy 门补 `needs` 边以避免互踩包锁/OOM"。读码＋实测否证：
+`needs` 只有两个消费者（`manifest.py` 存在性校验、`planner.toposort` 排序），执行环把
+pending 整批 `pool.submit` 进线程池后只 `as_completed`，**从不读 needs** ⇒ 并发档下
+被依赖者与依赖者同时在跑。于是本波**不加任何边**（无真实前置关系的边是会撒谎的数据，
+而且会给人"已处理"的错觉），改为：清单头注写清语义 + `NeedsSemanticsTests` 两条特征锁
+（jobs=2 区间重叠；jobs=1 不重叠作阳性对照）+ 影子 root 上"成环必红/合法边判绿"实测。
+真正的 heavy 互斥本来就由 cargo 自身 target-dir 锁提供（后来者等待而非损坏）。
+
+### D-45 并行语义入 CI 阈值：键必须按组拆，µs 级余量不能抄 ms 级（S8）
+
+`gqep-executor|tool_plan` 与 `chimera-cli|llm_tool_loop_bench` 由 dev-only → registered
+（freeze 数据行 64→62，I6 真实下限是 `>=60`，升格后余量只剩 2 行）。CI 断言取"命中集合内
+最大 median" ⇒ 若把 serial 与 parallel 塞进同一键，阈值下限被 249ms 串行基线钉死，
+"并行退化成串行"永远测不出。故 8 个组级键；`tool_plan_parallel=80ms` 既是实测 ×2.6
+又远低于串行基线，才是那条有意义的绊线。µs 级键给 ×6.1–8.3 而非先例的 ×2.5，因为同码
+两轮漂移带实测 max **69.64%**（`llm_diag_event_bus_new` 9.66↔2.93µs）——照抄 ms 级口径
+就是把阈值锁在噪声上。宿主计时粒度探针（`llm_diag_host_timer_granularity` 15.5ms）**有意
+不配键**：给它绝对阈值＝让 CI 随 runner 内核 HZ 变红。
+
+不进 `calibration_pending`（计划原拟"先进 pending 由 CI 校准"）：该列表与 cap=1 是只减不增
+棘轮，加项＝放宽门禁，需独立裁决。⇒ 计划的这条退路在机器层不存在，本批只给量级绊线。
+
+### D-46 自测面入门必须先解决 CI 腿（S9 与一条不存在的中间态）
+
+`test_govd`（本波结束时 86 条）入门为 G-147。计划设想的"门已入清单、CI 腿待接"中间态
+**不存在**：G-137 方向 B 规定非 `ci_exempt` 且 cmd 指名脚本的门必须出现在某个 workflow，
+影子 root 实测 `[GATE-MISSING] G-147 -> scripts/govd/tests/test_govd.py` ⇒ rc=1。
+唯一绕行是新写一条 `ci_exempt`（本仓已有 12 条同类先例），那等于把"入门"退化成
+"入门但永不进 CI"，与立项理由相反。据计划承诺"不擅自豁免"，请裁决后走了加 CI 步。
+cmd 用路径形态 `{python} scripts/govd/tests/test_govd.py` 而非 `-m scripts.govd.tests…`：
+后者不含 `scripts/...py`，会绕开 G-137 的脚本对拍＝给这条门自己开后门（两种写法实测都可跑）。
+普查常量 144/137/7 → 145/138/7 的自锁也被真实走通一遍：先落门后改常量时新门自己红
+（`145 != 144` + `PR_SUM_LINE` 未命中）。
+
+### D-47 执行面实例按进程缓存，声明表随装配点取一次（S4）
+
+`build_tool_runtime` 从"每次调用装配一套"改为取 `OnceLock<SharedToolPlane>` 里的共享实例，
+`llm_answer_with` 同时拿运行实例与**借用**形式的描述符全集（原来每轮应答重跑一次
+registry 全表 clone + sort，而那个方法自己的文档写着它是"cold listing path"）。
+只在成功时落缓存（失败固化＝把一次性故障升级成永久故障）；`get_or_init` 让并发首调中
+的一份胜出，多装配一次是良性浪费而非两实例并存。快照不会漂移：`ToolRuntime::new` 收走
+`Arc<ToolRegistry>` 后对外只有 `&Arc<ToolRegistry>`，`register` 需要 `&mut` ⇒ 无晚注册通道。
+
+### 复测账：子代理结论的采纳/驳回/降级（本波增量）
+
+| 主张 | 复现命令 | 判定 |
+|---|---|---|
+| "并行度=4 ⇒ 墙钟应缩到 1/4" | 同树两腿实测 | **修正**：加速比 0.454（2.20×），且并发腿单门时长普遍抬高（G-08 139.8→224.9ms、G-36 49.5→120.4ms）⇒ 并行度不等于加速比 |
+| "`needs` 能避免 heavy 门互踩" | 读 `cli.py` 执行环 + `NeedsSemanticsTests` | **驳回**（见 D-44） |
+| "新阈值可先进 calibration_pending 由 CI 校准" | `I4a` 断言 `len(pending) <= cap(=1)` | **驳回**：加项即放宽棘轮（见 D-45） |
+| "门可先入清单、CI 腿待接" | 影子 root 跑 G-137 | **驳回**：该中间态判红（见 D-46） |
+| "S3 需改 `dispatch` 去掉 chunk 屏障" | 实施期发现 | **修正**：`dispatch` 只有一个函数体，屏障随 S2 一并废除；S3 只贡献判据，回滚单位＝S2+S3 |
+| "Verification 里跑 `--test dispatch_order_is_preserved`" | 全库 grep | **驳回**：幽灵 target 名（0 命中），等价覆盖由 `results_are_attributed_by_call_id_under_concurrent_completion` 补 |
+| "S9 要同批改 `tasks.toml` 与清单头注里的门数陈述" | 现读两文件 | **修正**：`tasks.toml` 明确自陈"NOT gates"、清单头注不含门数 ⇒ 无该陈述可改 |
+| "S2 的 UI 文案必须走 `t!()` 双语键" | 读 `i18n_hardcode_invariant_test.rs` 扫描域 | **修正**：`popup.rs` 不在扫描域内（域＝`panels/`、`actions/`、`app/`、`render.rs`） |
+| 计划基线表两条降级主张（`severity()` 4 次 / `Lane` 每发布一次分配） | 未再复测 | **维持不做**（本波未碰 event-bus） |
+
+### 本波终态与残余
+
+- 全量 light 门（govd pr 并发腿）：`[SUM] ok=132 mismatch=2 env-fail=4 unknown=0 skip=7 /
+  total 145/145`；非绿成员集合与第三波**逐人相同**（mismatch{G-04,G-18} +
+  env{G-06,G-11,G-17,G-72}）。
+- 包级：`-p chimera-cli` 405/0（21 target）、`-p chimera-tui` 1788/0（88）、
+  `-p gqep-executor` 158/0（14）、`test_govd` 86/0。
+- 残余（不粉饰）：
+  1. heavy 门（G-12/13/14/15/19/49/50）本地恒 skip —— D 盘现取 9.5 GiB < `disk_gb` 20/25。
+     "无全量回归退化""workspace 级 test/clippy 通过"在本波不可取得，只能由 CI 判定。
+  2. CI 腿（G-147 新步、bench_check 的 8 键数值）本地不可执行 ⇒ 首跑才是最终判决。
+  3. heredoc 与 TOML 的**数值**无机器对拍、`PATH_KEYWORDS` dict 完全无对拍（I9 只比
+     THRESHOLDS_NS 键集）⇒ 已登记 ADR-225 §5 / C-86，属判据层待办。
+  4. `docs/architecture/adr_index.md` 不在本 worktree（md 被 ignore，worktree 只带入库面），
+     且 `adr_index_sync.py` 零门零 workflow 引用 ⇒ ADR-234 与追加节无法在此回写权威索引
+     （任务 #33 同题）。
+  5. 弹窗默认选中 Yes→No（D1b②）仍待裁。
+  6. `llm_diag_*` 的 µs 级阈值是量级绊线（×6–8），不是 ±% 级回退检测。
