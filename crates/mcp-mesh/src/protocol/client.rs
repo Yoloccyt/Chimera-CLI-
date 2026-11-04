@@ -205,6 +205,9 @@ impl McpClient {
                     },
                 }
             }
+            // 显式收尾：stdio 的 close 是 kill+wait；不做的话运行时关闭会等子进程
+            // 自然退出（实测 sleep 30 会让进程额外停 30s）。
+            transport.close().await;
         });
 
         Self {
