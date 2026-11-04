@@ -694,3 +694,23 @@ registry 全表 clone + sort，而那个方法自己的文档写着它是"cold l
      （任务 #33 同题）。
   5. 弹窗默认选中 Yes→No（D1b②）仍待裁。
   6. `llm_diag_*` 的 µs 级阈值是量级绊线（×6–8），不是 ±% 级回退检测。
+
+## 追加节十（2026-11-04）— 第五波：W4b 以独立子系统交付（ADR-235），前置条件已裁
+
+**追加节六的"遗留 1（MCP 真实装配与能力发现）"本波兑现**，另立 `ADR-235`（MCP 语义层与能力发现）。三处口径更新：
+
+1. **前置条件已裁**：追加节六写的前置是"先决定 `McpServerConfig` 是否加 capabilities 覆盖字段"。裁决结果：**不加 capabilities**。能力形状来自 `tools/list`（真实发现），配置面只加四个与连接/信任有关的字段 —— `env` / `timeout_ms` / `trust_readonly_hints`（默认 false）/ `enabled`（默认 false），全部 `#[serde(default)]`，旧 YAML 原样可读。理由：capabilities 是**发现的产物**，写进配置就会变成第二权威源，且会在服务器升级后悄悄过期。
+2. **遗留 2 关闭**：`crates/chimera-cli/src/tool_plane/mcp.rs` 已整体重写为"消费发现快照 + 每 server 路由"。旧头注"capability 名不能证明只读 ⇒ 一律 Write"的意图保留并加强：`readOnlyHint` 默认**不采信**，只有逐 server 显式 `trust_readonly_hints = true` 且 `read_only && !destructive` 才降 `ReadOnly`；未审批调用一律 `AskRequired`。
+3. **遗留 3 保持**：mesh 外层 200 ms / 内层 50 ms 双层超时**未动** —— 本波没有改变任何 mesh 请求的时序，数值裁决仍随真实链路另议。
+
+**范围比追加节六的设想窄一档**（用户裁决，ADR-235 D2）：只交付**语义层 + 传输接缝**，stdio 实现但默认不启用；HTTP / Streamable HTTP 不在本波；`npx`/`node`/`python` 的 spawn 白名单政策**未裁**（现网配置会得到 `Denied` + warn）。
+
+**同波判据卫生批**（与 W4b 无关，同批交付）：
+
+- `hnsw_tiered` 补进 `PATH_KEYWORDS`（此前 `run_bench` 在跑、阈值也在表里，但关键词缺失 ⇒ 断言循环只打 `::warning::No estimates found` 后 `continue`，**阈值从未生效**）；workflow heredoc 与 `perf_thresholds.toml` 双侧先给 8 ms 宽松档，CI 首跑后再收紧；
+- 新增 **I10**（三集合相等：heredoc `PATH_KEYWORDS` 键集 = heredoc `THRESHOLDS_NS` 键集 = TOML `[path_keywords]` 键集）与 **I11**（同键数值对拍，非整数硬红）；反证：删关键词 ⇒ I10 红点名；改数值 ⇒ I11 红；
+- `test_kind` 的 4 行 `single_crate` 改 `cross_crate`，并在 `check_manifest_schema.py` 加 `TEST_KINDS` 枚举成员校验（含 `bad-test-kind` 夹具）；
+- govd 死字段 `reuse_ok` 删除（解析、`Profile` 字段、`policy.toml` 四行、自测断言同批）；
+- `bench_inventory_freeze.txt` 头注自我订正为"本批删除 2 行；现取 62 行（行法计数，`grep -c dev-only` 会把头注算进去）"。
+
+**读数**（本轮现取）：`-p mcp-mesh` 10 target **176 passed / 0 failed / 2 ignored**；`-p chimera-cli` 23 target **418 / 0**；`-p nexus-core` **273 / 0**；clippy（三包，分轮）/fmt（逐包）/`test_fnlen_smoke.sh` 全部 rc=0；反证 5 条（fence 先于 spawn、拒绝被当真、默认全 Write、信任只降非破坏、I10/I11 各一）全部先红后复原（`sha256` 自证）。详见 `ADR-235 §4` 与 `docs/reports/toolchain-execution-plane-w5-2026-11-04.md`。

@@ -14,7 +14,7 @@
 //!
 //! # 失败语义
 //! 单个 server 的建连/握手/发现失败 ⇒ `tracing::warn!` 后跳过它，**不阻塞启动**
-//! （ADR-235 D6）。HTTP/Streamable HTTP 本波未实现 ⇒ 显式 warn 并跳过（D2）。
+//! （ADR-235 D6）。HTTP/Streamable HTTP 不在本波范围 ⇒ 显式 warn 并跳过（D2）。
 
 use std::sync::{Arc, Mutex};
 

@@ -371,7 +371,7 @@ fn assemble_tool_plane(config: &ChimeraConfig) -> Result<SharedToolPlane> {
     )))?;
     // MCP provider 走"装配期发现快照"（ADR-235 S6）：只对 `enabled = true` 的
     // server 建连 + `initialize` + `tools/list`；单个 server 失败只跳过它自己，
-    // 不阻塞启动（D6）。HTTP 传输未实现 ⇒ 显式 warn 后跳过（D2）。
+    // 不阻塞启动（D6）。HTTP 传输不在本波范围 ⇒ 显式 warn 后跳过（D2）。
     // 默认配置里三条 `default_mcp_servers()` 全是 `enabled = false` ⇒ 空装配、
     // 不建 runtime（默认路径零成本，装配结果与旧行为一致）。
     let mcp_plane = crate::tool_plane::assemble_mcp(
