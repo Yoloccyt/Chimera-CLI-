@@ -596,6 +596,7 @@ dependencies = [
  "seccore",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sesa-router",
  "session-store",
  "ssra-fusion",

@@ -298,9 +298,9 @@ pub fn build_with_sharding(
 /// `check_composition_root.py` 的 R2 旁路告警，又会让读代码的人以为"传了总线就会有事件"。
 /// 需要发事件的层（LLM 循环的 `BudgetExceeded`）自己持有总线。
 pub fn build_tool_runtime(
-    _config: &ChimeraConfig,
+    config: &ChimeraConfig,
 ) -> Result<Arc<gqep_executor::tool_plane::ToolRuntime>> {
-    Ok(Arc::clone(shared_tool_plane()?.runtime()))
+    Ok(Arc::clone(shared_tool_plane_with(config)?.runtime()))
 }
 
 /// 进程内共享的工具执行面（ADR-234 S4）。
@@ -316,6 +316,9 @@ pub fn build_tool_runtime(
 pub(crate) struct SharedToolPlane {
     runtime: Arc<gqep_executor::tool_plane::ToolRuntime>,
     descriptors: Vec<gqep_executor::tool_plane::ToolDescriptor>,
+    /// MCP 会话保活：客户端任务跑在它自己的 runtime 上（ADR-235 S6）。
+    /// 无 `enabled` server 时是空装配、不建 runtime；**字段存在即会话存活**。
+    _mcp: crate::tool_plane::McpPlane,
 }
 
 impl SharedToolPlane {
@@ -344,27 +347,40 @@ static SHARED_TOOL_PLANE: OnceLock<SharedToolPlane> = OnceLock::new();
 /// 全仓无任何进程内 `set_var("CHIMERA_TOOL…")` 调用点（现取 0 命中），而 `chimera`
 /// 的进程生命周期就是命令生命周期，故实际行为不变。
 pub(crate) fn shared_tool_plane() -> Result<&'static SharedToolPlane> {
+    // LLM 路径（run.rs）不持有配置对象，用默认配置 —— 与 `llm_answer_with` 里
+    // `ChimeraConfig::default()` 的口径一致；配置驱动装配见 `build_tool_runtime`。
+    shared_tool_plane_with(&ChimeraConfig::default())
+}
+
+/// 带配置的取用入口：**首次调用决定缓存**（进程内 config/env 视为不变）。
+fn shared_tool_plane_with(config: &ChimeraConfig) -> Result<&'static SharedToolPlane> {
     if let Some(existing) = SHARED_TOOL_PLANE.get() {
         return Ok(existing);
     }
-    let built = assemble_tool_plane().context("assemble tool execution plane")?;
+    let built = assemble_tool_plane(config).context("assemble tool execution plane")?;
     Ok(SHARED_TOOL_PLANE.get_or_init(|| built))
 }
 
 /// 真正的装配体（原 `build_tool_runtime` 的函数体，逐语句搬移，语义未改）。
-fn assemble_tool_plane() -> Result<SharedToolPlane> {
+fn assemble_tool_plane(config: &ChimeraConfig) -> Result<SharedToolPlane> {
     let plane = crate::tool_plane::ToolPlaneConfig::from_env();
     let mut registry = gqep_executor::tool_plane::ToolRegistry::new();
     registry.register(Arc::new(crate::tool_plane::EchoToolProvider::new()))?;
     registry.register(Arc::new(crate::tool_plane::ProcessToolProvider::new(
         plane.max_payload_bytes,
     )))?;
-    // MCP provider 走"装配期发现快照"（ADR-235 S5）：本波尚未接配置驱动发现，
-    // 故这里给空快照 ⇒ descriptors 为空 ⇒ provider 不注册（与旧行为一致）。
-    // WHY 不再构造 `McpMesh`：那份自研 2PC 注册表从来不是 MCP 能力来源，装配出的
-    // mesh 恒为空、provider 恒被丢弃；留着只会让读代码的人以为 MCP 已经接上。
-    let mcp_snapshot = Arc::new(mcp_mesh::protocol::DiscoverySnapshot::default());
-    let mcp_provider = Arc::new(crate::tool_plane::McpToolProvider::new(mcp_snapshot));
+    // MCP provider 走"装配期发现快照"（ADR-235 S6）：只对 `enabled = true` 的
+    // server 建连 + `initialize` + `tools/list`；单个 server 失败只跳过它自己，
+    // 不阻塞启动（D6）。HTTP 传输未实现 ⇒ 显式 warn 后跳过（D2）。
+    // 默认配置里三条 `default_mcp_servers()` 全是 `enabled = false` ⇒ 空装配、
+    // 不建 runtime（默认路径零成本，装配结果与旧行为一致）。
+    let mcp_plane = crate::tool_plane::assemble_mcp(
+        &config.mcp.servers,
+        Arc::new(crate::tool_plane::FenceGate::default_secure()),
+    );
+    let mcp_provider = Arc::new(crate::tool_plane::McpToolProvider::new(Arc::clone(
+        &mcp_plane.snapshot,
+    )));
     if !mcp_provider.descriptors().is_empty() {
         registry.register(mcp_provider)?;
     }
@@ -397,6 +413,8 @@ fn assemble_tool_plane() -> Result<SharedToolPlane> {
     Ok(SharedToolPlane {
         runtime,
         descriptors,
+        // 保活：这里一 drop，MCP 的 runtime 与会话全部结束。
+        _mcp: mcp_plane,
     })
 }
 

@@ -615,6 +615,14 @@ pub struct McpServerConfig {
     pub url: Option<String>,
     /// 认证方式:oauth / password / none
     pub auth: Option<String>,
+    /// stdio 模式:显式注入的环境变量(在安全白名单之外,见 ADR-235 S4)
+    pub env: std::collections::BTreeMap<String, String>,
+    /// 单请求超时(毫秒);0 = 默认 30s
+    pub timeout_ms: u64,
+    /// 是否采信该服务器自报的 `readOnlyHint`(默认 false:hint 不可信,ADR-235 D1)
+    pub trust_readonly_hints: bool,
+    /// 是否启用该服务器(默认 false:本波不默认连任何 MCP,ADR-235 D2)
+    pub enabled: bool,
 }
 
 /// 默认 MCP 服务器列表(对齐 §10.2 模板)
@@ -629,6 +637,7 @@ pub fn default_mcp_servers() -> Vec<McpServerConfig> {
             ]),
             url: None,
             auth: None,
+            ..Default::default()
         },
         McpServerConfig {
             id: "github".to_string(),
@@ -636,6 +645,7 @@ pub fn default_mcp_servers() -> Vec<McpServerConfig> {
             args: None,
             url: Some("https://api.github.com/mcp".to_string()),
             auth: Some("oauth".to_string()),
+            ..Default::default()
         },
         McpServerConfig {
             id: "postgres".to_string(),
@@ -643,6 +653,7 @@ pub fn default_mcp_servers() -> Vec<McpServerConfig> {
             args: None,
             url: Some("postgresql://localhost:5432/mcp".to_string()),
             auth: Some("password".to_string()),
+            ..Default::default()
         },
     ]
 }
