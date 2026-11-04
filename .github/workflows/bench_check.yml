@@ -47,6 +47,11 @@ on:
       - '.github/workflows/bench_check.yml'
       # P2-7: CLI 启动路径变更触发启动延迟检查
       - 'crates/chimera-cli/src/**'
+      # ADR-234 S8（已授权的 paths 扩面，只加本波实际改动的 crate）：
+      # L7 执行面（调度器许可顺序、PlanRunner 派发窗口）的 src 变更此前**不触发**
+      # 本 workflow —— 而 tool_plan/llm_tool_loop_bench 量的正是这一层。改坏
+      # scheduler.rs 而 PR 不碰 benches/，并行语义的回退要等到日跑才露头。
+      - 'crates/gqep-executor/src/**'
       - 'scripts/check_cli_startup.*'
   push:
     tags:
@@ -185,6 +190,11 @@ jobs:
           # dev-only → registered。hot/scoring 组有绝对阈值守门（见下方 THRESHOLDS_NS）;
           # concurrent 组随文件注册进 CI 运行,绝对阈值待 CI 首跑数据后校准（不假锁）。
           run_bench faae_parallel      cargo bench -p faae-router --bench faae_parallel_bench
+          # ADR-234 S8（第四波·工具链执行面并行化）：两条并行语义 bench 升格。
+          # 与 scripts/perf_thresholds.toml 的 [[run_bench]] 同批（I7 机器对拍），
+          # 组级阈值键见下方 THRESHOLDS_NS / PATH_KEYWORDS 各 8 项（I9 对拍键集）。
+          run_bench tool_plan          cargo bench -p gqep-executor --bench tool_plan
+          run_bench llm_tool_loop_bench cargo bench -p chimera-cli --bench llm_tool_loop_bench
 
       - name: Assert thresholds
         # WHY 用 Python 解析 criterion 的 estimates.json:
@@ -259,13 +269,16 @@ jobs:
               # x3-8、ms 级约 x2-2.5，与 sigmoid 33ns→500ns 先例同原则）；数据与
               # 推导见 docs/reports/c6-kpi-threshold-calibration-report-2026-09-04.md。
               # 与 scripts/perf_thresholds.toml 的 [thresholds_ns] 逐键一致（I1）。
-              # 【2026-10-26 R2 订正（M44/M65）】上句是假的：I1 只断言
-              # set(thresholds_ns) == set(path_keywords)，即**只在 perf_thresholds.toml
-              # 内部两表之间比对**（check_perf_redlines.py:303-308），从不拿本 heredoc
-              # 去对那个表。实测已因此产生过一条静默差集：本 dict 曾缺 hnsw_tiered
-              # （下方已补），而该 bench 每轮都跑（L166 run_bench）且 TOML 有 2ms 阈值
-              # ⇒ 该阈值在 CI 永不被断言，且三道自证结构（I1/I7/compare）均看不见它。
-              # 真正的键集对拍不变式尚未实现，已登记为待落单（ADR-225 §5 / 交付物 03 C-86）。
+              # 【2026-11-04 ADR-234 S8 订正】下方 2026-10-26 的 R2 订正说"真正的键集
+              # 对拍不变式尚未实现" —— 那已陈旧：`check_perf_redlines.py` 的 I9
+              # (scripts/check_perf_redlines.py 的 "I9 heredoc THRESHOLDS_NS 键集 ==" 段)
+              # 就是这份 dict 与 [thresholds_ns] 的键集对拍，本批 --static-only 实测自报
+              # `I9 ... (61 keys; dict found=True)`。仍未覆盖的是**数值**对拍（两边同一键
+              # 写了不同数字，I9 看不见）与 PATH_KEYWORDS 这份 dict（无任何不变式对拍它，
+              # 见下方关键词表注释）—— 二者已登记为判据层待办（ADR-225 §5 / 交付物 03 C-86）。
+              # 实测曾因此产生过一条静默差集：本 dict 曾缺 hnsw_tiered
+              # （下方已补），而该 bench 每轮都跑且 TOML 有 2ms 阈值
+              # ⇒ 该阈值在 CI 永不被断言。
               # gather 本地 median 305ms 为离群值（5 severe outliers；CI 侧 <100ms
               # 通过）→ 数据不可信，保留 100ms 兜底，calibration_pending 唯一存活项。
               "config_concurrency": 3_000_000,     # < 3ms（实测 1.21ms）
@@ -335,6 +348,31 @@ jobs:
               #   faae_hot_scoring/serial_24k 12.201ms（该键 max 组）→ ×2.5 余量 30ms
               "faae_scoring":        50_000_000,
               "faae_hot_scoring":    30_000_000,
+              # ADR-234 S8（第四波）：工具链执行面并行语义。依据 = 本机同码两轮
+              # （sample 10 / warm-up 1s / measure 3s）取 estimates.json 的
+              # median.point_estimate（与 CI 同一字段，不用 stdout）：
+              #   tool_plan/serial_16                249.4 / 250.3 ms → 500ms(×2)
+              #   tool_plan/parallel_16               31.2 / 31.1 ms → 80ms(×2.6)
+              #   tool_plan_edges/two_chains_lockstep 187.9 / 191.1 ms → 400ms(×2.1)
+              #   llm_loop 最重组 16_tools_window8     25.5 / 26.7 µs → 200µs(×7.5)
+              #   llm_tool_decls_32                    3.04 / 2.86 µs → 25µs(×8.2)
+              #   llm_diag_request_rebuild/history_26  4.62 / 4.85 µs → 40µs(×8.3)
+              #   llm_diag_invoke_batch_8             10.6 / 13.1 µs → 80µs(×6.1)
+              #   llm_diag_micro(最重组 event_bus_new) 9.66 / 2.93 µs → 80µs(×8.3)
+              # µs 级给到近一个数量级而非 ms 级的 ×2.5：同码漂移带实测 median 4.95%
+              # 而 **max 69.64%**（就是 event_bus_new 那 3.3× 摆动），×2.5 会锁在噪声上。
+              # 并行退化的可测性来自**按组拆键**：CI 取"命中集合内最大 median"，
+              # 若 serial 与 parallel 同键，阈值下限被 250ms 串行基线钉死 ⇒ 永远测不出。
+              # 未配键：llm_diag_host_timer_granularity(15.5ms) 是宿主计时粒度探针，
+              # 给它绝对阈值 = 让 CI 随 runner 内核 HZ 变红；依 faae concurrent 先例留 unmatched。
+              "tool_plan_serial":    500_000_000,
+              "tool_plan_parallel":   80_000_000,
+              "tool_plan_edges":     400_000_000,
+              "llm_loop":                200_000,
+              "llm_tool_decls":           25_000,
+              "llm_diag_request_rebuild": 40_000,
+              "llm_diag_invoke_batch":    80_000,
+              "llm_diag_micro":           80_000,
           }
 
           # 路径关键词映射:criterion 目录名 → benchmark crate
@@ -432,6 +470,24 @@ jobs:
               # I2 已核:与全部既有键双向互不为子串）
               "faae_scoring":        ["faae_scoring/serial_24k", "faae_scoring/parallel_24k"],
               "faae_hot_scoring":    ["faae_hot_scoring/serial_24k", "faae_hot_scoring/parallel_24k"],
+              # ADR-234 S8：与 perf_thresholds.toml [path_keywords] 同批的 8 键。
+              # 关键词按磁盘实形（`组名/bench名` 或 bench 全名前缀）书写；落笔前用脚本
+              # 对既有 71 个在册关键词与本批 8 键做了**双向**子串预检（新增重叠 0，
+              # I2 上限 1 已被 diff_engine_bench/writer_ansi 占），并逐键确认至少命中一条
+              # 盘上 measurement（命中不到的键是装饰：CI 只打 ::warning::，永不红也永不测）。
+              # 【本 dict 无机器对拍】I9 只比 THRESHOLDS_NS 的键集；这份关键词表与 TOML
+              # 的漂移目前靠人工同批 + 本注释提示（已登记为判据层待办，见波次报告）。
+              "tool_plan_serial":    ["tool_plan/serial_16"],
+              "tool_plan_parallel":  ["tool_plan/parallel_16"],
+              "tool_plan_edges":     ["tool_plan_edges/chain_plus_slow_sibling",
+                                      "tool_plan_edges/two_chains_lockstep"],
+              "llm_loop":            ["llm_loop"],
+              "llm_tool_decls":      ["llm_tool_decls"],
+              "llm_diag_request_rebuild": ["llm_diag_request_rebuild"],
+              "llm_diag_invoke_batch":    ["llm_diag_invoke_batch"],
+              "llm_diag_micro":      ["llm_diag_resolve_hit", "llm_diag_resolve_miss",
+                                      "llm_diag_scheduler_acquire", "llm_diag_cancel_token_only",
+                                      "llm_diag_provider_invoke_only", "llm_diag_event_bus_new"],
           }
 
           criterion_dir = Path("target/criterion")

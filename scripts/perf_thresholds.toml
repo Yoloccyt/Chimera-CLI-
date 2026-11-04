@@ -114,6 +114,29 @@ percentile_sorted = 1000
 faae_scoring = 50000000
 faae_hot_scoring = 30000000
 
+# ADR-234 S8（第四波·工具链执行面并行化）：把两条"并行语义"bench 从 dev-only
+# 升为 registered。取值口径与先例一致（本地实测最重组 × 余量）：
+#   ms 级（含刻意 sleep 的 PlanRunner 方向性基线）余量 ×2-2.6；
+#   µs 级 余量 ×7.5-13（同码两轮漂移带实测 median 4.95% / max 69.64%，
+#   其中 llm_diag_event_bus_new 一轮 9.66µs 一轮 2.93µs —— µs 级必须给到
+#   近一个数量级才不是假锁；faae/P-6 批的 ×2.5 是 ms 级口径，不可照抄到 µs 级）。
+# 键必须**按组拆开**：CI 的断言取"命中集合里的最大 median"，若把 serial 与
+# parallel 塞进同一个键，阈值下限就被 250ms 的串行基线钉死，
+# "并行退化成串行"这件事永远测不出来（这正是本批要买的东西）。
+# 不进 calibration_pending：那个列表是只减不增棘轮（cap=1），加项等于放宽门禁；
+# 本批给的是量级绊线，CI 首跑后收紧（降阈值）不触碰任何棘轮。
+# 未配键的 measurement：llm_diag_host_timer_granularity（实测 15.5ms）是**宿主计时
+# 粒度探针**，量的不是本仓代码的成本，给它绝对阈值就是让 CI 随 runner 内核HZ变红；
+# 依 faae concurrent 组先例留 unmatched（CI 只列诊断，不判红）。
+tool_plan_serial = 500000000
+tool_plan_parallel = 80000000
+tool_plan_edges = 400000000
+llm_loop = 200000
+llm_tool_decls = 25000
+llm_diag_request_rebuild = 40000
+llm_diag_invoke_batch = 80000
+llm_diag_micro = 80000
+
 [path_keywords]
 exit_code_matrix = ["exit_code"]
 diff_engine_bench = ["diff_incremental_5pct", "diff_full_redraw"]
@@ -187,6 +210,24 @@ formal_gate = ["formal_gate/evaluate/256"]
 # ADR-192：关键词按 benchmark_group + BenchmarkId 的真两级磁盘形态书写
 # （同 l2_knn_slo 先例；与既有键无子串冲突，I2 已核：含 "top10_recall" 而非 "l2_recall"）
 hnsw_tiered = ["l2_knn_tiered/top10_recall/10000_tiered"]
+
+# ADR-234 S8：与 [thresholds_ns] 同批的 8 键（I1 成对）。关键词一律按磁盘实形的
+# `组名/bench 名` 或 bench 全名前缀书写（Path 关键词唯一性原则，同 faae/hnsw 先例），
+# 且已用脚本对既有 71 个在册关键词 + 本批 8 键做双向子串预检：新增重叠 0
+# （I2 上限 1 已被 diff_engine_bench/writer_ansi 用掉，再加即红）。
+# 交叉核验含"每个键必须至少命中一条盘上 measurement"—— 命中不到的键是装饰，
+# CI 侧只会打 ::warning:: 而永不红（I7 幽灵条目那一族）。
+tool_plan_serial = ["tool_plan/serial_16"]
+tool_plan_parallel = ["tool_plan/parallel_16"]
+tool_plan_edges = ["tool_plan_edges/chain_plus_slow_sibling",
+                   "tool_plan_edges/two_chains_lockstep"]
+llm_loop = ["llm_loop"]
+llm_tool_decls = ["llm_tool_decls"]
+llm_diag_request_rebuild = ["llm_diag_request_rebuild"]
+llm_diag_invoke_batch = ["llm_diag_invoke_batch"]
+llm_diag_micro = ["llm_diag_resolve_hit", "llm_diag_resolve_miss",
+                  "llm_diag_scheduler_acquire", "llm_diag_cancel_token_only",
+                  "llm_diag_provider_invoke_only", "llm_diag_event_bus_new"]
 
 # calibration_pending：当前值取保守 100ms 兜底、待 CI 首跑实测收紧的键。
 # 项目约束（ADR-159 决策 3）：此列表只减不增；wal_recovery 的 100ms 是真实规格，列在列表外。
@@ -452,4 +493,17 @@ bench = "hnsw_tiered"
 alias = "faae_parallel"
 crate = "faae-router"
 bench = "faae_parallel_bench"
+
+# ADR-234 S8：两条工具链执行面并行语义的 bench 由 dev-only → registered。
+# 文件级注册即"CI 会跑它"（I7 机器断言 CI 的 run_bench 清单 == 本表），
+# 组级阈值见上面 [thresholds_ns] 的 8 键。
+[[run_bench]]
+alias = "tool_plan"
+crate = "gqep-executor"
+bench = "tool_plan"
+
+[[run_bench]]
+alias = "llm_tool_loop_bench"
+crate = "chimera-cli"
+bench = "llm_tool_loop_bench"
 

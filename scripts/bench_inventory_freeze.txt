@@ -24,11 +24,16 @@
 #   按本文件自订约定「删除一行 = 该 bench 升格为受门禁守护」—— 它早已升格,这行是升格时漏撤的旧账。
 #   删除后 I6 下限(len>=70)余量 75→74 仍满足;改前/改后 --selftest 输出逐字节相同,
 #   --static-only 的 rc/I5/I7/VERDICT 全部不变,唯一 stdout 差异是 I6 自报数 (75)→(74)。
+# gqep-executor|tool_plan 与 chimera-cli|llm_tool_loop_bench 两行已删除(2026-11-04,
+#   ADR-234 S8)：按本文件约定「删除一行 = 该 bench 升格为受门禁守护」,二者均已入
+#   perf_thresholds.toml 的 [[run_bench]] 与 8 个组级阈值键,且 bench_check.yml 的
+#   run_bench 行同批补齐(I7 机器对拍)。dev-only 计数 71→69,I6 的真实下限是
+#   **>=60**(见 check_perf_redlines.py 的 I6,历史 70→65→60),上方 2026-09-21 那行
+#   写的 "len>=70" 是**当时**的下限陈述、非现值 —— 抄它会误判本批违规。
+#   原由头「首跑无对照值故不入四表阈值」已被 S8 的实测取代(两轮同码取数见波次报告)。
 chimera-cli|overwindow_bridge|dev-only|overwindow 桥接开发探针,无 SLO
 chimera-cli|quest_orchestrator_bench|dev-only|Quest 编排黑盒探索基准
 chimera-cli|composition_root_bench|dev-only|C12 组合根装配延迟基线(build/build_app_server),启动路径探针,不入四表阈值
-gqep-executor|tool_plan|dev-only|Phase 2/T2 PlanRunner 有界并发方向性基线(ADR-229),同计划串行 vs 窗口对照,首跑无对照值故不入四表阈值
-chimera-cli|llm_tool_loop_bench|dev-only|Phase 7/T7.8 LLM 工具循环延迟基线(ADR-232),脚本化客户端零网络,首跑无对照值故不入四表阈值
 chimera-tui|data_pipeline_bench|dev-only|数据管线开发基准,已由 writer/v3 覆盖主链
 chimera-tui|panels_scale_bench|dev-only|面板规模压力探索基准
 chimera-tui|v3_output_bench|dev-only|v3 输出渲染补充基准,主链已注册 v3_pipeline
