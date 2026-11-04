@@ -39,7 +39,6 @@ def load(path) -> Policy:
         profiles[name] = Profile(
             name=name, include_heavy=bool(row.get("include_heavy", False)),
             jobs=max(1, jobs), allow_mutating=bool(row.get("allow_mutating", False)),
-            reuse_ok=bool(row.get("reuse_ok", False)),
         )
     exec_row = doc.get("exec", {})
     whitelist = tuple(str(x) for x in exec_row.get("whitelist", ()))

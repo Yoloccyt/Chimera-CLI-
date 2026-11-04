@@ -89,7 +89,6 @@ class Profile:
     include_heavy: bool
     jobs: int
     allow_mutating: bool
-    reuse_ok: bool
 
 @dataclass
 class Attempt:

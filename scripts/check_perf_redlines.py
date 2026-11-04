@@ -70,6 +70,9 @@ BENCH_FREEZE_PATH = os.path.join(HERE, "bench_inventory_freeze.txt")
 IGNORED_FREEZE_PATH = os.path.join(HERE, "ignored_test_inventory_freeze.txt")
 # I7 的比对对象: CI 侧真实执行 bench 的清单所在 workflow
 BENCH_WORKFLOW_PATH = os.path.join(ROOT, ".github", "workflows", "bench_check.yml")
+# selftest 的 inv_rc 会临时替换上面的全局来中和 I7；用它判别「这次跑的是不是真文件」，
+# 从而让 I10/I11 的「两份 dict 必须存在」只在真文件上强制（合成夹具无 dict 属正常）。
+_REAL_BENCH_WORKFLOW_PATH = BENCH_WORKFLOW_PATH
 
 # criterion 单位 -> 秒的乘数。三态微符号 (U+00B5 / U+03BC / ASCII u) 必须兼容:
 # criterion 以 UTF-8 输出 "µs", 若宿主按 GBK 解码会得到 "μs"(U+03BC), 而老脚本
@@ -352,6 +355,27 @@ def mode_invariants(redlines, thresholds_doc, freeze):
         for p in th_problems:
             print(f"         {p}")
 
+    # I10/I11 双源对拍（ADR-235 S1）：I9 只覆盖 THRESHOLDS_NS 键集，而「阈值到底有没有
+    # 被断言」取决于关键词能否命中 —— hnsw_tiered 缺关键词时阈值空转，I9 却全程绿。
+    # I11 补的另一半：只比键集时，把 CI 一侧数值改宽（或只改 TOML）无人看得见。
+    # 前置「两份 dict 都在」只在真文件上强制：selftest 的 inv_rc 会用「只有 run_bench
+    # 行」的合成 workflow 临时替换全局来中和 I7，那种文件没有 dict 属正常。
+    if (BENCH_WORKFLOW_PATH == _REAL_BENCH_WORKFLOW_PATH
+            and not _check("I10/I11 preconditions: both dicts present in the real workflow",
+                           ci_table_dicts_present(BENCH_WORKFLOW_PATH))):
+        fails += 1
+    pk_problems, value_problems = ci_table_sync(BENCH_WORKFLOW_PATH, thr, kw)
+    if not _check("I10 heredoc PATH_KEYWORDS keys == heredoc THRESHOLDS_NS keys == TOML keys",
+                  not pk_problems):
+        fails += 1
+        for p in pk_problems:
+            print(f"         {p}")
+    if not _check(f"I11 heredoc threshold values == [[thresholds_ns]] values ({len(thr)} keys)",
+                  not value_problems):
+        fails += 1
+        for p in value_problems:
+            print(f"         {p}")
+
     # I4 兜底债棘轮: 列表只减不增, 且列表内每项当前值必须仍是 100ms 兜底
     pending = set(ratchet.get("calibration_pending", []))
     cap = int(ratchet.get("max_calibration_pending", len(pending)))
@@ -590,6 +614,93 @@ def ci_threshold_dict_present(workflow_path):
         return False
     with open(workflow_path, encoding="utf-8-sig") as fh:
         return bool(CI_THRESHOLDS_DICT_RE.search(fh.read()))
+
+
+def ci_table_dicts_present(workflow_path):
+    """I10/I11 的防伪绿前提：两份 dict（THRESHOLDS_NS 与 PATH_KEYWORDS）都在。
+
+    只查一份不够：只补了一半 dict 的 workflow 会让另一条不变式静默失效，
+    与 hnsw_tiered「有阈值没关键词」是同一个形状。
+    """
+    if not os.path.exists(workflow_path):
+        return False
+    with open(workflow_path, encoding="utf-8-sig") as fh:
+        text = fh.read()
+    return bool(CI_THRESHOLDS_DICT_RE.search(text)) and bool(
+        CI_PATHKEYWORDS_DICT_RE.search(text))
+
+
+# I10/I11 的比对对象：workflow 里 PATH_KEYWORDS dict（键 -> 关键词列表）。
+# 与 THRESHOLDS_NS 同形（值里只有方括号，无嵌套花括号），故同样以「单独一行的 }」收尾。
+# WHY 必须单列一条：断言循环是「先按 PATH_KEYWORDS 找键、再查 THRESHOLDS_NS 的阈值」——
+# 关键词缺项时该 bench 一个 measurement 都匹配不上，循环只打 ::warning::No estimates
+# 后 continue。实测 hnsw_tiered 就因缺这一项，从 2026-09-26 起阈值一直空转，
+# 而 I9（只比 THRESHOLDS_NS 键集）全程绿。
+CI_PATHKEYWORDS_DICT_RE = re.compile(r"PATH_KEYWORDS\s*=\s*\{(.*?)\n\s*\}", re.S)
+
+# heredoc 数值的书写形状：`"key": 2_000_000,`。注行以 # 开头，不会落入此形。
+# 非整数字面量（表达式/裸标识符）必须判红而不是跳过 —— 跳过等于把「解析失败」
+# 记成「没有分歧」，与 I9 防的那种假绿同族。
+CI_THRESHOLD_VALUE_RE = re.compile(r'^\s*"([a-z0-9_]+)":\s*([0-9][0-9_]*)\s*,', re.M)
+
+
+def ci_table_sync(workflow_path, thresholds_ns, path_keywords):
+    """返回 (键集分歧, 数值分歧)；两者皆空 = 对等或本文件无 dict 可查。
+
+    I10 判三集合相等：heredoc PATH_KEYWORDS 键 == heredoc THRESHOLDS_NS 键 ==
+    TOML `[path_keywords]` 键（后者与 `[thresholds_ns]` 的相等已由 I1 保证）。
+    I11 判数值逐键相等：heredoc 是 CI **真正**断言的数字，TOML 是登记处；
+    只比键集时「只改 CI 一侧放宽、或只改 TOML 一侧登记」不会被任何门看见。
+
+    缺 dict 时返回中性（[]）：selftest 的 inv_rc 会把 BENCH_WORKFLOW_PATH 换成
+    「只有 run_bench 行、没有 dict」的合成文件来中和 I7 —— 那里判红会把
+    selftest-17（未破坏夹具必须绿）顶红，那正是 F67 修掉的空断言形态。
+    「真文件到底有没有 dict」由 ci_table_dicts_present 单独判（调用方只在
+    路径等于真文件时强制），与 I9 的 present 探针同一思路。
+    """
+    if not os.path.exists(workflow_path):
+        return ([f"workflow not found: {os.path.relpath(workflow_path, ROOT)}"], [])
+    with open(workflow_path, encoding="utf-8-sig") as fh:
+        text = fh.read()
+    m_th = CI_THRESHOLDS_DICT_RE.search(text)
+    m_pk = CI_PATHKEYWORDS_DICT_RE.search(text)
+    if not m_th or not m_pk:
+        return ([], [])
+
+    pk_body, th_body = m_pk.group(1), m_th.group(1)
+    pk_keys = set(CI_THRESHOLD_KEY_RE.findall(pk_body))
+    th_keys = set(CI_THRESHOLD_KEY_RE.findall(th_body))
+    table_keys = set(path_keywords)
+
+    key_problems = [f"PATH_KEYWORDS heredoc missing key: {k}"
+                    for k in sorted(th_keys - pk_keys)]
+    key_problems += [f"PATH_KEYWORDS heredoc has key absent from THRESHOLDS_NS: {k}"
+                     for k in sorted(pk_keys - th_keys)]
+    key_problems += [f"TOML has threshold with no heredoc PATH_KEYWORDS entry: {k}"
+                     for k in sorted(table_keys - pk_keys)]
+    key_problems += [f"heredoc PATH_KEYWORDS has key absent from TOML: {k}"
+                     for k in sorted(pk_keys - table_keys)]
+
+    pairs = dict(CI_THRESHOLD_VALUE_RE.findall(th_body))
+    value_problems = []
+    for k in sorted(th_keys):
+        raw = pairs.get(k)
+        if raw is None:
+            # 键在、值不是整数字面量 —— 不可判定，按红处理（见上面 WHY）。
+            value_problems.append(f"heredoc value for {k} is not an integer literal")
+            continue
+        if k in thresholds_ns:
+            try:
+                ci_value = int(raw.replace("_", ""))
+                table_value = int(thresholds_ns[k])
+            except (TypeError, ValueError):
+                value_problems.append(f"non-integer threshold for {k} "
+                                      f"(ci={raw!r} table={thresholds_ns[k]!r})")
+                continue
+            if ci_value != table_value:
+                value_problems.append(
+                    f"threshold value drift for {k}: ci={ci_value} table={table_value}")
+    return (key_problems, value_problems)
 
 
 def keyword_overlaps(kw):
@@ -1361,6 +1472,45 @@ def mode_selftest():
         expect("selftest-11g real bench_check.yml heredoc is in sync with [[thresholds_ns]]",
                ci_threshold_key_sync(BENCH_WORKFLOW_PATH,
                                      load_toml(THRESHOLDS_PATH)["thresholds_ns"]), [])
+
+        # 11h/11i：I10/I11 的产环境对账（ADR-235 S1）。11h 若红，说明「阈值登记了但
+        # 关键词缺项」——那正是 hnsw_tiered 从 2026-09-26 起空转六周的真实形态。
+        _td_real = load_toml(THRESHOLDS_PATH)
+        _pk_probs, _val_probs = ci_table_sync(
+            BENCH_WORKFLOW_PATH, _td_real["thresholds_ns"], _td_real["path_keywords"])
+        expect("selftest-11h real PATH_KEYWORDS keys lock-step with THRESHOLDS_NS + TOML",
+               _pk_probs, [])
+        expect("selftest-11i real heredoc threshold values == TOML values",
+               _val_probs, [])
+
+        with open(BENCH_WORKFLOW_PATH, encoding="utf-8-sig") as fh:
+            _real_wf = fh.read()
+
+        # 11j：数值漂移必红（副本里把 hnsw 的 heredoc 值改大）—— 键集仍相等，
+        # 所以只有 I11 能抓，正好证明 I10 不是它的替代品。
+        drift, n_drift = re.subn(r'("hnsw_tiered":\s*)[0-9_]+', r'\g<1>99_000_000',
+                                 _real_wf, count=1)
+        assert n_drift == 1, "fixture anchor missing: hnsw_tiered heredoc value line"
+        drift_path = os.path.join(tmp, "wf_value_drift.yml")
+        with open(drift_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(drift)
+        _, drift_probs = ci_table_sync(drift_path, _td_real["thresholds_ns"],
+                                       _td_real["path_keywords"])
+        expect("selftest-11j heredoc value drift is fatal",
+               (len(drift_probs), all("hnsw_tiered" in p for p in drift_probs)), (1, True))
+
+        # 11k：关键词缺项必红（副本里删掉那一行）—— 这就是修复前的真实形态。
+        missing, n_missing = re.subn(r'\n\s*"hnsw_tiered":\s*\[[^\]]*\],', "", _real_wf,
+                                     count=1)
+        assert n_missing == 1, "fixture anchor missing: hnsw_tiered keyword line"
+        missing_path = os.path.join(tmp, "wf_keyword_missing.yml")
+        with open(missing_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(missing)
+        missing_probs, _ = ci_table_sync(missing_path, _td_real["thresholds_ns"],
+                                         _td_real["path_keywords"])
+        expect("selftest-11k missing PATH_KEYWORDS entry is fatal and names the key",
+               (bool(missing_probs), all("hnsw_tiered" in p for p in missing_probs)),
+               (True, True))
 
         # 断言 12/13：入口契约（F18 + F29）—— 过了 main() 的码才算数，
         # 只在注释里写"0=通过/1=违反/2=不可判定"不算（那是另一道"写了不跑"）。

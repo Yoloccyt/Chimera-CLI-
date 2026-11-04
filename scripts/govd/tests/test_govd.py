@@ -257,11 +257,11 @@ class PlannerTests(unittest.TestCase):
 
     def test_mutating_requires_both_profile_and_flag(self):
         tasks = [make_task(id="M-1", mutating=True), make_task(id="L-1")]
-        pr = Profile("pr", False, 1, False, False)
+        pr = Profile("pr", False, 1, False)
         selected, skipped = planner.plan(tasks, pr, False)
         self.assertEqual([t.id for t in selected], ["L-1"])
         self.assertEqual([t.id for t in skipped], ["M-1"])
-        rel = Profile("release", True, 1, True, False)
+        rel = Profile("release", True, 1, True)
         self.assertEqual(len(planner.plan(tasks, rel, True)[0]), 2)
         self.assertEqual(len(planner.plan(tasks, rel, False)[0]), 1)
 
@@ -277,7 +277,6 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(self.pol.profiles["pr"].include_heavy)
         self.assertTrue(self.pol.profiles["nightly"].include_heavy)
         self.assertTrue(self.pol.profiles["release"].allow_mutating)
-        self.assertFalse(self.pol.profiles["release"].reuse_ok)
         self.assertIsNone(policy.role_check(self.pol, "ci", "pr"))
         self.assertIn("may not run", policy.role_check(self.pol, "ci", "release"))
         self.assertIn("unknown role", policy.role_check(self.pol, "root", "pr"))

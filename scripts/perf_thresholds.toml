@@ -99,7 +99,11 @@ formal_gate = 2000
 # ADR-192（2026-09-26）：mlc L2 分层检索 10k 档 Top-10 召回。立项时现值 4.117ms
 # （已越 mlc_l2_knn 的 4ms redline），分层后目标 ≤ 2ms（≥2× 改善且退出警示带）。
 # 实际门槛以静默态单跑 median 定档（见 perf-slo-2026-09-25.md §1.1 落地状态）。
-hnsw_tiered = 2_000_000
+# 【ADR-235 S1，2026-11-04】上一行 2ms 从未在 CI 生效过：workflow 的 THRESHOLDS_NS
+# 有本键，但 PATH_KEYWORDS 缺关键词 ⇒ 断言循环打 ::warning:: 后 continue（缺一表即空转）。
+# 两表同批补齐后按用户裁决**先给宽松量级 8ms**（4× 立项目标），CI 首跑拿到真实 median
+# 再收紧到 2ms；收紧＝降阈值，不触碰 calibration_pending / I4 等任何只减不增棘轮。
+hnsw_tiered = 8000000
 sigmoid_scalar = 500
 sigmoid_map = 200000
 percentile_sorted = 1000

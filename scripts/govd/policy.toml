@@ -2,25 +2,21 @@
 include_heavy = false
 jobs = 4
 allow_mutating = false
-reuse_ok = false
 
 [profiles.nightly]
 include_heavy = true
 jobs = 2
 allow_mutating = false
-reuse_ok = false
 
 [profiles.release]
 include_heavy = true
 jobs = 1
 allow_mutating = true
-reuse_ok = false
 
 [profiles.local]
 include_heavy = false
 jobs = 1
 allow_mutating = false
-reuse_ok = false
 
 [exec]
 whitelist = ["{python}", "bash", "pwsh", "cargo", "git"]

@@ -292,11 +292,18 @@ jobs:
               "l2_recall":          5_000_000,     # < 5ms（实测 1.86ms）
               # ADR-192 mlc L2 分层检索 10k 档 Top-10 召回（R2 C-67 补齐）：
               # 本键原仅存在于 scripts/perf_thresholds.toml:93（= 2_000_000），
-              # 而对应 bench 已在 L166 每轮跑 ⇒ 阈值在册却永不执行（M44）。
+              # 而对应 bench 已在 run_bench 每轮跑 ⇒ 阈值在册却永不执行（M44）。
+              # 【2026-11-04 ADR-235 S1 订正】上一版写「（下方已补）」只补了
+              # THRESHOLDS_NS 这一半 —— PATH_KEYWORDS 始终没有本键，于是 CI 侧
+              # bench_results 里永远没有它，断言循环只打 ::warning::No estimates
+              # 后 continue：该阈值从 2026-09-26 起一直空转。现两表同批补齐，
+              # 并新增 I10（三集合相等）防下一次只补一半。
               # 插入序安全：其关键词 `l2_knn_tiered/top10_recall/10000_tiered` 与既有任一键
               # 均无子串关系（TOML 侧 I2 已核，且含 top10_recall 而非 l2_recall），
               # 故放此处不改变任何 first-match-wins 归类。
-              "hnsw_tiered":        2_000_000,     # < 2ms（ADR-192 立项 ≤2ms）
+              # 数值：按用户裁决先给宽松量级 8ms（4× 立项目标），CI 首跑拿到真实
+              # median 后收紧到 2ms —— 收紧是降阈值，不触碰任何棘轮。
+              "hnsw_tiered":        8_000_000,     # < 8ms（临时宽松；目标 ≤2ms，待 CI 首跑收紧）
               "compress":           50_000,        # < 50µs（实测 9.6µs）
               "compute_masks":      1_500_000,     # < 1.5ms（实测 583µs）
               "delegation":         40_000_000,    # < 40ms（实测 16.2ms）
@@ -475,8 +482,8 @@ jobs:
               # 对既有 71 个在册关键词与本批 8 键做了**双向**子串预检（新增重叠 0，
               # I2 上限 1 已被 diff_engine_bench/writer_ansi 占），并逐键确认至少命中一条
               # 盘上 measurement（命中不到的键是装饰：CI 只打 ::warning::，永不红也永不测）。
-              # 【本 dict 无机器对拍】I9 只比 THRESHOLDS_NS 的键集；这份关键词表与 TOML
-              # 的漂移目前靠人工同批 + 本注释提示（已登记为判据层待办，见波次报告）。
+              # 【2026-11-04 ADR-235 S1】原写「本 dict 无机器对拍」—— 现由 I10（三集合相等）
+              # 与 I11（heredoc 数值 == TOML）两条不变式覆盖，`--static-only` 会自报。
               "tool_plan_serial":    ["tool_plan/serial_16"],
               "tool_plan_parallel":  ["tool_plan/parallel_16"],
               "tool_plan_edges":     ["tool_plan_edges/chain_plus_slow_sibling",
@@ -488,6 +495,9 @@ jobs:
               "llm_diag_micro":      ["llm_diag_resolve_hit", "llm_diag_resolve_miss",
                                       "llm_diag_scheduler_acquire", "llm_diag_cancel_token_only",
                                       "llm_diag_provider_invoke_only", "llm_diag_event_bus_new"],
+              # ADR-235 S1：补回 THRESHOLDS_NS 早有、本 dict 一直缺的那一项（见上文
+              # hnsw_tiered 注释）。关键词按磁盘实形书写，与 TOML [path_keywords] 同值。
+              "hnsw_tiered":         ["l2_knn_tiered/top10_recall/10000_tiered"],
           }
 
           criterion_dir = Path("target/criterion")
