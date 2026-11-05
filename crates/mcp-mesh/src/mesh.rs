@@ -1201,10 +1201,17 @@ mod tests {
         }
     }
 
-    /// P2-1：默认预算（200ms）内首次失败 + 50ms 退避重试必须能成功。
+    /// P2-1：默认预算内首次失败 + 50ms 退避重试必须能成功。
     ///
     /// 改前基数 200ms ≥ 预算 → 首次退避即被外层 timeout 取消（重试是死码）。
-    #[tokio::test]
+    ///
+    /// WHY `start_paused`（ADR-236 S4）：本用例原本断言的是**墙钟**——预算 200ms
+    /// 与退避 50ms 都是真实时间，16 核宿主在 96% 内存压力下曾单次失败
+    /// （同机连跑 3/3 通过 + 之后两轮全量通过 ⇒ 是计时脆弱而非逻辑回归）。
+    /// 超时与退避都走 `tokio::time`（mesh.rs 的 `timeout` + `sleep`），因此
+    /// 切到虚拟时钟后**判据更强而不是更弱**：预算是否容得下一次退避变成确定性
+    /// 算术，任何一次回归都稳定判红，不再依赖宿主负载。
+    #[tokio::test(start_paused = true)]
     async fn commit_retry_within_default_budget() {
         let client = Arc::new(FlakyOnceClient::default());
         let mesh = McpMesh::with_participant_client(
@@ -1220,6 +1227,35 @@ mod tests {
             .await
             .expect("默认预算内应能完成首次失败 + 重试（改前必超时）");
         assert!(result.success, "重试后 commit 应成功");
+    }
+
+    /// 与上一条成对的正控：预算小于一次退避 ⇒ 必须超时失败。
+    ///
+    /// WHY 必须存在：只有"预算内成功"这一半时，把 `transaction_timeout_ms` 调大
+    /// 或把退避调小都能让它继续绿 —— 它并未证明超时真的在生效。这一条钉住
+    /// "200ms 不是装饰"：预算 10ms < 首次退避 50ms ⇒ 重试拿不到时间片 ⇒ 事务失败。
+    #[tokio::test(start_paused = true)]
+    async fn commit_retry_backoff_exceeding_budget_times_out() {
+        let client = Arc::new(FlakyOnceClient::default());
+        let mesh = McpMesh::with_participant_client(
+            MeshConfig {
+                transaction_timeout_ms: 10,
+                ..MeshConfig::default()
+            },
+            None,
+            Arc::clone(&client) as Arc<dyn ParticipantClient>,
+        );
+        mesh.register_server(MeshServer::new("s-0", "203.0.113.1:80", vec![]))
+            .expect("注册失败");
+
+        let err = mesh
+            .execute_transaction(vec!["s-0".into()], "op".into())
+            .await
+            .expect_err("预算容不下一次退避时必须报超时，而不是静默成功或返回 Ok(false)");
+        assert!(
+            matches!(err, McpError::TransactionTimeout { timeout_ms: 10, .. }),
+            "期望 TransactionTimeout(timeout_ms=10)，实得 {err:?}"
+        );
     }
 
     /// P2-1：位移封顶 6，极大 `max_retries` 不 panic/回绕，单次退避 ≤ 3200ms。
