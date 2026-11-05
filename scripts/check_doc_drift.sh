@@ -41,6 +41,11 @@ set -euo pipefail
 
 # PATH may lack coreutils when launched from PowerShell/MSYS; harmless on Linux.
 export PATH="/usr/bin:/bin:$PATH"
+# extglob is required by the freeze-file normalisation below: in a bash PATTERN,
+# `*` means "any characters" while sed's regex `*` means "repeat the previous
+# class" -- writing `[[:space:]]*|` as a glob swallows the rest of the line.
+# `*([[:space:]])` is the pattern-language spelling of "zero or more spaces".
+shopt -s extglob
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$root"
@@ -116,14 +121,19 @@ load_freeze() {
         case "$line" in
             ''|\#*) continue ;;
         esac
+        # 同一套规整，全部改内置展开：`sed`/`tr` 在本机单价 118ms，
+        # 而这个循环对 freeze 的每一条数据行都要付 2~4 次子进程。
         local body="${line%%#*}"
-        body="$(printf '%s' "$body" | sed 's/[[:space:]]*$//')"
+        body="${body%"${body##*[![:space:]]}"}"          # rtrim，等价 s/[[:space:]]*$//
         case "$body" in
-            "drift = "*) REGISTRY+=("$(printf '%s' "${body#drift = }" | sed 's/[[:space:]]*|[[:space:]]*/|/g')") ;;
+            "drift = "*)
+                local squeezed="${body#drift = }"
+                REGISTRY+=("${squeezed//*([[:space:]])|*([[:space:]])/|}") ;;
             *=*)
-                k="$(printf '%s' "${body%%=*}" | tr -d '[:space:]')"
+                k="${body%%=*}"; k="${k//[[:space:]]/}"
                 LOCKED_KEYS+=("$k")
-                LOCKED_VALS+=("$(printf '%s' "${body#*=}" | tr -d '[:space:]')")
+                local v="${body#*=}"; v="${v//[[:space:]]/}"
+                LOCKED_VALS+=("$v")
                 ;;
         esac
     done < "$freeze"
@@ -215,7 +225,7 @@ run_check() {
     # --- layer 2: doc declarations vs locked baseline -----------------------
     local -a findings=()    # unique "file|metric|declared" mismatches found in docs
     local -a fevidence=()   # first "file:line" evidence per finding (aligned)
-    local file ere metric hits lineno text declared triple dup t
+    local file ere metric hits lineno text declared triple dup t _pre line
     for spec in "${DECLS[@]}"; do
         file="${spec%%|*}"; rest="${spec#*|}"
         metric="${rest%%|*}"; ere="${rest#*|}"
@@ -223,7 +233,23 @@ run_check() {
             echo "[FAIL] declaration target missing: $file" >&2
             return 2
         fi
-        hits="$(grep -Eno "$ere" "$scan_root/$file" || true)"
+        # bash 内置 ERE 取代 `grep -Eno`：本机实测外部命令单价 118ms、`$(...)` 74ms，
+        # 而这一段每条命中还要再付 `printf|grep|head` 三个子进程 —— 真跑 9.83s、
+        # 自测 59.19s 几乎全在这里。与 grep 的两处语义差都被下游抵消：
+        #   1) 同一行多次命中时 grep 会出行多次，内置只取最左一次 —— 两者的 declared
+        #      相同，下面 findings 的去重本来就会折叠 ⇒ 判定与顺序都不变；
+        #   2) 零命中时 grep 退 1、hits 为空，与循环结束同样落进 anchor-lost 分支。
+        lineno=0
+        hits=""      # 累加式扫描必须每条锚点重置（旧写法由命令替换隐式赋值，天然为空）
+        while IFS= read -r line || [ -n "$line" ]; do
+            lineno=$((lineno + 1))
+            if [[ "$line" =~ $ere ]]; then
+                hits+="${lineno}:${BASH_REMATCH[0]}"$'
+'
+            fi
+        done < "$scan_root/$file"
+        hits="${hits%$'
+'}"
         if [ -z "$hits" ]; then
             echo "[FAIL] anchor lost: no match in $file for the $metric anchor" >&2
             echo "       (gate cannot verify - anchor rusting away is not green;" >&2
@@ -234,7 +260,13 @@ run_check() {
         while IFS= read -r hit; do
             lineno="${hit%%:*}"
             text="${hit#*:}"
-            declared="$(printf '%s' "$text" | grep -Eo '[0-9]+' | head -1)"
+            # 首个连续数字段（等价 `grep -Eo '[0-9]+' | head -1`），零 fork：
+            # 先切掉第一个数字之前的前缀，再截到第一个非数字为止。
+            # WHY 不能写成 ${_pre:+...}：命中行常以数字开头（"2 类 EventTopic"），
+            # 那时 _pre 为空，`:+` 会把整个展开吞成空串 ⇒ declared 变空 = 假红。
+            _pre="${text%%[0-9]*}"
+            declared="${text#"$_pre"}"
+            declared="${declared%%[!0-9]*}"
             i=0
             for m in "${METRICS[@]}"; do [ "$m" = "$metric" ] && break; i=$((i + 1)); done
             if [ "$declared" = "${LOCKED[$i]}" ]; then
