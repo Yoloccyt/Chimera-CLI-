@@ -203,26 +203,61 @@ is_declared_dep() {
 # =============================================================================
 # Dependency resolution
 # =============================================================================
+#
+# WHY 一次 awk 建全图（ADR-236 S2）：本机实测 `$(...)` 命令替换单价 74ms、外部命令
+# 118ms（Git Bash fork 极慢），而旧实现"每个 crate 一条 tr|sed|grep|grep|sed 流水线"
+# 且被 4 个 check 各调一遍 ⇒ 单门 161.76s。现在一趟 awk 产出 `crate<TAB>dep`，
+# 图存进 DEPS 关联数组，check 侧零 fork。
+#
+# 提取语义逐条对齐旧流水线（改动任何一条都会改判定面）：
+#   1) 先去掉所有 \r（`tr -d '\r'` 是全行删除，不是只删行尾）—— CRLF manifest 若
+#      不归一化会得到**空依赖表**，那是假绿，比假红更危险（2026-08-31 实录）；
+#   2) 只取 `[dependencies]` 到下一个 `[` 头之间的行（dev-dependencies 排除）；
+#   3) 只认 `name = { workspace = true … }`（裸版本号引用是外部依赖，不算内部边）；
+#   4) 名字取行首标识符（旧 sed 是 `^([A-Za-z0-9_-]+).*/\1`，与空格位置无关）。
+CRATE_LIST=()
+declare -A DEPS
 
-# Normal mode: extract production workspace deps from the [dependencies] section
-# (dev-dependencies excluded). Slices from the `[dependencies]` header to the
-# next `[`-prefixed header, strips header lines, then keeps only
-# `name = { workspace = true }` refs (plain version refs are external).
-workspace_deps_of() {
-    local crate="$1"
-    # 层图条目必须对应真实目录：条目比代码活得久时（crate 已退役但层号未清理），
-    # 这里会直接对不存在的 manifest 报错。跳过而非静默产出空列表，让 C3 反向
-    # 检查去显式暴露它。
-    [ -f "crates/$crate/Cargo.toml" ] || return 0
-    # WHY `tr -d '\r'`: same CRLF fragility as above -- without it a CRLF manifest
-    # yields an EMPTY dep list, so the crate is quietly never checked (false green,
-    # strictly worse than a false red).
-    tr -d '\r' < "crates/$crate/Cargo.toml" \
-        | sed -n '/^\[dependencies\]$/,/^\[/p' \
-        | grep -v '^\[' \
-        | grep -E '^[A-Za-z0-9_-]+[[:space:]]*=[[:space:]]*\{[[:space:]]*workspace[[:space:]]*=[[:space:]]*true' \
-        | sed -E 's/^([A-Za-z0-9_-]+).*/\1/' || true
+build_graph() {
+    local line crate dep
+    if [ "$SELFTEST" = "1" ]; then
+        # 合成图：名字集与 mock 表同源，逐名取一次（7 次 fork，只在这里付）
+        local mock="mlc-engine repo-wiki event-bus gqep-executor pvl-layer nexus-contracts chimera-tui"
+        for crate in $mock; do
+            CRATE_LIST+=("$crate")
+            DEPS[$crate]="$(mock_deps_of "$crate")"
+        done
+        return 0
+    fi
+    while IFS=$'\t' read -r crate dep; do
+        [ -n "${DEPS[$crate]+set}" ] || CRATE_LIST+=("$crate")
+        DEPS[$crate]="${DEPS[$crate]:+${DEPS[$crate]} }$dep"
+    done < <(awk '
+        FNR==1 { crate = FILENAME; sub(/^crates\//, "", crate); sub(/\/Cargo\.toml$/, "", crate); inside = 0 }
+        { line = $0; gsub(/\r/, "", line) }
+        line ~ /^\[/ { inside = (line == "[dependencies]") }
+        inside && match(line, /^[A-Za-z0-9_-]+[[:space:]]*=[[:space:]]*\{[[:space:]]*workspace[[:space:]]*=[[:space:]]*true/) {
+            match(line, /^[A-Za-z0-9_-]+/); print crate "\t" substr(line, RSTART, RLENGTH)
+        }
+    ' crates/*/Cargo.toml)
+    # CRATE_LIST 的顺序 = glob 顺序（bash 对 glob 结果排序），与旧 `for d in crates/*/`
+    # 一致；缺 Cargo.toml 的目录不产任何行 ⇒ 与旧的 `[ -f ] || return 0` 同构，
+    # 由 C3 的磁盘普查去显式暴露层图条目对不上真实目录的情况。
 }
+
+# 层号查询的记忆化包装：`layer_of()` 本体一字不改（scripts/check_l0_sublayer.py
+# G-125/G-126 用正则解析它的 case 表，且它仍是唯一真值源）。结果写进全局
+# LAYER_OF，调用点因此不再 fork —— 每个**不同名字**只付一次 74ms。
+declare -A LAYER_OF_MEMO
+LAYER_OF=""
+layer_of_memo() {
+    local key="$1"
+    if [ -z "${LAYER_OF_MEMO[$key]+set}" ]; then
+        LAYER_OF_MEMO[$key]="$(layer_of "$key")"
+    fi
+    LAYER_OF="${LAYER_OF_MEMO[$key]}"
+}
+
 
 # SelfTest mode: embedded mock graph with deliberately constructed violations.
 mock_deps_of() {
@@ -241,26 +276,9 @@ mock_deps_of() {
     esac
 }
 
-# Unified dep source: real files (normal) or mock graph (selftest).
-deps_of() {
-    if [ "$SELFTEST" = "1" ]; then
-        mock_deps_of "$1"
-    else
-        workspace_deps_of "$1"
-    fi
-}
-
-# Crate universe: real crates/* dirs (normal) or mock crate list (selftest).
-all_crates() {
-    if [ "$SELFTEST" = "1" ]; then
-        echo "mlc-engine repo-wiki event-bus gqep-executor pvl-layer nexus-contracts chimera-tui"
-    else
-        for d in crates/*/; do
-            [ -f "$d/Cargo.toml" ] || continue
-            basename "$d"
-        done
-    fi
-}
+# `deps_of()` / `all_crates()` 已并入 build_graph()：两者的返回集合与顺序由
+# CRATE_LIST / DEPS 一次性确定（旧实现每次调用都 fork 一条五段流水线，
+# 而这两个函数只在循环里被 `$(...)` 调用 —— 正是 161s 的来源）。
 
 # =============================================================================
 # Checks A / B / C (shared by normal + selftest mode)
@@ -280,12 +298,12 @@ run_checks() {
     # live in ADR-187; see gate-predicate parity gate (G-38/G-39) going expect=0.
 
     # --- Check B: upward dependency L(N) -> L(N+1) ---
-    for crate in $(all_crates); do
-        layer="$(layer_of "$crate")"
+    for crate in "${CRATE_LIST[@]}"; do
+        layer_of_memo "$crate"; layer="$LAYER_OF"
         [ -n "$layer" ] || continue   # undefined crate -> handled by C
-        for dep in $(deps_of "$crate"); do
+        for dep in ${DEPS[$crate]}; do
             is_adr_exception "$crate" "$dep" && continue
-            dep_layer="$(layer_of "$dep")"
+            layer_of_memo "$dep"; dep_layer="$LAYER_OF"
             [ -n "$dep_layer" ] || continue   # undefined dep -> handled by C
             if [ "$dep_layer" -gt "$layer" ]; then
                 report+=("[GAP-B] $crate (L$layer) -> $dep (L$dep_layer) upward dependency violation")
@@ -300,11 +318,11 @@ run_checks() {
     # (e.g. nexus-app-server -> nexus-subagent L7), so blocking their downward
     # edges would forbid wire-up itself.
     for crate in chimera-tui; do
-        layer="$(layer_of "$crate")"
+        layer_of_memo "$crate"; layer="$LAYER_OF"
         [ -n "$layer" ] || continue
-        for dep in $(deps_of "$crate"); do
+        for dep in ${DEPS[$crate]}; do
             is_adr_exception "$crate" "$dep" && continue
-            dep_layer="$(layer_of "$dep")"
+            layer_of_memo "$dep"; dep_layer="$LAYER_OF"
             [ -n "$dep_layer" ] || continue
             if [ "$dep_layer" -ge 2 ] && [ "$dep_layer" -le 9 ]; then
                 report+=("[GAP-E] $crate (L10) -> $dep (L$dep_layer) outbound violation; route cross-layer data via EventBus (2.2)")
@@ -317,9 +335,10 @@ run_checks() {
     # C1: every referenced workspace dep must be either an internal crate (with
     # a layer) or declared in root [workspace.dependencies]; anything else is an
     # undefined dependency (typo / unregistered new crate).
-    for crate in $(all_crates); do
-        for dep in $(deps_of "$crate"); do
-            if [ -z "$(layer_of "$dep")" ] && ! is_declared_dep "$dep"; then
+    for crate in "${CRATE_LIST[@]}"; do
+        for dep in ${DEPS[$crate]}; do
+            layer_of_memo "$dep"
+            if [ -z "$LAYER_OF" ] && ! is_declared_dep "$dep"; then
                 report+=("[GAP-C] $crate references undefined dependency <$dep>")
                 status=1
             fi
@@ -336,7 +355,8 @@ run_checks() {
         status=1
     fi
     for crate in $layered_crates; do
-        if [ -z "$(layer_of "$crate")" ]; then
+        layer_of_memo "$crate"
+        if [ -z "$LAYER_OF" ]; then
             report+=("[GAP-C] layer map entry <$crate> has no layer (internal config error)")
             status=1
         fi
@@ -348,9 +368,10 @@ run_checks() {
         for d in crates/*/; do
             [ -f "$d/Cargo.toml" ] || continue
             local name
-            name="$(basename "$d")"
+            name="${d%/}"; name="${name##*/}"
             disk_count=$((disk_count + 1))
-            if [ -z "$(layer_of "$name")" ]; then
+            layer_of_memo "$name"
+            if [ -z "$LAYER_OF" ]; then
                 report+=("[GAP-C] disk crate <$name> not registered in layer map (expect $expected_crates/$expected_crates coverage)")
                 status=1
             fi
@@ -371,8 +392,9 @@ run_checks() {
     if [ "$scan_disk" = "yes" ] && [ -f "crates/chimera-mas/Cargo.toml" ]; then
         local mas_internal=0
         local mas_limit=16
-        for dep in $(workspace_deps_of chimera-mas); do
-            if [ -n "$(layer_of "$dep")" ]; then
+        for dep in ${DEPS[chimera-mas]}; do
+            layer_of_memo "$dep"
+            if [ -n "$LAYER_OF" ]; then
                 mas_internal=$((mas_internal + 1))
             fi
         done
@@ -388,6 +410,9 @@ run_checks() {
 # =============================================================================
 # Main flow
 # =============================================================================
+
+# 图先建好，check 侧只做数组查找 —— 这一步把"每 crate 一条五段流水线"降为一次 awk。
+build_graph
 
 if [ "$SELFTEST" = "1" ]; then
     # SelfTest mode: run the shared checks against the embedded mock graph.
