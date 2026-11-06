@@ -17,12 +17,14 @@
 //! ```
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use nexus_contracts::tool_plan::{guards, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan};
+use tokio::sync::Semaphore;
 
 /// 工具执行器 — 接入方注入（execpolicy 审批/沙箱/超时/审计流水线挂载点）
 ///
@@ -83,11 +85,16 @@ pub struct PlanSummary {
 }
 
 /// 计划运行器 — topo 序解释执行 DAG
+///
+/// 分层执行:只读/纯数据算子层有界并发（`Semaphore` 上界 = 默认 8 或
+/// [`Self::with_concurrency`] 覆写值）;含「可能写」节点的层整层串行。
 pub struct PlanRunner {
     /// 工具执行器（注入）
     executor: Box<dyn ToolExecutor>,
     /// 守卫
     guards: PlanGuards,
+    /// 只读层并发上界（有界,恒 ≥ 1）
+    concurrency: usize,
 }
 
 impl std::fmt::Debug for PlanRunner {
@@ -95,22 +102,43 @@ impl std::fmt::Debug for PlanRunner {
         // Box<dyn ToolExecutor> 无 Debug:trait 对象边界（与 AppServer 同模式）
         f.debug_struct("PlanRunner")
             .field("guards", &self.guards)
+            .field("concurrency", &self.concurrency)
             .finish_non_exhaustive()
     }
 }
 
 impl PlanRunner {
+    /// 默认只读层并发上界:默认 8 = 有界上界，语义不变（结果与顺序契约不受并发度影响）
+    const DEFAULT_CONCURRENCY: usize = 8;
+
     /// 新建运行器
+    ///
+    /// 默认并发度 8 = 有界上界，语义不变（结果与顺序契约不受并发度影响，
+    /// 并发度只影响只读层的墙钟并行度）。
     #[must_use]
     pub fn new(executor: Box<dyn ToolExecutor>, guards: PlanGuards) -> Self {
-        Self { executor, guards }
+        Self {
+            executor,
+            guards,
+            concurrency: Self::DEFAULT_CONCURRENCY,
+        }
     }
 
-    /// 执行计划 — 校验即拒（冲突计划 100% 拒绝）,分层并行解释执行
+    /// 覆写只读层并发上界
     ///
-    /// # 执行模型（WI-16 门禁:无冲突层内全并行）
+    /// `n == 0` 按 1 处理:信号量为 0 时首个 `acquire` 永久挂起 = 死锁。
+    #[must_use]
+    pub fn with_concurrency(mut self, n: usize) -> Self {
+        self.concurrency = n.max(1);
+        self
+    }
+
+    /// 执行计划 — 校验即拒（冲突计划 100% 拒绝）,分层解释执行
+    ///
+    /// # 执行模型（WI-16 门禁:无冲突层内并行）
     /// DAG 按节点深度分层（Kahn 最长路径）;同层节点互无依赖（DAG 性质）,
-    /// 经 `FuturesUnordered` 并行执行;层间串行（数据依赖）。
+    /// 层间串行（数据依赖）。层内策略:只读/纯数据算子层经 `FuturesUnordered`
+    /// + `Semaphore` 有界并发;含「可能写」节点的层整层串行（不可重排、不可并发）。
     ///
     /// # 返回
     /// - `Ok(PlanSummary)`:聚合结果回填（预算内截断）;
@@ -141,29 +169,13 @@ impl PlanRunner {
                 truncated = true;
                 break;
             }
-            // 同层并行（FuturesUnordered,§4.1 规范）
-            let mut tasks = FuturesUnordered::new();
-            for node in layer {
-                let input = self.inputs_of(plan, &env, &node.id);
-                let node_ref = node.clone();
-                tasks.push(async move {
-                    let out = self.exec_node(&node_ref, &input).await;
-                    (node_ref, out)
-                });
-            }
-            while let Some((node, out)) = tasks.next().await {
-                if node.op == ToolOp::ToolCall {
-                    tool_calls += 1;
-                }
-                nodes_executed += 1;
-                env.insert(node.id.clone(), out);
-                // 回填预算守卫:环境累积超限即截断
-                if env.values().map(String::len).sum::<usize>() > self.guards.budget_bytes {
-                    truncated = true;
-                    break;
-                }
-            }
-            if truncated {
+            // 层内策略:副作用层串行,只读/纯算子层有界并发
+            let layer_truncated = self
+                .exec_layer(plan, layer, &mut env, &mut tool_calls, &mut nodes_executed)
+                .await;
+            // 回填预算守卫:环境累积超限即截断（串行/并发两条路径同口径）
+            if layer_truncated {
+                truncated = true;
                 break;
             }
         }
@@ -181,6 +193,99 @@ impl PlanRunner {
             duration_ms: started.elapsed().as_millis() as u64,
             truncated,
         })
+    }
+
+    /// 单层执行 — 按层的副作用性质选择串行/有界并发
+    ///
+    /// # 返回
+    /// `true` = 回填预算超限（调用方置 `truncated` 并终止后续层）;
+    /// `false` = 本层正常完成。
+    async fn exec_layer(
+        &self,
+        plan: &ToolPlan,
+        layer: &[ToolNode],
+        env: &mut HashMap<String, String>,
+        tool_calls: &mut usize,
+        nodes_executed: &mut usize,
+    ) -> bool {
+        if layer_requires_serial(layer) {
+            self.exec_layer_serial(plan, layer, env, tool_calls, nodes_executed)
+                .await
+        } else {
+            self.exec_layer_concurrent(plan, layer, env, tool_calls, nodes_executed)
+                .await
+        }
+    }
+
+    /// 串行层执行 — 按既有层序逐节点 `await`（不 spawn、不并发）
+    ///
+    /// WHY 整层串行:该层存在 `op == ToolCall && side_effect != Some(ReadOnly)` 的节点,
+    /// 即有副作用（显式 `Write` 或未声明 `None` 保守按「可能写」处理）。有副作用节点
+    /// 不可重排、不可并发:并发会让同层写入顺序由调度器决定 ⇒ 结果不可复现,
+    /// 审计链也无法对齐「计划声明顺序」的可审计性契约。
+    async fn exec_layer_serial(
+        &self,
+        plan: &ToolPlan,
+        layer: &[ToolNode],
+        env: &mut HashMap<String, String>,
+        tool_calls: &mut usize,
+        nodes_executed: &mut usize,
+    ) -> bool {
+        for node in layer {
+            // 每个节点用「前序节点已回填」的 env 计算输入（数据依赖需逐节点可见）
+            let input = self.inputs_of(plan, env, &node.id);
+            let out = self.exec_node(node, &input).await;
+            accumulate(node, out, env, tool_calls, nodes_executed);
+            if env.values().map(String::len).sum::<usize>() > self.guards.budget_bytes {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 并发层执行 — 只读/纯数据算子层:`Semaphore` 限制同时进行的节点数
+    ///
+    /// WHY 有界而非无上限 spawn:无上限 spawn 会把整层一次性推入运行时就绪队列,
+    /// 在飞任务数与峰值内存随层宽线性增长（层宽受 `max_steps` 限制但仍可达 64）;
+    /// 信号量把在飞节点数钉死在 `concurrency`,限流只延后不拒绝。
+    async fn exec_layer_concurrent(
+        &self,
+        plan: &ToolPlan,
+        layer: &[ToolNode],
+        env: &mut HashMap<String, String>,
+        tool_calls: &mut usize,
+        nodes_executed: &mut usize,
+    ) -> bool {
+        let permits = Arc::new(Semaphore::new(self.concurrency.max(1)));
+        let mut tasks = FuturesUnordered::new();
+        for node in layer {
+            let input = self.inputs_of(plan, env, &node.id);
+            let node_ref = node.clone();
+            let sem = Arc::clone(&permits);
+            tasks.push(async move {
+                // 必须先取许可再执行:在飞节点数恒 ≤ concurrency（有界上界）
+                let _permit = match sem.acquire_owned().await {
+                    Ok(p) => p,
+                    // 信号量在本运行器生命周期内不会被 close;防御性 fail-soft,不 panic
+                    Err(_) => {
+                        return (
+                            node_ref,
+                            r#"{"error":"concurrency gate closed"}"#.to_string(),
+                        );
+                    }
+                };
+                let out = self.exec_node(&node_ref, &input).await;
+                (node_ref, out)
+            });
+        }
+        while let Some((node, out)) = tasks.next().await {
+            accumulate(&node, out, env, tool_calls, nodes_executed);
+            // 回填预算守卫:环境累积超限即截断（与串行层完全同口径）
+            if env.values().map(String::len).sum::<usize>() > self.guards.budget_bytes {
+                return true;
+            }
+        }
+        false
     }
 
     /// 执行单个节点（数据算子 / 工具调用）
@@ -236,6 +341,39 @@ impl PlanRunner {
             format!("[{}]", parts.join(","))
         }
     }
+}
+
+/// 节点结果回填 — `tool_calls`/`nodes_executed` 累加 + 环境写入
+///
+/// WHY 抽公共函数:串行层与并发层必须共用同一回填口径,否则「层策略」会悄悄
+/// 改变统计计数与截断判定语义（等价性硬门槛:同计划不同并发度 `PlanSummary` 相等）。
+fn accumulate(
+    node: &ToolNode,
+    out: String,
+    env: &mut HashMap<String, String>,
+    tool_calls: &mut usize,
+    nodes_executed: &mut usize,
+) {
+    if node.op == ToolOp::ToolCall {
+        *tool_calls += 1;
+    }
+    *nodes_executed += 1;
+    env.insert(node.id.clone(), out);
+}
+
+/// 层副作用判定 — 该层是否必须整层串行
+///
+/// 仅 `ToolOp::ToolCall` 可能产生副作用;纯数据算子（Map/Filter/Aggregate/Limit/Sort）
+/// 不产生副作用,可并发。串行充要条件:层内存在
+/// `op == ToolCall && side_effect != Some(SideEffectDecl::ReadOnly)`,
+/// 即显式 `Write` **或未声明（None）**都按「可能写」保守处理（未声明 ≠ 只读）。
+///
+/// WHY:有副作用节点不可重排、不可并发——并发会让同层写入顺序由调度器决定,
+/// 结果不可复现,顺序契约与审计链的可审计性随之破坏。
+fn layer_requires_serial(layer: &[ToolNode]) -> bool {
+    layer
+        .iter()
+        .any(|n| n.op == ToolOp::ToolCall && n.side_effect != Some(SideEffectDecl::ReadOnly))
 }
 
 /// 分层 — 每节点深度 = 最长路径长度（Kahn 扩展）;同层节点互无依赖
