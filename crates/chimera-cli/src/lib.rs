@@ -71,6 +71,8 @@ pub mod composition;
 pub mod config;
 /// CLI 错误类型(结构化错误码,Task 0.2 将据此映射 ExitCode 矩阵)
 pub mod error;
+/// `exec --plan` 工具执行内核接线（E1′：内置工具 + 四环链 + 三层超时 + Scc 回写）
+pub mod exec_plan;
 /// §16.1 经验卡片闭环组合根接线(Phase 10 审计修复 Wave 1:
 /// ExperienceCardBus 主链 + L3 双流持久化 + L2/L6 消费 + 五维审计)
 pub mod experience_loop;

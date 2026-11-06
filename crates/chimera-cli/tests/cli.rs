@@ -804,16 +804,27 @@ fn test_no_color_env_runs_successfully() {
 // === Task 1.8: chimera mcp <action> 子命令集成测试(SubTask 1.8.7)===
 //
 // 验证 mcp list/serve/call/inspect 4 个子动作的真实接入 mcp-mesh crate。
-// 进程内 ephemeral mesh 注册表为空是预期行为(mcp list 返回空提示)。
+// E4′ 后 list 反映当次 config.mcp().servers 的注册结果（默认 3 条配置：
+// filesystem=stdio 无法注册、github=url 注册成功、postgres=localhost url 被 SSRF 拒绝）。
 
-/// 测试 `chimera mcp list` 成功执行,空注册表输出友好提示(SubTask 1.8.2)
+/// 测试 `chimera mcp list` 输出配置源中可注册的服务器（SubTask 1.8.2 / E4′）
 ///
-/// 进程内 ephemeral McpMesh 无注册服务器,list_all() 返回空 Vec。
-/// 人类可读模式输出"当前无 MCP 服务器"提示到 stderr。
+/// 默认配置 3 条：`filesystem`(stdio) 与 `postgres`(localhost url) 会被显式 warn 跳过，
+/// `github`(https url) 注册成功，因此列表不再恒空。
 #[test]
-fn test_mcp_list_returns_empty_list() {
+fn test_mcp_list_reports_configured_servers() {
     let bin = env!("CARGO_BIN_EXE_chimera");
-    let output = std::process::Command::new(bin)
+    let home = TempDir::new().expect("创建隔离 HOME 目录失败");
+    let mut cmd = std::process::Command::new(bin);
+    for (key, _) in std::env::vars() {
+        if key.starts_with("CHIMERA_") {
+            cmd.env_remove(key);
+        }
+    }
+    let output = cmd
+        .env("HOME", home.path())
+        .env("USERPROFILE", home.path())
+        .env("RUST_LOG", "error")
         .args(["mcp", "list"])
         .output()
         .expect("执行 chimera 二进制失败");
@@ -822,11 +833,14 @@ fn test_mcp_list_returns_empty_list() {
         "mcp list 应成功,实际退出码: {:?}",
         output.status.code()
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stderr.contains("无 MCP 服务器"),
-        "stderr 应包含空注册表提示,实际 stderr: {}",
-        stderr
+        stdout.contains("github"),
+        "默认配置中的 github(url 型) 应出现在列表,实际 stdout: {stdout}"
+    );
+    assert!(
+        !stdout.contains("当前无已注册的 MCP 服务器"),
+        "注册后不应再输出空列表提示,实际 stdout: {stdout}"
     );
 }
 

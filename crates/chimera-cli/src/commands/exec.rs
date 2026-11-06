@@ -21,6 +21,7 @@
 //! Exec 分支应用，经 [`exec_exit_code`] 显式转换）。
 
 use anyhow::Result;
+use nexus_contracts::spec::tool_plan::ToolPlan;
 use nexus_core::{MultimodalInput, UserIntent};
 use serde::Serialize;
 use uuid::Uuid;
@@ -131,6 +132,175 @@ pub async fn execute_with_ctx(
     }
 
     Ok(())
+}
+
+/// 执行 `exec --plan` — 兼容层 thin wrapper（独立调用/库测试场景）
+///
+/// 语义与 [`execute`] 对齐：经组合根装配 ephemeral `AppContext`，
+/// 计划文件（或 `-` stdin）解析为 [`ToolPlan`] 后交 [`crate::exec_plan::run_plan`]。
+pub async fn execute_plan(
+    plan_path: &std::path::Path,
+    config: &ChimeraConfig,
+    concurrency: usize,
+    json: bool,
+) -> Result<()> {
+    let ctx = crate::composition::build(config)?;
+    execute_plan_with_ctx(&ctx, plan_path, concurrency, json).await
+}
+
+/// `exec --plan` 命令主体 — 复用 dispatch 级 `AppContext`
+///
+/// # 退出码语义
+/// - 计划读取/解析失败 → `EngineError`（Exec 退出码 3）
+/// - 计划校验失败 → `EngineError`（3）
+/// - 存在失败节点 → `IoError`（Exec 退出码 4；不改公共枚举，见注释）
+pub async fn execute_plan_with_ctx(
+    ctx: &AppContext,
+    plan_path: &std::path::Path,
+    concurrency: usize,
+    json: bool,
+) -> Result<()> {
+    execute_plan_with_timeouts(ctx, plan_path, concurrency, json, None, None).await
+}
+
+/// `exec --plan` 的可显式超时版本（非破坏性扩展入口）
+///
+/// 超时解析见 [`resolve_timeouts`]：缺省值与既有行为**逐字一致**
+/// （单操作 5s / 计划级 30s），显式值只能收紧、不能越过全局 `gather_deadline_ms`。
+pub async fn execute_plan_with_timeouts(
+    ctx: &AppContext,
+    plan_path: &std::path::Path,
+    concurrency: usize,
+    json: bool,
+    op_timeout_ms: Option<u64>,
+    plan_timeout_ms: Option<u64>,
+) -> Result<()> {
+    let (plan_ms, op_ms) = resolve_timeouts(ctx, op_timeout_ms, plan_timeout_ms)?;
+    let plan = load_tool_plan(plan_path).await?;
+    let (summary, failed_nodes) = crate::exec_plan::run_plan_with_failures_timed(
+        ctx,
+        &plan,
+        concurrency,
+        plan_ms,
+        Some(op_ms),
+    )
+    .await?;
+
+    let report = PlanRunReport {
+        status: if failed_nodes == 0 { "ok" } else { "failed" },
+        plan_id: &summary.plan_id,
+        summary: &summary.summary,
+        tool_calls: summary.tool_calls,
+        nodes_executed: summary.nodes_executed,
+        failed_nodes,
+        truncated: summary.truncated,
+        duration_ms: summary.duration_ms,
+    };
+    crate::output::emit(json, &report, || {
+        println!(
+            "plan {}: {} node(s), {} tool call(s), {}ms{}",
+            report.plan_id,
+            report.nodes_executed,
+            report.tool_calls,
+            report.duration_ms,
+            if report.truncated { " (truncated)" } else { "" }
+        );
+        println!("{}", report.summary);
+        Ok(())
+    })?;
+
+    if failed_nodes > 0 {
+        // WHY 用 IoError 承载「工具失败」：Exec profile 将 IoError 稳定映射为 4，
+        // 且不新增公共枚举变体（避免破坏性 API）。计划/解析类故障已由 EngineError 归 3。
+        return Err(ChimeraCliError::IoError(std::io::Error::other(format!(
+            "plan {} failed: {failed_nodes} node(s) returned tool errors",
+            summary.plan_id
+        )))
+        .into());
+    }
+    Ok(())
+}
+
+/// 解析 `exec --plan` 的 `(计划级, 单操作)` 超时
+///
+/// # 规则（优先级从内到外收敛）
+/// 1. 单操作 = `--op-timeout-ms`，缺省 `GqepConfig::default_timeout_ms`（5s，既有默认）；
+/// 2. 计划级 = `--plan-timeout-ms`，缺省 `PlanGuards::default().timeout_ms`（30s，既有默认）；
+/// 3. 逐层取 min：单操作 ≤ 计划级；`gather_deadline_ms > 0` 时单操作 ≤ 全局截止
+///    （CLI 只能**收紧**全局上限，不能越过）。`gather_deadline_ms = 0` 表示关闭
+///    全局截止，不参与收敛（既有语义）。
+///
+/// 超大值（`> MAX_OP_TIMEOUT_MS` / `> MAX_PLAN_TIMEOUT_MS`）显式报 `EngineError`（退出码 3），
+/// 不静默截断用户意图；`0` 与负数由 clap `range(1..)` 在解析期拒绝（退出码 2）。
+pub fn resolve_timeouts(
+    ctx: &AppContext,
+    op_timeout_ms: Option<u64>,
+    plan_timeout_ms: Option<u64>,
+) -> Result<(u64, u64), ChimeraCliError> {
+    if let Some(raw) = op_timeout_ms {
+        if raw > crate::exec_plan::MAX_OP_TIMEOUT_MS {
+            return Err(ChimeraCliError::EngineError(format!(
+                "--op-timeout-ms={raw} 超出上限 {}ms",
+                crate::exec_plan::MAX_OP_TIMEOUT_MS
+            )));
+        }
+    }
+    if let Some(raw) = plan_timeout_ms {
+        if raw > crate::exec_plan::MAX_PLAN_TIMEOUT_MS {
+            return Err(ChimeraCliError::EngineError(format!(
+                "--plan-timeout-ms={raw} 超出上限 {}ms",
+                crate::exec_plan::MAX_PLAN_TIMEOUT_MS
+            )));
+        }
+    }
+
+    let cfg = ctx.gqep.config();
+    let plan_ms =
+        plan_timeout_ms.unwrap_or_else(|| gqep_executor::PlanGuards::default().timeout_ms);
+    let op_ms = crate::exec_plan::effective_op_timeout_ms(
+        op_timeout_ms,
+        plan_ms,
+        cfg.default_timeout_ms,
+        cfg.gather_deadline_ms,
+    );
+    Ok((plan_ms, op_ms))
+}
+
+/// 读取 ToolPlan 源（文件或 `-` stdin）并反序列化
+async fn load_tool_plan(plan_path: &std::path::Path) -> Result<ToolPlan, ChimeraCliError> {
+    use tokio::io::AsyncReadExt;
+
+    let text = if plan_path == std::path::Path::new("-") {
+        let mut buffer = String::new();
+        let mut stdin = tokio::io::stdin();
+        stdin.read_to_string(&mut buffer).await.map_err(|e| {
+            ChimeraCliError::IoError(std::io::Error::other(format!("读取 stdin 失败: {e}")))
+        })?;
+        buffer
+    } else {
+        tokio::fs::read_to_string(plan_path).await.map_err(|e| {
+            ChimeraCliError::IoError(std::io::Error::other(format!(
+                "读取 plan 文件 {} 失败: {e}",
+                plan_path.display()
+            )))
+        })?
+    };
+
+    serde_json::from_str::<ToolPlan>(&text)
+        .map_err(|e| ChimeraCliError::EngineError(format!("解析 ToolPlan 失败: {e}")))
+}
+
+/// `exec --plan` 输出载荷（`--json` 走统一 envelope，人类模式打印摘要）
+#[derive(Debug, Serialize)]
+struct PlanRunReport<'a> {
+    status: &'static str,
+    plan_id: &'a str,
+    summary: &'a str,
+    tool_calls: usize,
+    nodes_executed: usize,
+    failed_nodes: usize,
+    truncated: bool,
+    duration_ms: u64,
 }
 
 /// `exec --json` 的单行事件载荷（JSONL，每行一个）。

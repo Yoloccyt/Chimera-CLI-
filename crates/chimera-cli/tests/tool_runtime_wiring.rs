@@ -1,4 +1,4 @@
-//! 工具运行时四环链生产接线验收（ADR-240 W2-T1）
+//! 工具运行时四环链生产接线验收（ADR-240 W2-T1 + ADR-244 D1/D2）
 //!
 //! # WHY 需要这个文件
 //!
@@ -12,8 +12,19 @@
 //!
 //! 本文件从 crate **外部边界**验证组合根确实装配了四环链，并验证：
 //! 1. 装配成功（缺环会构造失败 —— 这是 ADR-238 D2 的核心不变量）；
-//! 2. 沙箱层真实生效（注入形态被拦截）—— 这是本次接线**新增**的防护；
-//! 3. 传输环对「无真实执行器」如实 fail-closed（不虚构成功）。
+//! 2. 沙箱层真实生效（注入形态被拦截）—— 这是接线**新增**的防护；
+//! 3. **ADR-244 D2 迁移后的 fail-closed 契约**：组合根装配的是真实
+//!    `BuiltinToolExecutor`（不是 `UnwiredToolExecutor`），因此
+//!    - 已知内置工具（`text.echo`）必须经四环链真实返回 `Ok`；
+//!    - 未知工具（`repo.search`）必须 `Err(DispatchError::Transport)` 且
+//!      明确指出 `unknown builtin tool`，**绝不**返回 `Ok`。
+//!
+//! # 契约迁移说明（ADR-244 D2）
+//!
+//! 原断言（`not wired`）防的是**「以伪造成功掩盖传输环缺失」**这一类回归。
+//! 收敛后传输环已真实装配，同类回归的新守门方式是：未知工具名必须被传输环
+//! 如实拒绝（`unknown builtin tool`）—— 若有人用「统统返回 Ok 的假执行器」
+//! 替换 delegate，本测试立即变红。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
@@ -27,33 +38,63 @@ use gqep_executor::tool_runtime::{DispatchError, DispatchRequest};
 /// WHY 不是 `is_some()`：字段类型是 `Arc<ToolRuntime>`（非 Option）——
 /// 组合根**必须**装配它，没有「不装配」这条路径。这正是本测试要锁的：
 /// 若将来有人把字段改成 Option 并默认 None，本测试会红。
+///
+/// ADR-244 D2：组合根已装配真实 `BuiltinToolExecutor`。本断言从「未接线」
+/// 迁移为「未知工具必须被如实拒绝」，守住同一类回归（伪造成功掩盖缺环）。
 #[tokio::test]
 async fn composition_root_wires_tool_runtime() {
     let ctx = build(&ChimeraConfig::default()).expect("组合根装配应成功");
     // 存在性：字段本身即证据（非 Option ⇒ 恒存在）
     let _ = &ctx.tool_runtime;
 
-    // 可派发：四环齐备时，一个允许的工具名应走到传输环（而非在装配期失败）
+    // 可派发：四环齐备时，一个允许但**未在内置执行器注册**的工具名
+    // 应走到传输环并被如实拒绝（而非在装配期失败，更不得返回 Ok）
     let req = DispatchRequest {
         tool_name: "repo.search".to_string(),
         args_json: r#"{"q":"hello"}"#.to_string(),
     };
     let result = ctx.tool_runtime.dispatch(&req).await;
     match result {
-        // 未接线传输环：如实 fail-closed，归因 Transport
+        // 已接线传输环：未知内置工具如实 fail-closed，归因 Transport
         Err(DispatchError::Transport(msg)) => {
             assert!(
-                msg.contains("not wired"),
-                "传输环未接线时错误应说明未接线，实际: {msg}"
+                msg.contains("unknown builtin tool"),
+                "未知工具必须由传输环如实拒绝（unknown builtin tool），实际: {msg}"
             );
         }
         // 沙箱层拦截注入形态 —— 也是合法路径，但归因必须是 Sandbox 而非 Transport
-        Err(other) => panic!("期望传输环未接线错误，实际: {other:?}"),
+        Err(other) => panic!("期望传输环的未知工具拒绝，实际: {other:?}"),
         Ok(outcome) => panic!(
-            "未接线传输环不得返回成功（会虚构功能），实际: {}",
+            "未知工具不得返回成功（会虚构功能），实际: {}",
             outcome.content_json
         ),
     }
+}
+
+/// ADR-244 D2 正向契约：已知内置工具必须经组合根四环链真实执行成功。
+///
+/// WHY 与上一条互补：只断言「未知工具被拒」可以靠一个「全拒绝」的假执行器
+/// 蒙过去。本测试锁住「真实可执行」—— `text.echo` 必须 `Ok` 且回显参数，
+/// 证明组合根 delegate 是真实执行器而非占位。
+#[tokio::test]
+async fn composition_root_executes_builtin_tool() {
+    let ctx = build(&ChimeraConfig::default()).expect("组合根装配应成功");
+
+    let args = r#"{"text":"hello"}"#;
+    let req = DispatchRequest {
+        tool_name: "text.echo".to_string(),
+        args_json: args.to_string(),
+    };
+    let outcome = ctx
+        .tool_runtime
+        .dispatch(&req)
+        .await
+        .expect("text.echo 经组合根四环链应执行成功");
+    assert!(
+        outcome.content_json.contains("hello"),
+        "text.echo 应回显参数，实际: {}",
+        outcome.content_json
+    );
 }
 
 /// 沙箱层在生产装配中真实生效 —— 注入形态参数被拦截。
@@ -103,15 +144,16 @@ fn tool_runtime_policy_default_action_is_allow() {
     );
 }
 
-/// `--execute` 的「接线完成但开关关闭」姿态（Q-1 裁决 (b)）。
+/// `--execute` 的「接线完成但开关关闭」姿态（Q-1 裁决 (b) + ADR-244 D3）。
 ///
 /// WHY 这条断言锁定的是一个**架构状态**，不是行为细节：
-/// ADR-240 已把四环链接入组合根（安全前置真实生效），但 `--execute`
-/// 仍显式拒绝 —— 因为本仓尚无生产 `ToolExecutor` 实现。
+/// 组合根已装配真实 `BuiltinToolExecutor`（ADR-244 D1），但 `run --execute`
+/// 仍显式拒绝 —— 因为该命令路径不消费工具运行时，只有 `exec --plan` 消费。
 ///
 /// 断言两件事：
 /// 1. 拒绝路径**零副作用**（未建 Quest、未发事件）—— 既有 `run.rs` 单测已覆盖；
-/// 2. 拒绝文案反映的是**真实**根因（缺生产执行器），而非过时的「沙箱未接线」。
+/// 2. 拒绝文案反映的是**真实**根因（执行器在组合根、仅 exec --plan 消费），
+///    而非过时的「缺生产执行器」或「传输环 fail-closed」。
 #[tokio::test]
 async fn execute_refusal_reflects_real_root_cause() {
     // 文案稳定前缀（脚本按前缀 grep）
@@ -120,15 +162,20 @@ async fn execute_refusal_reflects_real_root_cause() {
         msg.starts_with("execute_not_enabled:"),
         "拒绝文案需带稳定前缀，实际: {msg}"
     );
-    // 真实根因：缺生产 ToolExecutor（ADR-240 的未接线传输环）
+    // 真实根因：执行器已在组合根装配（不再宣称「缺 ToolExecutor」）
     assert!(
-        msg.contains("ToolExecutor"),
-        "拒绝文案需指明缺生产执行器这一根因，实际: {msg}"
+        msg.contains("composition root"),
+        "拒绝文案需说明执行器在组合根装配，实际: {msg}"
     );
-    // 沙箱派发链**已在位**——文案不应再声称它未验证
+    // 真实可用路径：exec --plan
     assert!(
-        msg.contains("sandbox dispatch chain is in place"),
-        "拒绝文案需说明沙箱派发链已在位（ADR-240 后已接线），实际: {msg}"
+        msg.contains("chimera exec --plan"),
+        "拒绝文案需指向唯一消费工具运行时的命令，实际: {msg}"
+    );
+    // 不得再出现过时措辞（ADR-240 前/后的两种旧说法）
+    assert!(
+        !msg.contains("not yet wired"),
+        "文案不得再声称执行器未接线（会误导用户以为功能缺失），实际: {msg}"
     );
     // 可执行的替代路径
     assert!(

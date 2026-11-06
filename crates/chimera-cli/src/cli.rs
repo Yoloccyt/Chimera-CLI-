@@ -469,8 +469,33 @@ chimera exec --json '列出文件'               # JSONL 事件流(每行一 App
 chimera exec 'x' ; echo $?                  # 退出码四类语义(0/2/3/4)"
     )]
     Exec {
-        /// 任务提示词
-        prompt: String,
+        /// 任务提示词（未传 `--plan` 时必填；传 `--plan` 时可省略）
+        #[arg(required_unless_present = "plan")]
+        prompt: Option<String>,
+        /// 声明式 ToolPlan 文件路径（`-` 表示从 stdin 读取）
+        #[arg(long, value_name = "PATH")]
+        plan: Option<std::path::PathBuf>,
+        /// ToolPlan 只读层并发上限（默认 8）
+        #[arg(long, default_value_t = 8, value_name = "N")]
+        plan_concurrency: usize,
+        /// 单操作超时（毫秒，缺省沿用 `GqepConfig::default_timeout_ms` = 5000）
+        ///
+        /// 实际生效值 = min(本项或默认 5000, 计划级, `gather_deadline_ms`)；
+        /// 其中 `gather_deadline_ms` 是 **GQEP 全局 gather 截止**（默认 5000ms，
+        /// `0` = 关闭），保护的是整个批量而非单个操作 ⇒ 单操作不可能比它更长。
+        /// 因此**全局截止比计划级更紧**属正常：默认配置下生效值为 5000ms，
+        /// 而非 30000ms。想放宽必须同时改配置（CLI 只能收紧，不能越过全局）。
+        ///
+        /// `0`/负数在解析期拒绝（退出码 2）；超上限由 `exec::resolve_timeouts`
+        /// 报 `EngineError`（退出码 3），不静默截断。
+        #[arg(long, value_name = "MS", value_parser = clap::value_parser!(u64).range(1..))]
+        op_timeout_ms: Option<u64>,
+        /// 计划级超时（毫秒，缺省沿用 `PlanGuards::default().timeout_ms` = 30000）
+        ///
+        /// 与 `--op-timeout-ms` 的关系：单操作只能**收紧**到 ≤ 计划级；
+        /// 全局 `gather_deadline_ms > 0` 时再对单操作取 min（`0` 表示关闭全局截止）。
+        #[arg(long, value_name = "MS", value_parser = clap::value_parser!(u64).range(1..))]
+        plan_timeout_ms: Option<u64>,
     },
     /// 协议宿主服务（WI-01 serve 形态）— JSON-RPC v1 over stdio
     ///
@@ -571,6 +596,12 @@ pub enum McpAction {
         /// 工具参数(可变参数,JSON 字符串形式)
         #[arg(num_args = 0..)]
         args: Vec<String>,
+        /// 启用真实 TCP 传输（默认 InProcess 客户端，**无网络副作用**）
+        ///
+        /// 显式开启后经 `TcpParticipantClient` 连接服务器 endpoint，
+        /// 会**真实发起网络请求**（远端或本机监听端口）。测试/门禁不得开启。
+        #[arg(long)]
+        network: bool,
     },
     /// 检查 MCP 服务器详情(注册时间 / 心跳 / 支持工具清单)
     Inspect {

@@ -63,16 +63,19 @@ pub(crate) const DEFAULT_CHUNK_DELAY_MS: u64 = 20;
 
 /// `--execute` 未启用时的稳定拒绝文案(可被测试与文档引用)
 ///
-/// WHY 文案在 ADR-240 接线后更新：原措辞称「沙箱派发链未端到端验证」——
-/// 该状态已改变。ADR-240 把四环链接入组合根，policy 与 sandbox 两环已在
-/// 生产路径真实生效；当前阻塞点**不是**安全前置，而是**本仓尚无生产
-/// `ToolExecutor` 实现**（传输环如实 fail-closed）。
+/// WHY 文案在 ADR-244 后再次修正：ADR-240 接线时称「尚无生产 ToolExecutor」，
+/// 但那之后 Wave E′ + ADR-244 D1 已在组合根**唯一装配**了真实
+/// `BuiltinToolExecutor`（policy → sandbox → route → transport 四环真实生效）。
+/// 因此当前拒绝的根因**不是**「缺执行器」，而是**本命令路径本身不消费工具运行时**：
+/// 只有 `chimera exec --plan` 走 `ctx.tool_runtime`。文案改为描述真实边界，
+/// 不再宣称传输环 fail-closed（那已是错误状态）。
 ///
 /// 稳定前缀 `execute_not_enabled:` 不变（脚本按前缀 grep），既有测试锁定。
 pub const EXECUTE_REFUSAL_MSG: &str =
-    "execute_not_enabled: tool execution requires a production ToolExecutor, which is not yet \
-     wired (the sandbox dispatch chain is in place; the transport ring fails closed); \
-     run without --execute to inspect the plan";
+    "execute_not_enabled: `run --execute` does not route into tool execution (the production \
+     ToolExecutor and the policy/sandbox rings are wired at the composition root, but only \
+     `chimera exec --plan <PATH|->` consumes them); run without --execute to inspect the plan, \
+     or use `chimera exec --plan` to execute";
 
 /// 构造 `--execute` 拒绝错误(`NotImplemented`,退出码 2)
 #[must_use]
@@ -264,6 +267,14 @@ mod tests {
         assert!(
             EXECUTE_REFUSAL_MSG.contains("sandbox"),
             "拒绝文案需指明沙箱派发链这一根因"
+        );
+        assert!(
+            EXECUTE_REFUSAL_MSG.contains("composition root"),
+            "Adr-244 后必须说明执行器已在组合根装配，避免误导为「缺执行器」"
+        );
+        assert!(
+            EXECUTE_REFUSAL_MSG.contains("chimera exec --plan"),
+            "拒绝文案需给出真实可执行路径"
         );
         assert!(
             EXECUTE_REFUSAL_MSG.contains("without --execute"),

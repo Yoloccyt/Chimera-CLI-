@@ -10,16 +10,19 @@
 //!
 //! # 设计决策(WHY)
 //! - **进程内 ephemeral mesh**:与 `chimera run` / `quest` 一致,每次调用创建独立 McpMesh。
-//!   这意味着 `mcp list` 在新进程中返回空列表(注册表不跨进程持久化)。
-//!   真实 MCP 服务器管理请用 `chimera tui`(长生命周期 mesh + 后台探活)。
+//!   每次 `mcp list` 会先按 `config.mcp().servers` 注册（url 型可注册；stdio 型显式 warn 后跳过），
+//!   因此列表反映当次配置源，但注册表不跨进程持久化。
 //! - **`mcp serve` 为 NotImplemented**:真实服务器启动需要绑定网络端口、加载 TLS 证书等,
 //!   不适合 CLI 一次性启动。指引替代方案:`chimera tui` 或独立部署 mcp-mesh 服务。
 //! - **`mcp call` 触发 permission prompt**:调用外部 MCP 工具属破坏性操作(可能执行任意代码),
 //!   必须调用 `permission::confirm` 获取用户确认(除非 `--yes` / `--no-permission`)。
 
 use anyhow::Result;
-use mcp_mesh::{McpMesh, MeshConfig};
+use mcp_mesh::{
+    InProcessClient, McpMesh, MeshConfig, MeshServer, ParticipantClient, TcpParticipantClient,
+};
 use serde::Serialize;
+use std::sync::Arc;
 
 use crate::cli::McpAction;
 use crate::config::ChimeraConfig;
@@ -34,7 +37,7 @@ use crate::permission::{self, PermissionCtx};
 /// `dry_run`(Task 2.2):仅 `mcp call` 消费,`true` 时只输出预览不执行。
 pub async fn execute(
     action: &McpAction,
-    _config: &ChimeraConfig,
+    config: &ChimeraConfig,
     json: bool,
     perm: &PermissionCtx,
     dry_run: bool,
@@ -42,16 +45,102 @@ pub async fn execute(
     tracing::info!(?action, dry_run, "MCP 量子网格管理操作");
 
     // 构造进程内 ephemeral McpMesh(与 chimera run 一致的设计)
-    let mesh = McpMesh::new(MeshConfig::default());
+    // 默认 `InProcessClient`：**零网络副作用**。仅 `mcp call --network` 显式开关
+    // 才切到 `TcpParticipantClient`（真实 TCP，会连服务器 endpoint）。
+    let use_network = matches!(action, McpAction::Call { network: true, .. });
+    let mesh = build_mesh(use_network);
+    // E4′:注册必须发生在 list/call/inspect 之前，否则 registry 恒空
+    register_configured_servers(&mesh, config)?;
 
     match action {
         McpAction::List => list_servers(&mesh, json).await,
         McpAction::Serve => serve_server().await,
-        McpAction::Call { server, tool, args } => {
+        McpAction::Call {
+            server,
+            tool,
+            args,
+            network,
+        } => {
+            if *network {
+                // 副作用可见性（ADR-245 D4）：真实 TCP 生效时在 stderr 留痕
+                tracing::info!(
+                    server = %server,
+                    tool = %tool,
+                    "mcp call: 已显式启用真实 TCP 传输（可能产生网络请求）"
+                );
+            }
             call_tool(&mesh, server, tool, args, perm, json, dry_run).await
         }
         McpAction::Inspect { server } => inspect_server(&mesh, server, json).await,
     }
+}
+
+/// 按显式开关装配 participant 客户端
+///
+/// # 副作用边界
+/// - `use_network = false`（默认）：[`InProcessClient`]，进程内伪传输，**不发任何网络请求**；
+/// - `use_network = true`：[`TcpParticipantClient`]，真实 TCP + 4 字节长度前缀 JSON 帧，
+///   会连接注册端点（受 registry SSRF 校验约束；loopback/保留地址在 `register` 阶段即被拒）。
+fn build_mesh(use_network: bool) -> McpMesh {
+    if use_network {
+        let client: Arc<dyn ParticipantClient> = Arc::new(TcpParticipantClient::new());
+        McpMesh::with_participant_client(MeshConfig::default(), None, client)
+    } else {
+        let client: Arc<dyn ParticipantClient> = Arc::new(InProcessClient::new());
+        McpMesh::with_participant_client(MeshConfig::default(), None, client)
+    }
+}
+
+/// 将 `omega.yaml` 的 `mcp.servers` 注册进 ephemeral mesh registry（E4′）
+///
+/// - `url` 型：直接以 `url` 作为 endpoint 注册，`validate_endpoint`（SSRF）拒绝时
+///   显式 warn（不静默跳过）；
+/// - stdio 型（无 `url`、有 `command`）：MCP mesh 只支持网络 endpoint，stdio 无法真实注册。
+///   这里合成 `stdio://localhost/<id>` 占位并尝试注册——SSRF 校验会拒绝 localhost，
+///   从而进入**显式 warn** 分支（满足「不得静默跳过」；若未来接受则正常注册）。
+fn register_configured_servers(mesh: &McpMesh, config: &ChimeraConfig) -> Result<()> {
+    let mcp = &config.mcp;
+
+    for server in &mcp.servers {
+        if server.id.is_empty() {
+            tracing::warn!("MCP 配置项缺少 server id，已跳过");
+            continue;
+        }
+
+        let (endpoint, is_url) = match server.url.as_deref() {
+            Some(url) if !url.is_empty() => (url.to_string(), true),
+            _ => (format!("stdio://localhost/{}", server.id), false),
+        };
+        let transport = if is_url { "url" } else { "stdio" };
+        let candidate = MeshServer::new(
+            server.id.clone(),
+            endpoint.clone(),
+            vec![transport.to_string()],
+        );
+
+        match mesh.registry().register(candidate) {
+            Ok(()) => {
+                tracing::info!(server_id = %server.id, %endpoint, "MCP 服务器已注册");
+            }
+            Err(err) if !is_url => {
+                tracing::warn!(
+                    server_id = %server.id,
+                    %endpoint,
+                    error = %err,
+                    "stdio 服务器暂不支持注册（仅 url 型可注册）"
+                );
+            }
+            Err(err) => {
+                tracing::warn!(
+                    server_id = %server.id,
+                    %endpoint,
+                    error = %err,
+                    "MCP 服务器注册被拒（SSRF 校验）"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// `mcp list` 的 JSON 载荷（typed，字段名编译期校验）。
@@ -64,9 +153,11 @@ struct McpListPayload<'a> {
 /// `mcp list` — 列出所有已注册 MCP 服务器(SubTask 1.8.2)
 ///
 /// 默认表格输出(`comfy-table`),`--json` 时输出 JSON 数组 envelope。
-/// 进程内 ephemeral mesh 的注册表为空,输出友好提示。
+/// 输出源为本次 `execute` 已按 `config.mcp().servers` 注册后的 registry。
 async fn list_servers(mesh: &McpMesh, json: bool) -> Result<()> {
-    let server_ids = mesh.registry().list_all();
+    let mut server_ids = mesh.registry().list_all();
+    // registry 底层是 DashMap，排序保证输出确定性与快照稳定
+    server_ids.sort();
 
     let payload = McpListPayload {
         servers: server_ids.as_slice(),
@@ -75,7 +166,7 @@ async fn list_servers(mesh: &McpMesh, json: bool) -> Result<()> {
     output::emit(json, &payload, || {
         if server_ids.is_empty() {
             // 空列表友好提示(到 stderr,不污染 stdout 数据流)
-            output::print_info("当前无 MCP 服务器(进程内 ephemeral mesh,不持久化)");
+            output::print_info("当前无已注册的 MCP 服务器（配置源未提供可注册的 url 型服务器）");
         } else {
             // 表格输出:Server ID / Endpoint / Capabilities / 存活状态
             let rows: Vec<Vec<String>> = server_ids
@@ -138,7 +229,7 @@ struct McpCallPayload<'a> {
 ///
 /// 触发 permission prompt(除非 `--yes` / `--no-permission`)。
 /// 确认后通过 `McpMesh::execute_transaction` 调用工具。
-/// 进程内 ephemeral mesh 无注册服务器,调用必返回 EngineError(ServerNotFound)。
+/// 目标服务器未在本次注册中出现时，仍返回 `McpError::ServerNotFound`（既有语义）。
 ///
 /// `dry_run=true`(Task 2.2):permission 确认后只输出预览,不调用 execute_transaction。
 async fn call_tool(
@@ -170,8 +261,8 @@ async fn call_tool(
     }
 
     // 真实调用 McpMesh::execute_transaction
-    // WHY 返回 EngineError:进程内 ephemeral mesh 无注册服务器,
-    // execute_transaction 对未注册 server_id 返回 ServerNotFound
+    // WHY 返回 EngineError:目标 server 若未出现在本次注册（含 stdio 跳过/SSRF 拒绝），
+    // execute_transaction 仍返回 ServerNotFound（既有语义保持不变）。
     let result = mesh
         .execute_transaction(vec![server.to_string()], tool.to_string())
         .await

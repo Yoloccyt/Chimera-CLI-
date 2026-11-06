@@ -198,7 +198,13 @@ mod tests {
                 CommandClass::FullContext,
             ),
             (
-                Some(Commands::Exec { prompt: "x".into() }),
+                Some(Commands::Exec {
+                    prompt: Some("x".into()),
+                    plan: None,
+                    plan_concurrency: 8,
+                    op_timeout_ms: None,
+                    plan_timeout_ms: None,
+                }),
                 CommandClass::FullContext,
             ),
             (Some(Commands::Chat), CommandClass::FullContext),
@@ -283,7 +289,13 @@ mod tests {
                 prompt: "x".into(),
                 execute: false,
             }),
-            Some(Commands::Exec { prompt: "x".into() }),
+            Some(Commands::Exec {
+                prompt: Some("x".into()),
+                plan: None,
+                plan_concurrency: 8,
+                op_timeout_ms: None,
+                plan_timeout_ms: None,
+            }),
             Some(Commands::Quest {
                 action: QuestAction::List,
                 json: false,

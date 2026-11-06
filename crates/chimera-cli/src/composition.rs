@@ -114,9 +114,9 @@ pub struct AppContext {
     /// 在命令层装配必然遗漏某条路径 —— 这正是 ADR-238 落地后仍存在的
     /// 「四环链只被单元测试覆盖、生产路径无调用点」缺口（ADR-240 P-01）。
     ///
-    /// 当前为**未接线传输环**（`delegate = None`）：本仓尚无生产
-    /// `ToolExecutor` 实现，传输环对「无真实执行器」如实 fail-closed，
-    /// 而 policy 与 sandbox 两环已真实生效（见 [`tool_runtime_policy`]）。
+    /// 传输环 delegate 在此**唯一装配**为 [`crate::exec_plan::BuiltinToolExecutor`]
+    /// （ADR-244 D1）。此前 `exec` 路径局部再装配一份，导致同进程内两种传输语义
+    /// （同名工具两种归因）；收敛后 `exec` 复用本字段，策略规则与默认动作单源。
     pub tool_runtime: Arc<gqep_executor::tool_runtime::ToolRuntime>,
     /// WI-D1：跨厂商辩论激活输入。`None`=未启用（默认，主干恒绿）；
     /// `Some(names)`=组合根从 `config.model_router` 解析出的去重 provider 通道名，
@@ -265,15 +265,17 @@ pub fn build_with_sharding(
     // stats()(非"构造即丢弃");CacheHit/Miss 事件仅由真实缓存访问触发,
     // 装配本身零事件流量(零行为变化)。
     let scc = scc_cache::SccCache::new(scc_cache::SccConfig::default(), bus.clone());
-    // ADR-240 W2-T1：装配工具运行时四环链（policy → sandbox → route → transport）。
+    // ADR-240 W2-T1 + ADR-244 D1：装配工具运行时四环链（policy → sandbox → route → transport）。
     //
     // WHY 在组合根：沙箱层是全局安全前置，命令层装配必然漏路径。
-    // WHY delegate = None：本仓尚无生产 ToolExecutor 实现；传输环对「无真实
-    // 执行器」如实 fail-closed，而 policy 与 sandbox 两环已真实生效 ——
-    // 详见 tool_runtime_policy 的 WHY 段。
+    // WHY 只在此装配：传输环 delegate 若在命令层再装配一份，同进程会出现两种
+    // 传输语义（同名工具两种归因），且策略规则双源无编译期一致性保证。
+    // 内置执行器仅暴露只读工具（路径受限、fs.read ≤256 KiB），未知工具恒 Err。
     let (tool_rules, tool_default_action) = tool_runtime_policy();
+    let tool_delegate: Arc<dyn gqep_executor::ToolExecutor> =
+        Arc::new(crate::exec_plan::BuiltinToolExecutor);
     let tool_runtime = gqep_executor::tool_runtime::ToolRuntime::with_optional_delegate(
-        None,
+        Some(tool_delegate),
         tool_rules,
         tool_default_action,
     )

@@ -103,8 +103,38 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         }
         // WI-02: exec 非交互契约 — 独立退出码语义（0/2/3/4）经 exec::exec_exit_code 映射；
         // std::process::exit 立即终止（exec 为 CI 管道场景，析构无业务依赖）
-        Some(Commands::Exec { prompt }) => {
-            match exec::execute_with_ctx(ctx_ref(&ctx)?, prompt, cli.json, &perm).await {
+        Some(Commands::Exec {
+            prompt,
+            plan,
+            plan_concurrency,
+            op_timeout_ms,
+            plan_timeout_ms,
+        }) => {
+            // E3′：`--plan` 走声明式计划执行内核；否则既有 prompt 路径逐字不变。
+            let result = match plan {
+                Some(plan_path) => {
+                    exec::execute_plan_with_timeouts(
+                        ctx_ref(&ctx)?,
+                        plan_path,
+                        *plan_concurrency,
+                        cli.json,
+                        *op_timeout_ms,
+                        *plan_timeout_ms,
+                    )
+                    .await
+                }
+                None => match prompt {
+                    Some(prompt) => {
+                        exec::execute_with_ctx(ctx_ref(&ctx)?, prompt, cli.json, &perm).await
+                    }
+                    // clap `required_unless_present` 已拦截；保留防御性分支避免空 prompt 静默执行
+                    None => Err::<(), anyhow::Error>(
+                        ChimeraCliError::EngineError("exec 缺少 prompt（clap 应已拦截）".into())
+                            .into(),
+                    ),
+                },
+            };
+            match result {
                 Ok(()) => Ok(()),
                 Err(e) => {
                     if let Some(ce) = e.downcast_ref::<ChimeraCliError>() {
