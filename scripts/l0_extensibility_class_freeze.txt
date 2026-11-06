@@ -25,7 +25,7 @@
 #   NEW public types with no row are red, and a row whose type moved/disappeared is STALE
 #   red -- so a W3-style physical move must re-key rows in the same commit.
 #
-# CLAIM types=230 listed=230 open=57 closed=173
+# CLAIM types=231 listed=231 open=57 closed=174
 #
 # CURRENT STATE (machine-verified: G-115 recomputes the CLAIM line above from the live tree
 # plus these rows on every run, so this paragraph can no longer rot in silence -- ADR-218):
@@ -278,6 +278,7 @@ STRUCT | type=spec/scheduler_contract::Quota | class=closed
 STRUCT | type=spec/scheduler_contract::TodoClaim | class=closed
 STRUCT | type=spec/tool_dispatch::DispatchOutcome | class=closed
 STRUCT | type=spec/tool_dispatch::DispatchRequest | class=closed
+STRUCT | type=spec/tool_dispatch::DispatchRequestRef | class=closed
 STRUCT | type=spec/tool_plan::PlanEdge | class=closed
 STRUCT | type=spec/tool_plan::ToolNode | class=closed
 STRUCT | type=spec/tool_plan::ToolPlan | class=closed

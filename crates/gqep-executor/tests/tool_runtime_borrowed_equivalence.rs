@@ -22,8 +22,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use gqep_executor::tool_runtime::{
-    BorrowedToolDispatcher, DispatchError, DispatchOutcome, DispatchRequest, DispatchRequestRef,
-    SandboxGate, SeccoreSandboxGate, ToolDispatcher, ToolRuntime,
+    DispatchError, DispatchRequest, DispatchRequestRef, SandboxGate, SeccoreSandboxGate, ToolRuntime,
 };
 use gqep_executor::ToolExecutor;
 use nexus_contracts::tool_dispatch::DispatchRequestRef as L0DispatchRequestRef;
@@ -52,7 +51,9 @@ fn runtime() -> ToolRuntime {
     ToolRuntime::new(Arc::new(EchoExecutor), echo_only_policy()).expect("四环齐备的装配应成功")
 }
 
-/// 不变量 1：借用派发与拥有派发逐位等价。
+// 不变量 1：借用派发与拥有派发逐位等价。
+// WHY 普通注释而非 doc 注释：rustdoc 不为宏调用生成文档，doc 注释会触发
+// `unused_doc_comment` lint（-D warnings 下即错）。
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 

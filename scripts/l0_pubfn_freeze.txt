@@ -234,6 +234,8 @@ spec/platform_grounding::check
 spec/platform_grounding::from_doc
 spec/platform_grounding::from_marker
 spec/scheduler_contract::new
+# ADR-241 D2: 借用化派发视图的显式升级入口（借用 → 拥有）
+spec/tool_dispatch::to_owned_request
 spec/tool_plan::validate
 spec/variant::matches_task_type
 spec/variant::new

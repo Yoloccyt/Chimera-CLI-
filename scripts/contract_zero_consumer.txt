@@ -22,7 +22,7 @@
 # Why there is no minimum: `zero` is the debt -- wiring types up drives it to
 # 0, and a floor there would make this gate's green depend on the defect.
 #
-# CLAIM defs=236 zero=74 one=87 ge2=75 gap=161 baseline=161 rows=74 sum=OK
+# CLAIM defs=242 zero=74 one=93 ge2=75 gap=167 baseline=167 rows=74 sum=OK
 AffinityOverrides | consumers=0 | declared_in=mca/affinity
 AgreementTrendPoint | consumers=0 | declared_in=safety/calibration
 BadCaseConversion | consumers=0 | declared_in=safety/calibration
