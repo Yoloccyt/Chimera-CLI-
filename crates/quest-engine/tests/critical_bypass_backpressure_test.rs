@@ -2,34 +2,47 @@
 //!
 //! 背景:审计报告 `docs/audit/quad-perspective-progress-audit-v2.25.0-omega.md` SYN-P0-1
 //! 指出:quest-engine 的 ambient_mode 双通道订阅(broadcast Normal + mpsc 旁路 Critical)
-//! 仅测试了"资源恢复 → Quest 恢复"闭环,未覆盖 mpsc 通道背压满时 16 个 `[Critical]`
+//! 仅测试了"资源恢复 → Quest 恢复"闭环,未覆盖 mpsc 通道背压满时旁路触发集
+//! (现 `CRITICAL_MPSC_VARIANTS` = 18)的 `[Critical]`
 //! 事件在 §3.4 "Critical 事件必须可靠投递"红线下的契约行为(阻塞 vs 失败 vs 丢弃)。
 //!
 //! 本文件端到端验证 event-bus 的 mpsc 旁路投递契约(不修改任何 src 代码):
 //!
 //! ## 契约语义(基于 bus.rs 实际实现)
 //! - **投递方式**: `subscribe_critical_events()` 创建有界 `tokio::sync::mpsc::channel`,
-//!   容量 `CRITICAL_CHANNEL_CAPACITY = 4096`(bus.rs L33,编译时常量,不可配置);
-//!   发布侧经 `send_critical_mpsc` 用 **`try_send`**(同步非阻塞)投递(bus.rs L611-650)。
+//!   容量 `CRITICAL_CHANNEL_CAPACITY = 4096`(bus.rs 编译时常量,不可配置);
+//!   发布侧经 `send_critical_mpsc` 用 **`try_send`**(同步非阻塞)投递(bus.rs `send_critical_mpsc`)。
 //! - **容量内**: `try_send` 返回 `Ok(())`,事件可靠投递,`critical_dropped_count` 不增长。
 //! - **溢出时**: `try_send` 返回 `Err(Full)`,事件被**显式丢弃并递增
 //!   `critical_dropped_count`**(优先级采样丢弃策略)——即"显式失败(可观测计数)"语义:
 //!   **非阻塞**(publish 仍立即返回 Ok,无背压等待)、**非静默丢弃**(丢弃数可观测)。
 //!   `Err(Closed)` 表示订阅者已 drop,对应 Sender 被移除(不属于本测试契约范围)。
 //!
-//! ## 19 个 `[Critical]` 事件清单(审计报告 §7.2 line 518 + P2-1 补充 3 个旁路事件)
-//! CheckpointSaved / ConsensusReached / BudgetExceeded / CapabilityFrozen /
-//! SandboxViolation / SlowConsumerDropped / OrphanCallDetected / SkepticVeto /
-//! VetoOverridden / RedTeamAudit / AsaIntervention / AgentTaskFailed /
-//! AgentContextOverflow / ResourceRecovered / FormalViolation / RewardSignalReported /
-//! AffinityQuotaExhausted / R2FreezeViolation / R2FreezeRollbackFailed(P2-1 补充)
+//! ## 构造清单构成(26 个事件 + 1 个 Normal 对照 = 注入 27)
 //!
-//! 注:该清单与 `NexusEvent::severity()` 的显式 Critical 分支(15 个)不完全重合
-//! (审计清单另含 CapabilityFrozen/SandboxViolation/AgentContextOverflow/
-//! ResourceRecovered/RewardSignalReported),本测试以审计清单为准;
-//! mpsc 旁路触发集(`bus.rs is_critical_mpsc_event`)与审计 19 清单的交集为 9 个:
-//! BudgetExceeded / SkepticVeto / RedTeamAudit / AsaIntervention / AgentTaskFailed /
-//! AffinityQuotaExhausted / R2FreezeViolation / R2FreezeRollbackFailed / FormalViolation。
+//! 构造清单 = **mpsc 旁路触发集全量 18 个** + **非旁路对照 8 个**:
+//!
+//! - **旁路 18 个**(权威清单 = `bus.rs::is_critical_mpsc_event` 的 matches! 臂,
+//!   规模锚定常量 `CRITICAL_MPSC_VARIANTS`):SkepticVeto / RedTeamAudit /
+//!   BudgetExceeded / AgentTaskFailed / AsaIntervention / AffinityQuotaExhausted /
+//!   R2FreezeViolation / R2FreezeRollbackFailed / FormalViolation / VetoOverridden /
+//!   R1ShadowRollbackFailed / StopRulingIssued / ErrorSignatureMatched /
+//!   FormalVerificationFailed / CertifyIssued / FailureRegistered /
+//!   ShadowBreakerTripped / SandboxViolation
+//! - **非旁路对照 8 个**:4 个 severity Critical 但只走 broadcast
+//!   (CheckpointSaved / ConsensusReached / SlowConsumerDropped / OrphanCallDetected,
+//!   即 `CRITICAL_TOTAL - CRITICAL_MPSC_VARIANTS` 的差集) + 4 个 Normal
+//!   (CapabilityFrozen / AgentContextOverflow / ResourceRecovered / RewardSignalReported)
+//!
+//! ## 两张清单的关系(双清单同步红线)
+//!
+//! - **旁路集 ⊆ severity Critical 集**:18 个旁路变体在定级表
+//!   (`event-bus/src/registry.rs` 的 `define_event_registry!`)中**全部**同时定级 Critical。
+//!   故旁路集从 10 扩到 18 **不改变** broadcast 侧的期望集。
+//! - **两通道是并集不是二选一**:`bus.rs` 派发宏先走 mpsc 旁路后**照发 broadcast**
+//!   ("旁路不减 broadcast,两通道是并集不是二选一"),故 broadcast 侧收到**全部**注入事件
+//!   (26 清单 + 1 Normal),而非"severity Critical ∩ 非旁路"子集。
+//!   旁路扩容只影响 mpsc 侧的期望集(10 → 18)。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
@@ -37,11 +50,15 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use event_bus::{EventBus, EventMetadata, EventReceiver, NexusEvent};
+use event_bus::payloads::{RollbackDiagnosticContext, RollbackTriggerType};
+use event_bus::{
+    EventBus, EventMetadata, EventReceiver, EventSeverity, NexusEvent, CRITICAL_MPSC_VARIANTS,
+    CRITICAL_TOTAL,
+};
 use nexus_contracts::behavior_contract::ContractContext;
 use nexus_contracts::reward::RewardSignal;
 
-/// 构造审计报告定义的 16 个 `[Critical]` 事件(顺序与清单一致)
+/// 构造 Critical 事件清单(26 个:旁路 18 + 非旁路对照 8)
 ///
 /// 每个变体携带唯一可辨识字段,便于端到端断言"按序投递、无一丢失"。
 fn audit_critical_events() -> Vec<NexusEvent> {
@@ -167,31 +184,87 @@ fn audit_critical_events() -> Vec<NexusEvent> {
             metadata: meta(),
             reason: "git revert conflict".into(),
         },
+        // ── 旁路全集补齐(在途基线扩展的 7 个旁路变体)──────────────────
+        // 权威清单 = bus.rs `is_critical_mpsc_event` 的 matches! 臂,
+        // 规模锚定 `CRITICAL_MPSC_VARIANTS`(现取 18)。此前本清单只覆盖 11 个,
+        // 漏 7 个 ⇒ 旁路侧期望集与实际投递集长期不一致(本测试红)。
+        NexusEvent::R1ShadowRollbackFailed {
+            metadata: meta(),
+            reason: "r1 shadow rollback conflict".into(),
+            trigger_type: RollbackTriggerType::Unknown,
+            triggered_at: None,
+            details: "capability registry rollback failed".into(),
+            diagnostic: RollbackDiagnosticContext::default(),
+        },
+        NexusEvent::StopRulingIssued {
+            metadata: meta(),
+            quest_id: "q-1".into(),
+            reason: "stagnation".into(),
+            preserve_best: true,
+        },
+        NexusEvent::ErrorSignatureMatched {
+            metadata: meta(),
+            error_hash: "sig-1".into(),
+            matched_card_ids: vec!["card-1".into()],
+        },
+        NexusEvent::FormalVerificationFailed {
+            metadata: meta(),
+            property: "property-1".into(),
+            counterexample: "ce-1".into(),
+            generation: 0u64,
+        },
+        NexusEvent::CertifyIssued {
+            metadata: meta(),
+            claim_ref: "claim-1".into(),
+            subject: "subject-1".into(),
+            verifier: "verifier-1".into(),
+        },
+        NexusEvent::FailureRegistered {
+            metadata: meta(),
+            signature: "sig-1".into(),
+            affected_component: "gsoe-evolution".into(),
+            fix_status: "Open".into(),
+        },
+        NexusEvent::ShadowBreakerTripped {
+            metadata: meta(),
+            reason: "formal property violation".into(),
+        },
     ]
 }
 
-/// 审计 19 清单 ∩ mpsc 旁路触发集(bus.rs `is_critical_mpsc_event`)= 10 个
+/// mpsc 旁路触发集全集(bus.rs `is_critical_mpsc_event`)= 18 个
 ///
-/// 旁路触发集(Phase 10 Wave 5 对齐后 13 类):SkepticVeto/RedTeamAudit/
-/// BudgetExceeded/AgentTaskFailed/AsaIntervention/AffinityQuotaExhausted/
-/// R2FreezeViolation/R2FreezeRollbackFailed/FormalViolation/VetoOverridden/
-/// R1ShadowRollbackFailed/StopRulingIssued/ErrorSignatureMatched。
-/// 此集合与 `severity()` 是两张独立清单(双清单同步红线),
-/// 本测试仅锁定审计清单 ∩ 旁路集的交集。
+/// 权威清单 = `bus.rs::is_critical_mpsc_event` 的 matches! 臂,规模锚定常量
+/// `CRITICAL_MPSC_VARIANTS`(现取 18):SkepticVeto/RedTeamAudit/BudgetExceeded/
+/// AgentTaskFailed/AsaIntervention/AffinityQuotaExhausted/R2FreezeViolation/
+/// R2FreezeRollbackFailed/FormalViolation/VetoOverridden/R1ShadowRollbackFailed/
+/// StopRulingIssued/ErrorSignatureMatched/FormalVerificationFailed/CertifyIssued/
+/// FailureRegistered/ShadowBreakerTripped/SandboxViolation。
+///
+/// 此集合与 `severity()` 是两张独立清单(双清单同步红线),但当前 18 项**全部**
+/// 同时定级 Critical(定级表 = registry.rs 的 `define_event_registry!`),
+/// 故"旁路 ∩ severity Critical"= 旁路全集本身。
 fn is_audit_bypass_event(event: &NexusEvent) -> bool {
     matches!(
         event,
-        NexusEvent::BudgetExceeded { .. }
-            | NexusEvent::SkepticVeto { .. }
+        NexusEvent::SkepticVeto { .. }
             | NexusEvent::RedTeamAudit { .. }
-            | NexusEvent::AsaIntervention { .. }
+            | NexusEvent::BudgetExceeded { .. }
             | NexusEvent::AgentTaskFailed { .. }
+            | NexusEvent::AsaIntervention { .. }
             | NexusEvent::AffinityQuotaExhausted { .. }
             | NexusEvent::R2FreezeViolation { .. }
             | NexusEvent::R2FreezeRollbackFailed { .. }
             | NexusEvent::FormalViolation { .. }
-            // Phase 10 Wave 5:否决覆盖审计纳入旁路(审计清单内,交集 +1)
             | NexusEvent::VetoOverridden { .. }
+            | NexusEvent::R1ShadowRollbackFailed { .. }
+            | NexusEvent::StopRulingIssued { .. }
+            | NexusEvent::ErrorSignatureMatched { .. }
+            | NexusEvent::FormalVerificationFailed { .. }
+            | NexusEvent::CertifyIssued { .. }
+            | NexusEvent::FailureRegistered { .. }
+            | NexusEvent::ShadowBreakerTripped { .. }
+            | NexusEvent::SandboxViolation { .. }
     )
 }
 
@@ -215,10 +288,9 @@ async fn recv_critical(
     }
 }
 
-/// 测试 1(容量内投递):注入 20 个事件(19 Critical + 1 Normal),
-/// 断言全部投递成功 —— broadcast 保序收到全部 20 个,mpsc 旁路收到且仅收到
-/// 旁路触发集以权威清单为准(现 CRITICAL_MPSC_VARIANTS=13,2026-09-04;
-/// 本测试登记时为 10,Phase 10 Wave 5:9→10),
+/// 测试 1(容量内投递):注入 27 个事件(26 构造清单 + 1 Normal 对照),
+/// 断言全部投递成功 —— broadcast 保序收到全部 27 个,mpsc 旁路收到且仅收到
+/// 旁路触发集全集(`CRITICAL_MPSC_VARIANTS` 现取 18),
 /// 全程 `critical_dropped_count == 0`。
 #[tokio::test]
 async fn critical_events_within_capacity_all_delivered() {
@@ -226,16 +298,25 @@ async fn critical_events_within_capacity_all_delivered() {
     let mut broadcast_rx = bus.subscribe(); // 先 subscribe 再发布(异步红线)
     let mut critical_rx = bus.subscribe_critical_events(); // 先订阅旁路再发布
 
-    let mut events = audit_critical_events(); // 19 Critical
-    assert_eq!(events.len(), 19, "审计 19 清单应构造齐全");
+    let mut events = audit_critical_events(); // 18 旁路 + 8 非旁路对照
+    assert_eq!(events.len(), 26, "构造清单应构造齐全(18 旁路 + 8 非旁路)");
+    // 构造清单覆盖 severity Critical 全集(18 旁路 + 4 只走 broadcast 的历史 Critical)
+    let critical_in_list = events
+        .iter()
+        .filter(|e| e.severity() == EventSeverity::Critical)
+        .count();
+    assert_eq!(
+        critical_in_list, CRITICAL_TOTAL,
+        "构造清单的 severity Critical 覆盖数应与 CRITICAL_TOTAL 一致"
+    );
     // 1 个 Normal 事件(severity Normal,不走旁路,作为对照)
     events.push(NexusEvent::QuestCreated {
         metadata: EventMetadata::new("critical-bypass-test"),
-        quest_id: "q-20".into(),
+        quest_id: "q-27".into(),
         title: "普通事件".into(),
         task_count: 1,
     });
-    assert_eq!(events.len(), 20, "共注入 20 个事件");
+    assert_eq!(events.len(), 27, "共注入 27 个事件");
 
     let expected: Vec<&str> = events.iter().map(|e| e.type_name()).collect();
     for event in events {
@@ -243,48 +324,62 @@ async fn critical_events_within_capacity_all_delivered() {
         assert!(result.is_ok(), "容量内 publish 应成功,实际: {result:?}");
     }
 
-    // broadcast 侧:按注入顺序收到全部 20 个事件(容量内 broadcast 无丢失)
-    let mut received: Vec<String> = Vec::with_capacity(20);
-    for _ in 0..20 {
+    // broadcast 侧:按注入顺序收到全部 27 个事件(容量内 broadcast 无丢失)
+    // WHY 旁路不减 broadcast:bus.rs 派发宏先走 mpsc 旁路后照发 broadcast
+    // (两通道是并集不是二选一),故 broadcast 侧期望集 = 全部注入事件。
+    let mut received: Vec<String> = Vec::with_capacity(27);
+    for _ in 0..27 {
         match recv_broadcast(&mut broadcast_rx, Duration::from_secs(2)).await {
             Ok(event) => received.push(event.type_name().to_string()),
-            Err(msg) => panic!("broadcast 应收到全部 20 个事件: {msg}"),
+            Err(msg) => panic!("broadcast 应收到全部 27 个事件: {msg}"),
         }
     }
     assert_eq!(
         received, expected,
-        "broadcast 应保序送达全部 20 个事件(19 Critical + 1 Normal)"
+        "broadcast 应保序送达全部 27 个事件(26 构造清单 + 1 Normal)"
     );
     // 无多余事件
     let extra = tokio::time::timeout(Duration::from_millis(100), broadcast_rx.recv()).await;
     assert!(extra.is_err(), "broadcast 不应有多余事件");
 
-    // mpsc 旁路侧:收到且仅收到旁路触发集 ∩ 审计清单的 10 个事件
-    // (Phase 10 Wave 5:VetoOverridden 纳入旁路,交集 9→10)
+    // mpsc 旁路侧:收到且仅收到旁路触发集全集(18 个)
     let mut bypass_received: HashSet<String> = HashSet::new();
-    for _ in 0..10 {
+    for _ in 0..CRITICAL_MPSC_VARIANTS {
         match recv_critical(&mut critical_rx, Duration::from_secs(2)).await {
             Some(event) => {
                 bypass_received.insert(event.type_name().to_string());
             }
-            None => panic!("旁路应收到 10 个 mpsc Critical 事件"),
+            None => panic!("旁路应收到 {CRITICAL_MPSC_VARIANTS} 个 mpsc Critical 事件"),
         }
     }
     let expected_bypass: HashSet<String> = [
-        "BudgetExceeded",
         "SkepticVeto",
         "RedTeamAudit",
-        "AsaIntervention",
+        "BudgetExceeded",
         "AgentTaskFailed",
+        "AsaIntervention",
         "AffinityQuotaExhausted",
         "R2FreezeViolation",
         "R2FreezeRollbackFailed",
         "FormalViolation",
         "VetoOverridden",
+        "R1ShadowRollbackFailed",
+        "StopRulingIssued",
+        "ErrorSignatureMatched",
+        "FormalVerificationFailed",
+        "CertifyIssued",
+        "FailureRegistered",
+        "ShadowBreakerTripped",
+        "SandboxViolation",
     ]
     .iter()
     .map(|s| s.to_string())
     .collect();
+    assert_eq!(
+        expected_bypass.len(),
+        CRITICAL_MPSC_VARIANTS,
+        "旁路期望集规模应与 CRITICAL_MPSC_VARIANTS 一致"
+    );
     assert_eq!(
         bypass_received, expected_bypass,
         "旁路应仅收到 mpsc 触发集内的 Critical 事件"
@@ -312,7 +407,7 @@ async fn overflow_fails_explicitly_not_silently_dropped() {
     let mut critical_rx = bus.subscribe_critical_events(); // 先订阅再注入
     let capacity = bus.critical_channel_capacity();
     assert_eq!(capacity, 4096, "旁路容量应为实现常量 4096(bus.rs)");
-    let overflow = 20usize; // 超出容量的注入数(与 19 Critical + 1 Normal 对齐)
+    let overflow = 20usize; // 超出容量的注入数(与旁路清单规模无关,仅需为正)
 
     // 慢消费者场景:不消费 critical_rx,注入 容量 + 溢出 个 Critical 事件
     for i in 0..(capacity + overflow) {
@@ -362,8 +457,8 @@ async fn overflow_fails_explicitly_not_silently_dropped() {
     }
 }
 
-/// 测试 3(逐个投递验证,加分):19 个 `[Critical]` 事件逐个发布,
-/// 确认每一个都经 broadcast 送达、旁路触发集内的 9 个经 mpsc 旁路送达,
+/// 测试 3(逐个投递验证,加分):26 个构造清单事件逐个发布,
+/// 确认每一个都经 broadcast 送达、旁路触发集内的 18 个经 mpsc 旁路送达,
 /// 全程 `critical_dropped_count == 0` —— 无一被静默丢弃。
 #[tokio::test]
 async fn each_critical_variant_delivered_individually() {
@@ -371,6 +466,7 @@ async fn each_critical_variant_delivered_individually() {
     let mut broadcast_rx = bus.subscribe();
     let mut critical_rx = bus.subscribe_critical_events();
 
+    let mut bypass_seen = 0usize;
     for event in audit_critical_events() {
         let type_name = event.type_name();
         let bypass = is_audit_bypass_event(&event);
@@ -394,6 +490,8 @@ async fn each_critical_variant_delivered_individually() {
         }
 
         // mpsc 旁路:仅旁路触发集内的事件应经旁路送达
+        // WHY 逐个消费:mpsc 为 FIFO 且与 publish 同序,故"发一个旁路事件即取一个"
+        // 是逐变体的顺序断言(而非仅计数)。
         if bypass {
             match recv_critical(&mut critical_rx, Duration::from_secs(2)).await {
                 Some(received) => {
@@ -401,13 +499,22 @@ async fn each_critical_variant_delivered_individually() {
                 }
                 None => panic!("{type_name} 应经 mpsc 旁路送达"),
             }
+            bypass_seen += 1;
         }
     }
 
-    // 全部 19 个变体投递完毕,不得产生任何丢弃
+    // 逐个消费后旁路通道应为空(不多投),且旁路事件数 == 旁路清单规模
+    assert_eq!(
+        bypass_seen, CRITICAL_MPSC_VARIANTS,
+        "旁路触发集内的变体数应与 CRITICAL_MPSC_VARIANTS 一致"
+    );
+    let extra_critical = tokio::time::timeout(Duration::from_millis(100), critical_rx.recv()).await;
+    assert!(extra_critical.is_err(), "旁路不应有多余事件");
+
+    // 全部 26 个变体投递完毕,不得产生任何丢弃
     assert_eq!(
         bus.critical_dropped_count(),
         0,
-        "19 个 Critical 事件逐个投递不得被丢弃(禁止静默丢弃)"
+        "26 个构造清单事件逐个投递不得被丢弃(禁止静默丢弃)"
     );
 }
