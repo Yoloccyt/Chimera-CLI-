@@ -79,6 +79,66 @@ impl SandboxGate for DenyGate {
     }
 }
 
+/// 沙箱门缓存的无锁读候选实现（`DashMap`）—— **同轮对照基准**
+///
+/// WHY 在这里内联复刻而不直接改生产码：ADR-241 D-8 要求「每个并行化改造点
+/// 须有同轮对照基准，收益不显著则回退」。criterion 的跨轮比较会被机器状态
+/// （CPU 频率 / 后台负载）污染；只有同一进程同一轮内测得的差值才能作为
+/// 因果证据。
+///
+/// 本对照复刻「派生策略记忆化 + 无锁读」这一形态，但用 `DashMap`
+/// （分片锁）替代生产代码当前的 `RwLock`（单锁）—— 两者**判决完全等价**
+/// （同一套拦截模式 + 同一份派生策略），只有并发读路径不同。
+struct DashMapSeccoreGate {
+    command_policy: seccore::CommandPolicy,
+    env_policy: seccore::EnvPolicy,
+    tool_policies: dashmap::DashMap<String, Arc<seccore::CommandPolicy>>,
+}
+
+impl DashMapSeccoreGate {
+    fn new() -> Self {
+        Self {
+            command_policy: seccore::CommandPolicy::default_secure(),
+            env_policy: seccore::EnvPolicy::default_secure(),
+            tool_policies: dashmap::DashMap::new(),
+        }
+    }
+
+    fn derive_policy(&self, tool_name: &str) -> Arc<seccore::CommandPolicy> {
+        let mut policy = self.command_policy.clone();
+        policy.allowed_commands.insert(tool_name.to_lowercase());
+        Arc::new(policy)
+    }
+
+    fn policy_for(&self, tool_name: &str) -> Arc<seccore::CommandPolicy> {
+        if let Some(p) = self.tool_policies.get(tool_name) {
+            return Arc::clone(p.value());
+        }
+        let derived = self.derive_policy(tool_name);
+        self.tool_policies
+            .entry(tool_name.to_string())
+            .or_insert_with(|| Arc::clone(&derived));
+        derived
+    }
+}
+
+impl SandboxGate for DashMapSeccoreGate {
+    fn check(&self, req: &DispatchRequest) -> Result<(), DispatchError> {
+        let policy = self.policy_for(&req.tool_name);
+        let cmd = seccore::Command {
+            program: req.tool_name.clone(),
+            args: vec![req.args_json.clone()],
+            env: HashMap::new(),
+        };
+        seccore::validate_command(&cmd, policy.as_ref())
+            .map_err(|e| DispatchError::Sandbox(format!("{e}")))?;
+        let env: HashMap<String, String> = HashMap::new();
+        seccore::validate_env(&env, &self.env_policy)
+            .map_err(|e| DispatchError::Sandbox(format!("{e}")))?;
+        Ok(())
+    }
+}
+
 fn request() -> DispatchRequest {
     DispatchRequest {
         tool_name: "bench.echo".to_string(),
@@ -249,5 +309,89 @@ fn bench_chains(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_layer_components, bench_chains);
+/// 沙箱门缓存的**并发读**对照 —— `RwLock`（生产现状）vs 无锁读（候选）
+///
+/// ADR-241 W3-T3 的裁决依据。WHY 需要并发维度：单线程微基准下 `RwLock`
+/// 的读锁几乎无争用，看不出差异；只有**多线程并发读**才能暴露锁的
+/// cacheline 争用成本 —— 而批量派发正是并发读场景。
+///
+/// 判据（ADR-241 D-8）：候选实现的同轮耗时**必须小于**现状实现；
+/// 否则回退，保留 `RwLock`，并在 ADR 记录「已评估、不采纳」。
+fn bench_sandbox_cache_concurrent(c: &mut Criterion) {
+    let req = request();
+    let rwlock_gate = Arc::new(SeccoreSandboxGate::default_secure());
+    let dashmap_gate = Arc::new(DashMapSeccoreGate::new());
+
+    let mut group = c.benchmark_group("dispatch_sandbox_concurrent");
+    group.sample_size(30);
+
+    // 生产现状：`RwLock` 读锁（并发 4 线程）
+    group.bench_function("rwlock_read_c4", |b| {
+        b.iter(|| {
+            std::thread::scope(|scope| {
+                for _ in 0..4 {
+                    let gate = Arc::clone(&rwlock_gate);
+                    let req = &req;
+                    scope.spawn(move || {
+                        gate.check(req).expect("沙箱校验应通过");
+                    });
+                }
+            });
+        });
+    });
+
+    // 候选：无锁读（`DashMap`，并发 4 线程）
+    group.bench_function("dashmap_read_c4", |b| {
+        b.iter(|| {
+            std::thread::scope(|scope| {
+                for _ in 0..4 {
+                    let gate = Arc::clone(&dashmap_gate);
+                    let req = &req;
+                    scope.spawn(move || {
+                        gate.check(req).expect("沙箱校验应通过");
+                    });
+                }
+            });
+        });
+    });
+
+    // 生产现状：8 线程（更接近批量派发的并发上界）
+    group.bench_function("rwlock_read_c8", |b| {
+        b.iter(|| {
+            std::thread::scope(|scope| {
+                for _ in 0..8 {
+                    let gate = Arc::clone(&rwlock_gate);
+                    let req = &req;
+                    scope.spawn(move || {
+                        gate.check(req).expect("沙箱校验应通过");
+                    });
+                }
+            });
+        });
+    });
+
+    // 候选：8 线程
+    group.bench_function("dashmap_read_c8", |b| {
+        b.iter(|| {
+            std::thread::scope(|scope| {
+                for _ in 0..8 {
+                    let gate = Arc::clone(&dashmap_gate);
+                    let req = &req;
+                    scope.spawn(move || {
+                        gate.check(req).expect("沙箱校验应通过");
+                    });
+                }
+            });
+        });
+    });
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_layer_components,
+    bench_chains,
+    bench_sandbox_cache_concurrent
+);
 criterion_main!(benches);

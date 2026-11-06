@@ -26,6 +26,59 @@ pub struct DispatchRequest {
     pub args_json: String,
 }
 
+/// 借用化派发请求视图 — 热路径零分配载体
+///
+/// WHY 与拥有型 [`DispatchRequest`] 并存而非替换：
+///
+/// 拥有型是 L0 的**边界类型** —— 它能跨 `.await` 持有、能跨层传递、能存进
+/// 集合，是公开契约的一部分（`DispatchRequest` 的签名不可变，见 ADR-241 D6）。
+/// 但**链内派发是热路径**：每次构造拥有型请求需 2 次堆分配（`tool_name` 与
+/// `args_json` 各一次），批量派发 N 条即 2N 次。
+///
+/// 本视图让链内派发走借用，消除这 2 次分配，同时**不改动** L0 既有类型的
+/// 签名（既有调用方零改动）。
+///
+/// # 生命周期约束
+///
+/// 本视图**不得**跨 `.await` 持有 —— 借用期由 `'a` 参数在编译期约束；
+/// 若调用方需要跨 `.await`，必须回退 [`DispatchRequest`]（拥有型）。
+///
+/// # 大小
+///
+/// `size_of::<DispatchRequestRef>() == 2 * size_of::<&str>()` —— 无隐藏分配、
+/// 无填充。这是"零分配"的**可判定**判据（由 `nexus-contracts` 单测锁定）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DispatchRequestRef<'a> {
+    /// 工具名（逻辑名）
+    pub tool_name: &'a str,
+    /// 工具参数（JSON 片段）
+    pub args_json: &'a str,
+}
+
+impl<'a> From<&'a DispatchRequest> for DispatchRequestRef<'a> {
+    /// 拥有型 → 借用视图的零成本转换
+    fn from(r: &'a DispatchRequest) -> Self {
+        Self {
+            tool_name: &r.tool_name,
+            args_json: &r.args_json,
+        }
+    }
+}
+
+impl<'a> DispatchRequestRef<'a> {
+    /// 借用视图 → 拥有型（需跨 `.await` 持有时的显式升级）
+    ///
+    /// WHY 提供显式升级而非隐式 AsRef：借用/拥有的转换点在**热路径**上
+    /// 必须可见 —— 让调用方明确知道此处发生了一次拷贝。
+    #[must_use]
+    pub fn to_owned_request(self) -> DispatchRequest {
+        DispatchRequest {
+            tool_name: self.tool_name.to_string(),
+            args_json: self.args_json.to_string(),
+        }
+    }
+}
+
 /// 一次工具派发结果
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DispatchOutcome {

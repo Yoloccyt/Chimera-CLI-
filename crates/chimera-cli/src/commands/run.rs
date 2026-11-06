@@ -62,9 +62,17 @@ fn call_budget_to_cli_error(e: CallBudgetError) -> ChimeraCliError {
 pub(crate) const DEFAULT_CHUNK_DELAY_MS: u64 = 20;
 
 /// `--execute` 未启用时的稳定拒绝文案(可被测试与文档引用)
+///
+/// WHY 文案在 ADR-240 接线后更新：原措辞称「沙箱派发链未端到端验证」——
+/// 该状态已改变。ADR-240 把四环链接入组合根，policy 与 sandbox 两环已在
+/// 生产路径真实生效；当前阻塞点**不是**安全前置，而是**本仓尚无生产
+/// `ToolExecutor` 实现**（传输环如实 fail-closed）。
+///
+/// 稳定前缀 `execute_not_enabled:` 不变（脚本按前缀 grep），既有测试锁定。
 pub const EXECUTE_REFUSAL_MSG: &str =
-    "execute_not_enabled: tool execution is gated until the mandatory sandbox dispatch chain is \
-     fully verified end-to-end; run without --execute to inspect the plan";
+    "execute_not_enabled: tool execution requires a production ToolExecutor, which is not yet \
+     wired (the sandbox dispatch chain is in place; the transport ring fails closed); \
+     run without --execute to inspect the plan";
 
 /// 构造 `--execute` 拒绝错误(`NotImplemented`,退出码 2)
 #[must_use]

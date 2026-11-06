@@ -10,10 +10,13 @@ pub mod inproc;
 pub mod runtime;
 pub mod sandbox_gate;
 
-pub use batch::{dispatch_batch, BatchLimits, BatchOutcome, BATCH_DEADLINE_PREFIX};
+pub use batch::{
+    dispatch_batch, BatchAttribution, BatchLimits, BatchOutcome, BATCH_DEADLINE_PREFIX,
+};
 pub use chain::{DispatcherBuilder, SandboxedDispatcher};
 pub use dispatch::{
-    DispatchError, DispatchFuture, DispatchOutcome, DispatchRequest, ToolDispatcher,
+    BorrowedDispatchFuture, BorrowedToolDispatcher, DispatchError, DispatchFuture, DispatchOutcome,
+    DispatchRequest, DispatchRequestRef, ToolDispatcher,
 };
 pub use inproc::InProcDispatcher;
 pub use runtime::ToolRuntime;

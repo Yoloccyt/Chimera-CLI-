@@ -103,6 +103,66 @@ fn tool_runtime_policy_default_action_is_allow() {
     );
 }
 
+/// `--execute` 的「接线完成但开关关闭」姿态（Q-1 裁决 (b)）。
+///
+/// WHY 这条断言锁定的是一个**架构状态**，不是行为细节：
+/// ADR-240 已把四环链接入组合根（安全前置真实生效），但 `--execute`
+/// 仍显式拒绝 —— 因为本仓尚无生产 `ToolExecutor` 实现。
+///
+/// 断言两件事：
+/// 1. 拒绝路径**零副作用**（未建 Quest、未发事件）—— 既有 `run.rs` 单测已覆盖；
+/// 2. 拒绝文案反映的是**真实**根因（缺生产执行器），而非过时的「沙箱未接线」。
+#[tokio::test]
+async fn execute_refusal_reflects_real_root_cause() {
+    // 文案稳定前缀（脚本按前缀 grep）
+    let msg = chimera_cli::commands::run::EXECUTE_REFUSAL_MSG;
+    assert!(
+        msg.starts_with("execute_not_enabled:"),
+        "拒绝文案需带稳定前缀，实际: {msg}"
+    );
+    // 真实根因：缺生产 ToolExecutor（ADR-240 的未接线传输环）
+    assert!(
+        msg.contains("ToolExecutor"),
+        "拒绝文案需指明缺生产执行器这一根因，实际: {msg}"
+    );
+    // 沙箱派发链**已在位**——文案不应再声称它未验证
+    assert!(
+        msg.contains("sandbox dispatch chain is in place"),
+        "拒绝文案需说明沙箱派发链已在位（ADR-240 后已接线），实际: {msg}"
+    );
+    // 可执行的替代路径
+    assert!(
+        msg.contains("without --execute"),
+        "拒绝文案需给出可执行的替代路径，实际: {msg}"
+    );
+}
+
+/// 组合根装配的四环链在**拒绝路径**上也必须先于传输环短路。
+///
+/// WHY：这是 fail-closed 的时序保证。注入形态参数必须在沙箱层被拦下，
+/// **不得**触达传输环（哪怕传输环是未接线状态）—— 否则「沙箱生效」只是
+/// 表面事实，错误归因会从 Sandbox 变成 Transport。
+#[tokio::test]
+async fn sandbox_rejection_precedes_transport_ring() {
+    let ctx = build(&ChimeraConfig::default()).expect("组合根装配应成功");
+
+    let req = DispatchRequest {
+        tool_name: "repo.search".to_string(),
+        args_json: "$(rm -rf /)".to_string(),
+    };
+    let result = ctx.tool_runtime.dispatch(&req).await;
+
+    match result {
+        Err(DispatchError::Sandbox(msg)) => {
+            assert!(
+                !msg.contains("not wired"),
+                "沙箱拒绝的文案不应提及传输环未接线（说明短路发生在传输环之前），实际: {msg}"
+            );
+        }
+        other => panic!("期望沙箱层拦截（归因 Sandbox），实际: {other:?}"),
+    }
+}
+
 /// 反向断言：生产代码路径中不存在绕过 `tool_runtime` 的裸执行器装配。
 ///
 /// WHY 反向断言：正向测试只能证明「组合根装了它」，无法证明「**只有**它」。

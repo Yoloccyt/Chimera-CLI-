@@ -19,8 +19,12 @@ use std::sync::Arc;
 
 use seccore::execpolicy::{ExecPolicy, PolicyAction};
 
-use super::dispatch::{DispatchError, DispatchFuture, DispatchRequest, ToolDispatcher};
+use super::dispatch::{
+    BorrowedDispatchFuture, BorrowedToolDispatcher, DispatchError, DispatchFuture, DispatchRequest,
+    ToolDispatcher,
+};
 use super::sandbox_gate::SandboxGate;
+use nexus_contracts::tool_dispatch::DispatchRequestRef;
 
 /// 策略层 — execpolicy 三态裁决（Deny/Ask 均 fail-closed）
 pub(crate) struct PolicyLayer {
@@ -225,6 +229,34 @@ impl SandboxedDispatcher {
 impl ToolDispatcher for SandboxedDispatcher {
     fn dispatch<'a>(&'a self, req: &'a DispatchRequest) -> DispatchFuture<'a> {
         self.head.dispatch(req)
+    }
+}
+
+impl BorrowedToolDispatcher for SandboxedDispatcher {
+    /// 借用式派发 — 与 [`ToolDispatcher::dispatch`] 走**同一套四环**
+    ///
+    /// WHY 走同一套层而非另建一条借用链：另建链意味着策略/沙箱/路由/传输
+    /// 各有两个实现 —— 它们的行为可能分叉，借用路径就成了绕过安全校验的
+    /// 旁路。这里只做**入参形态**的适配，链的语义完全共用。
+    ///
+    /// 代价：入站处有一次「借用 → 拥有」转换（2 次分配）。
+    /// 收益：调用方（热路径上的批量编排）**不再为每次派发构造
+    /// `DispatchRequest`** —— 那 2 次分配被消除，且调用方可直接复用
+    /// 同一份 `args_json` 缓冲。
+    fn dispatch_borrowed<'a>(
+        &'a self,
+        req: &'a DispatchRequestRef<'a>,
+    ) -> BorrowedDispatchFuture<'a> {
+        // 一次性升级为拥有型，之后走既有链（语义与 `dispatch` 逐位一致）。
+        //
+        // WHY owned 在 async 块**内部**创建：`head.dispatch(&owned)` 借用
+        // `owned`，若在函数体创建再返回 future，future 会持有指向已 drop
+        // 局部变量的借用。放进 async 块内创建 + 立即 await，生命周期自洽。
+        let head = Arc::clone(&self.head);
+        Box::pin(async move {
+            let owned = req.to_owned_request();
+            head.dispatch(&owned).await
+        })
     }
 }
 

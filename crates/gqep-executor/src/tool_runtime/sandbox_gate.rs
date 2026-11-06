@@ -9,11 +9,28 @@ use std::sync::{Arc, RwLock};
 use seccore::{validate_command, validate_env, Command, CommandPolicy, EnvPolicy};
 
 use super::dispatch::{DispatchError, DispatchRequest};
+use nexus_contracts::tool_dispatch::DispatchRequestRef;
 
 /// 沙箱门 — 同步校验一次派发请求
 pub trait SandboxGate: Send + Sync {
     /// 校验请求；`Err` 即 fail-closed，调用方不得继续派发
     fn check(&self, req: &DispatchRequest) -> Result<(), DispatchError>;
+
+    /// 校验借用化请求 — 热路径零分配入口
+    ///
+    /// WHY 有这个方法：链内派发走 [`DispatchRequestRef`]（借用）以消除热路径的
+    /// 2 次堆分配，但沙箱门的既有契约是 `&DispatchRequest`（拥有型）。
+    ///
+    /// 默认实现把借用视图**升级**为拥有型再调 `check` —— 语义完全等价，
+    /// 但保留了那 2 次分配。实现者可覆写本方法走零分配路径
+    /// （[`SeccoreSandboxGate`] 已覆写）。
+    ///
+    /// **判决必须等价**：对同一工具名与参数，`check` 与 `check_ref` 的结果
+    /// 必须完全相同（含错误变体与文案）。这是链内借用化的硬约束 ——
+    /// 若两者判决不同，借用路径就成了一条绕过安全校验的旁路。
+    fn check_ref(&self, req: &DispatchRequestRef<'_>) -> Result<(), DispatchError> {
+        self.check(&req.to_owned_request())
+    }
 }
 
 /// 工具名派生策略缓存上界
@@ -137,6 +154,30 @@ impl SandboxGate for SeccoreSandboxGate {
             .map_err(|e| DispatchError::Sandbox(format!("{e}")))?;
 
         // 空 env 必然 Ok；保留调用以对齐「环境变量也要过策略」的语义。
+        let env: HashMap<String, String> = HashMap::new();
+        validate_env(&env, &self.env_policy).map_err(|e| DispatchError::Sandbox(format!("{e}")))?;
+
+        Ok(())
+    }
+
+    /// 借用化校验 — 与 [`Self::check`] 判决完全等价，但省去 2 次 clone。
+    ///
+    /// WHY 判决等价是硬约束：本方法与 `check` 走**同一套**拦截模式与
+    /// 同一份派生策略缓存，只是入参来源不同（借用 vs 拥有）。
+    /// 两者判决若不同，借用路径就成了绕过安全校验的旁路 ——
+    /// 由 `tool_runtime_borrowed_equivalence.rs` 的 property test 锁定。
+    fn check_ref(&self, req: &DispatchRequestRef<'_>) -> Result<(), DispatchError> {
+        // 派生策略按工具名记忆化（与 `check` 同路径、同缓存）。
+        let policy = self.policy_for(req.tool_name);
+
+        let cmd = Command {
+            program: req.tool_name.to_string(),
+            args: vec![req.args_json.to_string()],
+            env: HashMap::new(),
+        };
+        validate_command(&cmd, policy.as_ref())
+            .map_err(|e| DispatchError::Sandbox(format!("{e}")))?;
+
         let env: HashMap<String, String> = HashMap::new();
         validate_env(&env, &self.env_policy).map_err(|e| DispatchError::Sandbox(format!("{e}")))?;
 

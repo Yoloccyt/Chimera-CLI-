@@ -35,6 +35,10 @@ async-trait = { workspace = true }
 criterion = { workspace = true, features = ["async_tokio"] }
 # 属性测试框架(SubTask 24.6)
 proptest = { workspace = true }
+# ADR-241 W3-T3 裁决用：沙箱门缓存的「无锁读候选」同轮对照基准。
+# WHY 只作 dev-dependency：候选实现尚未采纳（须先由同轮对照证明收益>0），
+# 裁决前不进生产依赖，避免供应链面无谓扩大。
+dashmap = { workspace = true }
 # tokio 测试工具
 tokio-test = { workspace = true }
 # JSON 序列化测试(config.rs serde 往返测试)

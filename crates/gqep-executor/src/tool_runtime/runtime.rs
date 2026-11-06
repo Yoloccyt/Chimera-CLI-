@@ -80,6 +80,23 @@ impl ToolRuntime {
         self.dispatcher.dispatch(req)
     }
 
+    /// 借用式派发一次请求 — 调用方无需构造 `DispatchRequest`
+    ///
+    /// WHY 提供这个入口：热路径上的批量编排往往已持有 `tool_name` 与
+    /// `args_json` 的**借用**（例如从同一次响应解析出的多个工具调用）。
+    /// 走 `dispatch` 需先构造拥有型 `DispatchRequest`（2 次堆分配），
+    /// 而这份拥有型数据在派发结束后即被丢弃 —— 纯浪费。
+    ///
+    /// 契约：与 [`ToolRuntime::dispatch`] 的结果**完全一致**（含错误变体与
+    /// 文案）—— 两者走同一套四环，只是入参形态不同。
+    pub fn dispatch_borrowed<'a>(
+        &'a self,
+        req: &'a nexus_contracts::tool_dispatch::DispatchRequestRef<'a>,
+    ) -> super::dispatch::BorrowedDispatchFuture<'a> {
+        use super::dispatch::BorrowedToolDispatcher;
+        self.dispatcher.dispatch_borrowed(req)
+    }
+
     /// 生产接线（组合根用）：策略可配置 + 委托执行器可缺省
     ///
     /// 与 [`ToolRuntime::new`] 的唯一差异：

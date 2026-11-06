@@ -135,11 +135,15 @@ pub(super) async fn check_sqlite_path(cfg: &ChimeraConfig) -> HealthCheck {
     }
 
     // 检查父目录可写(尝试创建临时文件)
+    //
+    // WHY 用 tokio::fs 而非 std::fs：本探针经 doctor.rs 的 gather_collected
+    // 与其他探针**并发**执行，同步文件 IO 会阻塞所在 Tokio worker 线程，
+    // 使并发探针的墙钟收益被抵消（ADR-241 P-08）。
     let test_file = parent_dir.join(".chimera_doctor_write_test");
-    match std::fs::write(&test_file, b"test") {
+    match tokio::fs::write(&test_file, b"test").await {
         Ok(_) => {
-            // 清理测试文件
-            let _ = std::fs::remove_file(&test_file);
+            // 清理测试文件（清理失败不影响"可写"判定本身）
+            let _ = tokio::fs::remove_file(&test_file).await;
             HealthCheck {
                 name: "sqlite_path",
                 description: "SQLite 数据库路径可读写",

@@ -209,6 +209,19 @@ async fn run_probes_parallel(
 mod probes;
 use probes::*;
 
+/// SQLite 路径探针的公开入口（供集成测试验收异步 IO 语义）
+///
+/// WHY 需要这层薄包装：`check_sqlite_path` 是 `pub(super)`（模块内可见），
+/// 集成测试在 crate 外部，无法直接调用。而该探针的**异步 IO 语义**
+/// （不阻塞 Tokio worker）需要从 crate 外部验证 —— 它是 ADR-241 W3-T1
+/// 的核心验收项。
+///
+/// 这是一层**零逻辑**的转发：判定逻辑仍在 `probes::check_sqlite_path`，
+/// 此处只做可见性放宽，不复制任何行为。
+pub async fn probes_check_sqlite_path(cfg: &ChimeraConfig) -> HealthCheck {
+    check_sqlite_path(cfg).await
+}
+
 // 人类可读渲染已迁至 `commands/doctor/report.rs`（T2.5 拆分）。
 
 #[cfg(test)]

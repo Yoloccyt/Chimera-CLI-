@@ -104,6 +104,57 @@ impl BatchOutcome {
     pub fn is_conserved(&self) -> bool {
         self.succeeded + self.failed + self.abandoned + self.not_started == self.results.len()
     }
+
+    /// 批量归因快照 — 聚合计数，供在线观测
+    ///
+    /// # WHY 只有聚合计数（无高基数标签）
+    ///
+    /// 工具名、参数、错误文案都是**高基数**的 —— 把它们放进指标标签会让
+    /// 时序库的基数爆炸（ADR-241 D5 的教训同样适用于指标面）。
+    /// 本快照只含**有限取值域**的计数与比率，可安全作为指标标签值。
+    ///
+    /// # WHY 快照而非直接在批量内部累加全局计数器
+    ///
+    /// 全局静态计数器无法区分「哪一次批量」——而排查并行化问题恰恰需要
+    /// 逐批次的视角。快照由调用方按需取用并自行聚合（上层可按需推入
+    /// 指标系统），保持本 crate **零指标依赖**（不引入 prometheus/telemetry）。
+    #[must_use]
+    pub fn attribution(&self) -> BatchAttribution {
+        let total = self.results.len();
+        BatchAttribution {
+            total,
+            succeeded: self.succeeded,
+            failed: self.failed,
+            abandoned: self.abandoned,
+            not_started: self.not_started,
+            success_ratio_bp: if total == 0 {
+                0
+            } else {
+                ((self.succeeded as u128 * 10_000) / total as u128) as u32
+            },
+        }
+    }
+}
+
+/// 批量归因快照 — 有限取值域的聚合计数
+///
+/// # 数值纪律
+///
+/// 比率用**千分比 `u32`**（项目红线：比率不进浮点相等比较）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BatchAttribution {
+    /// 请求总数
+    pub total: usize,
+    /// 成功数
+    pub succeeded: usize,
+    /// 失败数（含单操作超时）
+    pub failed: usize,
+    /// 已入流被全局 deadline 放弃的请求数
+    pub abandoned: usize,
+    /// 从未入流的请求数
+    pub not_started: usize,
+    /// 成功率（千分比；`total == 0` 时为 0）
+    pub success_ratio_bp: u32,
 }
 
 /// 单条批量任务 future — 显式 boxed 以统一 `FuturesUnordered` 元素类型
@@ -226,13 +277,34 @@ pub async fn dispatch_batch<'a>(
     }
     let abandoned = total - not_started - succeeded - failed;
 
-    BatchOutcome {
+    let outcome = BatchOutcome {
         results,
         succeeded,
         failed,
         abandoned,
         not_started,
-    }
+    };
+
+    // 在线归因（ADR-241 P-13）：批量派发的逐批次聚合计数。
+    //
+    // WHY 用 tracing 而非指标库：本 crate 保持**零指标依赖**（不引入
+    // prometheus/telemetry），只发布**有限取值域**的结构化字段 ——
+    // 上层（CLI/TUI）可按需把字段推入自己的指标系统。
+    //
+    // WHY 不打工具名/错误文案：那是高基数，会让时序库基数爆炸。
+    // 逐条细节由 `BatchOutcome::results` 按需取用。
+    let attribution = outcome.attribution();
+    tracing::debug!(
+        total = attribution.total,
+        succeeded = attribution.succeeded,
+        failed = attribution.failed,
+        abandoned = attribution.abandoned,
+        not_started = attribution.not_started,
+        success_ratio_bp = attribution.success_ratio_bp,
+        "tool batch dispatch completed"
+    );
+
+    outcome
 }
 
 #[cfg(test)]
