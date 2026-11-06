@@ -46,6 +46,7 @@ gea-activator|crates/gea-activator/tests/csa.rs#test_csa_pvl_latency|slo-daily|�
 gea-activator|crates/gea-activator/tests/csa.rs#test_csa_scc_latency|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
 gea-activator|crates/gea-activator/tests/csa.rs#test_csa_total_latency_under_100ms|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
 gqep-executor|crates/gqep-executor/tests/concurrent.rs#test_perf_100_ops_within_threshold|slo-daily|比值类或宽松绝对阈值;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
+gqep-executor|crates/gqep-executor/tests/tool_runtime_batch_latency.rs#serial_vs_parallel_latency_percentiles|slo-daily|批量派发串行/并行延迟分位数对比,比值类且需真实墙钟;先入每日 schedule 观测积累基线,不阻塞 PR|wired: slo-daily
 hcw-window|crates/hcw-window/tests/coarse_recall_p95_test.rs#test_coarse_recall_p95_below_10ms|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
 hcw-window|crates/hcw-window/tests/fine_recall_p95_test.rs#test_fine_recall_p95_below_50ms|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate
 hcw-window|crates/hcw-window/tests/fine_recall_p95_test.rs#test_precise_rerank_overhead_acceptable|slo-blocking|绝对 ms 级 p95 红线,需 release + 静默态单跑;进 R1-T10 tag 阻塞门|wired: slo-release-gate

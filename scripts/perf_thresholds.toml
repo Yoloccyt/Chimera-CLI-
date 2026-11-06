@@ -54,6 +54,70 @@ l2_recall = 5000000
 compress = 50000
 compute_masks = 1500000
 delegation = 40000000
+# ===== 工具链并行化重构（ADR-239）新增 =====
+# 数据来源：本机 Windows GNU 全量实测 median（2026-11-06，criterion sample_size
+# 50/30/20 视 bench 而定）。余量按本表既有分级原则：ns 级 ×10、us 级 ×3-8、
+# ms 级 ×2-2.5。推导与归因公式见 docs/architecture/ADR-239-*.md。
+#
+# 【归因锚点】四环链分层归因（dispatch_layers/dispatch_chain）给出各环成本：
+#   传输地板 floor_echo_transport  = 58 ns
+#   策略层   policy_evaluate_allow = 465 ns  （链级残差 539-58=481ns，吻合）
+#   沙箱层   sandbox_check_seccore = 1179 ns （链级残差 1698-539=1159ns，吻合）
+# 两组独立测点互相印证 ⇒ 阈值按链级端到端值设，另设分层测点做交叉守护。
+#
+# WHY 键名不含公共子串：不变式 I2 要求任意两关键词互不为子串，否则
+# first-match-wins 会把长路径误归给短键（`cache_hit` 污染先例）。
+# 故用 `dispatch_` / `dchain_` / `tbatch_` / `trchain_` 四个互不包含的前缀族。
+#
+# —— 分层归因（单点，微基准）——
+# 传输地板：链的地板（一次 boxed future 分配 + Arc 解引用）
+dispatch_floor_echo = 1000
+# 策略层：ExecPolicy::evaluate 纯同步规则匹配（Allow 路径）
+dispatch_policy_eval = 10000
+# 沙箱层（当前实现，派生策略记忆化命中）
+dispatch_sandbox_cached = 20000
+# 沙箱层（旧实现对照组，逐次 clone 策略）—— 保留以防缓存被静默移除
+dispatch_sandbox_uncached = 60000
+# —— 链级端到端 ——
+# AllowAll 沙箱 + 路由命中：策略 + 路由 + 传输的地板路径
+dchain_allowall_hit = 10000
+# Seccore 沙箱 + 路由命中：真实安全路径的端到端
+dchain_seccore_hit = 40000
+# Seccore 沙箱 + 路由命中（旧沙箱门对照组）
+dchain_seccore_legacy = 80000
+# 拒绝路径：短路必须比放行路径更快（fail-closed 的性能特征）
+dchain_policy_deny = 2000
+dchain_sandbox_deny = 12000
+dchain_route_miss = 12000
+# —— 工具运行时链（独立 bench，端到端 allow 路径）——
+trchain_allow_echo = 20000
+# —— 批量派发（串行 vs 有界并行）——
+# 零延迟派发（纯开销）：64 条请求串行 ≈ 146µs，并行 ≈ 165µs
+# WHY 并行略慢是预期：零延迟场景下并行无收益可摊，仅有调度开销；
+# 该键锁定的是「并行开销不失控」，不是「并行更快」。
+tbatch_serial_zero = 1000000
+tbatch_parallel_zero = 2000000
+# 含 1ms 模拟延迟（真实 I/O 场景）：64 条串行 ≈ 493ms，并行（bound 8）≈ 112ms
+# WHY 这两条是并行化的**核心收益判据**：4.4× 加速来自有界并发的真实摊薄。
+tbatch_serial_slow = 1200000000
+tbatch_parallel_slow = 400000000
+# —— CLI 启动分段（cli_parse bench）——
+# clap 解析成本（实测 131/110/104 µs）：D4 把 parse 前置到 runtime 创建之前，
+# 这三档是「命令树构建 + 参数匹配」的纯 CPU 成本，锁定其不退化。
+cli_parse_help = 500000
+cli_parse_run = 500000
+cli_parse_doctor = 500000
+# 配置按需判定（D5）：判定本身 ~104µs（与 parse 同量级，说明是 clap 解析主导）。
+cli_startup_config = 500000
+# runtime 构建：current_thread ~4.3µs；multi_thread ~783µs（建 worker 池，
+# 是 one-shot 命令启动税的主要来源之一）⇒ 两个 flavor 分别设阈。
+cli_startup_runtime = 5000000
+# 启动端到端（parse + 分类 + runtime 构建）：实测 ~982µs。
+cli_startup_e2e = 5000000
+# —— MCP server registry 查找（registry_lookup bench）——
+# 最大值来自 list_alive_100（遍历 100 个存活 server，实测 10.6µs）；
+# 单点 get/contains 为 ns 级，被同键兜底覆盖。
+mcp_registry_lookup = 100000
 # ADR-192 附带（性能门精度）：dev-only bench `hcw-window/probe_select` 升为 registered。
 # 其值组目录 `score_cache_hit_vs_recompute/{cache_hit,recompute}` 的路径内嵌 `cache_hit` 子串，
 # 在本地累积的 criterion 树上被 first-match-wins 误归给下方 `cache_hit` 键，使其报 100µs > 10µs 假红
@@ -151,6 +215,37 @@ l2_recall = ["l2_recall"]
 compress = ["100k_to_32k"]
 compute_masks = ["compute_all_masks"]
 delegation = ["delegation_fanout"]
+# ===== 工具链并行化重构（ADR-239）新增 =====
+# 关键词取 criterion 值组目录名（形如 `dispatch_layers/floor_echo_transport`）。
+# I2 要求任意两关键词互不为子串 ⇒ 用四个互不包含的前缀族
+# （dispatch_ / dchain_ / tbatch_ / trchain_），且各关键词自身不含他人前缀。
+dispatch_floor_echo = ["floor_echo_transport"]
+dispatch_policy_eval = ["policy_evaluate_allow"]
+dispatch_sandbox_cached = ["sandbox_check_seccore/"]
+dispatch_sandbox_uncached = ["sandbox_check_seccore_legacy"]
+dchain_allowall_hit = ["chain_allowall_route_hit"]
+dchain_seccore_hit = ["chain_seccore_route_hit/"]
+dchain_seccore_legacy = ["chain_seccore_route_hit_legacy"]
+dchain_policy_deny = ["chain_policy_deny"]
+dchain_sandbox_deny = ["chain_sandbox_deny"]
+dchain_route_miss = ["chain_route_miss"]
+trchain_allow_echo = ["tool_runtime_chain/allow_route_hit_echo"]
+tbatch_serial_zero = ["serial_ms0"]
+tbatch_parallel_zero = ["parallel_ms0"]
+tbatch_serial_slow = ["serial_ms1/64"]
+tbatch_parallel_slow = ["parallel_ms1_bound8/64"]
+# CLI 启动分段（cli_parse bench）：解析 + 配置判定 + runtime 构建三段。
+# WHY 键名带 `cli_` 前缀族：与既有全部键互不为子串（I2），
+# 且 `cli_` 不被任何既有键包含（`cluster`/`client` 之类均不存在于本表）。
+cli_parse_help = ["cli_parse/help"]
+cli_parse_run = ["cli_parse/run"]
+cli_parse_doctor = ["cli_parse/doctor"]
+# CLI 启动分段计时组（cli_startup_* 值组）
+cli_startup_config = ["cli_startup_config/"]
+cli_startup_runtime = ["cli_startup_runtime/"]
+cli_startup_e2e = ["cli_startup_e2e/"]
+# MCP registry 查找（registry_lookup bench → mcp_registry 值组）
+mcp_registry_lookup = ["mcp_registry/"]
 cache_hit = ["cache_hit"]
 tiering = ["apply_decision", "handle_quest_created"]
 gather = ["gather", "entangle_alone"]
@@ -358,6 +453,47 @@ bench = "lsct_tiering_benchmark"
 alias = "gather"
 crate = "gqep-executor"
 bench = "gather"
+
+# ===== 工具链并行化重构（ADR-239）新增 =====
+# WHY 升格为 registered 而非 dev-only：这批 bench 是本次重构的**判据来源**——
+# 四环链分层归因给出各环占比（沙箱/策略/路由/传输），批量吞吐对照给出
+# 「串行 vs 有界并行」的加速比。登记进 run_bench 后它们进入 CI 的
+# Assert thresholds 步骤，而非仅本地可跑。
+[[run_bench]]
+alias = "tool_dispatch_layers"
+crate = "gqep-executor"
+bench = "tool_dispatch_layers"
+
+[[run_bench]]
+alias = "tool_runtime_batch"
+crate = "gqep-executor"
+bench = "tool_runtime_batch"
+
+[[run_bench]]
+alias = "tool_runtime_chain"
+crate = "gqep-executor"
+bench = "tool_runtime_chain"
+
+# CLI 解析成本基线：main.rs 的 D4（parse 前置）使 --version/--help 零 runtime
+# 成本，D5（配置按需）使 4 类命令免 14 段 Figment 解析——本 bench 是这两项
+# 优化的回归防护。
+[[run_bench]]
+alias = "cli_parse"
+crate = "chimera-cli"
+bench = "cli_parse"
+
+# TUI tick 成本基线：事件循环 Normal 100ms / Eco 1000ms 的每轮成本，
+# 配合终端尺寸缓存与 sysinfo 定向采集（CHIMERA_SYSINFO_FULL_REFRESH 回滚开关）。
+[[run_bench]]
+alias = "tui_tick"
+crate = "chimera-tui"
+bench = "tui_tick_bench"
+
+# MCP server registry 查找成本：server_registry 并发化后的注册表查询基线。
+[[run_bench]]
+alias = "registry_lookup"
+crate = "mcp-mesh"
+bench = "registry_lookup"
 
 [[run_bench]]
 alias = "produce_verify"

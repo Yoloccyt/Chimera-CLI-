@@ -150,6 +150,15 @@ jobs:
           run_bench cache_hit         cargo bench -p scc-cache --bench cache_hit
           run_bench tiering           cargo bench -p cmt-tiering --bench lsct_tiering_benchmark
           run_bench gather            cargo bench -p gqep-executor --bench gather
+          # ===== 工具链并行化重构（ADR-239）新增 =====
+          # 四环链分层归因 + 批量派发吞吐对照 + CLI 启动分段 + TUI tick + MCP registry 查找。
+          # 与 scripts/perf_thresholds.toml 的 [[run_bench]] 保持同步（I7 双源配对）。
+          run_bench tool_dispatch_layers cargo bench -p gqep-executor --bench tool_dispatch_layers
+          run_bench tool_runtime_batch   cargo bench -p gqep-executor --bench tool_runtime_batch
+          run_bench tool_runtime_chain   cargo bench -p gqep-executor --bench tool_runtime_chain
+          run_bench cli_parse            cargo bench -p chimera-cli --bench cli_parse
+          run_bench tui_tick             cargo bench -p chimera-tui --bench tui_tick_bench
+          run_bench registry_lookup      cargo bench -p mcp-mesh --bench registry_lookup
           run_bench produce_verify    cargo bench -p pvl-layer --bench produce_verify
           # ADR-192 附带：probe_select 升为 registered（消除 cache_hit 串台假红），I7 双源配对
           run_bench probe_select      cargo bench -p hcw-window --bench probe_select
@@ -295,6 +304,37 @@ jobs:
               "cache_hit":          10_000,        # < 10µs（实测 581ns，ns 级放大防 CI 抖动）
               "tiering":            500_000,       # < 500µs（实测 250µs）
               "gather":             100_000_000,   # < 100ms 保留兜底（本地离群不可信，待 CI 首跑收紧）
+              # ===== 工具链并行化重构（ADR-239）新增 =====
+              # 数据来源：本机 Windows GNU 全量实测 median（2026-11-06）。余量按既有
+              # 分级原则 ns×10 / us×3-8 / ms×2-2.5。归因推导见 ADR-239。
+              # 分层归因：传输地板 58ns / 策略层 465ns / 沙箱层 1179ns
+              "dispatch_floor_echo":     1_000,           # < 1µs（实测 58ns）
+              "dispatch_policy_eval":   10_000,          # < 10µs（实测 465ns）
+              "dispatch_sandbox_cached": 20_000,         # < 20µs（实测 1179ns，派生策略记忆化）
+              "dispatch_sandbox_uncached": 60_000,       # < 60µs（实测 3094ns，旧实现对照组）
+              # 链级端到端：拒绝路径必须快于放行路径（fail-closed 性能特征）
+              "dchain_allowall_hit":    10_000,          # < 10µs（实测 539ns）
+              "dchain_seccore_hit":     40_000,          # < 40µs（实测 1698ns）
+              "dchain_seccore_legacy":  80_000,          # < 80µs（实测 3694ns，旧沙箱门对照）
+              "dchain_policy_deny":      2_000,          # < 2µs（实测 73ns）
+              "dchain_sandbox_deny":    12_000,          # < 12µs（实测 531ns）
+              "dchain_route_miss":      12_000,          # < 12µs（实测 554ns）
+              "trchain_allow_echo":     20_000,          # < 20µs（实测 563ns）
+              # 批量派发：零延迟下并行仅付调度开销（锁定开销不失控）
+              "tbatch_serial_zero":      1_000_000,      # < 1ms（实测 146µs）
+              "tbatch_parallel_zero":    2_000_000,      # < 2ms（实测 165µs）
+              # 1ms 模拟延迟（真实 I/O 场景）：并行 4.4× 加速是本次重构的核心收益判据
+              "tbatch_serial_slow":  1_200_000_000,      # < 1.2s（实测 493ms）
+              "tbatch_parallel_slow":  400_000_000,      # < 400ms（实测 112ms）
+              # —— CLI 启动分段（cli_parse bench）——
+              "cli_parse_help":       500_000,          # < 500µs（实测 131µs）
+              "cli_parse_run":        500_000,          # < 500µs（实测 110µs）
+              "cli_parse_doctor":     500_000,          # < 500µs（实测 104µs）
+              "cli_startup_config":   500_000,          # < 500µs（实测 ~104µs）
+              "cli_startup_runtime":  5_000_000,        # < 5ms（实测 current_thread 4.3µs / multi_thread 783µs）
+              "cli_startup_e2e":      5_000_000,        # < 5ms（实测 982µs）
+              # —— MCP server registry 查找（registry_lookup bench）——
+              "mcp_registry_lookup":  100_000,          # < 100µs（实测最大 list_alive_100 = 10.6µs）
               "produce_verify":     500_000,       # < 500µs（实测 216µs）
               "command_validator":  50_000,        # < 50µs（实测 6.8µs）
               # 预留(并行 WS-2 将创建 nexus-contracts/benches/xts_top_k.rs):
@@ -397,6 +437,32 @@ jobs:
               "compress":           ["100k_to_32k"],
               "compute_masks":      ["compute_all_masks"],
               "delegation":         ["delegation_fanout"],
+              # ===== 工具链并行化重构（ADR-239）新增 =====
+              # 关键词取 criterion 值组目录名；I2 要求互不为子串 ⇒ 四个互不包含前缀族。
+              "dispatch_floor_echo":     ["floor_echo_transport"],
+              "dispatch_policy_eval":   ["policy_evaluate_allow"],
+              "dispatch_sandbox_cached": ["sandbox_check_seccore/"],
+              "dispatch_sandbox_uncached": ["sandbox_check_seccore_legacy"],
+              "dchain_allowall_hit":    ["chain_allowall_route_hit"],
+              "dchain_seccore_hit":     ["chain_seccore_route_hit/"],
+              "dchain_seccore_legacy":  ["chain_seccore_route_hit_legacy"],
+              "dchain_policy_deny":      ["chain_policy_deny"],
+              "dchain_sandbox_deny":    ["chain_sandbox_deny"],
+              "dchain_route_miss":      ["chain_route_miss"],
+              "trchain_allow_echo":     ["tool_runtime_chain/allow_route_hit_echo"],
+              "tbatch_serial_zero":      ["serial_ms0"],
+              "tbatch_parallel_zero":    ["parallel_ms0"],
+              "tbatch_serial_slow":      ["serial_ms1/64"],
+              "tbatch_parallel_slow":    ["parallel_ms1_bound8/64"],
+              # —— CLI 启动分段（cli_parse bench）——
+              "cli_parse_help":          ["cli_parse/help"],
+              "cli_parse_run":           ["cli_parse/run"],
+              "cli_parse_doctor":        ["cli_parse/doctor"],
+              "cli_startup_config":      ["cli_startup_config/"],
+              "cli_startup_runtime":     ["cli_startup_runtime/"],
+              "cli_startup_e2e":         ["cli_startup_e2e/"],
+              # —— MCP server registry 查找（registry_lookup bench）——
+              "mcp_registry_lookup":     ["mcp_registry/"],
               # ADR-192 附带：顺序与阈值字典一致（先于 cache_hit）；`hit_vs_recompute` 同时
               # 接走污染的两个值组，且与 `cache_hit` 互不为子串（I2 双向已核），不反向遮蔽真组。
               "probe_select":       ["probe_window_select/", "probe_score_throughput/", "hit_vs_recompute"],
