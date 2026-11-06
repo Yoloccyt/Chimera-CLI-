@@ -80,6 +80,59 @@ impl ToolRuntime {
         self.dispatcher.dispatch(req)
     }
 
+    /// 生产接线（组合根用）：策略可配置 + 委托执行器可缺省
+    ///
+    /// 与 [`ToolRuntime::new`] 的唯一差异：
+    /// 1. 策略的「未命中默认动作」可指定（[`ToolRuntime::new`] 固定用
+    ///    `ExecPolicy::new()` 的零信任默认 `Deny`）；
+    /// 2. `delegate` 可为 `None` —— 此时传输环装一个**恒拒绝**执行器，
+    ///    而非虚构一个能"成功"的执行器。
+    ///
+    /// # WHY 需要可缺省委托
+    ///
+    /// 本仓当前的工具执行面**尚无生产委托执行器**（`ToolExecutor` 的生产实现
+    /// 只有 `ExecPolicyToolExecutor`，它自身包裹的 delegate 由上层注入）。
+    /// 组合根若凭空造一个"总是成功"的 delegate，等于**虚构功能**——任何工具
+    /// 都会返回成功，掩盖真实的未接线状态。
+    ///
+    /// 正确姿态是：四环链的**安全骨架**（policy → sandbox → route → transport）
+    /// 先真实装配起来并可被检验，而传输环对「没有真实执行器」这一事实**如实
+    /// fail-closed**（返回 `DispatchError::Transport`）。上层一旦注入真实
+    /// delegate（`ToolRuntime::new`），行为立即切换为可执行。
+    ///
+    /// # 参数
+    /// - `delegate`: 真实工具执行者；`None` 表示「本进程尚未接入真实执行器」
+    /// - `rules`: execpolicy 规则（先命中先裁决；调用方按具体→通用排序）
+    /// - `default_action`: 策略未命中规则时的默认动作
+    ///
+    /// # 安全不变量
+    /// 可缺省委托**只影响传输环**。policy 与 sandbox 两环的行为与
+    /// [`ToolRuntime::new`] **完全一致** —— 拒绝仍发生在任何副作用之前。
+    pub fn with_optional_delegate(
+        delegate: Option<Arc<dyn ToolExecutor>>,
+        rules: Vec<seccore::execpolicy::ExecPolicyRule>,
+        default_action: seccore::execpolicy::PolicyAction,
+    ) -> Result<Self, DispatchError> {
+        let mut policy = ExecPolicy::with_default_action(default_action);
+        for rule in rules {
+            policy = policy.add_rule(rule);
+        }
+        let policy = Arc::new(policy);
+        let transport_executor: Arc<dyn ToolExecutor> = match delegate {
+            Some(exec) => Arc::new(ExecPolicyToolExecutor::new(Arc::clone(&policy), exec)),
+            None => Arc::new(UnwiredToolExecutor),
+        };
+        let inproc: Arc<dyn ToolDispatcher> = Arc::new(InProcDispatcher::new(transport_executor));
+        let dispatcher = DispatcherBuilder::new()
+            .with_policy(Some(Arc::clone(&policy)))
+            .with_sandbox(Some(Arc::new(SeccoreSandboxGate::default_secure())))
+            .with_route(Some(HashMap::new()))
+            .with_fallback(Some(Arc::clone(&inproc)))
+            .with_transport(Some(inproc))
+            .build()?;
+        Ok(Self { dispatcher })
+    }
+
     /// 批量派发 — 有界并发 + 输入序结果（性能增量 2026-11-06）
     ///
     /// # 语义契约
@@ -116,6 +169,32 @@ impl ToolExecutor for ToolRuntime {
             .await
             .map(|outcome| outcome.content_json)
             .map_err(|err| err.to_string())
+    }
+}
+
+/// 未接线执行器 — 本进程尚未接入真实工具执行器时的**恒拒绝**传输环
+///
+/// # WHY 恒拒绝而非「总是成功」
+///
+/// 组合根在真实 delegate 缺席时若装一个"总是成功"的执行器，等于**虚构功能**：
+/// 任何工具调用都会返回成功，把「这条路径没有真实执行器」这一事实掩盖成
+/// 「工具执行成功」。恒拒绝让未接线状态**如实可见**：
+/// 派发返回 `DispatchError::Transport("tool executor not wired: ...")`，
+/// 上层可据此判定「四环链已装配但传输环未接真实执行器」。
+///
+/// # 安全姿态
+///
+/// 恒拒绝是 fail-closed 方向（拒绝 > 误放行）。策略层与沙箱层的行为与
+/// 装了真实 delegate 时**完全一致** —— 它们仍先于传输环短路。
+#[derive(Debug)]
+struct UnwiredToolExecutor;
+
+#[async_trait]
+impl ToolExecutor for UnwiredToolExecutor {
+    async fn execute(&self, tool_name: &str, _args_json: &str) -> Result<String, String> {
+        Err(format!(
+            "tool executor not wired: no production ToolExecutor is registered for tool '{tool_name}'"
+        ))
     }
 }
 

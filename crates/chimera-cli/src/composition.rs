@@ -108,6 +108,16 @@ pub struct AppContext {
     /// 推测上下文缓存（M13 / ADR-161 路径①；SccCache Clone=Arc 共享,
     /// doctor scc_cache 探针经此真实消费 stats()）
     pub scc: scc_cache::SccCache,
+    /// 工具运行时 — 强制沙箱四环派发链（policy → sandbox → route → transport）
+    ///
+    /// WHY 在组合根而非各命令：四环链的沙箱层是**全局安全前置**，
+    /// 在命令层装配必然遗漏某条路径 —— 这正是 ADR-238 落地后仍存在的
+    /// 「四环链只被单元测试覆盖、生产路径无调用点」缺口（ADR-240 P-01）。
+    ///
+    /// 当前为**未接线传输环**（`delegate = None`）：本仓尚无生产
+    /// `ToolExecutor` 实现，传输环对「无真实执行器」如实 fail-closed，
+    /// 而 policy 与 sandbox 两环已真实生效（见 [`tool_runtime_policy`]）。
+    pub tool_runtime: Arc<gqep_executor::tool_runtime::ToolRuntime>,
     /// WI-D1：跨厂商辩论激活输入。`None`=未启用（默认，主干恒绿）；
     /// `Some(names)`=组合根从 `config.model_router` 解析出的去重 provider 通道名，
     /// 供 `chimera parliament` 命令经 `CrossVendorDebate::from_provider_names` 注入。
@@ -129,6 +139,42 @@ const _: fn() = || {
     assert_send_sync::<AppContext>();
 };
 
+/// 工具运行时策略 — 组合根派生的 execpolicy 规则集与默认动作
+///
+/// # WHY 默认动作是 Allow 而非零信任 Deny
+///
+/// `seccore::execpolicy::ExecPolicy::new()` 的零信任默认是 `Deny`（未声明即拒绝），
+/// 适用于「声明式白名单」语义。但 CLI 当前的工具执行路径**本来就没有策略层**
+/// —— ADR-238 落地后，生产路径上既无 `ExecPolicyToolExecutor` 调用点，
+/// 也无任何 `ToolExecutor` 生产实现（实测：`impl ToolExecutor for` 的生产
+/// 命中只有 `ExecPolicyToolExecutor` 自身，其余全在 tests/benches）。
+///
+/// 因此把默认动作改成 `Deny` 会**削减现有功能**：所有工具调用从「可执行」
+/// 变成「一律拒绝」。正确的兼容姿态是：
+///
+/// - 默认动作 `Allow` —— 保持当前「无策略层 ⇒ 放行」的行为不变；
+/// - 规则集为空 —— 尚无生产侧声明的策略规则；
+/// - **沙箱层真实生效** —— 这是本次接线**新增**的防护：注入形态、提权、
+///   沙箱逃逸、数据泄露、篡改六类拦截模式对 `tool_name + args_json` 完整
+///   生效（ADR-238 D4 的安全论证）。
+///
+/// 即：本次接线**不削减任何既有功能，同时新增沙箱层防护**。策略规则的
+/// 声明式来源（配置面）留待独立批次 —— 那需要新增配置段并触发
+/// `config_sample` 门与 14 段 Figment 的联动，属另一个变更的范畴。
+///
+/// # 回滚
+/// 传输环当前是未接线状态（`delegate = None`），派发会如实返回
+/// `transport: tool executor not wired: ...`。要真正执行工具，需上层注入
+/// 生产 `ToolExecutor`（见 ADR-240 的后续批次）。
+#[must_use]
+pub fn tool_runtime_policy() -> (
+    Vec<seccore::execpolicy::ExecPolicyRule>,
+    seccore::execpolicy::PolicyAction,
+) {
+    // 当前无生产侧声明的 execpolicy 规则；默认动作 Allow 保持既有行为。
+    (Vec::new(), seccore::execpolicy::PolicyAction::Allow)
+}
+
 /// 装配 AppContext（唯一组合根入口，C12）
 ///
 /// # 参数
@@ -140,6 +186,7 @@ const _: fn() = || {
 /// 1. 构造 EventBus + QuestEngine（bus/engine 共享同一 Arc 内核）；
 /// 2. 注册 Critical 旁路订阅者（C3 契约全局生效——不再仅 serve/acp 协议宿主，
 ///    全部经组合根的命令进程内 Critical 事件均有真实消费者兜底）。
+/// 3. 装配工具运行时四环链（ADR-240）：policy → sandbox → route → transport。
 ///
 /// # 错误
 /// 当前构造链不可失败（EventBus/QuestEngine 均无失败构造）；
@@ -218,6 +265,19 @@ pub fn build_with_sharding(
     // stats()(非"构造即丢弃");CacheHit/Miss 事件仅由真实缓存访问触发,
     // 装配本身零事件流量(零行为变化)。
     let scc = scc_cache::SccCache::new(scc_cache::SccConfig::default(), bus.clone());
+    // ADR-240 W2-T1：装配工具运行时四环链（policy → sandbox → route → transport）。
+    //
+    // WHY 在组合根：沙箱层是全局安全前置，命令层装配必然漏路径。
+    // WHY delegate = None：本仓尚无生产 ToolExecutor 实现；传输环对「无真实
+    // 执行器」如实 fail-closed，而 policy 与 sandbox 两环已真实生效 ——
+    // 详见 tool_runtime_policy 的 WHY 段。
+    let (tool_rules, tool_default_action) = tool_runtime_policy();
+    let tool_runtime = gqep_executor::tool_runtime::ToolRuntime::with_optional_delegate(
+        None,
+        tool_rules,
+        tool_default_action,
+    )
+    .map_err(|e| anyhow::anyhow!("工具运行时四环链装配失败: {e}"))?;
     // M4-P2: C3 Critical 旁路注册上提为 build() 标准装配步骤（subscribe 在
     // engine 构造后、AppContext 移出前同步完成，§4.4 反模式 3 纪律）。
     spawn_critical_subscriber(&bus);
@@ -276,6 +336,7 @@ pub fn build_with_sharding(
         gqep: Arc::new(gqep),
         sched: Arc::new(sched),
         scc,
+        tool_runtime: Arc::new(tool_runtime),
         cross_vendor_providers,
         #[cfg(feature = "r2_unfreeze")]
         evolution_orchestrator,

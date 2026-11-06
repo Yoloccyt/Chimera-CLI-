@@ -180,6 +180,32 @@ impl ExecPolicy {
         Self::default()
     }
 
+    /// 新建策略并指定「无规则命中时」的默认动作
+    ///
+    /// WHY 需要这个构造器：零信任默认（`Deny`）适用于「声明式白名单」语义 ——
+    /// 调用方必须逐条列出允许的工具，未声明即拒绝。而「默认放行 + 规则设防」
+    /// 语义（规则负责拦截危险工具，其余放行）无法用 `new()` + `add_rule()` 表达：
+    /// 后者只能加规则，无法把「未命中」从 `Deny` 改为 `Allow`。
+    ///
+    /// 二者都合法，取决于部署侧选择哪种心智模型。本构造器只暴露选择权，
+    /// **不改变** `new()` 的零信任默认值 —— 默认值的安全性不变。
+    ///
+    /// # 示例
+    /// ```
+    /// use seccore::execpolicy::{ExecPolicy, PolicyAction};
+    /// // 默认放行，但显式拒绝 rm
+    /// let policy = ExecPolicy::with_default_action(PolicyAction::Allow);
+    /// assert_eq!(policy.evaluate("rm", &[]), PolicyAction::Allow);
+    /// ```
+    #[must_use]
+    pub fn with_default_action(default_action: PolicyAction) -> Self {
+        Self {
+            rules: Vec::new(),
+            default_action,
+            stats: DecisionStats::default(),
+        }
+    }
+
     /// 添加规则（先添加优先——调用方按具体→通用排序）
     pub fn add_rule(mut self, rule: ExecPolicyRule) -> Self {
         self.rules.push(rule);
