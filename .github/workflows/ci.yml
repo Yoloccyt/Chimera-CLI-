@@ -283,6 +283,17 @@ jobs:
           python3 scripts/check_gates_provenance.py --selftest
           python3 scripts/check_gates_provenance.py
 
+      # WHY (2026-10-30): an unquoted `- name: Format check (isolated workspace: fuzz)`
+      # made ci.yml unparsable, and GitHub reacts by dropping *every* job in the file --
+      # including the actionlint job below, which therefore can never validate its own
+      # workflow. zizmor also exits 0 after "failed to parse input", so neither tool
+      # gives a usable local signal. This gate is the lexical tripwire for that class;
+      # its selftest carries the exact regression line as a real file fixture.
+      - name: Workflow YAML lexical guard (G-141, G-142)
+        run: |
+          python3 scripts/check_workflow_yaml_lexical.py --selftest
+          python3 scripts/check_workflow_yaml_lexical.py
+
       # WHY: 源文件级可达性门(ADR-213 D-18)。ADR-160 的可达性棘轮数的是 crate,而 cargo
       # 对「某个 .rs 没有任何 mod 指向它」一个警告都不给:该文件从不被解析,其 #[cfg(test)]
       # 测试永不运行,其 pub 项不在 API 里,只会随时间腐坏。2026-10-13 实测发现 9 个此类

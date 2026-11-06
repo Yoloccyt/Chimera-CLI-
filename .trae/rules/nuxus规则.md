@@ -38,7 +38,7 @@
 | 核心哲学 | **OMEGA 十一定律**: Ω₁-Sparse · Ω₂-Compress · Ω₃-Evolve · Ω₄-Event · Ω₅-Credit · Ω₆-Reuse · Ω₇-Locate · Ω₈-Assess · Ω₉-Preserve · Ω₁₀-Card · Ω₁₁-Synthesize |
 | 当前版本 | `v2.29.0-omega`(workspace.package.version,**2026-09-27 发布**;收口四维深审运行期质量批次 + 架构减法 A/B/P0 治理 + mlc L2 分层检索 ADR-192;上一发布 v2.28.2-omega(2026-09-08),其 tag a1b4616 落在 release 支线而非 main 祖先——⚠ 双支线历史待治理;再早 tag v2.28.0-omega → 94499b4(2026-09-06)) |
 | 测试规模 | **动态 passed 数不在此登记**——权威源 `docs/reports/` 最新回归报告;已登记时点 11587(2026-09-02,43 crates / 485 test target)→ **11794(2026-09-17 M13 提交态,回写提交 `d3840ba`)**,架构减法批次 `38c72e6`(43→41 crates)改动测试面 ⇒ **现势值待重测**;静态口径两尺 11232(strict)/11276(loose,2026-09-22 现取)与旧"差值=doctest+宏展开"解释的**否证**见 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md §24` |
-| crates | **39 crates**(成员数现取 `Cargo.toml` 的 `workspace.members`;零 Stub / 零 `todo!()` / 零 `unimplemented!()`。可达性**不登记**、以 `scripts/check_crate_reachability.sh` 现取(2026-10-02 实测 30 生产可达 / 0 冻结孤岛 / 9 GATED);成员数演进:43 - 架构减法删 auto-dpo/model-router + 新增 router-traits,再经 ADR-193 两批次退役 router-traits、整并 lsct-tiering 入 cmt-tiering,41→39。旧口径"28 可达 + 14 孤岛 + 1 GATED"(ADR-160 时点)已被 P0-P3 岛链偿还批次取代。**"零 Stub" ≠ "已装配"** 仍然成立) |
+| crates | **39 crates**(成员数现取 `Cargo.toml` 的 `workspace.members`;零 Stub / 零 `todo!()` / 零 `unimplemented!()`。可达性**不登记**、以 `scripts/check_crate_reachability.sh` 现取(2026-10-02 实测 30 生产可达 / 0 冻结孤岛 / 9 GATED);成员数演进:43 - 架构减法删 auto-dpo/model-router + 新增 router-traits,再经 ADR-193 两批次退役 router-traits、整并 lsct-tiering 入 cmt-tiering,41→39。旧口径"28 可达 + 14 孤岛 + 1 GATED"(ADR-160 时点)已被 P0-P3 岛链偿还批次取代。**"零 Stub" ≠ "已装配"** 仍然成立;ADR-222(2026-10-20)后成员数为 **46 crates**(+L0-B `nexus-telemetry` 与 6 个 L0-A sibling 契约 crate:core/sparse/safety/seams/mca/memory)) |
 | NexusEvent 变体 | **计数不在此登记**——变体清单唯一权威源 `crates/event-bus/src/types.rs`,基线锁 `scripts/doc_count_freeze.txt`,现取命令 `pwsh scripts/check_doc_consistency.ps1`(2026-10-11 实测 **152**);`event_types.rs` 分层子枚举镜像已按 ADR-160 决策 5 退役删除,分类真值源收敛一处 |
 | ADR 数量 | **不登记上限**(2026-10-11 磁盘 `ADR-*.md` 为 107 文件、最大主编号 **211**,其中含保留号/历史号;在途 v3.4/v3.5 批次已涉 ADR-196/201/210/211)。编号分段、合并档与保留号一律以 `docs/architecture/adr_index.md` + `CODE_WIKI §11` 为准,需要时现取 `ls docs/architecture/ADR-*.md`,本文不抄最大值 |
 
@@ -288,7 +288,7 @@ $env:PATH = "D:\Chimera CLI\.toolchain\cargo\bin;D:\msys64\mingw64\bin;$env:PATH
 cargo check --workspace
 
 # 全量测试(passed 数不写死:权威源 docs/reports/ 最新回归报告;时点值 11587=2026-09-02、11794=2026-09-17 M13 提交态,架构减法批次后待重测)
-cargo test --workspace
+cargo test --workspace --no-fail-fast
 
 # clippy(Windows OOM 缓解:--jobs 2)
 $env:RUST_MIN_STACK = '33554432'; $env:CARGO_INCREMENTAL = '0'

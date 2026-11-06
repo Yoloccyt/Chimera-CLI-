@@ -649,7 +649,7 @@ name = "token_efficiency_benchmark_driver"
 path = "tests/e2e/token_efficiency_benchmark_driver.rs"
 
 # Phase 1: Dependency Rules Inner Ring Test — 已按 ADR-213 R3 退役(2026-10-13)。
-# 退役理由见 docs/reports/L0-contracts-residual-debt_2026-10-14.md §2:该 target 4/5 用例
+# 退役理由见 docs/reports/L0-contracts-residual-debt_2026-10-13.md §2:该 target 4/5 用例
 # 调 `powershell` + 硬编码 `current_dir("d:\\Chimera CLI")`,在 ci.yml 的 ubuntu-latest
 # runner 上 spawn 失败即 panic(本分支从未跑过 ci.yml,故此前未暴露);其 TC-1 断言
 # "[GAP-A] 不出现" 是恒真守卫(Check A 已随 ADR-187 双源删除),合法后继在

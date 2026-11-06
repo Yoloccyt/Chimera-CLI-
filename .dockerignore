@@ -6,6 +6,13 @@ target/
 .toolchain/
 tmp/
 
+# 本地工具状态目录(重型;.mimosa/ 实测 24.4 万个文件,会拖慢构建上下文上传)
+# WHY 安全:Dockerfile 仅 COPY Cargo.toml / Cargo.lock / .cargo/config.toml / crates/
+# (实测 :38-40),以下目录无任何引用。
+.mimosa/
+.tower/
+tmp_podman/
+
 # 版本控制
 .git/
 .gitignore

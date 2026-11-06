@@ -7,6 +7,9 @@ target_clippy*/
 **/*.rs.bk
 *.pdb
 
+# === 覆盖率产物 (cargo-llvm-cov，coverage.yml 夜间运行；补齐忽略策略，防未追踪噪声) ===
+coverage/
+
 # === Rust 工具链缓存(本地迁移至 D 盘)===
 .toolchain/
 
@@ -28,6 +31,17 @@ tmp_podman/
 *.swp
 *.swo
 *~
+
+# === 本地工具状态目录 ===
+# WHY 必须显式忽略(而非只靠 .git/info/exclude 本地私有排除):typos / lychee / ripgrep /
+# IDE 索引 / git status 这一族工具都按 .gitignore 决定扫描视野。`.mimosa/` 实测 244,021
+# 个文件(hook 本地状态,hook-state + hook-status),不排除即拖累全家族与 git status。
+# 本表与 docs/CONVENTIONS.md §一·隐藏目录登记表逐项对齐;`.qoder-cn/` 受 git 跟踪,勿加。
+.mimosa/
+.tower/
+.superpowers/
+.workbuddy/
+.zcode/
 
 # === 操作系统 ===
 .DS_Store

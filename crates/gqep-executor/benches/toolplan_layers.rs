@@ -5,6 +5,16 @@
 //!
 //! 理论墙钟:串行 ≈ 8 × 2ms = 16ms;有界并行 ≈ 2ms + 调度开销。
 //!
+//! 两组值组的分工(ADR-252):
+//! - `readonly8_ms2/*` — 计划**显式声明** `side_effect: "read_only"`,走并发分支,
+//!   是「上限」对照组。
+//! - `undeclared8_ms2/*` — 计划**不声明** `side_effect`(字段缺省 `None`)。
+//!   `layer_requires_serial` 把「未声明」按「可能写」保守处理 ⇒ 今天 c1 与 c8
+//!   读数应几乎相等(整层串行)。这组是 F-A5 的**代价测量锚**:它把
+//!   「缺省语义导致并行分支在生产形同不存在」变成一个可对比的数字,
+//!   而不是停在争论上。接入执行器能力表(ADR-254)后 c8 才应向
+//!   `readonly8_ms2/8` 靠拢 —— 阈值收紧即该改动的验收证据。
+//!
 //! 运行:
 //! ```powershell
 //! cargo bench -p gqep-executor --bench toolplan_layers
@@ -33,7 +43,10 @@ impl ToolExecutor for SleepExecutor {
 }
 
 /// n 个只读 ToolCall 同层（无依赖 → 同一层）
-fn readonly_layer_plan(n: usize) -> ToolPlan {
+///
+/// `declared` 控制每个节点是否写 `side_effect: Some(ReadOnly)`：
+/// `false` 时留 `None`，即「未声明」形态，供 `undeclared8_ms2/*` 值组使用。
+fn readonly_layer_plan(n: usize, declared: bool) -> ToolPlan {
     let nodes: Vec<ToolNode> = (0..n)
         .map(|i| ToolNode {
             id: format!("t{i}"),
@@ -42,11 +55,15 @@ fn readonly_layer_plan(n: usize) -> ToolPlan {
             args_json: Some(format!(r#"{{"i":{i}}}"#)),
             field: None,
             predicate: None,
-            side_effect: Some(SideEffectDecl::ReadOnly),
+            side_effect: if declared {
+                Some(SideEffectDecl::ReadOnly)
+            } else {
+                None
+            },
         })
         .collect();
     ToolPlan {
-        id: format!("bench-readonly-layer-{n}"),
+        id: format!("bench-readonly-layer-{n}-{declared}"),
         nodes,
         edges: Vec::new(),
     }
@@ -54,28 +71,40 @@ fn readonly_layer_plan(n: usize) -> ToolPlan {
 
 fn bench_toolplan_layers(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().expect("创建 tokio runtime 失败");
-    let plan = readonly_layer_plan(8);
+
+    // (值组前缀, 是否显式声明 read_only)。两组共用同一 executor 与同一形状，
+    // 唯一差异是 `side_effect` 字段 ⇒ 差值即「缺省保守串行」的代价。
+    let groups = [
+        ("readonly8_ms2", true),
+        ("undeclared8_ms2", false),
+    ];
 
     let mut group = c.benchmark_group("toolplan_layers");
     group.sample_size(20);
 
-    for concurrency in [1usize, 8] {
-        let runner = PlanRunner::new(
-            Box::new(SleepExecutor { delay_ms: 2 }),
-            PlanGuards::default(),
-        )
-        .with_concurrency(concurrency);
-        group.bench_with_input(
-            BenchmarkId::new("readonly8_ms2", concurrency),
-            &concurrency,
-            |b, _| {
-                b.to_async(&rt).iter(|| async {
-                    let summary = runner.run(&plan).await.expect("基准计划必须执行成功");
-                    assert_eq!(summary.tool_calls, 8);
-                    assert!(!summary.truncated);
-                });
-            },
-        );
+    for (label, declared) in groups {
+        let plan = readonly_layer_plan(8, declared);
+        for concurrency in [1usize, 8] {
+            let runner = PlanRunner::new(
+                Box::new(SleepExecutor { delay_ms: 2 }),
+                PlanGuards::default(),
+            )
+            .with_concurrency(concurrency);
+            group.bench_with_input(
+                BenchmarkId::new(label, concurrency),
+                &concurrency,
+                |b, _| {
+                    b.to_async(&rt).iter(|| async {
+                        let summary = runner
+                            .run(&plan)
+                            .await
+                            .expect("基准计划必须执行成功");
+                        assert_eq!(summary.tool_calls, 8);
+                        assert!(!summary.truncated);
+                    });
+                },
+            );
+        }
     }
 
     group.finish();

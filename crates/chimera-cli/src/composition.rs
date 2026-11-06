@@ -163,9 +163,9 @@ const _: fn() = || {
 /// `config_sample` 门与 14 段 Figment 的联动，属另一个变更的范畴。
 ///
 /// # 回滚
-/// 传输环当前是未接线状态（`delegate = None`），派发会如实返回
-/// `transport: tool executor not wired: ...`。要真正执行工具，需上层注入
-/// 生产 `ToolExecutor`（见 ADR-240 的后续批次）。
+/// 传输环已在组合根唯一装配为 `Some(BuiltinToolExecutor)`（ADR-244 D1），
+/// 四环 policy→sandbox→route→transport 真实生效；回退该 delegate 即回到
+/// ADR-240 D3 的 fail-closed 恒拒绝态，不涉及任何安全层降级。
 #[must_use]
 pub fn tool_runtime_policy() -> (
     Vec<seccore::execpolicy::ExecPolicyRule>,
