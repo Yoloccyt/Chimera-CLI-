@@ -24,9 +24,16 @@ Proposed — 2026-07-30
 
 引入 ExitCode 矩阵，将 `main` 签名改为 `async fn main() -> std::process::ExitCode`，根据 `ChimeraCliError` 变体映射结构化退出码。
 
+> **2026-10-22 追加（T1.1）**：新增 `ExitProfile { Global, Exec }` 作为两套对外契约的唯一分流点——`Global` 委托 ADR-060 矩阵，`Exec` 实现 WI-02 的 0/2/3/4。两套数字不合并，但共享同一变体分类；新增变体时两个 `match` 都会编译失败，强制同时决定两档映射。
+
 > **实施现状核对（2026-09-22，只登记事实，不改写下方决策）**
-> - ✅ 矩阵与实现逐条一致：`crates/chimera-cli/src/error.rs:84-94` `NotImplemented→2 / ConfigError→1 / EngineError·IoError→3 / UserCancelled→4 / PermissionDenied→5 / Timeout→6`；`kind` 稳定标识符见 `error.rs:103-112`（7 个），envelope 形状见 `crates/chimera-cli/src/output.rs:14-32`。
-> - ❌ **迁移计划第 3 步未执行**：本 ADR 称「v2.11.0-omega 移除 `--legacy-exit-code`，矩阵成为唯一行为」，但该 flag 仍在码内 —— `crates/chimera-cli/src/cli.rs:94` 声明 `pub legacy_exit_code: bool`、`main.rs:125` 仍 `if cli.legacy_exit_code { … ExitCode::from(1) }`（`main.rs:38` 注释亦自陈保留）。⇒ 要么补做移除（属 `crates/` 改动，需授权），要么由治理把本 ADR 的该步改写为「保留一个兼容窗口/长期保留」。**当前实况：矩阵默认生效，但显式传 `--legacy-exit-code` 会退回全 1。**
+> - ✅ 矩阵与实现逐条一致：`crates/chimera-cli/src/error.rs::exit_code_value` `NotImplemented→2 / ConfigError→1 / EngineError·IoError→3 / UserCancelled→4 / PermissionDenied→5 / Timeout→6`；`kind` 稳定标识符见 `error.rs::kind`（7 个），envelope 形状见 `crates/chimera-cli/src/output.rs` 顶部 schema 文档。
+> - ❌ **迁移计划第 3 步未执行**：本 ADR 称「v2.11.0-omega 移除 `--legacy-exit-code`，矩阵成为唯一行为」，但该 flag 仍在码内 —— `crates/chimera-cli/src/cli.rs` 声明 `pub legacy_exit_code: bool`、`main.rs` 仍 `if cli.legacy_exit_code { … ExitCode::from(1) }`。**当前实况：矩阵默认生效，但显式传 `--legacy-exit-code` 会退回全 1。**
+>
+> **治理裁决（2026-10-22，T2.7）：选择「保留长期兼容」，不移除 `--legacy-exit-code`。**
+> 理由：移除会让依赖 `$? -eq 1` 的脚本从「可能误判」升级为「完全无法判断失败」（该 flag 是唯一的全 1 退路），收益不足以承担 breaking；矩阵已是默认行为，显式 flag 只影响主动选择兼容的调用方。
+> 守卫：`crates/chimera-cli/tests/cli.rs::compat_shims_are_declared` 把该 flag 列入显式清单——移除必须同批更新本节与 release note。
+> 原「v2.11.0-omega 移除」表述作废，保留为历史记录。
 ### 1. 退出码矩阵
 
 | 退出码 | 语义 | 对应 `ChimeraCliError` 变体 | 说明 |

@@ -80,6 +80,8 @@ pub mod gatherer;
 /// P3-T7: 流式期间启动工具（v4.0 WI-17,增量解析 + 闭合即启动）
 pub mod streaming_dispatch;
 pub mod timeout;
+/// T2-3/T2-4: 工具运行时执行面 — 强制沙箱四环派发链（policy→sandbox→route→transport）
+pub mod tool_runtime;
 /// P3-T8: 声明式 ToolPlan 解释执行（v4.0 WI-16,PTC 计划批编排）
 pub mod toolplan_runner;
 pub mod types;
@@ -96,6 +98,15 @@ pub use streaming_dispatch::{DispatchOutcome, DispatchedCall, SideEffect, Stream
 pub use toolplan_runner::{PlanGuards, PlanRunner, PlanSummary, ToolExecutor};
 // P4-T3: execpolicy 接线公开 API
 pub use exec_tool_executor::ExecPolicyToolExecutor;
+// T2-3/T2-4: 强制沙箱派发链公开 API（T1-2 追加生产接线 ToolRuntime/InProcDispatcher）
+// WHY 不重导出 `tool_runtime::DispatchOutcome`：根命名空间已被
+// `streaming_dispatch::DispatchOutcome` 占用，同名会造成 E0252；
+// 需要执行面结果请走 `tool_runtime::DispatchOutcome` 全路径。
+pub use tool_runtime::{
+    AllowAllSandboxGate, DispatchError, DispatchFuture, DispatchRequest, DispatcherBuilder,
+    InProcDispatcher, SandboxGate, SandboxedDispatcher, SeccoreSandboxGate, ToolDispatcher,
+    ToolRuntime,
+};
 pub use types::{GatherCollected, GatherResult, GqepFuture, OperationId};
 
 /// 双层超时防护统计快照（Task 3.7:L10 → L7 向下依赖）

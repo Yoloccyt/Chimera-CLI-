@@ -154,7 +154,7 @@ proptest! {
         let cli = Cli::try_parse_from(args)
             .expect("run <合法 prompt> 应解析成功");
         prop_assert!(
-            matches!(cli.command, Some(Commands::Run { ref prompt }) if *prompt == input_prompt),
+            matches!(cli.command, Some(Commands::Run { ref prompt, .. }) if *prompt == input_prompt),
             "run <prompt> 应原样保留 prompt",
         );
     }

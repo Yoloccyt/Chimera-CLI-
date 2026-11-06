@@ -58,7 +58,7 @@ fn test_no_subcommand() {
 fn test_run_subcommand() {
     let cli = Cli::try_parse_from(["chimera", "run", "hello world"]).unwrap();
     match cli.command {
-        Some(chimera_cli::cli::Commands::Run { prompt }) => {
+        Some(chimera_cli::cli::Commands::Run { prompt, .. }) => {
             assert_eq!(prompt, "hello world");
         }
         _ => panic!("应解析为 Run 命令"),

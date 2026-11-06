@@ -16,12 +16,23 @@
 
 [CmdletBinding()]
 param(
-    [ValidateSet('Diagnose','SafeClean','ProjectClean')]
+    [ValidateSet('Diagnose','SafeClean','ProjectClean','DeepClean')]
     [string]$Mode = 'Diagnose',
 
     [switch]$Force,
 
-    [int]$TopN = 15
+    [int]$TopN = 15,
+
+    # DeepClean 专用：只报告不删除（DryRun 与实际执行严格分离）
+    [switch]$DryRun,
+
+    # DeepClean 专用：Repo=仓库内可再生缓存；Drive=C/D 盘开发链缓存；All=两者
+    [ValidateSet('Repo','Drive','All')]
+    [string]$Scope = 'Repo',
+
+    # DeepClean 专用：高风险项显式启用（fuzz-target / tower / rustup-unused /
+    # cargo-autoclean / recycle-d / legacy-rustup / c-pkg-caches / d-legacy-ide）
+    [string[]]$Include = @()
 )
 
 $ErrorActionPreference = 'Continue'
@@ -498,6 +509,229 @@ function Invoke-ProjectClean {
 }
 
 # ============================================================
+# DeepClean 模式函数（幂等 + DryRun 分离 + 白名单守卫）
+# 设计依据: dev-chain-safe-cleanup-plan §九（复用而非新造）
+# ============================================================
+
+# 脚本所在仓库根（DeepClean 白名单以它为界）
+$script:DeepCleanRepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+# 仓库内绝对受保护目录（DeepClean 绝不触碰；注意不包含 scripts/fuzz，因其下的
+# __pycache__ 与 target 才是清理对象）
+$script:DeepCleanProtected = @(
+    '.toolchain','.git','crates','docs','src','tests','examples',
+    '.cargo','.config','.github','.trae','.claude',
+    'Aegis','dsh-taskboard','archives','assets','canvases'
+)
+
+# 校验仓库内路径是否可删（越界/命中保护目录则拒绝）
+function Assert-DeepCleanSafePath {
+    param([string]$Path)
+    $root = [System.IO.Path]::GetFullPath($script:DeepCleanRepoRoot).TrimEnd('\','/')
+    $full = [System.IO.Path]::GetFullPath($Path).TrimEnd('\','/')
+    if ($full -eq $root) { throw "拒绝：$Path 指向仓库根" }
+    if (-not $full.StartsWith($root + [System.IO.Path]::DirectorySeparatorChar)) { throw "拒绝：$Path 不在仓库内" }
+    foreach ($pd in $script:DeepCleanProtected) {
+        $p = [System.IO.Path]::GetFullPath((Join-Path $root $pd)).TrimEnd('\','/')
+        if ($full -eq $p -or $full.StartsWith($p + [System.IO.Path]::DirectorySeparatorChar)) {
+            throw "拒绝：$Path 命中受保护目录 $pd"
+        }
+    }
+}
+
+# 统一的单一目标清理：DryRun 只报告；Test-Path 守卫；失败仅告警；幂等
+function Clear-DeepCleanTarget {
+    param(
+        [string]$Path,
+        [string]$Category = 'cache',
+        [string]$KeepIf = '',
+        [switch]$RemoveDir,
+        [switch]$SkipWhitelist
+    )
+    if (-not $SkipWhitelist) { Assert-DeepCleanSafePath -Path $Path }
+    if (-not (Test-Path -LiteralPath $Path)) {
+        Write-Host "  [SKIP ] $Category $Path (不存在)" -ForegroundColor DarkGray
+        return
+    }
+    $sizeGB = Format-GB -Bytes (Get-FolderSize -Path $Path).Size
+    if ($DryRun) {
+        Write-Host "  [DRY  ] $Category $Path (~$sizeGB GB) — 将删除" -ForegroundColor Yellow
+        return
+    }
+    Write-Host "  [CLEAN] $Category $Path (~$sizeGB GB)" -ForegroundColor Yellow
+    if ($RemoveDir) {
+        Remove-FullDirectory -Path $Path
+    } else {
+        Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -ne $KeepIf } |
+            ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Invoke-DeepClean {
+    Write-Host "`n************************************************" -ForegroundColor Cyan
+    Write-Host "  Chimera CLI 深度清理 (DeepClean · Scope=$Scope · DryRun=$DryRun)" -ForegroundColor Cyan
+    Write-Host "************************************************" -ForegroundColor Cyan
+
+    $freeBeforeC = Get-DiskFreeGB -DriveLetter 'C:'
+    $freeBeforeD = Get-DiskFreeGB -DriveLetter 'D:'
+    Write-SubStep "清理前 C 盘可用: $freeBeforeC GB | D 盘可用: $freeBeforeD GB"
+
+    # 统一工具链 env（仅影响本脚本进程）
+    if (Test-Path -LiteralPath (Join-Path $script:DeepCleanRepoRoot '.toolchain')) {
+        $env:CARGO_HOME  = Join-Path $script:DeepCleanRepoRoot '.toolchain\cargo'
+        $env:RUSTUP_HOME = Join-Path $script:DeepCleanRepoRoot '.toolchain\rustup'
+    }
+
+    $root = $script:DeepCleanRepoRoot
+
+    # 兼容 CLI 传入的逗号分隔单串（-File 下 -Include a,b,c 会作为单个字符串绑定）
+    $includeTokens = @()
+    foreach ($raw in $Include) {
+        foreach ($tok in ($raw -split ',')) {
+            $t = $tok.Trim()
+            if ($t) { $includeTokens += $t }
+        }
+    }
+
+    # ---------------- Repo 作用域：仓库内可再生缓存 ----------------
+    if ($Scope -in @('Repo','All')) {
+        Write-Section 'Repo 作用域（仓库内可再生缓存）'
+
+        # target/debug：优先 cargo clean --profile dev（保留 release/criterion）
+        $dbg = Join-Path $root 'target\debug'
+        if (Test-Path -LiteralPath $dbg) {
+            $dbgGB = Format-GB -Bytes (Get-FolderSize -Path $dbg).Size
+            if ($DryRun) {
+                Write-Host "  [DRY  ] 构建缓存 target/debug (~$dbgGB GB) — 将执行 cargo clean --profile dev" -ForegroundColor Yellow
+            } else {
+                Write-Host "  [CLEAN] 构建缓存 target/debug (~$dbgGB GB)" -ForegroundColor Yellow
+                if ($null -ne (Get-Command cargo -ErrorAction SilentlyContinue)) { & cargo clean --profile dev 2>&1 | Out-Null }
+                # cargo clean 若因锁/占用失败，则回退到直接删除残留（仍受白名单守卫）
+                if (Test-Path -LiteralPath $dbg) { Clear-DeepCleanTarget -Path $dbg -Category '构建缓存 target/debug(残留)' -RemoveDir }
+            }
+        } else {
+            Write-Host "  [SKIP ] target/debug (不存在)" -ForegroundColor DarkGray
+        }
+
+        Clear-DeepCleanTarget -Path (Join-Path $root 'tmp_podman') -Category '临时 tmp_podman'
+        Clear-DeepCleanTarget -Path (Join-Path $root 'tmp')      -Category '临时 tmp'
+        Clear-DeepCleanTarget -Path (Join-Path $root 'scripts\__pycache__') -Category 'Python 缓存' -RemoveDir
+        Clear-DeepCleanTarget -Path (Join-Path $root 'tmp\__pycache__')     -Category 'Python 缓存' -RemoveDir
+        foreach ($s in @('.superpowers','.zcode','.workbuddy')) {
+            Clear-DeepCleanTarget -Path (Join-Path $root $s) -Category "Agent scratch $s" -KeepIf '.gitignore'
+        }
+
+        # 高风险/需确认项：默认不删，显式 Include 才处理
+        if ($includeTokens -contains 'fuzz-target') {
+            Clear-DeepCleanTarget -Path (Join-Path $root 'fuzz\target') -Category 'fuzz 构建缓存' -RemoveDir
+        }
+        if ($includeTokens -contains 'tower') {
+            Clear-DeepCleanTarget -Path (Join-Path $root '.tower') -Category '工具态 .tower'
+        }
+    }
+
+    # ---------------- Drive 作用域：C/D 盘开发链缓存（高风险，逐项 Include 启用） ----------------
+    if ($Scope -in @('Drive','All')) {
+        Write-Section 'Drive 作用域（C/D 盘开发链缓存，按 -Include 逐项启用）'
+
+        # rustup 未用工具链（保留 stable-x86_64-pc-windows-gnu）
+        if ($includeTokens -contains 'rustup-unused') {
+            if ($null -eq (Get-Command rustup -ErrorAction SilentlyContinue)) {
+                Write-Host '  [SKIP ] rustup 不可用' -ForegroundColor DarkGray
+            } else {
+                $list = (& rustup toolchain list) 2>$null
+                foreach ($t in @('stable-x86_64-pc-windows-msvc','nightly-x86_64-pc-windows-gnu','nightly-x86_64-pc-windows-msvc')) {
+                    if ($list -match [regex]::Escape($t)) {
+                        if ($DryRun) { Write-Host "  [DRY  ] rustup 卸载 $t" -ForegroundColor Yellow }
+                        else { Write-Host "  [CLEAN] rustup 卸载 $t" -ForegroundColor Yellow; & rustup toolchain uninstall $t | Out-Null }
+                    }
+                }
+            }
+        }
+
+        # cargo registry autoclean（仅清过时条目）
+        if ($includeTokens -contains 'cargo-autoclean') {
+            if ($null -eq (Get-Command cargo -ErrorAction SilentlyContinue)) { Write-Host '  [SKIP ] cargo 不可用' -ForegroundColor DarkGray }
+            elseif ($DryRun) { Write-Host '  [DRY  ] cargo cache --autoclean' -ForegroundColor Yellow }
+            else { Write-Host '  [CLEAN] cargo cache --autoclean' -ForegroundColor Yellow; & cargo cache --autoclean 2>&1 | Out-Null }
+        }
+
+        # D 盘回收站（不可逆）
+        if ($includeTokens -contains 'recycle-d') {
+            if ($DryRun) { Write-Host '  [DRY  ] 清空 D 盘回收站' -ForegroundColor Yellow }
+            else { Write-Host '  [CLEAN] 清空 D 盘回收站' -ForegroundColor Yellow; Clear-RecycleBin -DriveLetter D -Force -ErrorAction SilentlyContinue }
+        }
+
+        # D:\.rustup 迁移前遗留（先改名观察，确认无影响后再删除）
+        if ($includeTokens -contains 'legacy-rustup') {
+            $legacy = 'D:\.rustup'
+            if (-not (Test-Path -LiteralPath $legacy)) { Write-Host '  [SKIP ] D:\.rustup (不存在)' -ForegroundColor DarkGray }
+            elseif ($DryRun) { Write-Host '  [DRY  ] D:\.rustup 改名为 .rustup.bak' -ForegroundColor Yellow }
+            else {
+                try {
+                    if (Test-Path -LiteralPath 'D:\.rustup.bak') { Write-Warning '  D:\.rustup.bak 已存在，跳过改名' }
+                    else { Rename-Item -LiteralPath $legacy -NewName '.rustup.bak' -ErrorAction Stop; Write-Host '  [CLEAN] D:\.rustup → .rustup.bak' -ForegroundColor Yellow }
+                } catch { Write-Warning "  无法改名 D:\.rustup（需提权/沙箱外执行）: $($_.Exception.Message)" }
+            }
+        }
+
+        # C 盘包管理/临时缓存（可能服务其他项目，显式 Include 才处理）
+        if ($includeTokens -contains 'c-pkg-caches') {
+            if ($null -ne (Get-Command npm -ErrorAction SilentlyContinue)) {
+                if ($DryRun) { Write-Host '  [DRY  ] npm cache clean --force' -ForegroundColor Yellow }
+                else { & npm cache clean --force 2>&1 | Out-Null; Write-Host '  [CLEAN] npm cache' -ForegroundColor Yellow }
+            }
+            $pipCmd = $null
+            if ($null -ne (Get-Command pip -ErrorAction SilentlyContinue)) { $pipCmd = 'pip' }
+            elseif ($null -ne (Get-Command py -ErrorAction SilentlyContinue)) { $pipCmd = 'py' }
+            if ($pipCmd) {
+                if ($DryRun) { Write-Host '  [DRY  ] pip cache purge' -ForegroundColor Yellow }
+                elseif ($pipCmd -eq 'pip') { & pip cache purge 2>&1 | Out-Null; Write-Host '  [CLEAN] pip cache' -ForegroundColor Yellow }
+                else { & py -m pip cache purge 2>&1 | Out-Null; Write-Host '  [CLEAN] pip cache (py)' -ForegroundColor Yellow }
+            }
+            Clear-DeepCleanTarget -Path (Join-Path $env:LOCALAPPDATA 'Temp')   -Category 'C 盘 Temp'      -SkipWhitelist
+            Clear-DeepCleanTarget -Path (Join-Path $HOME '.m2\repository')    -Category 'Maven .m2'     -SkipWhitelist
+            Clear-DeepCleanTarget -Path (Join-Path $HOME '.cargo')             -Category 'C 盘 .cargo 遗留' -SkipWhitelist
+        }
+
+        # C 盘 IDE 纯子缓存（仅 Cache/logs 等子目录，不碰设置/扩展本体）
+        if ($includeTokens -contains 'c-ide-caches') {
+            $ideDirs = @("$HOME\.vscode","$HOME\.qoder","$HOME\.qoder-cn","$HOME\.trae-cn","$HOME\.lingma","$HOME\.workbuddy")
+            $cacheSubs = @('Cache','CachedData','Code Cache','GPUCache','logs','CachedExtensionVSIXs','CachedProfilesData')
+            foreach ($ide in $ideDirs) {
+                if (-not (Test-Path -LiteralPath $ide)) { continue }
+                foreach ($sub in $cacheSubs) {
+                    Clear-DeepCleanTarget -Path (Join-Path $ide $sub) -Category "IDE 子缓存 $ide\$sub" -SkipWhitelist
+                }
+            }
+        }
+
+        # C 盘通用缓存（.cache / .docker）
+        if ($includeTokens -contains 'c-general-caches') {
+            Clear-DeepCleanTarget -Path (Join-Path $HOME '.cache')  -Category 'C 盘 .cache'  -SkipWhitelist
+            Clear-DeepCleanTarget -Path (Join-Path $HOME '.docker') -Category 'C 盘 .docker' -SkipWhitelist
+        }
+
+        # D 盘旧 IDE 安装（需人工确认已弃用）
+        if ($includeTokens -contains 'd-legacy-ide') {
+            foreach ($d in @('D:\.vscode','D:\.lingma','D:\Qoder（全新）')) {
+                Clear-DeepCleanTarget -Path $d -Category "D 盘旧 IDE $d" -RemoveDir -SkipWhitelist
+            }
+        }
+    }
+
+    # ---------------- 结果 ----------------
+    $freeAfterC = Get-DiskFreeGB -DriveLetter 'C:'
+    $freeAfterD = Get-DiskFreeGB -DriveLetter 'D:'
+    Write-Section 'DeepClean 结果'
+    Write-Host ("  C 盘: {0} GB → {1} GB" -f $freeBeforeC, $freeAfterC) -ForegroundColor Green
+    Write-Host ("  D 盘: {0} GB → {1} GB" -f $freeBeforeD, $freeAfterD) -ForegroundColor Green
+    if ($DryRun) { Write-Host "`n  [DRY-RUN] 未删除任何文件；去掉 -DryRun 后按上述清单执行。" -ForegroundColor Cyan }
+    Write-Host "`n=== DeepClean 完成 ===" -ForegroundColor Cyan
+}
+
+# ============================================================
 # 主分发
 # ============================================================
 
@@ -505,4 +739,5 @@ switch ($Mode) {
     'Diagnose'     { Invoke-Diagnose }
     'SafeClean'    { Invoke-SafeClean }
     'ProjectClean' { Invoke-ProjectClean }
+    'DeepClean'    { Invoke-DeepClean }
 }

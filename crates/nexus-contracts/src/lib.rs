@@ -38,11 +38,11 @@
 //!
 //! # 承载类型（按功能分组；ADR-222 拆分后的 7-crate 实测结构，下述文件数为 2026-10-20 现取）
 //!
-//! L0-A 共 **70 个 `src/*.rs`**（G-99 扫描面同值）= 本 umbrella **20** + 6 个 sibling **50**：
+//! L0-A 共 **71 个 `src/*.rs`**（G-99 扫描面同值）= 本 umbrella **21** + 6 个 sibling **50**：
 //!
 //! | crate | 保留组目录 | `src/*.rs` | 说明 |
 //! |---|---|---|---|
-//! | `nexus-contracts`（本 crate，facade） | `spec/` `vector_math/` `protocol/` `testutil/` | 20 | 4 组未拆 + facade 重导出 |
+//! | `nexus-contracts`（本 crate，facade） | `spec/` `vector_math/` `protocol/` `testutil/` | 21 | 4 组未拆 + facade 重导出 |
 //! | `nexus-contracts-core` | `core_domain/` | 10 | W3.1 首批，含 `is_schema_version_unset` 升 `pub` |
 //! | `nexus-contracts-sparse` | `sparse/` | 5 | W3.2 |
 //! | `nexus-contracts-safety` | `safety/` | 8 | W3.4 |
@@ -297,6 +297,14 @@ pub use spec::formal_props;
 /// 承载 ToolPlan / ToolNode / ToolOp / PlanEdge / PlanError / guards,
 /// 供 gqep-executor PlanRunner 解释执行（L0 纯类型契约层,零依赖）。
 pub use spec::tool_plan;
+
+/// 工具派发契约 — 执行面最小类型集（T1-1，ADR-033 上提）
+///
+/// 承载 DispatchRequest / DispatchOutcome / DispatchError / DispatchFuture /
+/// ToolDispatcher（对象安全的装饰器链接口）,自 L7 `gqep-executor` 的
+/// `tool_runtime::dispatch` 逐字上提;后者改为 re-export 保旧路径不变。
+/// 仅依赖 std（不引入 `futures`,G-99 外部依赖白名单）。
+pub use spec::tool_dispatch;
 
 /// 调度契约 — mas-sched 控制面类型先移 L0（P3-T2 补,ADR-033 先例）
 ///

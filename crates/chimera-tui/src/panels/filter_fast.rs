@@ -23,9 +23,23 @@ use event_bus::NexusEvent;
 /// - `Some(true)`:命中(拼接文本是 JSON 序列化文本的子集,与慢路径一致);
 /// - `Some(false)`:未命中(该变体的可搜索业务文本已全覆盖,可安全拒绝);
 /// - `None`:本变体无快速路径,调用方应回退 `event_search_text` JSON 兜底。
+///
+/// 测试便捷入口：内部先小写化再走 [`event_keyword_hit_fast_pre_lowered`]。
+///
+/// WHY `#[cfg(test)]`：生产面板已改为在事件循环外预降关键字（T2.4），
+/// 该包装仅服务单测，避免生产构建出现 dead_code 告警。
+#[cfg(test)]
 pub fn event_keyword_hit_fast(event: &NexusEvent, keyword: &str) -> Option<bool> {
     let kw_lower = keyword.to_lowercase();
-    let hit = |s: &str| s.to_lowercase().contains(&kw_lower);
+    event_keyword_hit_fast_pre_lowered(event, &kw_lower)
+}
+
+/// 与 [`event_keyword_hit_fast`] 相同，但关键字已由调用方小写化。
+///
+/// WHY 单独暴露：面板在事件循环外只做一次 `to_lowercase()`，
+/// 避免万级事件逐条分配关键字副本（T2.4）。
+pub fn event_keyword_hit_fast_pre_lowered(event: &NexusEvent, kw_lower: &str) -> Option<bool> {
+    let hit = |s: &str| s.to_lowercase().contains(kw_lower);
     let source = event.metadata().source.as_str();
     match event {
         // 缓存命中/未命中:type_name + source + cache_key

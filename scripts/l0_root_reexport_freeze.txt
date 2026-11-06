@@ -51,6 +51,7 @@ spec::harness_dimensions
 spec::harness_spec
 spec::platform_grounding
 spec::scheduler_contract
+spec::tool_dispatch  # T1-1: L0 契约上提（gqep-executor tool_runtime 改 re-export）
 spec::tool_plan
 spec::variant
 testutil::test_scale

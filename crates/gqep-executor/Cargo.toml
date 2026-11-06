@@ -45,6 +45,20 @@ serde_json = { workspace = true }
 name = "gather"
 harness = false
 
+[[bench]]
+name = "tool_runtime_chain"
+harness = false
+
+# 性能增量（2026-11-06）：四环链分层归因基准（policy/sandbox/route/transport 各环占比）
+[[bench]]
+name = "tool_dispatch_layers"
+harness = false
+
+# 性能增量（2026-11-06）：批量派发「串行 vs 有界并行」吞吐对照
+[[bench]]
+name = "tool_runtime_batch"
+harness = false
+
 # E-5 第五例 opt-in：生产码唯二 expect(“validate 已保证”不变量)已改 fail-soft
 # 错误 JSON(与执行失败同型)；余命中全在 cfg(test) mod/benches/tests，按惯用法 allow。
 [lints]

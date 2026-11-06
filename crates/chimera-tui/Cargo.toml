@@ -152,6 +152,11 @@ harness = false
 name = "tui_update_cost_bench"
 harness = false
 
+# 性能增量（2026-11-06）：事件循环 tick 基准（键盘事件路由 + 帧计数）
+[[bench]]
+name = "tui_tick_bench"
+harness = false
+
 # E-5 lint ratchet opt-in (docs/reports/arch-quality-deep-review-2026-09-25.md)
 [lints]
 workspace = true

@@ -47,6 +47,11 @@ harness = false
 name = "wal_recovery"
 harness = false
 
+# 性能增量（2026-11-06）：注册表查找命中/未命中 + ServerNotFound 快速失败
+[[bench]]
+name = "registry_lookup"
+harness = false
+
 # E-5 opt-in: production code measured clean (2 mock call_log poison-expects
 # rewritten to unwrap_or_else(IntoInternal)); rest are test/bench idioms.
 [lints]

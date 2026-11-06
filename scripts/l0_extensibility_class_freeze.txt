@@ -25,7 +25,7 @@
 #   NEW public types with no row are red, and a row whose type moved/disappeared is STALE
 #   red -- so a W3-style physical move must re-key rows in the same commit.
 #
-# CLAIM types=227 listed=227 open=57 closed=170
+# CLAIM types=230 listed=230 open=57 closed=173
 #
 # CURRENT STATE (machine-verified: G-115 recomputes the CLAIM line above from the live tree
 # plus these rows on every run, so this paragraph can no longer rot in silence -- ADR-218):
@@ -158,6 +158,7 @@ ENUM | type=spec/scheduler_contract::DenyReason | class=closed
 ENUM | type=spec/scheduler_contract::Priority | class=closed
 ENUM | type=spec/scheduler_contract::RenewOutcome | class=closed
 ENUM | type=spec/scheduler_contract::ShouldRunVerdict | class=closed
+ENUM | type=spec/tool_dispatch::DispatchError | class=closed
 ENUM | type=spec/tool_plan::PlanError | class=closed
 ENUM | type=spec/tool_plan::SideEffectDecl | class=closed
 ENUM | type=spec/tool_plan::ToolOp | class=closed
@@ -275,6 +276,8 @@ STRUCT | type=spec/platform_grounding::PlatformGroundingSpec | class=open | reas
 STRUCT | type=spec/scheduler_contract::Lease | class=closed
 STRUCT | type=spec/scheduler_contract::Quota | class=closed
 STRUCT | type=spec/scheduler_contract::TodoClaim | class=closed
+STRUCT | type=spec/tool_dispatch::DispatchOutcome | class=closed
+STRUCT | type=spec/tool_dispatch::DispatchRequest | class=closed
 STRUCT | type=spec/tool_plan::PlanEdge | class=closed
 STRUCT | type=spec/tool_plan::ToolNode | class=closed
 STRUCT | type=spec/tool_plan::ToolPlan | class=closed

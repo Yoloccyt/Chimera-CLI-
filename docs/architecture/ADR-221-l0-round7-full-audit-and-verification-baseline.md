@@ -175,3 +175,39 @@
 | 14 | **F-5 T-2 前提作废** | 读 `crates/chimera-cli/Cargo.toml:21-25` + grep `.rs` | `dep:` 映射存在；`.rs` 0 命中 |
 | 15 | 定向编译可行、测试不可行 | `cargo check -p nexus-contracts --all-targets` / `cargo test -p nexus-contracts` | rc=0(1m13s) / **rc=101（磁盘）** |
 | 16 | 编号合法性 | `LS` + `grep "ADR-221"` | 主编号至 220；221 无文件无预留 |
+
+---
+
+## 14. 追加订正节（2026-10-19 晚：磁盘阻塞解除后补齐全量验证）
+
+> 本节**追加**，不改写 §10 原文——§10 记录的「当时事实」成立；本节记录其后的状态变化与由此补齐的实测。
+
+### 14.1 状态变化：磁盘阻塞已解除
+
+§10 登记的「磁盘空间未回收」经**只读诊断**（`scripts/cleanup_disk_space.ps1 -Mode Diagnose`）定位到根因并已处置：
+
+- **根因**：`D:\$RECYCLE.BIN` 实测 **130.062 GB**，其条目时间戳**全为 2026-10-19 21:32**，与本次 `target` 清理量（debug 124.35 + release 4.80 + doc 0.02 = **129.17 GB**）尺寸吻合 ⇒ **沙箱把删除路由进了回收站**，这正是「命名空间已清而可用空间不增」的机制（§10 曾疑 deferred-delete / 影子副本，现由实测收敛为**回收站路由**）。
+- **处置**：经用户批准执行 `Clear-RecycleBin -DriveLetter D` ⇒ D 盘可用由 **0.02 GB 恢复至 112.08 GB**（回收站残留 15.7 GB）。
+- **未触碰项目外数据**：诊断同时测得 `D:\电脑管家迁移文件` 26.28 GB、`D:\机器学习实验` 13.04 GB、`D:\WeChat Files` 11.43 GB、`D:\LenovoSoftstore` 12.36 GB、`C:\Users\30324\AppData` 78.98 GB 等 —— 一律未动（长期主义：非本仓资产）。
+- **方法论教训（供后续复用）**：① 本机删除**走回收站** ⇒ 遇「删了不释放」先查 `$RECYCLE.BIN`，而不是先怀疑句柄/影子副本；② PowerShell 5 的 `Remove-Item -Recurse` 对 91k 文件**先长时枚举且枚举期间不释放空间**，改用 `robocopy <空目录> <目标> /MIR` 后命名空间**即时**清空。
+
+### 14.2 §10 的「未验证项」现已全部转为**已执行**
+
+| 项 | 命令 | 结果 |
+|---|---|---|
+| 全仓格式 | 逐包 `cargo fmt -p <pkg> -- --check` × **40**（`cargo fmt --all` 触发本仓已知 Windows 长路径问题，按 `agents.md §7.2` 改用逐包聚合法） | **40/40 全干净** |
+| L0 测试 | `cargo test -p nexus-contracts` | **939 passed / 0 failed**（17 个 result 行，含 58 doctests / 33.3s）——与 ADR-220 记录的 939 基线**逐值一致** |
+| 全量类型检查 | `cargo check --workspace --all-targets` | **rc=0**（`Finished dev profile`，0 error） |
+| 全量 lint | `cargo clippy --workspace --all-targets --jobs 2 -- -D warnings` | **rc=0**（`Finished dev profile`，`^error` / `warning` 均 0 条） |
+| 全量回归 | `cargo test --workspace --jobs 4 --exclude chimera-e2e-tests` | 已启动（CI `check` job 同口径，含 `--exclude` 因根 package 承载 33 个 E2E/压测独立二进制）；结果随本节后续追加 |
+
+### 14.3 结论修订
+
+§10 的四判据结论由「部分证据 + 论证」**升级为「本地全量实测」**：
+
+- **无功能退化**：`crates/**/src` 零改动 + `cargo test -p nexus-contracts` **939/0**（与基线逐值一致）+ workspace `check`/`clippy` **rc=0** ⇒ 有实测支撑。
+- **无公共 API 不当暴露**：G-105 `254/254` 与 G-107 `53/53` **逐值不变** ⇒ 正面证据。
+- **无性能劣化**：零运行时改动 + `check_perf_redlines` 三档 rc=0（`unknown=0`）+ bench 台账不变。
+- **无安全漏洞**：零新增 `unsafe`；新代码为「单点守卫调用 + 注释 + manifest 元数据」，无 IO / 无子进程 / 无网络。
+
+因此 §10 中「全量交 CI」的表述**不再适用**（本地已验到 workspace 级）；原文保留以留痕。

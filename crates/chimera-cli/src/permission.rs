@@ -26,10 +26,119 @@
 
 #![forbid(unsafe_code)]
 
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::cli::Cli;
 use crate::error::ChimeraCliError;
+
+/// 权限三态决策（T2-1）
+///
+/// 非交互环境无法替用户回答「是否允许」时，`Unknown` 必须由调用方
+/// fail-closed 降级为 `Deny`，而不是默认放行。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PermissionDecision {
+    /// 显式允许（`--yes` / `--no-permission`）
+    Allow,
+    /// 显式拒绝或 fail-closed 降级
+    Deny,
+    /// 非交互环境下无法判断，需交互确认
+    Unknown,
+}
+
+/// 授权结果 — 三态决策 + 是否发生 fail-closed 降级
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PermissionAuthorization {
+    /// 最终决策
+    pub decision: PermissionDecision,
+    /// 由 `Unknown` 降级为 `Deny` 时为 true
+    pub downgraded: bool,
+}
+
+impl PermissionAuthorization {
+    /// 是否放行
+    #[must_use]
+    pub const fn is_allowed(&self) -> bool {
+        matches!(self.decision, PermissionDecision::Allow)
+    }
+}
+
+/// fail-closed 降级计数器（全局静态，供测试与后续指标面板读取）
+static FAIL_CLOSED_DOWNGRADES: AtomicU64 = AtomicU64::new(0);
+
+/// 读取 fail-closed 降级累计次数
+#[must_use]
+pub fn fail_closed_downgrades() -> u64 {
+    FAIL_CLOSED_DOWNGRADES.load(Ordering::Relaxed)
+}
+
+/// 权限门 — 三态裁决 + 可注入的交互能力
+#[derive(Debug, Clone, Copy)]
+pub struct PermissionGate {
+    /// 当前环境是否具备 TTY 交互能力
+    interactive: bool,
+}
+
+impl PermissionGate {
+    /// 以显式交互能力构造（测试用可注入路径）
+    #[must_use]
+    pub const fn new(interactive: bool) -> Self {
+        Self { interactive }
+    }
+
+    /// 以进程 stdin 是否连接终端推断交互能力
+    #[must_use]
+    pub fn from_stdin() -> Self {
+        Self::new(io::stdin().is_terminal())
+    }
+
+    /// 当前门是否处于交互环境
+    #[must_use]
+    pub const fn is_interactive(&self) -> bool {
+        self.interactive
+    }
+
+    /// 三态评估（纯函数，不含降级与计数）
+    #[must_use]
+    pub fn evaluate(&self, ctx: &PermissionCtx) -> PermissionDecision {
+        if ctx.should_skip_prompt() {
+            PermissionDecision::Allow
+        } else {
+            PermissionDecision::Unknown
+        }
+    }
+
+    /// 授权 — 在 `evaluate` 基础上应用 fail-closed 降级与计数
+    #[must_use]
+    pub fn authorize(&self, ctx: &PermissionCtx) -> PermissionAuthorization {
+        match self.evaluate(ctx) {
+            PermissionDecision::Allow => PermissionAuthorization {
+                decision: PermissionDecision::Allow,
+                downgraded: false,
+            },
+            PermissionDecision::Deny => PermissionAuthorization {
+                decision: PermissionDecision::Deny,
+                downgraded: false,
+            },
+            PermissionDecision::Unknown if !self.interactive => {
+                FAIL_CLOSED_DOWNGRADES.fetch_add(1, Ordering::Relaxed);
+                tracing::warn!(
+                    reason = "unknown_permission_fail_closed",
+                    interactive = self.interactive,
+                    "permission decision unknown in non-interactive context; fail-closed to Deny"
+                );
+                PermissionAuthorization {
+                    decision: PermissionDecision::Deny,
+                    downgraded: true,
+                }
+            }
+            PermissionDecision::Unknown => PermissionAuthorization {
+                decision: PermissionDecision::Unknown,
+                downgraded: false,
+            },
+        }
+    }
+}
 
 /// Permission 上下文 — 封装 `--yes` 与 `--no-permission` 全局 flag
 ///
@@ -104,15 +213,42 @@ pub async fn confirm(
     action: &str,
     details: &str,
 ) -> Result<bool, ChimeraCliError> {
-    if ctx.should_skip_prompt() {
-        tracing::debug!(
-            action,
-            details,
-            yes = ctx.yes,
-            no_perm = ctx.no_permission,
-            "permission prompt skipped"
-        );
-        return Ok(true);
+    confirm_with(&PermissionGate::from_stdin(), ctx, action, details).await
+}
+
+/// 可注入权限门的确认实现（T2-2）
+///
+/// 1. `Allow` → 直接 `Ok(true)`，不读 stdin
+/// 2. `Deny` → 直接 `Ok(false)`，不读 stdin（fail-closed 降级也走这里）
+/// 3. `Unknown` → 原交互 prompt + Ctrl+C select 路径
+pub(crate) async fn confirm_with(
+    gate: &PermissionGate,
+    ctx: &PermissionCtx,
+    action: &str,
+    details: &str,
+) -> Result<bool, ChimeraCliError> {
+    let authorization = gate.authorize(ctx);
+    match authorization.decision {
+        PermissionDecision::Allow => {
+            tracing::debug!(
+                action,
+                details,
+                yes = ctx.yes,
+                no_perm = ctx.no_permission,
+                "permission prompt skipped"
+            );
+            return Ok(true);
+        }
+        PermissionDecision::Deny => {
+            tracing::info!(
+                action,
+                details,
+                downgraded = authorization.downgraded,
+                "permission denied without prompting"
+            );
+            return Ok(false);
+        }
+        PermissionDecision::Unknown => {}
     }
 
     // 打印 prompt 到 stderr
@@ -242,5 +378,82 @@ mod tests {
         };
         let result = confirm(&ctx, "test action", "test details").await.unwrap();
         assert!(result, "--no-permission 启用时 confirm 应返回 true");
+    }
+
+    /// 权限三态矩阵：Allow×{yes,no_permission} / Unknown×non-interactive / Unknown×interactive
+    #[test]
+    fn permission_matrix() {
+        let before = fail_closed_downgrades();
+
+        // Allow × {--yes, --no-permission}：evaluate 与 authorize 均为 Allow，不降级
+        for ctx in [
+            PermissionCtx {
+                yes: true,
+                no_permission: false,
+            },
+            PermissionCtx {
+                yes: false,
+                no_permission: true,
+            },
+        ] {
+            let gate = PermissionGate::new(false);
+            assert_eq!(gate.evaluate(&ctx), PermissionDecision::Allow);
+            let auth = gate.authorize(&ctx);
+            assert_eq!(auth.decision, PermissionDecision::Allow);
+            assert!(!auth.downgraded, "显式 allow 不应触发 fail-closed 降级");
+        }
+
+        // Unknown × non-interactive：降级为 Deny，计数 +1
+        let ctx = PermissionCtx::default();
+        let gate = PermissionGate::new(false);
+        assert_eq!(gate.evaluate(&ctx), PermissionDecision::Unknown);
+        let auth = gate.authorize(&ctx);
+        assert_eq!(auth.decision, PermissionDecision::Deny);
+        assert!(auth.downgraded, "非交互 Unknown 必须 fail-closed 降级");
+        let after = fail_closed_downgrades();
+        assert!(
+            after > before,
+            "fail-closed 降级计数应递增：before={before} after={after}"
+        );
+
+        // Unknown × interactive：保持 Unknown（等待交互确认）
+        let gate = PermissionGate::new(true);
+        assert_eq!(gate.evaluate(&ctx), PermissionDecision::Unknown);
+        let auth = gate.authorize(&ctx);
+        assert_eq!(auth.decision, PermissionDecision::Unknown);
+        assert!(!auth.downgraded, "交互环境不应降级");
+    }
+
+    /// 非交互且无 flag 时 confirm 返回 Ok(false)，且不读 stdin
+    #[tokio::test]
+    async fn test_confirm_non_interactive_without_flag_returns_false() {
+        let gate = PermissionGate::new(false);
+        let ctx = PermissionCtx::default();
+        let result = confirm_with(&gate, &ctx, "test action", "test details")
+            .await
+            .unwrap();
+        assert!(!result, "非交互无 flag 应 fail-closed 拒绝");
+    }
+
+    /// Allow 路径 authorize 后 confirm 语义等价 Ok(true)（不读 stdin）
+    #[tokio::test]
+    async fn test_confirm_allow_matrix_returns_true() {
+        for ctx in [
+            PermissionCtx {
+                yes: true,
+                no_permission: false,
+            },
+            PermissionCtx {
+                yes: false,
+                no_permission: true,
+            },
+        ] {
+            let gate = PermissionGate::new(false);
+            assert!(gate.authorize(&ctx).is_allowed());
+            let result = confirm_with(&gate, &ctx, "test action", "test details")
+                .await
+                .unwrap();
+            assert!(result, "Allow 路径 confirm 应返回 Ok(true)");
+        }
     }
 }

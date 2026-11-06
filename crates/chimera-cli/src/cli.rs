@@ -36,9 +36,9 @@
 //!         ├── list             # 列出已配置 Provider
 //!         ├── show <name>      # Provider 详情
 //!         ├── set-default <n>  # 设置默认 Provider
-//!         ├── test [name]      # 探测连通性
-//!         ├── channels         # 4 路由渠道
-//!         └── strategy [name]  # 显示/设置 model-router 策略
+//!         ├── test [name]      # 探测连通性（mock）
+//!         ├── channels         # 本地静态渠道表
+//!         └── strategy [name]  # 显示/设置 model_router.strategy
 //! ```
 
 use std::path::PathBuf;
@@ -88,8 +88,8 @@ pub struct Cli {
     ///
     /// WHY:v2.9.0-omega 引入 ExitCode 矩阵(0-6)是 BREAKING 变更,
     /// 依赖 `$? -eq 1` 判断失败的 v2.8.0 脚本会因新的退出码 2-6 而误判成功。
-    /// 此 flag 提供 2 个版本周期的兼容窗口(计划 v2.11.0-omega 移除),
-    /// 详见 ADR-060。类似 ADR-029 TUI v3.1 的 BREAKING 处理模式。
+    /// 兼容窗口已过期（原计划 v2.11.0-omega 移除，未执行）；当前保留，
+    /// 待 ADR-060 治理裁决。类似 ADR-029 TUI v3.1 的 BREAKING 处理模式。
     #[arg(long, global = true, hide = true)]
     pub legacy_exit_code: bool,
 
@@ -157,8 +157,7 @@ pub enum Commands {
         long_about = "显示 EXAMPLES(默认从顶层 after_long_help 派生)\n\
 \n\
 `chimera help` 无参时显示 5 个顶级 EXAMPLES;\n\
-`chimera help <command>` 显示子命令的 EXAMPLES。\n\
-`--no-examples` 关闭示例只显示 about。",
+`chimera help <command>` 显示子命令的 EXAMPLES。",
         after_long_help = "EXAMPLES:\n  \
 chimera help                                 # 5 个顶级 EXAMPLES\n  \
 chimera help quest                           # quest 子命令 EXAMPLES\n  \
@@ -175,21 +174,25 @@ chimera help llm                             # llm 子命令 EXAMPLES"
         after_long_help = "EXAMPLES:\n  \
 chimera run \"实现一个 hello world 函数\"       # 运行单次代码生成任务\n  \
 chimera --json run \"重构核心模块\"             # JSON 格式输出(便于脚本消费)\n  \
-CHIMERA_RUN_CHUNK_DELAY_MS=0 chimera run \"test\"  # 禁用流式延迟加速测试"
+CHIMERA_RUN_CHUNK_DELAY_MS=0 chimera run \"test\"  # 禁用流式延迟加速测试\n  \
+chimera run --execute \"部署变更\"                 # 申请执行(当前被沙箱派发链门禁拒绝)"
     )]
     Run {
         /// 任务提示词(用户意图的原始文本)
         prompt: String,
+        /// 执行计划（默认关闭：仅展示计划与流式回复；开启前需沙箱派发链端到端验证）
+        #[arg(long)]
+        execute: bool,
     },
     /// 启动 chat REPL（非 TUI 流式对话，支持 slash 命令）
     ///
     /// 与 `chimera tui` 的区别:`chat` 是纯文本流式 REPL,无 ratatui 渲染,
     /// 适合无 TTY 环境或管道消费(`chimera chat | tee log.txt`)。
-    /// 支持 9 个 slash 命令(/help / /clear / /model / /quest / /parliament /
-    /// /audit / /mcp / /agent / /exit),详见 `/help` 输出。
+    /// 支持 6 个 slash 命令(/help / /clear / /model / /llm / /quest / /exit),
+    /// 详见 `/help` 输出。
     #[command(
         long_about = "纯文本流式 REPL，无 ratatui 渲染，适合无 TTY 环境或管道消费。\n\
-支持 9 个 slash 命令（/help / /clear / /model / /quest / /parliament / /audit / /mcp / /agent / /exit）。",
+支持 6 个 slash 命令（/help / /clear / /model / /llm / /quest / /exit）。",
         after_long_help = "EXAMPLES:\n  \
 chimera chat                                   # 启动交互式对话\n  \
 chimera --no-permission chat                   # 自动允许所有 tool 调用(CI 友好)\n  \
@@ -200,11 +203,11 @@ chimera chat | tee log.txt                     # 管道消费对话输出"
     ///
     /// v3-engine M2(ADR-061):自研渲染路径默认启用,如需回退到 ratatui 路径
     /// 用于验证或排查渲染问题,可传入 `--no-v3-engine` flag(等价于设置
-    /// `CHIMERA_NO_V3_ENGINE=1` 环境变量)。兼容窗口计划至 v2.11.0-omega 移除。
+    /// `CHIMERA_NO_V3_ENGINE=1` 环境变量)。兼容窗口已过期，当前保留(ADR-061 未修订)。
     #[command(
         long_about = "v3-engine M2（ADR-061）:自研渲染路径默认启用，如需回退到 ratatui 路径\n\
 用于验证或排查渲染问题，可传入 `--no-v3-engine` flag（等价于设置\n\
-`CHIMERA_NO_V3_ENGINE=1` 环境变量）。兼容窗口计划至 v2.11.0-omega 移除。",
+`CHIMERA_NO_V3_ENGINE=1` 环境变量）。兼容窗口已过期，当前保留（ADR-061 未修订）。",
         after_long_help = "EXAMPLES:\n  \
 chimera tui                                    # 启动 TUI(默认启用 v3-engine)\n  \
 chimera tui --no-v3-engine                     # 回退到 ratatui 渲染路径\n  \
@@ -233,18 +236,18 @@ chimera --yes quest cancel <quest-id>          # 取消 Quest(跳过确认)"
         /// Quest 子命令动作
         #[command(subcommand)]
         action: QuestAction,
-        /// 输出 JSON 格式(机器可读,后续将统一为全局 --json)
+        /// 输出 JSON 格式(兼容保留；正确位置:`chimera quest --json list`)
         ///
-        /// WHY 子命令级 flag:在引入全局 --json 之前提供结构化输出能力,
-        /// 此 flag 提供 quest list/show 等子命令的结构化输出能力,便于脚本消费。
-        /// 全局 --json 引入后此 flag 将被替代,保留 2 个版本周期兼容。
+        /// WHY 保留:嵌套子命令 `list` 之后的 `--json` 不被 clap 接受,
+        /// 本 flag 是 `quest <action>` 层唯一的结构化输出开关。
+        /// 推荐新脚本使用全局位置:`chimera --json quest list`。
         #[arg(long)]
         json: bool,
     },
     /// 配置管理（初始化/查看/列出）
     #[command(
         long_about = "管理 omega.yaml 配置文件。支持 init/list/show/path 4 个子动作。\n\
-配置优先级:CLI --config > 默认路径 > env > defaults。",
+配置优先级（后者覆盖前者）：defaults < 配置文件 < 环境变量；--config 仅选择配置文件路径。",
         after_long_help = "EXAMPLES:\n  \
 chimera config init                            # 生成默认 omega.yaml\n  \
 chimera config list                            # 列出当前生效配置项\n  \
@@ -267,7 +270,7 @@ chimera --json wiki \"EventBus\"               # JSON 输出"
     Wiki {
         /// 查询语句(自然语言)
         query: String,
-        /// 输出 JSON 格式(机器可读,后续将统一为全局 --json)
+        /// 输出 JSON 格式(兼容保留；推荐全局位置 `chimera --json wiki ...`)
         #[arg(long)]
         json: bool,
         /// 限制返回结果数量(默认 10)
@@ -288,7 +291,7 @@ chimera --json grep 沙箱                      # JSON 输出结构化报告"
     Grep {
         /// 检索模式（自然语言或关键词）
         pattern: String,
-        /// 输出 JSON 格式(机器可读)
+        /// 输出 JSON 格式(兼容保留；推荐全局位置 `chimera --json grep ...`)
         #[arg(long)]
         json: bool,
     },
@@ -304,7 +307,7 @@ chimera parliament \"修改依赖方向\"             # 查看审议过程(stder
     Parliament {
         /// 提案内容(需审议的决策描述)
         proposal: String,
-        /// 输出 JSON 格式(机器可读,后续将统一为全局 --json)
+        /// 输出 JSON 格式(兼容保留；推荐全局位置 `chimera --json parliament ...`)
         #[arg(long)]
         json: bool,
     },
@@ -340,7 +343,7 @@ chimera --json audit                           # JSON 输出审计报告\n  \
 chimera audit --severity high                  # 过滤 high 严重度漏洞"
     )]
     Audit {
-        /// 输出 JSON 格式(机器可读,后续将统一为全局 --json)
+        /// 输出 JSON 格式(兼容保留；推荐全局位置 `chimera --json audit ...`)
         #[arg(long)]
         json: bool,
         /// 过滤严重度级别(如 "critical" / "high" / "medium" / "low")
@@ -410,7 +413,7 @@ chimera --json doctor                          # JSON 输出健康报告\n  \
 chimera doctor --fix                           # 自动修复可修复项"
     )]
     Doctor {
-        /// 输出 JSON 格式(机器可读,后续将统一为全局 --json)
+        /// 输出 JSON 格式(兼容保留；推荐全局位置 `chimera --json doctor ...`)
         #[arg(long)]
         json: bool,
         /// 自动修复可修复项(如缺失配置文件)
@@ -434,12 +437,12 @@ chimera completions powershell >> $PROFILE                 # 生成 PowerShell �
         /// 目标 shell(bash/zsh/fish/powershell/elvish)
         shell: clap_complete::Shell,
     },
-    /// LLM Provider 管理(统一入口,封装 mca-gateway / model-router)
+    /// LLM Provider 管理(读取 `model_router.providers` 配置)
     #[command(
-        long_about = "LLM Provider 管理(统一入口,封装 mca-gateway / model-router)\n\
+        long_about = "LLM Provider 管理(读取 `model_router.providers` 配置)\n\
 \n\
-管理 Provider / Channel / Strategy,支持连通性测试与持久化配置。\n\
-对应 `mca-gateway`(8 个 affinity profile)与 `model-router` 4 路由策略。",
+管理 Provider / Channel / Strategy。`test` 与 `strategy set` 当前为 mock 骨架，\n\
+待 mca-gateway 接线后替换；无独立路由 crate。",
         after_long_help = "EXAMPLES:\n  \
 chimera llm list                              # 列出已配置 Provider\n  \
 chimera llm test deepseek                     # 探测连通性\n  \
@@ -535,7 +538,7 @@ pub enum QuestAction {
 /// Config 子命令动作
 #[derive(Subcommand, Debug)]
 pub enum ConfigAction {
-    /// 生成默认 omega.yaml 到指定路径(默认 ~/.aether/omega.yaml)
+    /// 生成默认 omega.yaml 到指定路径(默认 ~/.chimera/omega.yaml)
     Init,
     /// 列出当前生效的配置项(键值对形式)
     List,
@@ -624,9 +627,9 @@ pub enum LlmAction {
         /// Provider 名称(默认使用 default_provider)
         name: Option<String>,
     },
-    /// 列出 model-router 4 路由渠道(Quality / Balanced / Cost / Speed)
+    /// 列出本地静态渠道表(Quality / Balanced / Cost / Speed,共 4 个)
     Channels,
-    /// 显示/设置 model-router 策略
+    /// 显示/设置 model_router.strategy（设置当前仅打印，未持久化）
     Strategy {
         /// 策略名(CostOptimized / SpeedOptimized / QualityOptimized / Auto / Failover)
         strategy: Option<String>,

@@ -129,6 +129,16 @@ impl ServerRegistry {
         self.servers.get(server_id).map(|r| r.clone())
     }
 
+    /// 判断服务器是否已注册 —— **存在性检查的零 clone 路径**
+    ///
+    /// WHY: [`get`](Self::get) 会 clone 整条 `MeshServer`（含 capabilities `Vec`
+    /// 与 2 个 `String`）；纯存在性判断（如 commit 前置的 `ServerNotFound` 快速失败）
+    /// 只需要布尔结果，clone 属纯浪费。语义与 `get(id).is_some()` 严格等价。
+    #[must_use]
+    pub fn contains(&self, server_id: &str) -> bool {
+        self.servers.contains_key(server_id)
+    }
+
     /// 列出所有存活服务器 ID(心跳未超时)
     pub fn list_alive(&self, timeout_ms: u64) -> Vec<String> {
         self.servers
@@ -348,6 +358,23 @@ mod tests {
         assert!(registry.get("unknown").is_none());
     }
 
+    /// `contains` 与 `get(...).is_some()` 语义严格等价（含判空边界）
+    #[test]
+    fn test_registry_contains_matches_get_presence() {
+        let registry = ServerRegistry::new(16);
+        assert!(!registry.contains("s-1"));
+        assert_eq!(registry.contains("s-1"), registry.get("s-1").is_some());
+
+        registry.register(make_server("s-1")).expect("注册失败");
+        assert!(registry.contains("s-1"));
+        assert_eq!(registry.contains("s-1"), registry.get("s-1").is_some());
+        assert!(!registry.contains("unknown"));
+
+        registry.unregister("s-1").expect("注销失败");
+        assert!(!registry.contains("s-1"));
+        assert_eq!(registry.contains("s-1"), registry.get("s-1").is_some());
+    }
+
     #[test]
     fn test_registry_register_overwrites() {
         let registry = ServerRegistry::new(16);
@@ -455,6 +482,20 @@ mod tests {
     // 公网全放)。重点验证 `extract_host` 对 host:port 的解析正确——若提 host
     // 错误(如漏剥端口/误剥)会让保留地址漏网,该 property 能捕获此类回归。
     proptest! {
+        /// `contains` 与 `get(...).is_some()` 在任意 server_id 上判据一致
+        /// （零 clone 快速路径不得改变语义）
+        #[test]
+        fn prop_contains_equivalent_to_get_presence(id in "[a-z]{1,8}") {
+            let registry = ServerRegistry::new(16);
+            registry.register(make_server("s-1")).expect("注册失败");
+            prop_assert_eq!(
+                registry.contains(&id),
+                registry.get(&id).is_some(),
+                "contains 与 get 判据必须逐位一致: id={:?}",
+                id
+            );
+        }
+
         #[test]
         fn prop_ssrf_ipv4_reservation_matches_verdict(
             a in any::<u8>(),

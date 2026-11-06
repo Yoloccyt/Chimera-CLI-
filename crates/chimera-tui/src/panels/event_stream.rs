@@ -83,12 +83,15 @@ impl EventStreamPanel {
     }
 
     /// 计算过滤后事件在 `latest_events`(正序)中的索引
+    ///
+    /// 关键字只小写一次，避免万级事件逐条分配（T2.4）。
     fn compute_filtered_indices(state: &TuiState) -> Vec<usize> {
+        let keyword_lower = state.filter_keyword.as_ref().map(|k| k.to_lowercase());
         state
             .latest_events
             .iter()
             .enumerate()
-            .filter(|(_, event)| event_matches_filters(event, state))
+            .filter(|(_, event)| event_matches_filters(event, state, keyword_lower.as_deref()))
             .map(|(idx, _)| idx)
             .collect()
     }
@@ -458,7 +461,11 @@ fn build_filter_title(state: &TuiState, base: &str) -> String {
 }
 
 /// 判断事件是否匹配当前过滤器(keyword + topic + level 三重过滤)
-fn event_matches_filters(event: &NexusEvent, state: &TuiState) -> bool {
+fn event_matches_filters(
+    event: &NexusEvent,
+    state: &TuiState,
+    keyword_lower: Option<&str>,
+) -> bool {
     if let Some(topic) = &state.filter_topic {
         if !event_matches_topic(event, topic) {
             return false;
@@ -471,7 +478,7 @@ fn event_matches_filters(event: &NexusEvent, state: &TuiState) -> bool {
         }
     }
 
-    if let Some(kw) = &state.filter_keyword {
+    if let Some(kw) = keyword_lower {
         if !event_matches_keyword(event, kw) {
             return false;
         }
@@ -480,17 +487,18 @@ fn event_matches_filters(event: &NexusEvent, state: &TuiState) -> bool {
     true
 }
 
-/// 事件关键字匹配(大小写不敏感)
+/// 事件关键字匹配(大小写不敏感，关键字已小写化)
 ///
-/// P1-3(评估报告 v2):高频变体经 `filter_fast::event_keyword_hit_fast` 快速路径
-/// (免 JSON 全量序列化);其余变体回退 `event_search_text` JSON 兜底。
-fn event_matches_keyword(event: &NexusEvent, keyword: &str) -> bool {
-    if let Some(hit) = crate::panels::filter_fast::event_keyword_hit_fast(event, keyword) {
+/// P1-3(评估报告 v2):高频变体经 `filter_fast::event_keyword_hit_fast_pre_lowered`
+/// 快速路径(免 JSON 全量序列化);其余变体回退 `event_search_text` JSON 兜底。
+fn event_matches_keyword(event: &NexusEvent, keyword_lower: &str) -> bool {
+    if let Some(hit) =
+        crate::panels::filter_fast::event_keyword_hit_fast_pre_lowered(event, keyword_lower)
+    {
         return hit;
     }
-    let keyword = keyword.to_lowercase();
     let haystack = event_search_text(event).to_lowercase();
-    haystack.contains(&keyword)
+    haystack.contains(keyword_lower)
 }
 
 /// 将事件转换为可搜索文本(类型名 + 源 + JSON 载荷)

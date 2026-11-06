@@ -15,8 +15,8 @@
 //!   每个 TUI 实例独立采集,符合"sysinfo 是 OS 直接 API"语义,无需经 L1 通道。
 //!   另:`render()` 期间可避免 sysinfo 跨平台差异(Windows/Linux/macOS 行为一致),
 //!   sysinfo 0.32 API 在三平台都有相同方法签名。
-//! - **构造即采集**:`SysinfoPanel::new()` 立即调用 `System::new_all()` + 首次进程采集,
-//!   确保 `render()` 时不阻塞(< 50ms,本地机器通常 < 10ms)。
+//! - **构造即采集**:`SysinfoPanel::new()` 构造期定向采集 CPU 列表/内存/自身 PID RSS
+//!   （W2 起不再 `new_all()` 枚举全进程表），确保 `render()` 时不阻塞。
 //! - **进程信息按需刷新**:主机信息(OS/CPU/内存/启动时间)只在构造时采集一次,
 //!   进程 RSS 随进程生命周期变化,按 5s 周期刷新。`refresh_if_needed` 通过
 //!   `Instant` 比较实现,避免每次 `render()` 都调用 `refresh_processes`(开销较大,
@@ -36,7 +36,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use sysinfo::{MemoryRefreshKind, Pid, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{MemoryRefreshKind, Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
 
 use crate::panels::Panel;
 use crate::types::{PanelId, TuiCommand, TuiState};
@@ -87,28 +87,51 @@ impl SysinfoPanel {
     /// - `interval_ms`:刷新间隔(毫秒),下限 100ms(sysinfo 进程采集开销 ~10-50ms)
     ///
     /// # 跨平台注意
-    /// `System::new_all()` 在 Windows/Linux/macOS 上语义一致,均会立即
-    /// 同步采集全部 sysinfo 数据;首次调用约 10-50ms,后续 `refresh_*`
-    /// 仅更新已采集的子集。
+    /// W2 起构造期只做定向采集（CPU 列表 + 内存 + 自身 PID），不再 `new_all()`
+    /// 枚举全进程表/磁盘；`refresh_cpu_all()` 在 Windows/Linux/macOS 均会建立
+    /// CPU 列表。回滚开关 `CHIMERA_SYSINFO_FULL_REFRESH=1` 可恢复旧全量路径。
     pub fn with_refresh_interval(interval_ms: u64) -> Self {
         let interval_ms = interval_ms.max(MIN_REFRESH_INTERVAL_MS);
-        let mut system = System::new_all();
-        // 显式刷新进程 + 内存(0.32 API 变更,需用 refresh_specifics)
-        // WHY refresh_specifics 而非 refresh_all:仅刷新所需子集,
-        // 跳过 CPU/disks/networks,降低跨平台开销。
-        // MemoryRefreshKind::everything() = ram + swap,涵盖 SysinfoPanel 展示所需。
-        system.refresh_specifics(
-            RefreshKind::new()
-                .with_processes(ProcessRefreshKind::new().with_memory())
-                .with_memory(MemoryRefreshKind::everything()),
-        );
+        let pid = std::process::id();
+        let system = if Self::full_refresh_env() {
+            // 回滚开关：旧全量路径（枚举全进程表/磁盘），仅用于故障排查。
+            let mut s = System::new_all();
+            s.refresh_specifics(
+                RefreshKind::new()
+                    .with_processes(ProcessRefreshKind::new().with_memory())
+                    .with_memory(MemoryRefreshKind::everything()),
+            );
+            s
+        } else {
+            // 性能重构 W2：本面板只消费 cpus()/total_memory()/自身 PID RSS，
+            // 无需枚举全进程表；定向刷新 CPU 列表 + 内存 + 自身进程。
+            // WHY refresh_cpu_all 而非 with_cpu：后者走 refresh_cpu_specifics，
+            // 不保证填充 CPU 列表，会使 cpu_brand/cpu_count 退化。
+            let mut s = System::new();
+            s.refresh_cpu_all();
+            s.refresh_memory();
+            s.refresh_processes_specifics(
+                ProcessesToUpdate::Some(&[Pid::from_u32(pid)]),
+                true,
+                ProcessRefreshKind::new().with_memory(),
+            );
+            s
+        };
         Self {
             system,
             // 立即采集的时间戳即为"上次刷新"
             last_refresh_at: Instant::now(),
             refresh_interval_ms: interval_ms,
-            pid: std::process::id(),
+            pid,
         }
+    }
+
+    /// 回滚开关：`CHIMERA_SYSINFO_FULL_REFRESH=1` 时走旧 `System::new_all()` 全量路径。
+    fn full_refresh_env() -> bool {
+        std::env::var("CHIMERA_SYSINFO_FULL_REFRESH")
+            .ok()
+            .as_deref()
+            == Some("1")
     }
 
     /// 检查是否到达刷新间隔,若是则刷新进程信息
@@ -117,20 +140,37 @@ impl SysinfoPanel {
     fn refresh_if_needed(&mut self) {
         let elapsed = self.last_refresh_at.elapsed();
         if elapsed >= Duration::from_millis(self.refresh_interval_ms) {
-            self.system.refresh_specifics(
-                RefreshKind::new().with_processes(ProcessRefreshKind::new().with_memory()),
-            );
+            if Self::full_refresh_env() {
+                self.system.refresh_specifics(
+                    RefreshKind::new().with_processes(ProcessRefreshKind::new().with_memory()),
+                );
+            } else {
+                // 只刷自身 PID（面板唯一进程消费者），避免每 5s 全进程表扫描。
+                self.system.refresh_processes_specifics(
+                    ProcessesToUpdate::Some(&[Pid::from_u32(self.pid)]),
+                    true,
+                    ProcessRefreshKind::new().with_memory(),
+                );
+            }
             self.last_refresh_at = Instant::now();
         }
     }
 
     /// 强制刷新(测试用 / 用户按 `r` 键手动触发)
     pub fn force_refresh(&mut self) {
-        self.system.refresh_specifics(
-            RefreshKind::new()
-                .with_processes(ProcessRefreshKind::new().with_memory())
-                .with_memory(MemoryRefreshKind::everything()),
-        );
+        if Self::full_refresh_env() {
+            self.system.refresh_specifics(
+                RefreshKind::new()
+                    .with_processes(ProcessRefreshKind::new().with_memory())
+                    .with_memory(MemoryRefreshKind::everything()),
+            );
+        } else {
+            self.system.refresh_processes_specifics(
+                ProcessesToUpdate::Some(&[Pid::from_u32(self.pid)]),
+                true,
+                ProcessRefreshKind::new().with_memory(),
+            );
+        }
         self.last_refresh_at = Instant::now();
     }
 

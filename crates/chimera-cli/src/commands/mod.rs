@@ -98,8 +98,8 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         // Task 5 of spec: EXAMPLES 一级入口 — 顶级命令位置(Run 之前)
         // 不消费 json/perm(纯字符串输出)
         Some(Commands::Help { command }) => help::execute(command.as_deref(), cli).await,
-        Some(Commands::Run { prompt }) => {
-            run::execute_with_ctx(ctx_ref(&ctx)?, prompt, cli.json, &perm).await
+        Some(Commands::Run { prompt, execute }) => {
+            run::execute_with_ctx(ctx_ref(&ctx)?, prompt, cli.json, &perm, *execute).await
         }
         // WI-02: exec 非交互契约 — 独立退出码语义（0/2/3/4）经 exec::exec_exit_code 映射；
         // std::process::exit 立即终止（exec 为 CI 管道场景，析构无业务依赖）

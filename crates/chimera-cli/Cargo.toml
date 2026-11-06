@@ -191,6 +191,11 @@ harness = false
 name = "composition_root_bench"
 harness = false
 
+# 性能增量（2026-11-06）：CLI 解析成本基线（--help / run / doctor）
+[[bench]]
+name = "cli_parse"
+harness = false
+
 # E-5 lint ratchet opt-in (docs/reports/arch-quality-deep-review-2026-09-25.md)
 [lints]
 workspace = true

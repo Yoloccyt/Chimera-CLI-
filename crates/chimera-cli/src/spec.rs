@@ -191,7 +191,10 @@ mod tests {
                 CommandClass::NoContext,
             ),
             (
-                Some(Commands::Run { prompt: "x".into() }),
+                Some(Commands::Run {
+                    prompt: "x".into(),
+                    execute: false,
+                }),
                 CommandClass::FullContext,
             ),
             (
@@ -276,7 +279,10 @@ mod tests {
         }
         // one-shot → Off
         let off_cases: Vec<Option<Commands>> = vec![
-            Some(Commands::Run { prompt: "x".into() }),
+            Some(Commands::Run {
+                prompt: "x".into(),
+                execute: false,
+            }),
             Some(Commands::Exec { prompt: "x".into() }),
             Some(Commands::Quest {
                 action: QuestAction::List,
@@ -318,7 +324,10 @@ mod tests {
             None,
             Some(Commands::Help { command: None }),
             Some(Commands::Cost),
-            Some(Commands::Run { prompt: "x".into() }),
+            Some(Commands::Run {
+                prompt: "x".into(),
+                execute: false,
+            }),
             Some(Commands::Chat),
             Some(Commands::Serve),
         ];

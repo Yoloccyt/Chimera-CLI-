@@ -529,7 +529,8 @@ impl McpMesh {
                 // P1-3 逐位等价：旧实现在 **循环层** `registry.get(sid)?` 短路——
                 // 未注册（含校验后被并发摘除的竞态）立即 `ServerNotFound`，
                 // 且**不写**待补偿台账。此处显式复刻该语义。
-                if self.registry.get(sid).is_none() {
+                // 纯存在性判断走零 clone 的 `contains`（`get` 会 clone 整条记录）
+                if !self.registry.contains(sid) {
                     return Err(McpError::ServerNotFound {
                         server_id: sid.clone(),
                     });

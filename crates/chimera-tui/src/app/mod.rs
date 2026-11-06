@@ -133,6 +133,11 @@ pub struct TuiApp {
     /// Cell 分配);提升为字段后仅终端尺寸变化时重建,消除每帧分配开销
     /// (评估报告 P0-1)。
     v3_term: Option<ratatui::Terminal<ratatui::backend::TestBackend>>,
+    /// 终端尺寸缓存(None = 尚未读取；Resize 事件到来时更新)
+    ///
+    /// WHY 缓存：每帧 `crossterm::terminal::size()` 是一次 ioctl；稳态尺寸不变时
+    /// 可复用。正确性由事件循环的 `Event::Resize(w,h)` 分支保证（显式更新缓存）。
+    cached_term_size: Option<(u16, u16)>,
     /// 上一轮事件轮询是否无事件(静默帧判定,评估报告 P0-1 DirtyTracker 接线)
     ///
     /// WHY 跨帧状态:事件循环中 poll 超时(无键盘/鼠标事件)意味着面板内部
@@ -312,6 +317,7 @@ impl TuiApp {
             event_bus: None,
             v3_output: None,
             v3_term: None,
+            cached_term_size: None,
             frame_quiescent: false,
             v3_cached_frame: None,
             status_bar_area: None,

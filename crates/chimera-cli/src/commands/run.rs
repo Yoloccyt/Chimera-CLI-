@@ -61,6 +61,17 @@ fn call_budget_to_cli_error(e: CallBudgetError) -> ChimeraCliError {
 /// W8 清理: chat.rs 原同值常量去重,统一引用本定义(单点维护)
 pub(crate) const DEFAULT_CHUNK_DELAY_MS: u64 = 20;
 
+/// `--execute` 未启用时的稳定拒绝文案(可被测试与文档引用)
+pub const EXECUTE_REFUSAL_MSG: &str =
+    "execute_not_enabled: tool execution is gated until the mandatory sandbox dispatch chain is \
+     fully verified end-to-end; run without --execute to inspect the plan";
+
+/// 构造 `--execute` 拒绝错误(`NotImplemented`,退出码 2)
+#[must_use]
+pub fn execute_refusal() -> ChimeraCliError {
+    ChimeraCliError::NotImplemented(EXECUTE_REFUSAL_MSG.to_string())
+}
+
 /// 执行 run 命令 — 兼容层 thin wrapper（M4-P1）
 ///
 /// 独立调用场景（库调用方/既有测试）经组合根装配 ephemeral AppContext，
@@ -74,14 +85,21 @@ pub(crate) const DEFAULT_CHUNK_DELAY_MS: u64 = 20;
 ///
 /// `perm`(Task 1.11):当前未消费,预留供未来外部命令执行确认
 /// (如 `chimera run "执行 rm -rf"` 时调用 `permission::confirm`)。
+///
+/// `execute`(T1-3):`true` 时在任何副作用之前返回 [`execute_refusal`];
+/// `false`(默认)时行为与改动前逐字等价。
 pub async fn execute(
     prompt: &str,
     config: &ChimeraConfig,
     json: bool,
     _perm: &PermissionCtx,
+    execute: bool,
 ) -> Result<()> {
+    if execute {
+        return Err(execute_refusal().into());
+    }
     let ctx = crate::composition::build(config)?;
-    execute_with_ctx(&ctx, prompt, json, _perm).await
+    execute_with_ctx(&ctx, prompt, json, _perm, execute).await
 }
 
 /// run 命令主体 — 从组合根 AppContext 取共享 bus + engine（M4-P1）
@@ -89,12 +107,20 @@ pub async fn execute(
 /// 迁移要点：原 `EventBus::new() + QuestEngine::new()` 样板删除，bus/engine
 /// 一律来自 `ctx`（dispatch 持有 AppContext，命令借用；engine 为 owned，
 /// 经 `&ctx.engine` 借用调用 `create_quest(&self)`）。
+///
+/// `execute`(T1-3):`true` 时在**任何副作用之前**（未建 Quest、未发事件）
+/// 返回 [`execute_refusal`]——拒绝本身不得先执行一半。
 pub async fn execute_with_ctx(
     ctx: &AppContext,
     prompt: &str,
     json: bool,
     _perm: &PermissionCtx,
+    execute: bool,
 ) -> Result<()> {
+    if execute {
+        return Err(execute_refusal().into());
+    }
+
     tracing::info!(prompt = %prompt, "收到单次任务");
 
     // 1. 共享 bus/engine 来自组合根（C12）。WHY 非 with_checkpoints:CLI 单次
@@ -199,7 +225,7 @@ mod tests {
         // §4.4 反模式 3：先 subscribe 再驱动命令，否则事件静默丢失
         let mut rx = ctx.bus.subscribe();
         let perm = PermissionCtx::default();
-        execute_with_ctx(&ctx, "分析依赖并给出优化建议", false, &perm)
+        execute_with_ctx(&ctx, "分析依赖并给出优化建议", false, &perm, false)
             .await
             .expect("run 正常路径应成功");
         let mut saw_quest_created = false;
@@ -220,13 +246,82 @@ mod tests {
         );
     }
 
+    /// T1-3：`--execute` 未启用时的拒绝必须明确、可测试（非静默 no-op）。
+    #[test]
+    fn execute_flag_returns_refusal_without_side_effects() {
+        assert!(
+            EXECUTE_REFUSAL_MSG.starts_with("execute_not_enabled:"),
+            "拒绝文案需带稳定前缀，便于脚本 grep：{EXECUTE_REFUSAL_MSG}"
+        );
+        assert!(
+            EXECUTE_REFUSAL_MSG.contains("sandbox"),
+            "拒绝文案需指明沙箱派发链这一根因"
+        );
+        assert!(
+            EXECUTE_REFUSAL_MSG.contains("without --execute"),
+            "拒绝文案需给出可执行的替代路径"
+        );
+        let err = execute_refusal();
+        assert_eq!(err.exit_code_value(), 2, "NotImplemented 退出码应为 2");
+        assert!(matches!(err, ChimeraCliError::NotImplemented(_)));
+    }
+
+    /// T1-3：`execute=true` 必须在任何副作用之前拒绝 —— 共享 bus 上零 Quest 事件。
+    #[tokio::test]
+    async fn execute_path_refuses_before_side_effects() {
+        let ctx = composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        // §4.4 反模式 3：先 subscribe 再驱动命令，否则事件静默丢失
+        let mut rx = ctx.bus.subscribe();
+        let perm = PermissionCtx::default();
+        let result = execute_with_ctx(&ctx, "执行高风险工具链", false, &perm, true).await;
+        let err = result.expect_err("--execute 应被拒绝");
+        let cli_err = err
+            .downcast_ref::<ChimeraCliError>()
+            .expect("拒绝错误应为 ChimeraCliError");
+        assert_eq!(cli_err.exit_code_value(), 2);
+        assert!(matches!(cli_err, ChimeraCliError::NotImplemented(_)));
+        let mut saw_quest_created = false;
+        for _ in 0..20 {
+            match tokio::time::timeout(Duration::from_millis(10), rx.recv()).await {
+                Ok(Ok(NexusEvent::QuestCreated { .. })) => {
+                    saw_quest_created = true;
+                    break;
+                }
+                Ok(Ok(_)) => continue, // 其他事件跳过
+                _ => break,
+            }
+        }
+        assert!(
+            !saw_quest_created,
+            "拒绝须发生在 create_quest 之前，不得产生 Quest 事件"
+        );
+    }
+
+    /// T1-3：`--execute` 必须被 clap 解析进 `Commands::Run.execute`（默认 false）。
+    #[test]
+    fn cli_parses_run_execute_flag() {
+        use clap::Parser;
+        let cli = crate::cli::Cli::try_parse_from(["chimera", "run", "--execute", "hi"])
+            .expect("run --execute 应解析成功");
+        match cli.command {
+            Some(crate::cli::Commands::Run { execute, .. }) => assert!(execute),
+            _ => panic!("应解析为 Run 命令"),
+        }
+        let cli = crate::cli::Cli::try_parse_from(["chimera", "run", "hi"])
+            .expect("run 无 flag 应解析成功");
+        match cli.command {
+            Some(crate::cli::Commands::Run { execute, .. }) => assert!(!execute),
+            _ => panic!("应解析为 Run 命令"),
+        }
+    }
+
     /// M4-P1 兼容层回归：原签名 execute wrapper 行为不变 ——
     /// 独立调用场景（库调用方/既有测试）经组合根 ephemeral 装配，正常路径仍 Ok。
     #[tokio::test]
     async fn run_wrapper_normal_path_unchanged() {
         let config = ChimeraConfig::default();
         let perm = PermissionCtx::default();
-        execute("分解需求：设计评审流程", &config, false, &perm)
+        execute("分解需求：设计评审流程", &config, false, &perm, false)
             .await
             .expect("wrapper 正常路径应成功");
     }

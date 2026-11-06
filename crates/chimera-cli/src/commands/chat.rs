@@ -331,17 +331,17 @@ fn spawn_tool_event_subscriber(bus: EventBus, perm: PermissionCtx) -> tokio::tas
                     // Completed 表示调用完成(结果已就绪)。实际 permission 应在
                     // TuiActionRequested 阶段确认,但该事件当前由编排器消费,
                     // 此处展示框架,真实接入后迁移到 Requested 阶段。
-                    if !perm.should_skip_prompt() {
-                        println!("[permission: {action_id}] allow? [y/N]");
-                        // 同步读取确认(简化实现,真实场景应用 permission::confirm)
-                        let mut input = String::new();
-                        if io::stdin().lock().read_line(&mut input).is_ok() {
-                            let confirmed =
-                                matches!(input.trim().to_lowercase().as_str(), "y" | "yes");
-                            if !confirmed {
-                                println!("[permission: {action_id}] 已拒绝");
-                                continue;
-                            }
+                    match crate::permission::confirm(&perm, "tool 调用", action_id).await {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            println!("[permission: {action_id}] 已拒绝");
+                            continue;
+                        }
+                        Err(e) => {
+                            // Ctrl+C / stdin IO 失败：按拒绝处理并结束订阅循环，
+                            // 避免在无 TTY 环境继续消费事件造成假成功。
+                            eprintln!("[permission: {action_id}] 取消: {e}");
+                            break;
                         }
                     }
                     println!("[tool: {action_id}] result: {result}");
@@ -365,7 +365,7 @@ fn spawn_tool_event_subscriber(bus: EventBus, perm: PermissionCtx) -> tokio::tas
 /// - 直接复用会引入 chimera-tui 的 i18n 依赖链,违反"CLI 轻量"原则
 ///
 /// 借鉴的设计模式:
-/// - **单一事实源**:9 个 slash 命令声明在 `SlashCommandRegistry::builtin()`,
+/// - **单一事实源**:6 个 slash 命令声明在 `SlashCommandRegistry::builtin()`,
 ///   `/help` 从注册表派生,避免手写清单漂移
 /// - **id + name + description**:与 ActionDescriptor 字段命名一致,便于未来合并
 #[derive(Debug, Clone, Copy)]
@@ -383,7 +383,7 @@ pub struct SlashCommandDescriptor {
 /// Slash 命令注册表 — 单一事实源(SubTask 1.6.2)
 ///
 /// 借鉴 `chimera_tui::actions::ActionRegistry` 的"单一事实源"设计,
-/// 但更轻量:不需要模糊搜索、域分组、熔断线(CLI 10 个命令,规模可控)。
+/// 但更轻量:不需要模糊搜索、域分组、熔断线(CLI 6 个命令,规模可控)。
 #[derive(Debug, Clone, Default)]
 pub struct SlashCommandRegistry {
     commands: Vec<SlashCommandDescriptor>,
@@ -395,7 +395,7 @@ impl SlashCommandRegistry {
         Self::default()
     }
 
-    /// 创建并装入 9 个内建 slash 命令(生产入口)
+    /// 创建并装入 6 个内建 slash 命令(生产入口)
     pub fn builtin() -> Self {
         let mut reg = Self::new();
         for desc in BUILTIN_SLASH_COMMANDS {
@@ -434,10 +434,10 @@ impl SlashCommandRegistry {
     }
 }
 
-/// 10 个内建 slash 命令(SubTask 1.6.1)
+/// 6 个内建 slash 命令(SubTask 1.6.1)
 ///
-/// 顺序与 spec 表格一致:`/help` / `/clear` / `/model` / `/llm` / `/quest` /
-/// `/parliament` / `/audit` / `/mcp` / `/agent` / `/exit`。
+/// 顺序与 spec 表格一致:`/help` / `/clear` / `/model` / `/llm` / `/quest` / `/exit`。
+/// 原 10 个清单中的 `/parliament` `/audit` `/mcp` `/agent` 已移除。
 pub const BUILTIN_SLASH_COMMANDS: &[SlashCommandDescriptor] = &[
     SlashCommandDescriptor {
         id: "help",
@@ -454,7 +454,7 @@ pub const BUILTIN_SLASH_COMMANDS: &[SlashCommandDescriptor] = &[
     SlashCommandDescriptor {
         id: "model",
         name: "model",
-        description: "显示/切换当前 model-router 渠道",
+        description: "显示/切换当前 Provider 路由渠道（本地静态表）",
         args_usage: "[<channel>]",
     },
     SlashCommandDescriptor {
@@ -582,7 +582,7 @@ fn handle_clear() {
     // 真实清零由调用方根据返回值或共享状态完成(当前简化为提示输出)。
 }
 
-/// `/model` — 显示/切换当前 model-router 渠道(SubTask 1.6.5 / Task 3)
+/// `/model` — 显示/切换当前 Provider 路由渠道（本地静态表）(SubTask 1.6.5 / Task 3)
 ///
 /// 无参数时显示当前渠道(strategy)+ CAF 四渠道占位;有参数时切换
 /// (内存态,后续 Task 接入 omega.yaml 持久化)。
@@ -594,8 +594,11 @@ fn handle_model(parsed: &ParsedSlashCommand, config: &ChimeraConfig, perm: &Perm
     match parsed.first_arg() {
         None => {
             // 无参:显示当前 strategy + CAF 四渠道占位
-            println!("当前 model-router 策略: {}", config.model_router.strategy);
-            println!("可用渠道(CAF 四渠道): Quality / Balanced / Cost / Speed");
+            println!(
+                "当前 model_router.strategy: {}",
+                config.model_router.strategy
+            );
+            println!("可用渠道(本地静态表): Quality / Balanced / Cost / Speed");
         }
         Some(strategy) => {
             // 有参:内存态切换(后续 Task 接入 omega.yaml 持久化)

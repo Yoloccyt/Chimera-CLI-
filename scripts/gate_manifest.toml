@@ -1568,3 +1568,21 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "G-138 夹具：一个合法夹具 + 每类失败各一（重复 id、缺 note、expect=3、kind=slow、timeout=0、retry=4、mutating 非 bool、未知 profile、mutating 列入 pr、needs 未知、needs 成环、disk_gb<0、首 token 非白名单、未知键、id 非 G-、空清单、expect=True、source 越词表、tasks 行缺 source）+ TOML 往返 + 畸形 TOML 必抛。任一断言不成立 ⇒ 退 1。"
+
+[[gate]]
+id = "G-141"
+spec_ref = "ADR-228 §3.6 / Spec §5 验收（CI 自身可解析性）"
+cmd = "{python} scripts/check_workflow_yaml_lexical.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "抓 workflow YAML 里 plain scalar 含「: 」与引号不配对——这类行会让 GitHub 在注册阶段整份拒绝 ci.yml，连带丢掉该文件里所有 job（包括本该抓它的 actionlint 作业）。实测事故：acf80d2 加的 `- name: Format check (isolated workspace: fuzz)` 未被任何本地门发现；zizmor 打印 failed to parse 仍退 0（等于读了个空）。缺目录/不可读/行数低于地板一律退 2，不判绿。"
+
+[[gate]]
+id = "G-142"
+spec_ref = "G-141 配套（门自身有牙）"
+cmd = "{python} scripts/check_workflow_yaml_lexical.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "10 条夹具：正例用真实事故行（既按内联文本测，也按文件形态喂进去并断言 rc=1）；负例含加引号、块标量、行尾注释里的冒号、URL、纯 key；另有「目录缺失 ⇒ 退 2」的致盲守卫。任一断言不成立 ⇒ 退 1。"

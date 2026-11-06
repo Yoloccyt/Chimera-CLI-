@@ -507,10 +507,10 @@ L1   Core ─────── nexus-core · event-bus · nexus-telemetry [ADR-
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **架构层** | L7 Execution |
 | **核心职责** | 聚集-查询执行协议(GQEP)，异步操作聚集、超时处理、批量执行 |
-| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/lib.rs) · [gatherer.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/gatherer.rs) · [timeout.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/timeout.rs) · [batch.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/batch.rs) |
-| **关键类型** | `GqepExecutor` · `BatchExecutor` · `GatherResult` |
-| **关键方法** | `GqepExecutor::gather()` · `GqepExecutor::completed_count()` · `GqepExecutor::entangle_spawn()` |
-| **主要依赖** | tokio · serde · dashmap · futures · rand · chrono · uuid · tracing · nexus-core · event-bus · qeep-protocol |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/lib.rs) · [gatherer.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/gatherer.rs) · [timeout.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/timeout.rs) · [batch.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/batch.rs) · [tool_runtime/runtime.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/tool_runtime/runtime.rs) · [tool_runtime/batch.rs](file:///d:/Chimera%20CLI/crates/gqep-executor/src/tool_runtime/batch.rs) |
+| **关键类型** | `GqepExecutor` · `BatchExecutor` · `GatherResult` · `ToolRuntime` · `InProcDispatcher` · `ToolDispatcher` · `BatchLimits` · `BatchOutcome` |
+| **关键方法** | `GqepExecutor::gather()` · `GqepExecutor::completed_count()` · `GqepExecutor::entangle_spawn()` · `ToolRuntime::new()` · `ToolRuntime::dispatch()` · `ToolRuntime::execute_batch()` |
+| **主要依赖** | tokio · serde · dashmap · futures · rand · chrono · uuid · tracing · nexus-contracts · nexus-core · event-bus · qeep-protocol · seccore |
 | **架构例外** | 无 —— 原「跨层渗透例外(ADR-048 Accepted)」已于 wave 3c / ADR-185 D4 **收编**:`gqep-executor`(L7)→`qeep-protocol`(L4) 是**合法向下边**,治理脚本 `scripts/check_dependency_rules.sh:217` 不再为其保留豁免条目;「推迟至三环重组根治」一项亦已完成(Phase 9 P9-T1~T12, v2.24.0) |
 
 #### [mtpe-executor](file:///d:/Chimera%20CLI/crates/mtpe-executor)

@@ -1722,6 +1722,8 @@ impl TuiApp {
             match event {
                 Event::Key(key) => self.handle_key_event(key),
                 Event::Mouse(mouse) => self.handle_mouse_event(mouse),
+                // 终端尺寸变化：更新缓存，下一帧按新尺寸重建 v3_term。
+                Event::Resize(w, h) => self.cached_term_size = Some((w, h)),
                 _ => {}
             }
         }
@@ -1769,6 +1771,8 @@ impl TuiApp {
             match event {
                 Event::Key(key) => self.handle_key_event(key),
                 Event::Mouse(mouse) => self.handle_mouse_event(mouse),
+                // 终端尺寸变化：更新缓存，下一帧按新尺寸重建 v3_term。
+                Event::Resize(w, h) => self.cached_term_size = Some((w, h)),
                 _ => {}
             }
         }
@@ -1815,8 +1819,15 @@ impl TuiApp {
     /// 终端尺寸读取失败 / 帧绘制失败 / ANSI 写出失败均映射为 `TuiError::Render`。
     #[cfg(feature = "v3-engine")]
     pub(crate) fn render_frame_v3(&mut self) -> Result<(), TuiError> {
-        let (w, h) = crossterm::terminal::size()
-            .map_err(|e| TuiError::Render(format!("terminal size: {e}")))?;
+        let (w, h) = match self.cached_term_size {
+            Some(size) => size,
+            None => {
+                let size = crossterm::terminal::size()
+                    .map_err(|e| TuiError::Render(format!("terminal size: {e}")))?;
+                self.cached_term_size = Some(size);
+                size
+            }
+        };
         self.render_frame_v3_sized(w, h)
     }
 
