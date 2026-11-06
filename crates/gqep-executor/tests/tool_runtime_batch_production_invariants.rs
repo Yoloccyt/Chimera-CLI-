@@ -382,7 +382,10 @@ async fn batch_attribution_on_empty_batch_is_zero() {
     assert_eq!(attribution.total, 0);
     assert_eq!(attribution.success_ratio_bp, 0);
     assert_eq!(
-        attribution.succeeded + attribution.failed + attribution.abandoned + attribution.not_started,
+        attribution.succeeded
+            + attribution.failed
+            + attribution.abandoned
+            + attribution.not_started,
         0
     );
 }
