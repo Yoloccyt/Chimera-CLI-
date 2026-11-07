@@ -438,6 +438,8 @@
 
 > **ADR-264 登记（2026-11-08，阶段四 R5 波次）**：`ADR-264-energy-efficiency-proxy-metrics.md` —— 能效代理指标体系（用户裁决：代理=硬验收，功耗=参考旁证）：三代理 = ①每请求分配数（R4-1 棘轮载体）②每请求 CPU-ms（criterion 现键）③空闲唤醒率（`idle_wakeup_audit.py` 静态审计，**生产区基线 32 点**——裸 grep 149 的测试污染 99 处被分类剥离，分布全为正当长周期定时器）；`energy_profile.ps1` 参考旁证（dev-only 不入门禁）；**R5-3 TUI 空闲 Eco 设计冻结、实施暂缓**——转移函数/接线点/手动 Eco 共存旗标/默认 0→5 的真机验证前置全部冻结在案（用户红线：TUI 改动须真实终端人工验证）。
 
+> **ADR-265 登记（2026-11-08，工程工单 Tranche 1 工单 B）**：`ADR-265-rss-peak-sampling.md` —— RSS 峰值采样口径：`energy_profile.ps1` 升级为**双口径并列**（窗口峰值=采样环内 WorkingSet64 最大值，$PollMs 粒度默认 500ms；进程生存期峰值=PeakWorkingSet64 OS 记账）+ 单环采样（CPU% 与工作集同帧可引用）+ 口径边界登记（WorkingSet≈物理驻留非提交内存）；定位不变=dev-only 参考旁证（ADR-264 代理指标仍为硬验收）。补 ADR-263 §3 明文承认的「内存峰值未测」缺口。实测验证：explorer 6s 窗口 peak 148.1 ≥ avg 148.1、生存期 402.9 独立呈现；G-85 28/28 保持（重写文件曾丢 BOM，按门 FIX 指令逐字节前置恢复）。
+
 > **ADR-252~255 已并入本索引（2026-11-07，G-04/G-18 区间登记）**：四支文件均在盘且各有批注行登记（ADR-252 / ADR-253 / ADR-254 / ADR-255，见下文批注）；本行按 `check_doc_consistency.ps1` GAP-D3 的 merged-range 语法（`ADR-XXX~YYY` 双向覆盖）把四号声明为已并入，消除「盘上有文件、索引无表格行」的孤号态。
 
 > **ADR-248 登记（2026-11-07，W7-R2 W3 波次）**：`ADR-248-tool-batch-attribution-counters.md` —— P-13 批量归因指标 C-A 路线（F-03）：`BusLogger::register_counter(name, help) -> RegisteredCounter`（event-bus 15-25 行域中立加性 API；`&mut self` 由 prometheus-client 0.22 `Registry::register(&mut self)` 决定，注册被类型系统约束在构造期；命名不带 `_total`，同名重复注册 panic）；gqep-executor 依赖倒置 `BatchAttributionSink` trait + `dispatch_batch_with_sink`（旧 `dispatch_batch` 签名不变，None 逐位等价，空批次结构性不触发 record）；chimera-cli `metrics_sink.rs::TelemetryBatchSink`（5 计数器 `chimera_tool_batch{,_succeeded,_failed,_abandoned,_not_started}`，`register` 命名避 composition-root 门正则——G-4 基线 7 点不变；装配时序构造→注册→set_logger）。spike 裁决与 C-B/事件路线否决理由见 ADR §3；bench 实测发布路径零回归。
