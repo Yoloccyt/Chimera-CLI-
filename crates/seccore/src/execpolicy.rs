@@ -239,7 +239,8 @@ impl ExecPolicy {
     /// use seccore::execpolicy::{ExecPolicy, PolicyAction};
     /// // 默认放行，但显式拒绝 rm
     /// let policy = ExecPolicy::with_default_action(PolicyAction::Allow);
-    /// assert_eq!(policy.evaluate("rm", &[]), PolicyAction::Allow);
+    /// // W4 泛型化后空切片须消歧（evaluate<S: AsRef<str>> 多 impl 候选）
+    /// assert_eq!(policy.evaluate("rm", &[] as &[String]), PolicyAction::Allow);
     /// ```
     #[must_use]
     pub fn with_default_action(default_action: PolicyAction) -> Self {
