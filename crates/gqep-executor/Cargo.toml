@@ -64,6 +64,11 @@ name = "tool_runtime_batch"
 harness = false
 
 # 性能增量（2026-11-06）：PlanRunner 只读层「concurrency=1 vs 8」墙钟对照
+# ADR-249：链级拥有/借用同轮对照（owned vs borrowed × c1/c4/c8；反转主次裁决尺）
+[[bench]]
+name = "dispatch_borrowed_chain"
+harness = false
+
 [[bench]]
 name = "toolplan_layers"
 harness = false

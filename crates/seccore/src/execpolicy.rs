@@ -116,6 +116,22 @@ pub struct RulePattern {
     pub args_glob: String,
 }
 
+/// 拼接参数序列为空格分隔的单串（与 `&[String]::join(" ")` 语义逐位一致）
+///
+/// WHY 手写而非 `map+collect+join`：单次分配（collect 会多一次 Vec 分配）。
+/// W4 泛型化判决核心的共用辅助——拥有型 `&[String]` 与借用型 `&[&str]`
+/// 走同一实现，匹配形状分叉即判决分叉（安全语义）。
+fn join_args<S: AsRef<str>>(args: &[S]) -> String {
+    let mut joined = String::new();
+    for (i, arg) in args.iter().enumerate() {
+        if i > 0 {
+            joined.push(' ');
+        }
+        joined.push_str(arg.as_ref());
+    }
+    joined
+}
+
 impl RulePattern {
     /// 新建模式
     #[must_use]
@@ -129,12 +145,15 @@ impl RulePattern {
     /// 匹配 — program 精确（小写）+ args 通配
     ///
     /// 空参数特例:`npm *` 应匹配无参调用 `npm`（单独调用也属该系列）
+    ///
+    /// W4 泛型化：拥有型 `&[String]` 与借用型 `&[&str]` 共用同一实现
+    /// （`String`/`&str` 均 `AsRef<str>`），判决逐位一致。
     #[must_use]
-    pub fn matches(&self, program: &str, args: &[String]) -> bool {
+    pub fn matches<S: AsRef<str>>(&self, program: &str, args: &[S]) -> bool {
         if program.to_lowercase() != self.program {
             return false;
         }
-        let joined = args.join(" ");
+        let joined = join_args(args);
         if joined.is_empty() && self.args_glob.ends_with(" *") {
             return true;
         }
@@ -213,15 +232,28 @@ impl ExecPolicy {
     }
 
     /// 评估 — 先命中规则优先,无命中回默认动作（每次决策计入审计统计）
+    ///
+    /// W4 泛型化：拥有型 `&[String]` 与借用型 `&[&str]` 共用同一判决体
+    /// （`RulePattern::matches` 同步泛型化），判决逐位一致。
     #[must_use]
-    pub fn evaluate(&self, program: &str, args: &[String]) -> PolicyAction {
+    pub fn evaluate<S: AsRef<str>>(&self, program: &str, args: &[S]) -> PolicyAction {
         let action = self.evaluate_uncounted(program, args);
         self.record_decision(action);
         action
     }
 
+    /// 借用评估入口 — 语义与 [`Self::evaluate`] 逐位一致（含决策计数）
+    ///
+    /// W4（ADR-249）：链内策略层与 `ExecPolicyToolExecutor` 的借用路径
+    /// 调本入口，避免 `args_json.to_string()` 的入参升级分配。存在意义是
+    /// **命名意图**（借用路径的显式签名），判决体与 `evaluate` 单源。
+    #[must_use]
+    pub fn evaluate_ref(&self, program: &str, args: &[&str]) -> PolicyAction {
+        self.evaluate(program, args)
+    }
+
     /// 未计数评估 — 内部辅助（避免重复计数;has_matching_rule 等调用不受影响）
-    fn evaluate_uncounted(&self, program: &str, args: &[String]) -> PolicyAction {
+    fn evaluate_uncounted<S: AsRef<str>>(&self, program: &str, args: &[S]) -> PolicyAction {
         for rule in &self.rules {
             if rule.pattern.matches(program, args) {
                 return rule.action;
@@ -472,10 +504,10 @@ mod tests {
     #[test]
     fn rule_pattern_matches() {
         let p = RulePattern::new("Bash", "npm *");
-        assert!(p.matches("bash", &["npm".into(), "install".into()]));
-        assert!(p.matches("bash", &[]), "空 args 也属 npm 系列");
-        assert!(!p.matches("sh", &["npm".into(), "install".into()]));
-        assert!(!p.matches("bash", &["npx".into(), "install".into()]));
+        assert!(p.matches("bash", &["npm".to_string(), "install".to_string()]));
+        assert!(p.matches("bash", &[] as &[String]), "空 args 也属 npm 系列");
+        assert!(!p.matches("sh", &["npm".to_string(), "install".to_string()]));
+        assert!(!p.matches("bash", &["npx".to_string(), "install".to_string()]));
     }
 
     /// 规则优先序 — 先添加先裁决;无命中回默认 Deny（零信任）
@@ -492,22 +524,25 @@ mod tests {
             });
         // npm 命中 Allow
         assert_eq!(
-            policy.evaluate("bash", &["npm".into(), "i".into()]),
+            policy.evaluate("bash", &["npm".to_string(), "i".to_string()]),
             PolicyAction::Allow
         );
         // rm 命中 Deny
         assert_eq!(
-            policy.evaluate("bash", &["rm".into(), "-rf".into(), "/".into()]),
+            policy.evaluate(
+                "bash",
+                &["rm".to_string(), "-rf".to_string(), "/".to_string()]
+            ),
             PolicyAction::Deny
         );
         // 无命中 → 默认 Deny
         assert_eq!(
-            policy.evaluate("git", &["status".into()]),
+            policy.evaluate("git", &["status".to_string()]),
             PolicyAction::Deny
         );
         // 空规则策略全拒
         let empty = ExecPolicy::new();
-        assert_eq!(empty.evaluate("echo", &[]), PolicyAction::Deny);
+        assert_eq!(empty.evaluate("echo", &[] as &[String]), PolicyAction::Deny);
     }
 
     /// 六模式场景矩阵 — Plan/AcceptEdits/Default/DontAsk/Auto/BypassPermissions
@@ -528,7 +563,13 @@ mod tests {
             PolicyAction::Allow
         );
         assert_eq!(
-            ModePolicy::Plan.evaluate(&policy, &spec, "bash", &["npm".into(), "i".into()], false),
+            ModePolicy::Plan.evaluate(
+                &policy,
+                &spec,
+                "bash",
+                &["npm".to_string(), "i".to_string()],
+                false
+            ),
             PolicyAction::Deny
         );
         // AcceptEdits:writable_patterns 自动批准;其余走规则
@@ -537,7 +578,7 @@ mod tests {
                 &policy,
                 &spec,
                 "bash",
-                &["git".into(), "add".into(), "x".into()],
+                &["git".to_string(), "add".to_string(), "x".to_string()],
                 false
             ),
             PolicyAction::Allow
@@ -547,14 +588,14 @@ mod tests {
                 &policy,
                 &spec,
                 "bash",
-                &["npm".into(), "i".into()],
+                &["npm".to_string(), "i".to_string()],
                 false
             ),
             PolicyAction::Allow
         );
         // Default:ask 规则触发审批;无命中 Allow（此处无 ask 规则 → Allow）
         assert_eq!(
-            ModePolicy::Default.evaluate(&policy, &spec, "echo", &["hi".into()], false),
+            ModePolicy::Default.evaluate(&policy, &spec, "echo", &["hi".to_string()], false),
             PolicyAction::Allow
         );
         // DontAsk:仅 preapproved
@@ -563,27 +604,39 @@ mod tests {
                 &policy,
                 &spec,
                 "bash",
-                &["git".into(), "status".into()],
+                &["git".to_string(), "status".to_string()],
                 false
             ),
             PolicyAction::Allow
         );
         assert_eq!(
-            ModePolicy::DontAsk.evaluate(&policy, &spec, "echo", &["hi".into()], false),
+            ModePolicy::DontAsk.evaluate(&policy, &spec, "echo", &["hi".to_string()], false),
             PolicyAction::Deny
         );
         // Auto:默认不启用（fail-closed）
         assert_eq!(
-            ModePolicy::Auto.evaluate(&policy, &spec, "echo", &["hi".into()], false),
+            ModePolicy::Auto.evaluate(&policy, &spec, "echo", &["hi".to_string()], false),
             PolicyAction::Deny
         );
         // BypassPermissions:isolated + 容器才放行
         assert_eq!(
-            ModePolicy::BypassPermissions.evaluate(&policy, &spec, "echo", &["hi".into()], true),
+            ModePolicy::BypassPermissions.evaluate(
+                &policy,
+                &spec,
+                "echo",
+                &["hi".to_string()],
+                true
+            ),
             PolicyAction::Allow
         );
         assert_eq!(
-            ModePolicy::BypassPermissions.evaluate(&policy, &spec, "echo", &["hi".into()], false),
+            ModePolicy::BypassPermissions.evaluate(
+                &policy,
+                &spec,
+                "echo",
+                &["hi".to_string()],
+                false
+            ),
             PolicyAction::Deny,
             "非容器必须降级拒绝"
         );
@@ -602,7 +655,7 @@ mod tests {
                 &policy,
                 &spec,
                 "bash",
-                &["git".into(), "push".into(), "origin".into()],
+                &["git".to_string(), "push".to_string(), "origin".to_string()],
                 false
             ),
             PolicyAction::Ask
@@ -610,7 +663,7 @@ mod tests {
         assert!(PolicyAction::Ask.permits(), "Ask 需经审批流,permits=true");
         // 无规则命中 → Allow（默认放行,规则负责设防）
         assert_eq!(
-            ModePolicy::Default.evaluate(&policy, &spec, "echo", &["hi".into()], false),
+            ModePolicy::Default.evaluate(&policy, &spec, "echo", &["hi".to_string()], false),
             PolicyAction::Allow
         );
     }
@@ -653,25 +706,29 @@ mod tests {
         });
         // evaluate ×3: Allow(npm) + Deny(默认 git) + Deny(默认 echo)
         assert_eq!(
-            policy.evaluate("bash", &["npm".into(), "i".into()]),
+            policy.evaluate("bash", &["npm".to_string(), "i".to_string()]),
             PolicyAction::Allow
         );
         assert_eq!(
-            policy.evaluate("git", &["status".into()]),
+            policy.evaluate("git", &["status".to_string()]),
             PolicyAction::Deny
         );
-        assert_eq!(policy.evaluate("echo", &["hi".into()]), PolicyAction::Deny);
+        assert_eq!(
+            policy.evaluate("echo", &["hi".to_string()]),
+            PolicyAction::Deny
+        );
         let stats = policy.decision_stats();
         assert_eq!(stats.allow_count(), 1);
         assert_eq!(stats.deny_count(), 2);
         assert_eq!(stats.total(), 3);
         // Auto 模式:fail-closed Deny 且计入审计
         let spec = ScopeSpec::default();
-        let auto_outcome = ModePolicy::Auto.evaluate(&policy, &spec, "echo", &["hi".into()], false);
+        let auto_outcome =
+            ModePolicy::Auto.evaluate(&policy, &spec, "echo", &["hi".to_string()], false);
         assert_eq!(auto_outcome, PolicyAction::Deny);
         assert_eq!(policy.decision_stats().deny_count(), 3, "Auto 决策必须留痕");
         // has_matching_rule 不计数（纯查询）
-        assert!(policy.has_matching_rule("bash", &["npm".into(), "i".into()]));
+        assert!(policy.has_matching_rule("bash", &["npm".to_string(), "i".to_string()]));
         assert_eq!(policy.decision_stats().total(), 4, "查询不计数");
     }
 
@@ -701,4 +758,48 @@ mod tests {
         let t3 = SingleUseToken::new("t3", 0);
         assert!(!t3.consume(), "0ms TTL 必须立即失效");
     }
+}
+/// W4-T2(ADR-249):evaluate(&[String]) 与 evaluate_ref(&[&str]) 判决逐位一致;
+/// RulePattern::matches 泛型化后双形态一致——借用路径不得成为判决分叉面。
+#[test]
+fn evaluate_ref_matches_owned_verdict_bitwise() {
+    let policy = ExecPolicy::new()
+        .add_rule(ExecPolicyRule {
+            pattern: RulePattern::new("rm", "*"),
+            action: PolicyAction::Deny,
+        })
+        .add_rule(ExecPolicyRule {
+            pattern: RulePattern::new("git", "push*"),
+            action: PolicyAction::Ask,
+        });
+    // 遍历程序名 × 参数形态的代表性笛卡尔积(含大小写/空参数/多参数边界)
+    let programs = ["rm", "RM", "git", "sh", ""];
+    let owned_sets: Vec<Vec<String>> = vec![
+        vec![],
+        vec!["-rf /".to_string()],
+        vec!["push".to_string(), "--force".to_string()],
+        vec!["status".to_string()],
+    ];
+    let ref_sets: Vec<Vec<&str>> = vec![
+        vec![],
+        vec!["-rf /"],
+        vec!["push", "--force"],
+        vec!["status"],
+    ];
+    for program in programs {
+        for (owned, refs) in owned_sets.iter().zip(ref_sets.iter()) {
+            let owned_action = policy.evaluate(program, owned);
+            let ref_action = policy.evaluate_ref(program, refs);
+            assert_eq!(
+                owned_action, ref_action,
+                "双形态判决必须逐位一致: program={program} owned={owned:?} refs={refs:?}"
+            );
+        }
+    }
+    // RulePattern::matches 双形态直测
+    let pattern = RulePattern::new("git", "push*");
+    assert!(pattern.matches("git", &["push".to_string()]));
+    assert!(pattern.matches("git", &["push"])); // 借用形态(&[&str])走同一泛型体
+    assert!(!pattern.matches("git", &["pull".to_string()]));
+    assert!(!pattern.matches("git", &["pull"]));
 }

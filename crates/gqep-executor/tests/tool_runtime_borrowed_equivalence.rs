@@ -56,7 +56,8 @@ fn runtime() -> ToolRuntime {
 // WHY 普通注释而非 doc 注释：rustdoc 不为宏调用生成文档，doc 注释会触发
 // `unused_doc_comment` lint（-D warnings 下即错）。
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
+    // W4/ADR-249:64→256(判决逐位等价的矩阵扩容)
+    #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
     fn borrowed_dispatch_matches_owned_dispatch(

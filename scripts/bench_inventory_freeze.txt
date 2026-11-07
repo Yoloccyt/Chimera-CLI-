@@ -68,6 +68,7 @@ event-bus|tui_action_dispatch_bench|dev-only|TUI 动作分发基准,功能层无
 #   删除一行 = 该 bench 升格为受门禁守护 —— 本文件自订约定。
 faae-router|operator_select|dev-only|算子选择开发基准
 faae-router|route|dev-only|路由热路径补充开发基准
+gqep-executor|dispatch_borrowed_chain|dev-only|ADR-249 否决裁决的同轮对照基准(owned vs borrowed,保留供复现与重评估)
 gsoe-evolution|channel_b_benchmark|dev-only|Channel-B 进化通道实验基准
 gsoe-evolution|evolution_benchmark|dev-only|进化引擎整体开发基准
 hcw-window|parallel_compress|dev-only|并行压缩补充基准

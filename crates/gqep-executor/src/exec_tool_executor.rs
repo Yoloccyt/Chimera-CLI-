@@ -65,7 +65,9 @@ impl ExecPolicyToolExecutor {
 impl ToolExecutor for ExecPolicyToolExecutor {
     async fn execute(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
         // execpolicy 前置检查（program=工具名,args=[args_json];决策计入审计）
-        let action = self.policy.evaluate(tool_name, &[args_json.to_string()]);
+        // W4(ADR-249):evaluate_ref 借用直传,消除原 `args_json.to_string()`
+        // 的入参升级分配（owned/借用两条派发路径共用本行,见 deepdive §3.4 表）。
+        let action = self.policy.evaluate_ref(tool_name, &[args_json]);
         match action {
             // Allow/Ask 之外的 Deny:拒绝执行（Ask 由上层审批流处置,此处同样不放行）
             //
@@ -80,6 +82,20 @@ impl ToolExecutor for ExecPolicyToolExecutor {
             )),
             PolicyAction::Allow => self.delegate.execute(tool_name, args_json).await,
         }
+    }
+
+    // W4/N-6（ADR-249）:能力表透传——修复「包装件单独作 PlanRunner executor
+    // 时能力表静默失效（trait 默认空集 ⇒ 整层保守串行）」的 fail-closed 盲区。
+    // 透传是加性修复而非语义漂移：`ToolRuntime::with_optional_delegate` 路径
+    // 的能力视图在包装前就地保留（runtime.rs 既有纪律,不受本转发影响）,本
+    // 转发只影响「把包装件直接当 delegate 传入」的场景,使其与直传原始执行器
+    // 的行为拉齐（ADR-254 残留清单项,深审 §3.7）。
+    fn capability_of(&self, tool_name: &str) -> Option<nexus_contracts::tool_plan::SideEffectDecl> {
+        self.delegate.capability_of(tool_name)
+    }
+
+    fn declared_tools(&self) -> Vec<String> {
+        self.delegate.declared_tools()
     }
 }
 
@@ -257,5 +273,112 @@ mod tests {
             "error 文本不得再是嵌套 JSON(双重编码回归): {text}"
         );
         assert!(text.contains("denied"), "应含拒绝语义: {text}");
+    }
+
+    /// W4-T7(ADR-249/N-6):能力表透传——包装件自报被包装执行器的声明。
+    #[test]
+    fn capability_forwarding() {
+        use nexus_contracts::tool_plan::SideEffectDecl;
+        struct DeclaringExecutor;
+        #[async_trait]
+        impl ToolExecutor for DeclaringExecutor {
+            async fn execute(&self, _t: &str, _a: &str) -> Result<String, String> {
+                Ok("{}".to_string())
+            }
+            fn capability_of(&self, tool_name: &str) -> Option<SideEffectDecl> {
+                (tool_name == "text.echo").then_some(SideEffectDecl::ReadOnly)
+            }
+            fn declared_tools(&self) -> Vec<String> {
+                vec![
+                    "text.echo".to_string(),
+                    "fs.read".to_string(),
+                    "fs.list".to_string(),
+                ]
+            }
+        }
+        let wrapper =
+            ExecPolicyToolExecutor::new(Arc::new(ExecPolicy::new()), Arc::new(DeclaringExecutor));
+        assert_eq!(
+            wrapper.declared_tools(),
+            vec![
+                "text.echo".to_string(),
+                "fs.read".to_string(),
+                "fs.list".to_string()
+            ]
+        );
+        assert_eq!(
+            wrapper.capability_of("text.echo"),
+            Some(SideEffectDecl::ReadOnly)
+        );
+        assert_eq!(wrapper.capability_of("other"), None);
+    }
+
+    /// W4-T8(ADR-249/N-6 行为增量锁):包装件单独作 PlanRunner executor 时,
+    /// 能力转发使同层只读计划进有界并发(在飞峰值 >1;未转发时保守串行峰值=1)。
+    #[tokio::test]
+    async fn runtime_layer_concurrency_unlocked_by_forwarding() {
+        use crate::toolplan_runner::{PlanGuards, PlanRunner};
+        use nexus_contracts::tool_plan::{SideEffectDecl, ToolNode, ToolOp, ToolPlan};
+        use seccore::execpolicy::{ExecPolicyRule, RulePattern};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+        struct DeclaringExecutor {
+            inflight: Arc<AtomicUsize>,
+            peak: Arc<AtomicUsize>,
+        }
+        #[async_trait]
+        impl ToolExecutor for DeclaringExecutor {
+            async fn execute(&self, _t: &str, _a: &str) -> Result<String, String> {
+                let now = self.inflight.fetch_add(1, Ordering::SeqCst) + 1;
+                self.peak.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                self.inflight.fetch_sub(1, Ordering::SeqCst);
+                Ok("{}".to_string())
+            }
+            fn capability_of(&self, tool_name: &str) -> Option<SideEffectDecl> {
+                (tool_name == "text.echo").then_some(SideEffectDecl::ReadOnly)
+            }
+            fn declared_tools(&self) -> Vec<String> {
+                vec!["text.echo".to_string()]
+            }
+        }
+        let inflight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        // 包装件直接当 PlanRunner executor(N-6 的目标场景)。
+        // WHY 策略要 Allow text.echo:ExecPolicy::new() 是零信任 Deny 默认,
+        // 不放行则包装件在 delegate 之前拒绝,DeclaringExecutor 永不执行。
+        let policy = ExecPolicy::new().add_rule(ExecPolicyRule {
+            pattern: RulePattern::new("text.echo", "*"),
+            action: PolicyAction::Allow,
+        });
+        let wrapper = ExecPolicyToolExecutor::new(
+            Arc::new(policy),
+            Arc::new(DeclaringExecutor {
+                inflight: Arc::clone(&inflight),
+                peak: Arc::clone(&peak),
+            }),
+        );
+        let plan = ToolPlan {
+            id: "w4-t8".to_string(),
+            nodes: (0..2)
+                .map(|i| ToolNode {
+                    id: format!("n{i}"),
+                    op: ToolOp::ToolCall,
+                    tool_name: Some("text.echo".to_string()),
+                    args_json: Some("{}".to_string()),
+                    field: None,
+                    predicate: None,
+                    side_effect: None, // 计划不声明 ⇒ 判决走执行器能力表(N-6 转发)
+                })
+                .collect(),
+            edges: vec![],
+        };
+        let runner = PlanRunner::new(Box::new(wrapper), PlanGuards::default()).with_concurrency(8);
+        runner.run(&plan).await.expect("计划应执行成功");
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            2,
+            "能力转发后同层只读节点应有界并发(峰值 2;未转发则保守串行峰值 1)"
+        );
     }
 }

@@ -121,7 +121,7 @@ fn declarative_rules_map_to_execpolicy() {
     );
     // 省略 args_glob 等价 "*"：任意参数都命中
     assert_eq!(
-        policy.evaluate("rm", &[]),
+        policy.evaluate("rm", &[] as &[String]),
         seccore::execpolicy::PolicyAction::Deny,
         "单段 pattern 应匹配任意参数（含无参调用）"
     );
