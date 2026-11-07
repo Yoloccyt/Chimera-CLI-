@@ -46,6 +46,19 @@ jobs:
         with:
           persist-credentials: false
 
+      # WHY: 可回溯性断言(F-06/W0.4-r, ADR-250)——下列 5 份文档是 ADR 索引/发布指南/
+      # 工具链专项决策链(ADR-239~255)的唯一载体,靠 .gitignore 精确豁免入库;豁免行被
+      # 误删或文件被改名时,干净克隆上索引消失而任何代码门都不报错(静默漂移)。本步骤
+      # 零依赖秒级失败,置于 checkout 之后首个位置。注:ADR-234 正文补建(阶段二)落地后
+      # 应把其路径追加进断言清单——其补建因 ADR-229~236 八编号散文引用链而推迟,先断言必红。
+      - name: Traceability assertion (tracked docs, F-06/W0.4-r)
+        run: |
+          git ls-files --error-unmatch docs/architecture/adr_index.md
+          git ls-files --error-unmatch docs/release/release_guide.md
+          git ls-files --error-unmatch docs/reports/toolchain-parallel-optimization-closure-2026-11-06.md
+          git ls-files --error-unmatch docs/reports/toolchain-w0-progress-2026-11-06.md
+          git ls-files --error-unmatch docs/reports/toolchain-parallel-optimization-w7r2-panorama-plan-2026-11-07.md
+
       # WHY 钉定工具链(2026-09-05): `-D warnings` 的 clippy 门必须锁版本；
       # 浮动到 ubuntu 预装 stable(现 1.98) 会因新版 clippy 新 lint 突发红
       # (如 chunks_exact_to_as_chunks 波及 nexus-contracts/repo-wiki 等多 crate)。

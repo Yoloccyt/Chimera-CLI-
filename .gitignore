@@ -74,6 +74,15 @@ dist/
 # declaration spot / "in committed documents"）在干净克隆上被门硬读，不入库则 PR CI 必红。
 !Chimera架构重构与优化方案_v3.5-*.md
 !docs/reports/DOC-AUDIT-FACTS_*.md
+# 例外：可回溯性台账文档（F-06/W0.4-r，2026-11-07）——adr_index.md 是 ADR 的唯一索引
+# 面、release_guide.md 是发布链权威指南，CI 干净克隆需可核；工具链专项三份报告是
+# ADR-239~255 决策链与可达性棘轮的交接证据。精确逐文件豁免，不放宽全局 *.md；
+# 断言由 ci.yml 的 Traceability assertion 步骤机械守护（ADR-250）。
+!docs/architecture/adr_index.md
+!docs/release/release_guide.md
+!docs/reports/toolchain-parallel-optimization-closure-2026-11-06.md
+!docs/reports/toolchain-w0-progress-2026-11-06.md
+!docs/reports/toolchain-parallel-optimization-w7r2-panorama-plan-2026-11-07.md
 .claude/
 .trae/
 
