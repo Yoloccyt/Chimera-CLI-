@@ -87,6 +87,8 @@ dist/
 # 例外：GPU 三门重开就绪度评估（R3-4，ADR-262 D5）——C-15 三重关闭的可回溯
 # 证据与监测仪表，须入库存证（精确逐文件豁免，不放宽全局 *.md）
 !docs/reports/gpu-unseal-readiness-2026-11.md
+# 例外：内存上界审计（R4-4，ADR-263）——零无界增长点的逐项证据与分配预算登记
+!docs/reports/memory-bound-audit-2026-11-08.md
 .claude/
 .trae/
 

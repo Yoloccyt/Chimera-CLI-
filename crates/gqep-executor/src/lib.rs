@@ -64,6 +64,12 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
+// R4-2(ADR-263)分配器评测面:feature 门(不默认)——启用后本 crate 的 bench
+// 二进制以 mimalloc 为全局分配器,供 A/B 实测;生产采纳与否由 ADR-263 裁决。
+#[cfg(feature = "allocator-mimalloc")]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::sync::atomic::Ordering;
 
 pub mod batch;

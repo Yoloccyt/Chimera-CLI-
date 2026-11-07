@@ -193,6 +193,9 @@ thiserror = "1.0"
 # 中作为传递依赖存在(rayon/async-channel 等),无新增编译器负担;
 # 纯 safe Rust 实现(unsafe 在依赖内部不传播),符合 forbid(unsafe_code) 哲学。
 crossbeam-queue = "0.3"
+# mimalloc:评测式分配器(R4-2,ADR-263)——不默认;feature 门 + bench A/B 裁决
+# (采纳判据 median ≥5% 且内存不升,ADR-241 D5 先例);与 G-86 无关(非 GPU 族)
+mimalloc = { version = "0.1", default-features = false }
 # D-18:parliament/scheduler 的工作窃取全局注入器。crossbeam-deque 早已作为
 # rayon-core 的传递依赖存在于 Cargo.lock,此处仅提升为直接依赖(无新增包)。
 crossbeam-deque = "0.8"

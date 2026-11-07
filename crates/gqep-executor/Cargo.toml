@@ -7,6 +7,8 @@ license.workspace = true
 [dependencies]
 # L1 Core:提供 id_newtype! 宏(生成 OperationId newtype)
 nexus-contracts = { workspace = true }
+# R4-2(ADR-263):评测式分配器,optional + feature 门(不默认),bench A/B 裁决
+mimalloc = { workspace = true, optional = true }
 # L4 Security: execpolicy 决策审计 + 规则引擎（P4-T3 接线:ToolExecutor 挂审批流水线）
 seccore = { workspace = true }
 nexus-core = { workspace = true }
@@ -28,6 +30,11 @@ futures = { workspace = true }
 async-trait = { workspace = true }
 # UUIDv7 操作 ID 生成(时间有序,便于追溯)
 # 时间戳(聚集延迟计算)
+
+# R4-2(ADR-263):分配器评测 feature——启用后本 crate 的 bench 二进制以
+# mimalloc 为全局分配器;采纳与否由 A/B 实测裁决(判据见 ADR-263)
+[features]
+allocator-mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
 # 性能基准框架(SubTask 24.6)
