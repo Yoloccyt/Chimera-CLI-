@@ -27,7 +27,6 @@
 //! - 全局 deadline：`BatchLimits::deadline_ms`（`0` = 禁用），用
 //!   `tokio::time::timeout_at` 一个**绝对时刻**包裹整批，不按波次重置。
 
-use std::collections::VecDeque;
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -211,47 +210,47 @@ pub async fn dispatch_batch_with_sink<'a>(
     let mut slots: Vec<Option<Result<DispatchOutcome, DispatchError>>> =
         (0..total).map(|_| None).collect();
 
-    // 惰性 future 队列：入队不产生在飞额度（首次 poll 才真正开始派发）
-    let mut backlog: VecDeque<BatchItemFuture<'a>> = requests
-        .iter()
-        .enumerate()
-        .map(|(idx, req)| -> BatchItemFuture<'a> {
-            Box::pin(async move {
-                let outcome = if per_op_ms == 0 {
-                    dispatcher.dispatch(req).await
-                } else {
-                    match tokio::time::timeout(
-                        Duration::from_millis(per_op_ms),
-                        dispatcher.dispatch(req),
-                    )
-                    .await
-                    {
-                        Ok(outcome) => outcome,
-                        Err(_) => Err(DispatchError::Transport(format!(
-                            "operation timeout after {per_op_ms} ms"
-                        ))),
-                    }
-                };
-                (idx, outcome)
-            })
+    // 惰性装载（R2-1,ADR-261）：backlog 保留下标而非预装箱 future，Box::pin
+    // 推迟到入波时——在飞装箱峰值 = bound 而非 N；deadline 放弃时未入波请求
+    // 零装箱成本（旧实现对全部 N 条预先 Box::pin，放弃即整体作废）。
+    // WHY 单循环单 push 位点：唯一调用点使 future 类型推断平凡（ADR-249 §2.1
+    // 的 drive_n 教训），且「填满即 poll、完成即补」与原两阶段（首波填充 +
+    // FIFO 补波）产生完全相同的 future 序列与回填顺序，语义逐位等价。
+    let mut make_item = |idx: usize| -> BatchItemFuture<'a> {
+        let req = &requests[idx];
+        Box::pin(async move {
+            let outcome = if per_op_ms == 0 {
+                dispatcher.dispatch(req).await
+            } else {
+                match tokio::time::timeout(
+                    Duration::from_millis(per_op_ms),
+                    dispatcher.dispatch(req),
+                )
+                .await
+                {
+                    Ok(outcome) => outcome,
+                    Err(_) => Err(DispatchError::Transport(format!(
+                        "operation timeout after {per_op_ms} ms"
+                    ))),
+                }
+            };
+            (idx, outcome)
         })
-        .collect();
-
-    // 首波填充（≤ bound）
+    };
+    let mut next_idx = 0usize;
     let mut stream: FuturesUnordered<BatchItemFuture<'a>> = FuturesUnordered::new();
-    while stream.len() < bound {
-        let Some(next) = backlog.pop_front() else {
-            break;
-        };
-        stream.push(next);
-    }
-
-    // 采集 + 补波（完成一个补一个，FIFO；禁止按结果价值重排）
+    // 采集 + 补波（完成一个补一个，FIFO；禁止按结果价值重排）。
+    // WHY 借用块而非 move：deadline 超时后仍需读 next_idx 记账 not_started。
     let collect = async {
-        while let Some((idx, outcome)) = stream.next().await {
-            slots[idx] = Some(outcome);
-            if let Some(next) = backlog.pop_front() {
-                stream.push(next);
+        loop {
+            if next_idx < total && stream.len() < bound {
+                stream.push(make_item(next_idx));
+                next_idx += 1;
+                continue;
+            }
+            match stream.next().await {
+                Some((idx, outcome)) => slots[idx] = Some(outcome),
+                None => break,
             }
         }
     };
@@ -265,7 +264,9 @@ pub async fn dispatch_batch_with_sink<'a>(
     }
 
     // not_started = backlog 残留：它们从未入流、从未被 poll
-    let not_started = backlog.len();
+    // R2-1:未启动数 = 从未入波的请求（下标 ≥ next_idx）——惰性装载下
+    // 未入波者连 future 都未构造,与旧「已装箱未 poll」在结果记账上等价
+    let not_started = total - next_idx;
     let mut succeeded = 0usize;
     let mut failed = 0usize;
     let mut results = Vec::with_capacity(total);
