@@ -58,6 +58,7 @@ jobs:
           git ls-files --error-unmatch docs/reports/toolchain-parallel-optimization-closure-2026-11-06.md
           git ls-files --error-unmatch docs/reports/toolchain-w0-progress-2026-11-06.md
           git ls-files --error-unmatch docs/reports/toolchain-parallel-optimization-w7r2-panorama-plan-2026-11-07.md
+          git ls-files --error-unmatch docs/reports/toolchain-w7r2-panorama-deepdive-2026-11-07.md
 
       # WHY 钉定工具链(2026-09-05): `-D warnings` 的 clippy 门必须锁版本；
       # 浮动到 ubuntu 预装 stable(现 1.98) 会因新版 clippy 新 lint 突发红
