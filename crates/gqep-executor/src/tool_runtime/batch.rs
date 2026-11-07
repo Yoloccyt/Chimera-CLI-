@@ -216,7 +216,7 @@ pub async fn dispatch_batch_with_sink<'a>(
     // WHY 单循环单 push 位点：唯一调用点使 future 类型推断平凡（ADR-249 §2.1
     // 的 drive_n 教训），且「填满即 poll、完成即补」与原两阶段（首波填充 +
     // FIFO 补波）产生完全相同的 future 序列与回填顺序，语义逐位等价。
-    let mut make_item = |idx: usize| -> BatchItemFuture<'a> {
+    let make_item = |idx: usize| -> BatchItemFuture<'a> {
         let req = &requests[idx];
         Box::pin(async move {
             let outcome = if per_op_ms == 0 {
