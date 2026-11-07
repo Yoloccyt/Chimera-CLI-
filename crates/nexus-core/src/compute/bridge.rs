@@ -561,8 +561,23 @@ pub(crate) fn decide(
 ///
 /// 预留 2 核给 tokio worker,防 CPU 计算饿死 IO（v4.0 §7.5.2 防互饿设计）。
 /// 用 `std::thread::available_parallelism()` 而非 num_cpus crate（Ω₆ 最小依赖）。
+///
+/// R3-2b(ADR-262):`CHIMERA_COMPUTE_THREADS` 显式覆盖（与 chimera-cli 的
+/// `CHIMERA_RT_WORKERS` 同族旋钮）——合法正整数(≥`MIN_THREADS`)直接采用,
+/// 未设/非法回退既有口径（零行为变更）。WHY:计算池与 tokio worker 的
+/// 核数分配是 CPU 争用/能耗的第一调节面,容器/桌面共宿主场景需要显式划分。
 #[must_use]
 fn compute_threads() -> usize {
+    if let Ok(raw) = std::env::var("CHIMERA_COMPUTE_THREADS") {
+        match raw.trim().parse::<usize>() {
+            Ok(n) if n >= MIN_THREADS => return n,
+            _ => tracing::warn!(
+                value = %raw,
+                min = MIN_THREADS,
+                "CHIMERA_COMPUTE_THREADS 非法,回退默认（num_cpus − 2,下限 MIN_THREADS）"
+            ),
+        }
+    }
     match std::thread::available_parallelism() {
         Ok(n) => (n.get().saturating_sub(2)).max(MIN_THREADS),
         // 受限环境(如 cgroup 探测失败)无法获知核心数,取保守下限;
@@ -576,6 +591,36 @@ fn compute_threads() -> usize {
 mod tests {
     use super::*;
     use crate::compute::dispatch::TaskKind;
+
+    /// R3-2b(ADR-262):`CHIMERA_COMPUTE_THREADS` 覆盖表驱动（env 变更集中单测,
+    /// 结束时恢复;非法值回退既有口径 = 未设时的 compute_threads() 读数）
+    #[test]
+    fn compute_threads_env_override_matrix() {
+        let saved = std::env::var("CHIMERA_COMPUTE_THREADS").ok();
+        std::env::remove_var("CHIMERA_COMPUTE_THREADS");
+        let default_threads = compute_threads();
+        assert!(default_threads >= MIN_THREADS);
+        let cases: &[(&str, Option<usize>)] = &[
+            ("4", Some(4)),
+            (" 6 ", Some(6)),
+            ("1", None), // < MIN_THREADS → 非法回退
+            ("0", None),
+            ("-1", None),
+            ("abc", None),
+        ];
+        for (raw, want) in cases {
+            std::env::set_var("CHIMERA_COMPUTE_THREADS", raw);
+            assert_eq!(
+                compute_threads(),
+                want.unwrap_or(default_threads),
+                "input={raw:?}"
+            );
+        }
+        match saved {
+            Some(v) => std::env::set_var("CHIMERA_COMPUTE_THREADS", v),
+            None => std::env::remove_var("CHIMERA_COMPUTE_THREADS"),
+        }
+    }
 
     /// bridge() 单例幂等 — 两次调用返回同一指针（OnceLock 语义）
     #[test]

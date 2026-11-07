@@ -222,9 +222,43 @@ fn build_runtime(class: spec::CommandClass) -> std::io::Result<tokio::runtime::R
             .enable_all()
             .build()
     } else {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder.enable_all();
+        // R3-1(ADR-262,OQ-09 关闭):worker 数显式旋钮——未设/auto = tokio 默认
+        // （available_parallelism,零行为变更）;数字 N = 显式 N。WHY 旋钮而非
+        // 固定值:16 核宿主上 CLI 常驻与重构建/其他负载共存时,减少 worker 数
+        // 是 CPU 争用与能耗的第一调节面（终稿 §4.6 的"one-shot 启动税"由
+        // CHIMERA_RT_FLAVOR=auto 承担,本旋钮补足 long-running 场景）。
+        if let Some(workers) = resolve_rt_workers() {
+            builder.worker_threads(workers);
+        }
+        builder.build()
+    }
+}
+
+/// 解析 `CHIMERA_RT_WORKERS`（表驱动,纯函数可测;`None` = 不干预 tokio 默认）。
+///
+/// | 输入 | 输出 | 附加行为 |
+/// | 未设 / `""` / `"auto"` | None（tokio 默认） | 无 |
+/// | 合法正整数 N | Some(N) | 无 |
+/// | `0` / 负数 / 非数字 | None | warn |
+fn resolve_rt_workers() -> Option<usize> {
+    let Ok(raw) = std::env::var("CHIMERA_RT_WORKERS") else {
+        return None;
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("auto") {
+        return None;
+    }
+    match trimmed.parse::<usize>() {
+        Ok(n) if n >= 1 => Some(n),
+        _ => {
+            tracing::warn!(
+                value = %raw,
+                "CHIMERA_RT_WORKERS 非法(应为正整数或 auto),回退 tokio 默认"
+            );
+            None
+        }
     }
 }
 
@@ -330,5 +364,32 @@ mod tests {
         assert!(!use_current_thread(FullContext, Some("auto")));
         // 未知值 fail-safe 多线程
         assert!(!use_current_thread(NoContext, Some("bogus")));
+    }
+
+    /// R3-1(ADR-262):`resolve_rt_workers` 表驱动（env 变更集中单测防竞态,结束时恢复）。
+    #[test]
+    fn resolve_rt_workers_matrix() {
+        let saved = std::env::var("CHIMERA_RT_WORKERS").ok();
+        // 未设 → None（tokio 默认,零行为变更）
+        std::env::remove_var("CHIMERA_RT_WORKERS");
+        assert_eq!(resolve_rt_workers(), None);
+        let cases: &[(&str, Option<usize>)] = &[
+            ("", None),
+            ("auto", None),
+            ("AUTO", None),
+            ("4", Some(4)),
+            (" 2 ", Some(2)),
+            ("0", None),
+            ("-1", None),
+            ("abc", None),
+        ];
+        for (raw, want) in cases {
+            std::env::set_var("CHIMERA_RT_WORKERS", raw);
+            assert_eq!(resolve_rt_workers(), *want, "input={raw:?}");
+        }
+        match saved {
+            Some(v) => std::env::set_var("CHIMERA_RT_WORKERS", v),
+            None => std::env::remove_var("CHIMERA_RT_WORKERS"),
+        }
     }
 }

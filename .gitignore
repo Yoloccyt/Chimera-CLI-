@@ -84,6 +84,9 @@ dist/
 !docs/reports/toolchain-w0-progress-2026-11-06.md
 !docs/reports/toolchain-parallel-optimization-w7r2-panorama-plan-2026-11-07.md
 !docs/reports/toolchain-w7r2-panorama-deepdive-2026-11-07.md
+# 例外：GPU 三门重开就绪度评估（R3-4，ADR-262 D5）——C-15 三重关闭的可回溯
+# 证据与监测仪表，须入库存证（精确逐文件豁免，不放宽全局 *.md）
+!docs/reports/gpu-unseal-readiness-2026-11.md
 .claude/
 .trae/
 
