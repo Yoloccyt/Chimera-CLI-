@@ -130,32 +130,15 @@ pub async fn spawn_experience_loop(
     // 1. L1 卡片总线(闭环心脏)
     let card_bus = Arc::new(ExperienceCardBus::new());
 
-    // 2. L3 持久化:SQLite 优先,打开失败诚实降级内存存储(warn 可观测)
+    // 2. L3 持久化(5.2 装配分区,ADR-251 D-W5-B):SQLite 打开是本装配唯一的
+    //    ms 级重活——抽为独立惰性 future,与「订阅器群」并行;打开失败诚实
+    //    降级内存存储(warn 可观测)。
+    //    WHY 惰性:storage_fut 构造不启动任何 I/O,真正执行在下方 join!。
     let db_path = experience_db_path();
-    let storage =
-        match ExperienceCardStorage::new(&db_path.to_string_lossy(), HOT_CACHE_CAPACITY).await {
-            Ok(s) => Arc::new(s),
-            Err(e) => {
-                warn!(
-                    path = %db_path.display(),
-                    error = %e,
-                    "经验卡片 SQLite 打开失败,降级为内存存储(重启后卡片不保留)"
-                );
-                Arc::new(
-                    ExperienceCardStorage::new_in_memory(HOT_CACHE_CAPACITY)
-                        .await
-                        .context("内存卡片存储构造失败")?,
-                )
-            }
-        };
-
-    // 2b. 双流持久化订阅(broadcast + Critical;subscribe-before-spawn 红线)
-    join_handles.push(spawn_card_persistence_subscriber(
-        &card_bus,
-        Arc::clone(&storage),
-    ));
+    let storage_fut = open_storage_or_fallback(&db_path);
 
     // 3. L2 记忆引擎 + 卡片总线消费(with_card_bus 内部 subscribe 后 spawn)
+    //    [约束①②串行主体:card_bus→mlc;router←mlc;feedback←router,ADR-251]
     let mlc = Arc::new(
         MlcEngine::new_in_memory(nexus_bus.clone())
             .context("MlcEngine 构造失败")?
@@ -171,139 +154,168 @@ pub async fn spawn_experience_loop(
     ));
     join_handles.push(spawn_card_feedback_loop(&card_bus, Arc::clone(&router)));
 
-    // 5. RuntimeAuditor:事件计数订阅 + 周期五维报告(发布 HarnessReportGenerated)
-    //    M13(decb 重路由):组合根构造共享 DecbGovernor 注入审计器——第 6 维
-    //    budget_discipline 每次报告经 get_stats() 真实消费(L9→L8 向下非内环,
-    //    ADR-179 读侧真实)。
-    //    ⚠ 读侧真 ≠ 维度真(C-78/M58 实测):**写侧在生产为 0 调用**——
-    //    `DecbGovernor::record_consumption` 的唯一适配器 `DecbCostCallback`
-    //    无任何生产构造点,全仓 hit 只在测试与 `///` 文档行 ⇒ 利用率恒为 0。
-    //    因此 `budget_discipline()` 在零消耗时按证据纪律返回 NEUTRAL(0.5),
-    //    不再把"没记账"报成满分 1.0。接上写侧见 ADR-225 §5 T-19。
-    let decb = Arc::new(
-        decb_governor::DecbGovernor::with_event_bus(
-            decb_governor::DecbConfig::default(),
-            nexus_bus.clone(),
-        )
-        .context("DecbGovernor 构造失败(默认配置校验)")?,
-    );
-    let auditor = Arc::new(
-        efficiency_monitor::RuntimeAuditor::with_event_bus(nexus_bus.clone())
-            .with_decb_governor(decb),
-    );
-    let mut rx_audit = nexus_bus.subscribe();
-    let auditor_for_loop = Arc::clone(&auditor);
-    join_handles.push(tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(AUDIT_REPORT_INTERVAL_SECS));
-        // 首个 tick 立即返回,先消费避免启动瞬间发空报告
-        interval.tick().await;
-        loop {
-            tokio::select! {
-                r = rx_audit.recv() => {
-                    match r {
-                        Ok(event) => auditor_for_loop.record_event(&event),
-                        // EventReceiver 将 broadcast Lagged 包装为 SlowConsumerDropped
-                        Err(event_bus::EventBusError::SlowConsumerDropped { .. }) => continue,
-                        Err(_) => break,
+    // 4b. 分区 B:订阅器群(原 §5~§A1 各点**顺序逐字保留**,每点内部
+    //     subscribe-before-spawn 红线原样成立;成员仅依赖 nexus_bus/engine,
+    //     与 storage 打开互无数据依赖)。惰性 async 块,join! 才执行;
+    //     auditor/sandbox 随块返回供 handles 暴露。
+    let bus_side_fut = async {
+        let mut handles: Vec<JoinHandle<()>> = Vec::new();
+
+        // 5. RuntimeAuditor:事件计数订阅 + 周期五维报告(发布 HarnessReportGenerated)
+        //    M13(decb 重路由):组合根构造共享 DecbGovernor 注入审计器——第 6 维
+        //    budget_discipline 每次报告经 get_stats() 真实消费(L9→L8 向下非内环,
+        //    ADR-179 读侧真实)。
+        //    ⚠ 读侧真 ≠ 维度真(C-78/M58 实测):**写侧在生产为 0 调用**——
+        //    `DecbGovernor::record_consumption` 的唯一适配器 `DecbCostCallback`
+        //    无任何生产构造点,全仓 hit 只在测试与 `///` 文档行 ⇒ 利用率恒为 0。
+        //    因此 `budget_discipline()` 在零消耗时按证据纪律返回 NEUTRAL(0.5),
+        //    不再把"没记账"报成满分 1.0。接上写侧见 ADR-225 §5 T-19。
+        let decb = Arc::new(
+            decb_governor::DecbGovernor::with_event_bus(
+                decb_governor::DecbConfig::default(),
+                nexus_bus.clone(),
+            )
+            .context("DecbGovernor 构造失败(默认配置校验)")?,
+        );
+        let auditor = Arc::new(
+            efficiency_monitor::RuntimeAuditor::with_event_bus(nexus_bus.clone())
+                .with_decb_governor(decb),
+        );
+        let mut rx_audit = nexus_bus.subscribe();
+        let auditor_for_loop = Arc::clone(&auditor);
+        handles.push(tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(AUDIT_REPORT_INTERVAL_SECS));
+            // 首个 tick 立即返回,先消费避免启动瞬间发空报告
+            interval.tick().await;
+            loop {
+                tokio::select! {
+                    r = rx_audit.recv() => {
+                        match r {
+                            Ok(event) => auditor_for_loop.record_event(&event),
+                            // EventReceiver 将 broadcast Lagged 包装为 SlowConsumerDropped
+                            Err(event_bus::EventBusError::SlowConsumerDropped { .. }) => continue,
+                            Err(_) => break,
+                        }
+                    }
+                    _ = interval.tick() => {
+                        // generate_report 内部 publish_report → HarnessReportGenerated
+                        // (sync + publish_blocking,§4.4 红线 8 合规)
+                        let _report = auditor_for_loop.generate_report();
                     }
                 }
-                _ = interval.tick() => {
-                    // generate_report 内部 publish_report → HarnessReportGenerated
-                    // (sync + publish_blocking,§4.4 红线 8 合规)
-                    let _report = auditor_for_loop.generate_report();
-                }
             }
-        }
-    }));
+        }));
 
-    // 5b/5c. O-1+O-3 可观测装配(行为与原内联逐字一致;抽 fn 守 fn-length 棘轮)。
-    attach_observability(&nexus_bus, &mut join_handles);
-    // 6. 协调度量订阅器(修复 metrics_sync 孤儿:P2-1 三重悖论推理悖论红线)
-    join_handles.push(quest_engine::spawn_metrics_subscriber(
-        Arc::clone(&engine),
-        &nexus_bus,
-    ));
-
-    // 7. 策略封顶守卫(推理悖论主动降级闭环,ADR-063)——默认 off,零行为变更
-    //    开启时 L8 StrategyCapGuard 订阅 CoordinationRatioReported,经滞后带
-    //    状态机驱动审议策略封顶降/升档,变更发布 ParliamentStrategyCapChanged。
-    //    WHY 收进 join_handles:后台关键路径句柄必须管理(反模式 #7,
-    //    不 fire-and-forget),与 metrics/审计订阅器同生命周期。
-    if enable_strategy_cap {
-        let cap_guard = Arc::new(parliament::StrategyCapGuard::default());
-        join_handles.push(parliament::spawn_strategy_cap_subscriber(
-            Arc::clone(&cap_guard),
-            nexus_bus.clone(),
+        // 5b/5c. O-1+O-3 可观测装配(行为与原内联逐字一致;抽 fn 守 fn-length 棘轮)。
+        attach_observability(&nexus_bus, &mut handles);
+        // 6. 协调度量订阅器(修复 metrics_sync 孤儿:P2-1 三重悖论推理悖论红线)
+        handles.push(quest_engine::spawn_metrics_subscriber(
+            Arc::clone(&engine),
+            &nexus_bus,
         ));
-    }
+
+        // 7. 策略封顶守卫(推理悖论主动降级闭环,ADR-063)——默认 off,零行为变更
+        //    开启时 L8 StrategyCapGuard 订阅 CoordinationRatioReported,经滞后带
+        //    状态机驱动审议策略封顶降/升档,变更发布 ParliamentStrategyCapChanged。
+        //    WHY 收进 handles:后台关键路径句柄必须管理(反模式 #7,
+        //    不 fire-and-forget),与 metrics/审计订阅器同生命周期。
+        if enable_strategy_cap {
+            let cap_guard = Arc::new(parliament::StrategyCapGuard::default());
+            handles.push(parliament::spawn_strategy_cap_subscriber(
+                Arc::clone(&cap_guard),
+                nexus_bus.clone(),
+            ));
+        }
+
+        // 8. §16.4 变体/父本事件消费订阅器(Phase 10 Wave 4):
+        //    订阅 VariantApproved + ParentSelected——修复审计发现的这两类事件
+        //    仅发布无消费(孤儿)问题。VariantApproved 登记到批准注册表(供路由
+        //    查询外部认可信号);ParentSelected 同步 L5 三因子选择器访问统计
+        //    (UCB 演化一致)并登记选择历史。
+        let variant_registry = Arc::new(std::sync::Mutex::new(
+            faae_router::ApprovedVariantRegistry::default(),
+        ));
+        let variant_history = Arc::new(std::sync::Mutex::new(
+            faae_router::ParentSelectionHistory::default(),
+        ));
+        // 注入独立选择器实例:与 OperatorRouter 内部选择器解耦,事件同步面独立演化
+        let selector_for_events = Arc::new(std::sync::Mutex::new(
+            gsoe_evolution::ThreeFactorSelector::new(1.414, 0.1, 1.0),
+        ));
+        handles.push(faae_router::spawn_variant_event_subscriber(
+            &nexus_bus,
+            Arc::clone(&variant_registry),
+            Some(Arc::clone(&selector_for_events)),
+            Arc::clone(&variant_history),
+        ));
+
+        // 9. §16.5 L1 吞吐量周期报告器(Phase 10 Wave 6):
+        //    修复审计发现的规范要求"Event Bus 吞吐量"无实现——真实采集
+        //    published_total 差分速率,周期发布 BusThroughputReported 观测面事件。
+        handles.push(event_bus::spawn_throughput_reporter(nexus_bus.clone(), 60));
+
+        // 10. §16.5 L4 沙箱拦截率周期报告器(Phase 10 Wave 6):
+        //     修复审计发现的"L4 拦截率/误拦截率比率统计"缺失——零信任沙箱
+        //     真实采集请求/拦截原子计数(误拦截率需人工真值,标注 v4.0 预留),
+        //     周期发布 SecurityInterceptionReported 观测面事件。
+        //     Sandbox 共享句柄暴露在 handles 供命令执行路径注入(未来装配)。
+        let sandbox = Arc::new(std::sync::Mutex::new(
+            seccore::Sandbox::with_default_policy().with_event_bus(nexus_bus.clone()),
+        ));
+        {
+            let sb = sandbox.lock().unwrap_or_else(|e| e.into_inner());
+            handles.push(seccore::spawn_interception_reporter(
+                nexus_bus.clone(),
+                sb.interception_stats_handle(),
+                60,
+            ));
+        }
+
+        // A1/ADR-197: L1 计算池饱和观测周期报告器 —— 与上面两个报告器同族。
+        // WHY 在装配层启动:nexus-core 拥有池统计但不持 EventBus(热路径不引 IO 侧依赖),
+        // 而本层同时持有二者——零新增跨层依赖边（见 telemetry 模块头说明）。
+        handles.push(nexus_core::compute::spawn_saturation_reporter(
+            nexus_bus.clone(),
+            60,
+        ));
+
+        // ADR-200 D1(V5): 因果归因 tap —— 订阅侧常驻,零发布路径改动。
+        // 触发集事件(SlowConsumerDropped/BudgetExceeded)到达时自动产出 5s 窗口
+        // 因果链诊断(可选 JSONL 经 CHIMERA_ATTRIBUTION_DUMP_PATH 门控)。
+        // subscribe-before-spawn 由 spawn_attribution_tap 内部保证;句柄收进
+        // handles 同报告器族生命周期纪律(反模式 #7,不 fire-and-forget)。
+        handles.push(event_bus::attribution::spawn_attribution_tap(&nexus_bus).into_task());
+
+        anyhow::Ok((auditor, sandbox, handles))
+    };
+
+    // 5. 并行汇合:storage 打开 ↔ 订阅器群装配(两条互无数据依赖的支线;
+    //    两支线各自可失败,错误语义与改造前逐位一致——任一失败即整装配失败)
+    let (storage_res, bus_side) = tokio::join!(storage_fut, bus_side_fut);
+    let storage = storage_res?;
+    let (auditor, sandbox, bus_handles) = bus_side?;
+    join_handles.extend(bus_handles);
+
+    // 2b. 双流持久化订阅(broadcast + Critical;subscribe-before-spawn 红线)。
+    //    WHY 位于 join 后:订阅者依赖 storage;card_bus 的两个订阅者(mlc 在
+    //    join 前、持久化在此)在订阅完成前均无 card 生产者(join 后才有
+    //    触发点),订阅序互换无语义影响(ADR-251 D-W5-B)。
+    join_handles.push(spawn_card_persistence_subscriber(
+        &card_bus,
+        Arc::clone(&storage),
+    ));
 
     // 8. L7 卡片生成触发点(§16.1 源头断链修复,Wave 3):
     //    订阅 PredictionVerified → ExperienceCardGenerator 生成卡片投递卡片总线。
     //    WHY 组合根订阅驱动而非改 pvl-layer 内部:零 L7 改动,依赖方向
     //    L10→L7 向下合规;同时消化 PredictionVerified 孤儿发布(有真实消费者)。
+    //    WHY 留在串行主体:依赖 card_bus,不属分区 B(仅依赖 nexus_bus);
+    //    且须在两个 card_bus 订阅者就绪后启动。
     join_handles.push(spawn_card_generation_trigger(
         &nexus_bus,
         Arc::clone(&card_bus),
     ));
-
-    // 8. §16.4 变体/父本事件消费订阅器(Phase 10 Wave 4):
-    //    订阅 VariantApproved + ParentSelected——修复审计发现的这两类事件
-    //    仅发布无消费(孤儿)问题。VariantApproved 登记到批准注册表(供路由
-    //    查询外部认可信号);ParentSelected 同步 L5 三因子选择器访问统计
-    //    (UCB 演化一致)并登记选择历史。
-    let variant_registry = Arc::new(std::sync::Mutex::new(
-        faae_router::ApprovedVariantRegistry::default(),
-    ));
-    let variant_history = Arc::new(std::sync::Mutex::new(
-        faae_router::ParentSelectionHistory::default(),
-    ));
-    // 注入独立选择器实例:与 OperatorRouter 内部选择器解耦,事件同步面独立演化
-    let selector_for_events = Arc::new(std::sync::Mutex::new(
-        gsoe_evolution::ThreeFactorSelector::new(1.414, 0.1, 1.0),
-    ));
-    join_handles.push(faae_router::spawn_variant_event_subscriber(
-        &nexus_bus,
-        Arc::clone(&variant_registry),
-        Some(Arc::clone(&selector_for_events)),
-        Arc::clone(&variant_history),
-    ));
-
-    // 9. §16.5 L1 吞吐量周期报告器(Phase 10 Wave 6):
-    //    修复审计发现的规范要求"Event Bus 吞吐量"无实现——真实采集
-    //    published_total 差分速率,周期发布 BusThroughputReported 观测面事件。
-    join_handles.push(event_bus::spawn_throughput_reporter(nexus_bus.clone(), 60));
-
-    // 10. §16.5 L4 沙箱拦截率周期报告器(Phase 10 Wave 6):
-    //     修复审计发现的"L4 拦截率/误拦截率比率统计"缺失——零信任沙箱
-    //     真实采集请求/拦截原子计数(误拦截率需人工真值,标注 v4.0 预留),
-    //     周期发布 SecurityInterceptionReported 观测面事件。
-    //     Sandbox 共享句柄暴露在 handles 供命令执行路径注入(未来装配)。
-    let sandbox = Arc::new(std::sync::Mutex::new(
-        seccore::Sandbox::with_default_policy().with_event_bus(nexus_bus.clone()),
-    ));
-    {
-        let sb = sandbox.lock().unwrap_or_else(|e| e.into_inner());
-        join_handles.push(seccore::spawn_interception_reporter(
-            nexus_bus.clone(),
-            sb.interception_stats_handle(),
-            60,
-        ));
-    }
-
-    // A1/ADR-197: L1 计算池饱和观测周期报告器 —— 与上面两个报告器同族。
-    // WHY 在装配层启动:nexus-core 拥有池统计但不持 EventBus(热路径不引 IO 侧依赖),
-    // 而本层同时持有二者——零新增跨层依赖边（见 telemetry 模块头说明）。
-    join_handles.push(nexus_core::compute::spawn_saturation_reporter(
-        nexus_bus.clone(),
-        60,
-    ));
-
-    // ADR-200 D1(V5): 因果归因 tap —— 订阅侧常驻,零发布路径改动。
-    // 触发集事件(SlowConsumerDropped/BudgetExceeded)到达时自动产出 5s 窗口
-    // 因果链诊断(可选 JSONL 经 CHIMERA_ATTRIBUTION_DUMP_PATH 门控)。
-    // subscribe-before-spawn 由 spawn_attribution_tap 内部保证;句柄收进
-    // join_handles 同报告器族生命周期纪律(反模式 #7,不 fire-and-forget)。
-    join_handles.push(event_bus::attribution::spawn_attribution_tap(&nexus_bus).into_task());
 
     Ok(ExperienceLoopHandles {
         card_bus,
@@ -314,6 +326,30 @@ pub async fn spawn_experience_loop(
         sandbox,
         join_handles,
     })
+}
+
+/// L3 经验卡片存储打开:SQLite 优先,失败诚实降级内存存储(warn 可观测)。
+///
+/// 5.2(ADR-251 D-W5-B)自 `spawn_experience_loop` 主体抽出:这是装配唯一的
+/// ms 级 I/O,独立成 future 后才可与订阅器群并行(分区 A)。
+async fn open_storage_or_fallback(
+    db_path: &std::path::Path,
+) -> anyhow::Result<Arc<ExperienceCardStorage>> {
+    match ExperienceCardStorage::new(&db_path.to_string_lossy(), HOT_CACHE_CAPACITY).await {
+        Ok(s) => Ok(Arc::new(s)),
+        Err(e) => {
+            warn!(
+                path = %db_path.display(),
+                error = %e,
+                "经验卡片 SQLite 打开失败,降级为内存存储(重启后卡片不保留)"
+            );
+            Ok(Arc::new(
+                ExperienceCardStorage::new_in_memory(HOT_CACHE_CAPACITY)
+                    .await
+                    .context("内存卡片存储构造失败")?,
+            ))
+        }
+    }
 }
 
 /// 2b. 卡片双流持久化订阅器：从 `spawn_experience_loop` 抽出入独立 fn 以守

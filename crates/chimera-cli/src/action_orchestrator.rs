@@ -345,12 +345,114 @@ fn payload_str(payload: &str, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// 有界并发默认上限 —— 与 gqep-executor `BatchLimits::default` 的 bound=8
+/// 同源口径（ADR-251 D-W5-A）：单用户命令面板语义下 8 个长动作并发已远超
+/// 人类操作节奏，同时避免无界任务堆积。
+const ACTION_CONCURRENCY_DEFAULT: usize = 8;
+
+/// 解析 `CHIMERA_ACTION_CONCURRENCY`（表驱动，纯函数便于测试）。
+///
+/// | 输入 | 输出 | 附加行为 |
+/// | 未设 | 8 | 无 |
+/// | `"unlimited"`（大小写不敏感） | `usize::MAX` | 无（≈改造前 per-event 无界 spawn 语义） |
+/// | `"0"` | 8 | warn（0 许可=永久阻塞，回退默认而非拒绝） |
+/// | 负数 / 非数字 | 8 | warn |
+/// | 合法正整数 N | N | 无 |
+fn resolve_action_concurrency() -> usize {
+    let Ok(raw) = std::env::var("CHIMERA_ACTION_CONCURRENCY") else {
+        return ACTION_CONCURRENCY_DEFAULT;
+    };
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("unlimited") {
+        return usize::MAX;
+    }
+    match trimmed.parse::<usize>() {
+        Ok(0) => {
+            tracing::warn!(
+                value = %raw,
+                default = ACTION_CONCURRENCY_DEFAULT,
+                "CHIMERA_ACTION_CONCURRENCY=0 无意义(0 许可=永久阻塞),回退默认值"
+            );
+            ACTION_CONCURRENCY_DEFAULT
+        }
+        Ok(n) => n,
+        Err(_) => {
+            tracing::warn!(
+                value = %raw,
+                default = ACTION_CONCURRENCY_DEFAULT,
+                "CHIMERA_ACTION_CONCURRENCY 非法(应为正整数或 unlimited),回退默认值"
+            );
+            ACTION_CONCURRENCY_DEFAULT
+        }
+    }
+}
+
+/// 构造并发许可信号量 —— unlimited（`usize::MAX`）超出 tokio `Semaphore`
+/// 的 `MAX_PERMITS` 上限会 panic，钳制到该常量（远超任何现实的单用户并发量）。
+fn action_semaphore(bound: usize) -> Arc<tokio::sync::Semaphore> {
+    Arc::new(tokio::sync::Semaphore::new(
+        bound.min(tokio::sync::Semaphore::MAX_PERMITS),
+    ))
+}
+
+/// Action 接收循环的并发骨架（与具体动作处理解耦,使并发机制可直接测试）。
+///
+/// 有界并发语义（ADR-251 D-W5-A，终稿 §4.4 缓解设计）：
+/// - `try_acquire` 优先：拿到许可 → spawn 独立任务（许可随任务体结束释放）；
+/// - 许可耗尽 → **在 recv 循环内同步执行**该动作：背压降级为串行处理而非
+///   停止 recv —— 不丢事件（阻塞 acquire 会让 broadcast 缓冲涨满触发
+///   Lagged 丢任意类型事件，影响面大于本点）、不无界堆积，长动作期间新
+///   事件留在容量缓冲内；
+/// - `unlimited`（`usize::MAX`）下 try_acquire 恒成功，逐事件 spawn = 改造前
+///   per-event 无界语义（等价性由测试锁定）。
+async fn run_action_loop<F, Fut>(
+    mut rx: event_bus::EventReceiver,
+    sem: Arc<tokio::sync::Semaphore>,
+    mut on_action: F,
+) where
+    F: FnMut(NexusEvent) -> Fut,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                // 仅为动作请求建任务;忽略自身回发的 Completed/Failed 及其他事件。
+                if !matches!(event, NexusEvent::TuiActionRequested { .. }) {
+                    continue;
+                }
+                match sem.clone().try_acquire_owned() {
+                    Ok(permit) => {
+                        let fut = on_action(event);
+                        tokio::spawn(async move {
+                            fut.await;
+                            drop(permit);
+                        });
+                    }
+                    Err(_) => {
+                        tracing::debug!(
+                            "action 并发许可耗尽,降级为 recv 循环内串行处理(背压不丢事件)"
+                        );
+                        on_action(event).await;
+                    }
+                }
+            }
+            Err(EventBusError::SlowConsumerDropped { lag, .. }) => {
+                tracing::warn!(lag, "Action 编排器接收滞后,丢弃部分事件后继续");
+            }
+            Err(e) => {
+                tracing::info!(error = %e, "Action 编排器订阅结束,退出");
+                break;
+            }
+        }
+    }
+}
+
 /// 启动后台 Action 编排器,返回可 abort 的任务句柄。
 ///
 /// # 生命周期(§4.4 反模式 #3 / #7)
 /// - **subscribe-before-spawn**:`bus.subscribe()` 在 `tokio::spawn()` 前同步调用。
-/// - 每个 `TuiActionRequested` spawn 独立任务(共享 `Arc<QuestEngine>`),recv 循环
-///   立即继续,避免长处理阻塞 recv。
+/// - `TuiActionRequested` 有界并发处理（默认 8,`CHIMERA_ACTION_CONCURRENCY`
+///   可调;见 [`run_action_loop`]）,长动作不阻塞 recv。
 /// - recv 错误:`SlowConsumerDropped`(Lagged)记录后继续;`ChannelClosed` 等退出。
 /// - 调用方负责在退出时 `abort()` 句柄,避免 orphan task。
 pub fn spawn_action_orchestrator(
@@ -360,41 +462,26 @@ pub fn spawn_action_orchestrator(
     chat: Option<ChatMessagesProvider>,
     curation: CurationConfig,
 ) -> JoinHandle<()> {
-    let mut rx = bus.subscribe();
-    tokio::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    // 仅为动作请求建任务;忽略自身回发的 Completed/Failed 及其他事件。
-                    if matches!(event, NexusEvent::TuiActionRequested { .. }) {
-                        let bus = bus.clone();
-                        let engine = Arc::clone(&engine);
-                        let overwindow = overwindow.clone();
-                        let chat = chat.clone();
-                        let curation = curation.clone();
-                        tokio::spawn(async move {
-                            handle_action_event(
-                                &bus,
-                                &engine,
-                                overwindow.as_ref(),
-                                chat.as_ref(),
-                                &curation,
-                                &event,
-                            )
-                            .await;
-                        });
-                    }
-                }
-                Err(EventBusError::SlowConsumerDropped { lag, .. }) => {
-                    tracing::warn!(lag, "Action 编排器接收滞后,丢弃部分事件后继续");
-                }
-                Err(e) => {
-                    tracing::info!(error = %e, "Action 编排器订阅结束,退出");
-                    break;
-                }
-            }
+    let rx = bus.subscribe();
+    let sem = action_semaphore(resolve_action_concurrency());
+    tokio::spawn(run_action_loop(rx, sem, move |event| {
+        let bus = bus.clone();
+        let engine = Arc::clone(&engine);
+        let overwindow = overwindow.clone();
+        let chat = chat.clone();
+        let curation = curation.clone();
+        async move {
+            handle_action_event(
+                &bus,
+                &engine,
+                overwindow.as_ref(),
+                chat.as_ref(),
+                &curation,
+                &event,
+            )
+            .await;
         }
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -1105,5 +1192,154 @@ mod tests {
             noop_completed,
             "空会话 compact 应 Completed(诚实 no-op 而非 Failed)"
         );
+    }
+
+    // ===== 5.1 有界并发(ADR-251 D-W5-A) =====
+
+    #[test]
+    fn resolve_action_concurrency_table() {
+        // 全部 env 变更集中在本测试内串行执行,避免并行测试间的 env 竞态;
+        // 结束时恢复原值,不污染同进程其他测试。
+        let saved = std::env::var("CHIMERA_ACTION_CONCURRENCY").ok();
+        // 未设 → 默认 8
+        std::env::remove_var("CHIMERA_ACTION_CONCURRENCY");
+        assert_eq!(resolve_action_concurrency(), ACTION_CONCURRENCY_DEFAULT);
+        let cases: &[(&str, usize)] = &[
+            ("unlimited", usize::MAX),
+            ("UNLIMITED", usize::MAX),
+            ("0", ACTION_CONCURRENCY_DEFAULT),
+            ("-1", ACTION_CONCURRENCY_DEFAULT),
+            ("abc", ACTION_CONCURRENCY_DEFAULT),
+            ("3", 3),
+            ("16", 16),
+            ("  4  ", 4),
+        ];
+        for (raw, want) in cases {
+            std::env::set_var("CHIMERA_ACTION_CONCURRENCY", raw);
+            assert_eq!(resolve_action_concurrency(), *want, "input={raw:?}");
+        }
+        match saved {
+            Some(v) => std::env::set_var("CHIMERA_ACTION_CONCURRENCY", v),
+            None => std::env::remove_var("CHIMERA_ACTION_CONCURRENCY"),
+        }
+    }
+
+    /// 有界模式:spawn 在飞峰值 ≤ bound(+1 串行降级,见 run_action_loop 文档)
+    /// 且每 request_id 恰处理一次。
+    #[tokio::test]
+    async fn bounded_loop_caps_inflight_and_delivers_exactly_once() {
+        use std::time::Duration;
+        let bus = EventBus::new();
+        const BOUND: usize = 2;
+        const N: usize = 10;
+        let inflight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let loop_task = tokio::spawn(run_action_loop(bus.subscribe(), action_semaphore(BOUND), {
+            let inflight = Arc::clone(&inflight);
+            let peak = Arc::clone(&peak);
+            let seen = Arc::clone(&seen);
+            let completed = Arc::clone(&completed);
+            move |event| {
+                let inflight = Arc::clone(&inflight);
+                let peak = Arc::clone(&peak);
+                let seen = Arc::clone(&seen);
+                let completed = Arc::clone(&completed);
+                async move {
+                    let NexusEvent::TuiActionRequested { request_id, .. } = &event else {
+                        return;
+                    };
+                    use std::sync::atomic::Ordering::SeqCst;
+                    let now = inflight.fetch_add(1, SeqCst) + 1;
+                    peak.fetch_max(now, SeqCst);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    seen.lock().unwrap().push(request_id.clone());
+                    inflight.fetch_sub(1, SeqCst);
+                    completed.fetch_add(1, SeqCst);
+                }
+            }
+        }));
+        for i in 0..N {
+            let _ = bus
+                .publish(action_with_request_id(
+                    &format!("req-{i}"),
+                    "noop.test",
+                    "{}",
+                ))
+                .await;
+        }
+        let wait = tokio::time::timeout(Duration::from_secs(5), async {
+            while completed.load(std::sync::atomic::Ordering::SeqCst) < N {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(wait.is_ok(), "{N} 个动作未在限时内全部处理完成");
+        use std::sync::atomic::Ordering::SeqCst;
+        assert_eq!(completed.load(SeqCst), N);
+        let mut ids: Vec<String> = seen.lock().unwrap().clone();
+        ids.sort();
+        ids.dedup();
+        assert_eq!(ids.len(), N, "每 request_id 恰处理一次(实际去重后 {ids:?})");
+        let max_inflight = peak.load(SeqCst);
+        assert!(
+            max_inflight <= BOUND + 1,
+            "在飞峰值 {max_inflight} 超界:spawn 路径 ≤ bound={BOUND},串行降级至多 +1"
+        );
+        loop_task.abort();
+    }
+
+    /// unlimited 与改造前 per-event 无界 spawn 语义等价:全部并发到达汇合点
+    /// (若被串行化,Barrier 死锁 ⇒ 测试超时红)。
+    #[tokio::test]
+    async fn unlimited_loop_preserves_per_event_spawn() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        use std::time::Duration;
+        let bus = EventBus::new();
+        const N: usize = 8;
+        let barrier = Arc::new(tokio::sync::Barrier::new(N));
+        let passed = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let loop_task = tokio::spawn(run_action_loop(
+            bus.subscribe(),
+            action_semaphore(usize::MAX),
+            {
+                let barrier = Arc::clone(&barrier);
+                let passed = Arc::clone(&passed);
+                let seen = Arc::clone(&seen);
+                move |event| {
+                    let barrier = Arc::clone(&barrier);
+                    let passed = Arc::clone(&passed);
+                    let seen = Arc::clone(&seen);
+                    async move {
+                        if let NexusEvent::TuiActionRequested { request_id, .. } = &event {
+                            seen.lock().unwrap().push(request_id.clone());
+                        }
+                        // 全部 N 个 handler 并发抵达才放行:若被串行化,
+                        // 首个 handler 永久阻塞于此 ⇒ passed 不增 ⇒ 超时红。
+                        barrier.wait().await;
+                        passed.fetch_add(1, SeqCst);
+                    }
+                }
+            },
+        ));
+        for i in 0..N {
+            let _ = bus
+                .publish(action_with_request_id(&format!("u-{i}"), "noop.test", "{}"))
+                .await;
+        }
+        let wait = tokio::time::timeout(Duration::from_secs(5), async {
+            while passed.load(SeqCst) < N {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await;
+        assert!(
+            wait.is_ok(),
+            "unlimited 下 {N} 个动作未并发通过汇合点(被串行化?)"
+        );
+        assert_eq!(seen.lock().unwrap().len(), N);
+        loop_task.abort();
     }
 }
