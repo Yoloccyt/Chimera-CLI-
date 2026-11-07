@@ -221,20 +221,19 @@ P4 其余 U 项逐项三态裁决（U-05/06/07/08/09/11/20 + F-09/F-12；ADR-259
 
 ### 5.2 W1 · F-01/U-16/U-19 策略规则声明式配置源（本轮执行）
 
-> **TDD 先行**：先写失败测试 `crates/chimera-cli/tests/tool_policy_config.rs`，再实现。测试矩阵：① 缺省（无段/空段）恒 `(vec![], Allow)`；② 显式 Deny 规则使 `ToolRuntime` 对匹配工具返回 `DispatchError::Policy`；③ 非法 action/空 pattern 在配置边界报可读错误（`ConfigError`，不 panic）；④ `serde(default)` 全字段（缺省 Allow）；⑤ 组合根集成（`composition::build()` 装配的 ToolRuntime 对声明规则真实生效）；⑥ env 覆盖 `CHIMERA_TOOL_RUNTIME_POLICY__DEFAULT_ACTION=Deny` 生效。
+> **TDD 先行**：先写失败测试 `crates/chimera-cli/tests/tool_policy_config.rs`，再实现。测试矩阵：① 缺省（无段/空段）恒 `(vec![], Allow)`；② 显式 Deny 规则使 `ToolRuntime` 对匹配工具返回 `DispatchError::Policy`；③ 非法 action/空 pattern 在配置边界报可读错误（`ConfigError`，不 panic）；④ `serde(default)` 全字段（缺省 Allow）；⑤ 组合根集成（`composition::build()` 装配的 ToolRuntime 对声明规则真实生效）；⑥ env 覆盖 `CHIMERA_TOOL_POLICY__DEFAULT_ACTION=Deny` 生效。
 
 1. **契约（双文件同批，A9）**：
-   - `crates/nexus-core/src/config.rs`：`ChimeraConfig` 增 `#[serde(default)] pub tool_policy: ToolPolicySection`；新类型同文件：
+   - `crates/nexus-core/src/config.rs`：`ChimeraConfig` 增 `pub tool_policy: ToolPolicyConfig`（实施订正：类型名以 `Config` 结尾——parity 门以类型名后缀区分段/标量，`*Section` 会被判标量使漏段只 NOTE 不红，见 ADR-246 §3-E）；新类型同文件：
      ```rust
-     #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-     pub struct ToolPolicySection {
-         #[serde(default)]
-         pub default_action: PolicyActionDef,          // 默认 Allow
+     #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+     pub struct ToolPolicyConfig {
+         pub default_action: ToolPolicyAction,         // 缺省 Allow
          #[serde(default)]
          pub rules: Vec<ToolPolicyRuleDef>,            // 缺省空
      }
-     pub struct ToolPolicyRuleDef { pub pattern: String, pub action: PolicyActionDef }  // pattern 必填
-     // PolicyActionDef: Allow|Ask|Deny（serde snake_case，映射 seccore::execpolicy::PolicyAction）
+     pub struct ToolPolicyRuleDef { pub pattern: String, pub action: ToolPolicyAction }  // pattern 必填
+     // ToolPolicyAction: Allow|Ask|Deny（serde snake_case + 首字母大写 alias，映射 seccore::execpolicy::PolicyAction）
      ```
    - `crates/chimera-cli/src/config.rs` `omega_yaml_template()` 同步 YAML 模板段（带注释：缺省 Allow 不削减、Deny 仅显式声明生效）。
 2. **parity**：`python scripts/check_config_sample_parity.py --write` 重生成样例；`--selftest`（G-68）+ 真树（G-69）双绿。

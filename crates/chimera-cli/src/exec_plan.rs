@@ -449,7 +449,10 @@ mod tests {
             .execute("bench.slow", "{}")
             .await
             .expect_err("200ms 工具在 10ms 预算下必须超时");
-        assert!(err.contains("timeout"), "错误文案应含 timeout，实得 {err:?}");
+        assert!(
+            err.contains("timeout"),
+            "错误文案应含 timeout，实得 {err:?}"
+        );
         assert_eq!(
             failed.load(Ordering::Relaxed),
             1,

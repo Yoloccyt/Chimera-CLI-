@@ -19,7 +19,7 @@
 //! 生产代码命令级自建总线装配点已清零；doctor 的 `check_event_bus` 消费
 //! 组合根共享 bus 并统计订阅者数（健康探针，非命令装配，有意保留）。
 
-use crate::config::ChimeraConfig;
+use crate::config::{ChimeraConfig, ToolPolicyAction};
 use anyhow::{Context, Result};
 use event_bus::{logging::BusLogger, EventBus};
 use nexus_app_server::{AppServer, AppServerConfig, QuestBackend};
@@ -139,40 +139,70 @@ const _: fn() = || {
     assert_send_sync::<AppContext>();
 };
 
-/// 工具运行时策略 — 组合根派生的 execpolicy 规则集与默认动作
+/// 工具运行时策略 — 组合根从声明式配置源派生的 execpolicy 规则集与默认动作
 ///
-/// # WHY 默认动作是 Allow 而非零信任 Deny
+/// # 规则源（F-01 / ADR-246）
+///
+/// 此前本函数硬编码 `(Vec::new(), Allow)`，策略环在生产路径形同虚设；ADR-246
+/// 落地 `ChimeraConfig.tool_policy` 声明式段（nexus-core 纯类型，本函数负责
+/// L1 类型 → L4 `seccore::execpolicy` 的映射——依赖方向 L10→L1→L4 合法）。
+/// 装配期一次读取，**无热加载**：运行期切换策略属安全能力开关（ADR-242 §3.5）。
+///
+/// # WHY 默认动作缺省是 Allow 而非零信任 Deny
 ///
 /// `seccore::execpolicy::ExecPolicy::new()` 的零信任默认是 `Deny`（未声明即拒绝），
-/// 适用于「声明式白名单」语义。但 CLI 当前的工具执行路径**本来就没有策略层**
-/// —— ADR-238 落地后，生产路径上既无 `ExecPolicyToolExecutor` 调用点，
-/// 也无任何 `ToolExecutor` 生产实现（实测：`impl ToolExecutor for` 的生产
-/// 命中只有 `ExecPolicyToolExecutor` 自身，其余全在 tests/benches）。
+/// 适用于「声明式白名单」语义。但 CLI 的工具执行路径在 ADR-240 接线前**本来
+/// 就没有策略层**，把默认动作改成 `Deny` 会**削减现有功能**：所有工具调用从
+/// 「可执行」变成「一律拒绝」。因此缺省姿态是 `Allow`（配置缺省同值）；需要
+/// 零信任白名单的部署方在配置里显式声明 `default_action: deny`——**Deny 只有
+/// 用户显式声明才生效**（ADR-240 D2 先例）。
 ///
-/// 因此把默认动作改成 `Deny` 会**削减现有功能**：所有工具调用从「可执行」
-/// 变成「一律拒绝」。正确的兼容姿态是：
+/// **沙箱层独立于本函数真实生效**：注入形态、提权、沙箱逃逸、数据泄露、篡改
+/// 六类拦截模式对 `tool_name + args_json` 完整生效（ADR-238 D4 安全论证）。
 ///
-/// - 默认动作 `Allow` —— 保持当前「无策略层 ⇒ 放行」的行为不变；
-/// - 规则集为空 —— 尚无生产侧声明的策略规则；
-/// - **沙箱层真实生效** —— 这是本次接线**新增**的防护：注入形态、提权、
-///   沙箱逃逸、数据泄露、篡改六类拦截模式对 `tool_name + args_json` 完整
-///   生效（ADR-238 D4 的安全论证）。
+/// # 非法规则的处置（边界诚实）
 ///
-/// 即：本次接线**不削减任何既有功能，同时新增沙箱层防护**。策略规则的
-/// 声明式来源（配置面）留待独立批次 —— 那需要新增配置段并触发
-/// `config_sample` 门与 14 段 Figment 的联动，属另一个变更的范畴。
+/// - `action` 非法值：serde 边界硬失败（`load()` 退 1，错误可定位到非法值）；
+/// - `pattern` 无有效 program（空/全空白）：跳过该条并 `tracing::warn!`
+///   （fail-soft per-rule——一条笔误不拖垮整份策略，也不静默吞掉其余规则）。
 ///
 /// # 回滚
 /// 传输环已在组合根唯一装配为 `Some(BuiltinToolExecutor)`（ADR-244 D1），
-/// 四环 policy→sandbox→route→transport 真实生效；回退该 delegate 即回到
-/// ADR-240 D3 的 fail-closed 恒拒绝态，不涉及任何安全层降级。
+/// 四环 policy→sandbox→route→transport 真实生效；回退本函数到 `(vec![], Allow)`
+/// 即回到 ADR-246 前语义，不涉及任何安全层降级。
 #[must_use]
-pub fn tool_runtime_policy() -> (
+pub fn tool_runtime_policy(
+    config: &ChimeraConfig,
+) -> (
     Vec<seccore::execpolicy::ExecPolicyRule>,
     seccore::execpolicy::PolicyAction,
 ) {
-    // 当前无生产侧声明的 execpolicy 规则；默认动作 Allow 保持既有行为。
-    (Vec::new(), seccore::execpolicy::PolicyAction::Allow)
+    let section = &config.tool_policy;
+    let default_action = match section.default_action {
+        ToolPolicyAction::Allow => seccore::execpolicy::PolicyAction::Allow,
+        ToolPolicyAction::Ask => seccore::execpolicy::PolicyAction::Ask,
+        ToolPolicyAction::Deny => seccore::execpolicy::PolicyAction::Deny,
+    };
+    let mut rules = Vec::with_capacity(section.rules.len());
+    for def in &section.rules {
+        let Some((program, args_glob)) = def.pattern_parts() else {
+            tracing::warn!(
+                pattern = %def.pattern,
+                "tool_policy 规则 pattern 无有效 program 名，该条忽略（其余规则不受影响）"
+            );
+            continue;
+        };
+        let action = match def.action {
+            ToolPolicyAction::Allow => seccore::execpolicy::PolicyAction::Allow,
+            ToolPolicyAction::Ask => seccore::execpolicy::PolicyAction::Ask,
+            ToolPolicyAction::Deny => seccore::execpolicy::PolicyAction::Deny,
+        };
+        rules.push(seccore::execpolicy::ExecPolicyRule {
+            pattern: seccore::execpolicy::RulePattern::new(program, args_glob),
+            action,
+        });
+    }
+    (rules, default_action)
 }
 
 /// 装配 AppContext（唯一组合根入口，C12）
@@ -231,7 +261,8 @@ pub fn build_with_sharding(
     // E-1 (ADR-191 D4): 可选 Critical WAL 持久化。默认关=保留 LogCriticalSink;
     // 设 CHIMERA_CRITICAL_WAL_PATH 则把“无 mpsc 订阅者”的 Critical 事件 JSONL 落盘,
     // 崩溃后 FileWalCriticalSink::replay 可审计(at-least-once)。走 env 而非新增
-    // ChimeraConfig 段:避免动 14 段 Figment 与 config_sample 门(正式 config 化留后续)。
+    // ChimeraConfig 段:避免动多段 Figment 与 config_sample 门(正式 config 化留后续;
+    // ADR-246 的 tool_policy 段是首个走正式 config 化路径的安全邻域段)。
     if let Ok(wal_path) = std::env::var("CHIMERA_CRITICAL_WAL_PATH") {
         match event_bus::FileWalCriticalSink::open(&wal_path) {
             Ok(sink) => {
@@ -271,7 +302,7 @@ pub fn build_with_sharding(
     // WHY 只在此装配：传输环 delegate 若在命令层再装配一份，同进程会出现两种
     // 传输语义（同名工具两种归因），且策略规则双源无编译期一致性保证。
     // 内置执行器仅暴露只读工具（路径受限、fs.read ≤256 KiB），未知工具恒 Err。
-    let (tool_rules, tool_default_action) = tool_runtime_policy();
+    let (tool_rules, tool_default_action) = tool_runtime_policy(config);
     let tool_delegate: Arc<dyn gqep_executor::ToolExecutor> =
         Arc::new(crate::exec_plan::BuiltinToolExecutor);
     let tool_runtime = gqep_executor::tool_runtime::ToolRuntime::with_optional_delegate(

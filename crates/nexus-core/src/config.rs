@@ -1,4 +1,4 @@
-//! Chimera CLI 配置类型定义 — 14 个顶层 section 的纯数据结构
+//! Chimera CLI 配置类型定义 — 15 个顶层 section 的纯数据结构
 //!
 //! 对应架构层:L1 Core(类型定义);加载逻辑位于 L10 chimera-cli
 //!
@@ -46,6 +46,8 @@ pub struct ChimeraConfig {
     pub gqep: GqepConfig,
     /// 安全核心(SecCore)
     pub seccore: SeccoreConfig,
+    /// 工具运行时策略(F-01/ADR-246)——策略环声明式规则源
+    pub tool_policy: ToolPolicyConfig,
     /// MCP 网格
     pub mcp: McpConfig,
     /// 在线进化(GSOE)
@@ -563,6 +565,88 @@ impl Default for CapabilityDecayConfig {
     }
 }
 
+/// 工具运行时策略段(F-01/ADR-246)——策略环的声明式规则源
+///
+/// 缺省等价于 ADR-240 时代的硬编码空集 `(vec![], Allow)`:无声明即无拦截,
+/// 零信任场景须显式声明 `default_action: deny`。装配期一次读取,**无热加载**
+/// (运行期切换策略属安全能力开关,ADR-242 §3.5 明确不提供)。
+///
+/// WHY 类型名以 `Config` 结尾:全仓 section 命名惯例(nexus-core 各段均为
+/// `*Config`),且 `check_config_sample_parity.py` 以「类型名是否以 Config
+/// 结尾」区分段与标量——段漏写样例判红,标量漏写只 NOTE。以 `Section` 结尾
+/// 会被误判标量,门强度静默降级。
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(default)]
+pub struct ToolPolicyConfig {
+    /// 无规则命中时的默认动作(缺省 Allow 保持既有行为,ADR-240 D2 先例)
+    pub default_action: ToolPolicyAction,
+    /// 规则表,声明顺序即优先序(先命中先裁决)
+    #[serde(default)]
+    pub rules: Vec<ToolPolicyRuleDef>,
+}
+
+impl Default for ToolPolicyConfig {
+    fn default() -> Self {
+        Self {
+            default_action: ToolPolicyAction::Allow,
+            rules: Vec::new(),
+        }
+    }
+}
+
+/// 策略动作三态(镜像 `seccore::execpolicy::PolicyAction`)
+///
+/// WHY 在 L1 独立定义而非直接复用 L4 类型:依赖铁律 L(N)→L(N-1) 禁止
+/// nexus-core(L1) 依赖 seccore(L4);映射到 seccore 侧的职责在 L10 组合根
+/// (`composition::tool_runtime_policy`)。serde `alias` 兼容首字母大写写法
+/// (`Allow`/`Ask`/`Deny`),YAML 与 env 覆盖同权;非法值在加载边界硬失败。
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolPolicyAction {
+    /// 放行(缺省)
+    #[default]
+    #[serde(alias = "Allow")]
+    Allow,
+    /// 触发审批(由上层审批流决定最终执行)
+    #[serde(alias = "Ask")]
+    Ask,
+    /// 拒绝
+    #[serde(alias = "Deny")]
+    Deny,
+}
+
+/// 单条工具策略规则
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ToolPolicyRuleDef {
+    /// 匹配模式,语法 `"<program> [args_glob]"`:
+    /// 首段为工具名(`RulePattern` 精确匹配,大小写不敏感),可选第二段对整段
+    /// 参数 JSON 做 shell 风格通配;省略第二段等价 `*`(任意参数,含无参调用)。
+    /// 例:`"text.echo"`、`"git push"`、`"rm *"`(第二段 `*` 与省略等价)。
+    pub pattern: String,
+    /// 命中后的动作
+    pub action: ToolPolicyAction,
+}
+
+impl ToolPolicyRuleDef {
+    /// 拆分 [`Self::pattern`] 为 `(program, args_glob)`。
+    ///
+    /// program 为空/全空白时返回 `None`(调用方应跳过该规则并告警——
+    /// fail-soft per-rule:一条笔误不拖垮整份策略,也不静默吞掉其余规则)。
+    #[must_use]
+    pub fn pattern_parts(&self) -> Option<(&str, &str)> {
+        let trimmed = self.pattern.trim();
+        let (program, rest) = match trimmed.split_once(' ') {
+            Some((p, r)) => (p, r.trim()),
+            None => (trimmed, ""),
+        };
+        if program.is_empty() {
+            return None;
+        }
+        let args_glob = if rest.is_empty() { "*" } else { rest };
+        Some((program, args_glob))
+    }
+}
+
 /// MCP 网格配置
 ///
 /// WHY 无 `mesh` 子段(ADR-255):原 `McpMeshConfig`(transports/entanglement)
@@ -788,8 +872,9 @@ pub fn default_alerts() -> Vec<AlertConfig> {
 mod tests {
     use super::*;
 
-    /// 验证全部 14 个顶层 section + 12 个嵌套子类型可从 nexus_core::config 导入,
-    /// 且 Default impl 可用。(ADR-255:McpMeshConfig 已随死配置收口移除)
+    /// 验证全部 15 个顶层 section + 嵌套子类型可从 nexus_core::config 导入,
+    /// 且 Default impl 可用。(ADR-255:McpMeshConfig 已随死配置收口移除;
+    /// ADR-246:新增 tool_policy 段)
     #[test]
     fn test_config_types_in_nexus_core() {
         use crate::config::{
@@ -798,7 +883,7 @@ mod tests {
             McpServerConfig, ModelRouterConfig, MonitoringConfig, MtpeConfig, NexusConfig,
             OnlineLearningConfig, OsaConfig, PrometheusConfig, ProviderConfig, PvlConfig,
             QuestConfig, RedTeamConfig, RepoWikiConfig, SeccoreConfig, ThinkingToggleConfig,
-            ThresholdEntry,
+            ThresholdEntry, ToolPolicyAction, ToolPolicyConfig,
         };
 
         // 编译期验证:上述 27 个类型均存在且可导入
@@ -831,6 +916,16 @@ mod tests {
         assert!(!cfg.seccore.sandbox.is_empty(), "seccore.sandbox 非空");
         // ADR-255:默认 servers 为空(历史默认三条无一可真实调用,不再分发)
         assert!(cfg.mcp.servers.is_empty(), "mcp.servers 默认应为空");
+        // ADR-246:tool_policy 缺省等价硬编码时代空集 (vec![], Allow)
+        assert_eq!(
+            cfg.tool_policy.default_action,
+            ToolPolicyAction::Allow,
+            "tool_policy.default_action 缺省必须 Allow"
+        );
+        assert!(
+            cfg.tool_policy.rules.is_empty(),
+            "tool_policy.rules 缺省必须为空"
+        );
         assert!(cfg.evolution.enabled, "evolution.enabled = true");
         assert!(
             cfg.monitoring.prometheus.enabled,
@@ -865,6 +960,7 @@ mod tests {
             SeccoreConfig::default(),
             ThinkingToggleConfig::default(),
             ThresholdEntry::default(),
+            ToolPolicyConfig::default(),
         );
     }
 

@@ -115,6 +115,22 @@ seccore:
     recovery_rate: 0.05
     recovery_interval_minutes: 10
 
+tool_policy:
+  # ADR-246:策略环声明式规则源(装配期一次读取,无热加载)。
+  # default_action = 无规则命中时的默认动作(allow/ask/deny,大小写均可);
+  # 缺省 allow 保持既有行为,零信任场景可显式改 deny。
+  # 规则按声明顺序先命中先裁决;pattern 语法 "<program> [args_glob]":
+  # program 精确匹配工具名(大小写不敏感),省略 args_glob 等价 "*"(任意参数),
+  # args_glob 对整段参数 JSON 做 shell 风格通配(例:"git push"、"rm *")。
+  default_action: "allow"
+  rules: []
+  # 示例(注释化,取消注释即生效):
+  # rules:
+  #   - pattern: "text.echo"
+  #     action: "deny"
+  #   - pattern: "git push"
+  #     action: "ask"
+
 mcp:
   # ADR-255:默认不分发任何 server 条目。mcp-mesh 当前为私有 2PC TCP 帧协议
   # (ADR-253 §4),不实现 MCP JSON-RPC、无认证透传——标准 MCP 服务器

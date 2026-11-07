@@ -440,7 +440,7 @@ jobs:
               # 已核对唯一性与"单词干唯一前缀"原则,且避开 render/diff/wal 宽泛前缀冲突:
               # writer_ansi 用 incremental_5pct 而非 render 前缀;v3_pipeline 用 v3_pipeline
               # (diff 门已收窄为 diff_{incremental,full});session_store 用 single_write 而非 wal 前缀。
-              "config_concurrency": ["14_sections"],
+              "config_concurrency": ["15_sections"],
               "writer_ansi":        ["incremental_5pct", "render_full_80x24"],
               "v3_pipeline":        ["v3_pipeline"],
               "reduce_bench":       ["reduce"],

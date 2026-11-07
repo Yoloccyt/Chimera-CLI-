@@ -15,7 +15,7 @@
 //!
 //! ## 配置样例
 //! - `examples/config.sample.yaml` 是本模板的**派生物**(由 G-69 `check_config_sample_parity.py` 断言等值),勿手改;`.toml` 只是指向本文件的指针(加载器只注册 `Yaml`)
-//! - 完整模板(含全部 14 个顶层 section)由 `chimera config init` 生成
+//! - 完整模板(含全部 15 个顶层 section)由 `chimera config init` 生成
 
 // 类型定义 re-export:nexus-core 定义,L10 通过 re-export 保持向后兼容。
 // trait impl(Serialize/Deserialize)是全局的,re-export 后自动随类型传播。
@@ -193,7 +193,7 @@ fn normalize_path(path: &Path) -> PathBuf {
     result
 }
 
-/// 只解析并校验路径，不加载 14 段配置；供 `config path` / `config init` 使用。
+/// 只解析并校验路径，不加载 15 段配置；供 `config path` / `config init` 使用。
 ///
 /// 语义：`--config` 显式路径优先；否则 `~/.chimera/omega.yaml`。
 pub fn resolve_config_path(config_path: Option<PathBuf>) -> Result<PathBuf> {
@@ -222,7 +222,7 @@ pub fn load(config_path: Option<PathBuf>) -> Result<ChimeraConfig> {
 
     // 优先级链:file -> env(后者覆盖前者);缺键由 `nexus-core` 容器级
     // `#[serde(default)]` 回填内置默认值——与旧 `Serialized::defaults` **同源**
-    // (两者都调 `Default::default()`),但省去一次 14 段全量序列化 + Dict 深合并。
+    // (两者都调 `Default::default()`),但省去一次全量序列化 + Dict 深合并。
     // WHY 不在此处再挂 defaults:serde 已能对缺失/部分/空文件逐段回填,
     // 显式 `null`/类型错误两路径仍为 Err(坏配置 → exit 1 契约不变)。
     let figment = Figment::from(Yaml::file(&path)).merge(Env::prefixed("CHIMERA_").split("__"));
@@ -374,6 +374,22 @@ seccore:
     recovery_rate: 0.05
     recovery_interval_minutes: 10
 
+tool_policy:
+  # ADR-246:策略环声明式规则源(装配期一次读取,无热加载)。
+  # default_action = 无规则命中时的默认动作(allow/ask/deny,大小写均可);
+  # 缺省 allow 保持既有行为,零信任场景可显式改 deny。
+  # 规则按声明顺序先命中先裁决;pattern 语法 "<program> [args_glob]":
+  # program 精确匹配工具名(大小写不敏感),省略 args_glob 等价 "*"(任意参数),
+  # args_glob 对整段参数 JSON 做 shell 风格通配(例:"git push"、"rm *")。
+  default_action: "allow"
+  rules: []
+  # 示例(注释化,取消注释即生效):
+  # rules:
+  #   - pattern: "text.echo"
+  #     action: "deny"
+  #   - pattern: "git push"
+  #     action: "ask"
+
 mcp:
   # ADR-255:默认不分发任何 server 条目。mcp-mesh 当前为私有 2PC TCP 帧协议
   # (ADR-253 §4),不实现 MCP JSON-RPC、无认证透传——标准 MCP 服务器
@@ -421,17 +437,17 @@ monitoring:
 "#
 }
 
-// === LazyConfig:14 section 按需懒加载(Task 4 / E1) ===
+// === LazyConfig:15 section 按需懒加载(Task 4 / E1;ADR-246 增 tool_policy) ===
 //
 // WHY 懒加载:`load()` 通过 `figment.extract::<ChimeraConfig>()` 一次性反序列化
-// 全部 14 个顶层 section。实际 CLI 运行往往只用其中一部分(如 `chimera quest list`
+// 全部 15 个顶层 section。实际 CLI 运行往往只用其中一部分(如 `chimera quest list`
 // 不需要 evolution/monitoring),启动期解析未使用 section 是纯浪费。
 // `LazyConfig` 仅在首次访问对应 getter 时,通过 `Figment::extract_inner` 按路径
 // 反序列化该 section,未访问 section 零解析开销。
 
 /// 单个 section 的 fallible 懒加载缓存。
 ///
-/// 封装 [`OnceLock`] + "首次解析、后续缓存"模式,使 14 个 getter 各自缩为一行,
+/// 封装 [`OnceLock`] + "首次解析、后续缓存"模式,使 15 个 getter 各自缩为一行,
 /// 避免样板重复。
 ///
 /// 线程安全:基于 [`std::sync::OnceLock`](Rust 1.70+ 稳定),无 `unsafe`,
@@ -470,7 +486,7 @@ impl<T> LazySection<T> {
     }
 }
 
-/// 懒加载配置容器:持有 Figment provider,14 个 section 按需首次访问时解析。
+/// 懒加载配置容器:持有 Figment provider,15 个 section 按需首次访问时解析。
 ///
 /// 与 [`load`] 的区别:`load` 立即全量 `extract::<ChimeraConfig>()`;
 /// [`LazyConfig::new`] 只构建 provider 链不 extract,各 getter 首次调用时
@@ -480,7 +496,7 @@ impl<T> LazySection<T> {
 /// [`ChimeraConfig`] 签名与行为均不变。
 pub struct LazyConfig {
     /// 合并后的 Figment provider(defaults > file > env),供懒加载 extract。
-    /// WHY 保留 provider 引用而非 extract 后丢弃:14 个 getter 需在各自首次
+    /// WHY 保留 provider 引用而非 extract 后丢弃:15 个 getter 需在各自首次
     /// 访问时从同一 provider 按路径取子树,必须长期持有 Figment。
     figment: Figment,
     nexus: LazySection<NexusConfig>,
@@ -494,6 +510,7 @@ pub struct LazyConfig {
     mtpe: LazySection<MtpeConfig>,
     gqep: LazySection<GqepConfig>,
     seccore: LazySection<SeccoreConfig>,
+    tool_policy: LazySection<ToolPolicyConfig>,
     mcp: LazySection<McpConfig>,
     evolution: LazySection<EvolutionConfig>,
     monitoring: LazySection<MonitoringConfig>,
@@ -505,7 +522,7 @@ impl LazyConfig {
     /// `config_path` 为 `None` 时使用 [`default_config_path`]。
     /// 配置文件不存在时不报错(与 [`load`] 一致),仅使用默认值 + 环境变量。
     ///
-    /// WHY 只构建 provider 不 extract:14 section 的反序列化推迟到首次访问,
+    /// WHY 只构建 provider 不 extract:15 个 section 的反序列化推迟到首次访问,
     /// 消除启动期未使用 section 的解析开销。
     pub fn new(config_path: Option<PathBuf>) -> Result<Self> {
         // 与 `load` 共用路径校验（防 `..` 穿越），避免懒加载成为绕过路径安全的缺口。
@@ -531,6 +548,7 @@ impl LazyConfig {
             mtpe: LazySection::new(),
             gqep: LazySection::new(),
             seccore: LazySection::new(),
+            tool_policy: LazySection::new(),
             mcp: LazySection::new(),
             evolution: LazySection::new(),
             monitoring: LazySection::new(),
@@ -603,6 +621,12 @@ impl LazyConfig {
             .get_or_try_init(|| extract_section(&self.figment, "seccore"))
     }
 
+    /// 工具运行时策略(ADR-246)配置。
+    pub fn tool_policy(&self) -> Result<&ToolPolicyConfig> {
+        self.tool_policy
+            .get_or_try_init(|| extract_section(&self.figment, "tool_policy"))
+    }
+
     /// MCP 网格配置。
     pub fn mcp(&self) -> Result<&McpConfig> {
         self.mcp
@@ -632,7 +656,7 @@ impl LazyConfig {
             .map_err(|e| anyhow::anyhow!("config field `enable_strategy_cap`: {e}"))
     }
 
-    /// 聚合全部 14 section 为完整 [`ChimeraConfig`]。
+    /// 聚合全部 15 section 为完整 [`ChimeraConfig`]。
     ///
     /// WHY 会触发所有未访问 section 的解析:仅用于需要完整配置的场景;
     /// 若只需部分 section,优先用对应 getter 避免全量解析。
@@ -649,6 +673,7 @@ impl LazyConfig {
             mtpe: self.mtpe()?.clone(),
             gqep: self.gqep()?.clone(),
             seccore: self.seccore()?.clone(),
+            tool_policy: self.tool_policy()?.clone(),
             mcp: self.mcp()?.clone(),
             evolution: self.evolution()?.clone(),
             monitoring: self.monitoring()?.clone(),
@@ -660,7 +685,7 @@ impl LazyConfig {
 
 /// 按 key 路径从 Figment 提取单个 section(私有辅助)。
 ///
-/// WHY 独立函数:14 个 getter 的解析逻辑完全相同
+/// WHY 独立函数:15 个 getter 的解析逻辑完全相同
 /// (`figment.extract_inner::<T>(path).map_err(to_string)`),
 /// 提取为函数消除重复,且便于未来统一错误格式。
 fn extract_section<T>(figment: &Figment, path: &str) -> std::result::Result<T, String>

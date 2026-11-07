@@ -136,7 +136,7 @@ async fn composition_root_tool_runtime_enforces_sandbox_gate() {
 /// 本测试锁定「默认 Allow」这一兼容姿态，防止后续批次无意改成零信任。
 #[test]
 fn tool_runtime_policy_default_action_is_allow() {
-    let (_rules, default_action) = tool_runtime_policy();
+    let (_rules, default_action) = tool_runtime_policy(&ChimeraConfig::default());
     assert_eq!(
         default_action,
         seccore::execpolicy::PolicyAction::Allow,

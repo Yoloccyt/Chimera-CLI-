@@ -207,7 +207,9 @@ dedup = ["dedup_semantic"]
 checkpoint = ["checkpoint_save"]
 shadow_stats = ["shadow_stats"]
 resolve_conflicts = ["resolve_conflicts"]
-config_concurrency = ["14_sections"]
+# ADR-246:组名 14_sections→15_sections(tool_policy 第 15 段落地,组名含计数同步改名,
+# 避免 first-match 归类落空变幽灵门)
+config_concurrency = ["15_sections"]
 writer_ansi = ["incremental_5pct", "render_full_80x24"]
 v3_pipeline = ["v3_pipeline"]
 reduce_bench = ["reduce"]
