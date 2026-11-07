@@ -41,31 +41,32 @@ impl PolicyAction {
 
 /// 决策审计统计 — 按动作分桶计数（P3-T4 补:全量决策留痕）
 ///
-/// WHY Mutex 而非 Atomic:统计为低频审计路径（决策计数）,Mutex 简单可靠;
-/// 锁内无 await（纯 u64 累加）,不违反持锁跨 await 红线。
+/// WHY 原为 Mutex:统计曾被视为低频审计路径;R1-4(ADR-260)改判——record 在
+/// 每次派发的**双重策略评估**热路径上（runtime.rs 防御性设计）,并发批量下
+/// 同一 `Arc<ExecPolicy>` 的统计锁是共享争用点（batch.rs 自陈选 8 并发即为
+/// 避它）。三桶独立单调 u64 → 原子加无锁化,临界区从「锁 + 三次写」降为
+/// 一次 fetch_add。
+///
+/// 快照语义取舍（ADR-260 §3 登记）:并发下 `allow/ask/deny` 逐桶 load 组成
+/// 的快照是近似瞬时值（不要求跨桶原子一致）——审计场景只要求各桶单调收敛,
+/// 与 Mutex 时代的强一致快照相比无消费者受损（全仓快照读数仅诊断/测试面）。
 #[derive(Debug, Default)]
 pub struct DecisionStats {
-    /// 分桶计数（allow/ask/deny）
-    inner: std::sync::Mutex<StatsInner>,
-}
-
-/// 分桶内部状态
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct StatsInner {
     /// Allow 计数
-    allow: u64,
+    allow: std::sync::atomic::AtomicU64,
     /// Ask 计数
-    ask: u64,
+    ask: std::sync::atomic::AtomicU64,
     /// Deny 计数
-    deny: u64,
+    deny: std::sync::atomic::AtomicU64,
 }
 
 impl Clone for DecisionStats {
     fn clone(&self) -> Self {
+        use std::sync::atomic::Ordering::Relaxed;
         Self {
-            inner: std::sync::Mutex::new(
-                self.inner.lock().unwrap_or_else(|p| p.into_inner()).clone(),
-            ),
+            allow: std::sync::atomic::AtomicU64::new(self.allow.load(Relaxed)),
+            ask: std::sync::atomic::AtomicU64::new(self.ask.load(Relaxed)),
+            deny: std::sync::atomic::AtomicU64::new(self.deny.load(Relaxed)),
         }
     }
 }
@@ -73,37 +74,37 @@ impl Clone for DecisionStats {
 impl DecisionStats {
     /// 记录一次决策
     pub fn record(&self, action: PolicyAction) {
-        let mut g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        match action {
-            PolicyAction::Allow => g.allow += 1,
-            PolicyAction::Ask => g.ask += 1,
-            PolicyAction::Deny => g.deny += 1,
-        }
+        use std::sync::atomic::Ordering::Relaxed;
+        let counter = match action {
+            PolicyAction::Allow => &self.allow,
+            PolicyAction::Ask => &self.ask,
+            PolicyAction::Deny => &self.deny,
+        };
+        counter.fetch_add(1, Relaxed);
     }
 
     /// Allow 次数
     #[must_use]
     pub fn allow_count(&self) -> u64 {
-        self.inner.lock().unwrap_or_else(|p| p.into_inner()).allow
+        self.allow.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Ask 次数
     #[must_use]
     pub fn ask_count(&self) -> u64 {
-        self.inner.lock().unwrap_or_else(|p| p.into_inner()).ask
+        self.ask.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Deny 次数
     #[must_use]
     pub fn deny_count(&self) -> u64 {
-        self.inner.lock().unwrap_or_else(|p| p.into_inner()).deny
+        self.deny.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 总决策数
     #[must_use]
     pub fn total(&self) -> u64 {
-        let g = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        g.allow + g.ask + g.deny
+        self.allow_count() + self.ask_count() + self.deny_count()
     }
 }
 
@@ -148,10 +149,26 @@ impl RulePattern {
     ///
     /// W4 泛型化：拥有型 `&[String]` 与借用型 `&[&str]` 共用同一实现
     /// （`String`/`&str` 均 `AsRef<str>`），判决逐位一致。
+    /// R1-2(ADR-260)：公共入口归一输入后走 [`Self::matches_normalized`];
+    /// 热路径(evaluate/索引试探)应直接调后者,避免每规则重复归一分配。
     #[must_use]
     pub fn matches<S: AsRef<str>>(&self, program: &str, args: &[S]) -> bool {
-        if program.to_lowercase() != self.program {
+        self.matches_normalized(&program.to_lowercase(), args)
+    }
+
+    /// 匹配（已归一 program）— `program_lower` 必须已是小写形态;
+    /// 热路径专用:归一由调用方单次完成,规则试探路径零重复分配。
+    ///
+    /// 判决体与 [`Self::matches`] 单源（安全语义:形状分叉即判决分叉）。
+    #[must_use]
+    pub fn matches_normalized<S: AsRef<str>>(&self, program_lower: &str, args: &[S]) -> bool {
+        if program_lower != self.program {
             return false;
+        }
+        // R1-2 补充(ADR-260):`*` 通配一切(join_args 结果与 DP 均不影响判决),
+        // 短路消掉主力白名单规则形态的 join_args 分配;与下方空参特例同族。
+        if self.args_glob == "*" {
+            return true;
         }
         let joined = join_args(args);
         if joined.is_empty() && self.args_glob.ends_with(" *") {
@@ -173,8 +190,15 @@ pub struct ExecPolicyRule {
 /// 执行策略引擎 — 规则优先序 + 默认动作
 #[derive(Debug, Clone)]
 pub struct ExecPolicy {
-    /// 规则（先命中先裁决）
+    /// 规则（先命中先裁决;顺序与统计的权威存储）
     rules: Vec<ExecPolicyRule>,
+    /// R1-1(ADR-260):program(小写) → 规则下标桶,`add_rule` 构造期维护。
+    /// WHY 语义安全:program 匹配是**精确**小写比较,跨 program 规则互斥 ⇒
+    /// 命中只可能来自同 program 规则;桶内保持先添加序 = 全局先匹配序,
+    /// 索引查找与线性扫描判决逐位等价(索引等价 proptest 锁定)。
+    /// 非 `RulePattern::new` 构造的直接字面量 program(未小写)在旧线性扫描下
+    /// 本就永不命中(输入被归一为小写),按小写分桶后同样永不命中,语义一致。
+    index: std::collections::HashMap<Box<str>, Vec<u32>>,
     /// 无规则命中的默认动作（零信任默认 Deny）
     default_action: PolicyAction,
     /// 决策审计统计（P3-T4 补:全量决策留痕,含 Auto 模式）
@@ -185,6 +209,7 @@ impl Default for ExecPolicy {
     fn default() -> Self {
         Self {
             rules: Vec::new(),
+            index: std::collections::HashMap::new(),
             // 零信任默认:未声明即拒绝（WI-07 同口径:未声明=不可并发+可能写）
             default_action: PolicyAction::Deny,
             stats: DecisionStats::default(),
@@ -220,6 +245,7 @@ impl ExecPolicy {
     pub fn with_default_action(default_action: PolicyAction) -> Self {
         Self {
             rules: Vec::new(),
+            index: std::collections::HashMap::new(),
             default_action,
             stats: DecisionStats::default(),
         }
@@ -227,6 +253,11 @@ impl ExecPolicy {
 
     /// 添加规则（先添加优先——调用方按具体→通用排序）
     pub fn add_rule(mut self, rule: ExecPolicyRule) -> Self {
+        // R1-1:构造期维护 program → 规则下标索引（键统一小写,与判决归一
+        // 口径一致;O(R) 线性扫描成本一次性前移到规则构造期）
+        let key: Box<str> = rule.pattern.program.to_lowercase().into_boxed_str();
+        let idx = self.rules.len() as u32;
+        self.index.entry(key).or_default().push(idx);
         self.rules.push(rule);
         self
     }
@@ -252,14 +283,41 @@ impl ExecPolicy {
         self.evaluate(program, args)
     }
 
-    /// 未计数评估 — 内部辅助（避免重复计数;has_matching_rule 等调用不受影响）
-    fn evaluate_uncounted<S: AsRef<str>>(&self, program: &str, args: &[S]) -> PolicyAction {
-        for rule in &self.rules {
-            if rule.pattern.matches(program, args) {
-                return rule.action;
+    /// 索引定位首个命中规则（R1-1/R1-2,ADR-260）— 判决唯一入口。
+    ///
+    /// O(R) 线性扫描 → program 索引 O(1) 定位 + 同 program 桶内扫描;
+    /// program 归一单次化:全 ASCII 且无大写 ⇒ 已是规范小写,零分配借用
+    /// 视图直传;否则一次 `to_lowercase` 复用（旧实现对**每条规则**试探
+    /// 各做一次 `to_lowercase`,2k 次分配/派发）。
+    fn find_matching<'a, S: AsRef<str>>(
+        &'a self,
+        program: &str,
+        args: &[S],
+    ) -> Option<&'a ExecPolicyRule> {
+        let lower_owned;
+        let program_lower: &str =
+            if program.is_ascii() && !program.bytes().any(|b| b.is_ascii_uppercase()) {
+                program
+            } else {
+                lower_owned = program.to_lowercase();
+                &lower_owned
+            };
+        let bucket = self.index.get(program_lower)?;
+        for &idx in bucket {
+            let rule = &self.rules[idx as usize];
+            if rule.pattern.matches_normalized(program_lower, args) {
+                return Some(rule);
             }
         }
-        self.default_action
+        None
+    }
+
+    /// 未计数评估 — 内部辅助（避免重复计数;has_matching_rule 等调用不受影响）
+    fn evaluate_uncounted<S: AsRef<str>>(&self, program: &str, args: &[S]) -> PolicyAction {
+        match self.find_matching(program, args) {
+            Some(rule) => rule.action,
+            None => self.default_action,
+        }
     }
 
     /// 决策审计 — 记录一次决策（全量留痕;Auto 模式经此计入）
@@ -277,7 +335,8 @@ impl ExecPolicy {
     /// （Default 模式:无命中放行,规则负责设防——六模式语义）
     #[must_use]
     pub fn has_matching_rule(&self, program: &str, args: &[String]) -> bool {
-        self.rules.iter().any(|r| r.pattern.matches(program, args))
+        // R1-1:与 evaluate_uncounted 同走索引判定（语义与线性 any 逐位等价）
+        self.find_matching(program, args).is_some()
     }
 
     /// 规则数（诊断）
@@ -412,12 +471,58 @@ fn is_readonly_program(program: &str) -> bool {
 /// 通配符匹配 — `*` 匹配任意序列（零个或多个字符）
 ///
 /// 简化 glob:仅支持 `*`;`npm *` 匹配 "npm" 或 "npm install" 等任意参数序列。
-/// 实现为迭代 DP（O(n·m),规则匹配低频,性能非关键路径）。
+///
+/// R1-3(ADR-260):迭代式双指针回溯,O(n·m) 时间 **O(1) 空间零堆分配**——
+/// 替换原「Vec\<char\>×2 + n·m bool DP 表」三重分配。原注释「性能非关键路径」
+/// 已过时:判决体在每派发双重评估热路径上（runtime.rs 防御性设计）。
+/// 字节级比较安全性:`*`(0x2A) 为唯一元字符,UTF-8 多字节序列不含 ASCII
+/// 字节 ⇒ 字节相等 ⇔ 字符相等,逐字节试探与按字符试探判决一致。
+/// 与原 DP 实现逐位等价,由 `glob_zero_alloc_matches_dp_reference` proptest
+/// 对拍锁定(参考实现保留于 tests 模块)。
 fn glob_match(pattern: &str, text: &str) -> bool {
+    let (p, t) = (pattern.as_bytes(), text.as_bytes());
+    let (mut pi, mut ti) = (0usize, 0usize);
+    // 最近一次 `*` 的 pattern 下标与其当前试探的 text 起点(usize::MAX=尚未见过 `*`)
+    let (mut star_p, mut star_t) = (usize::MAX, 0usize);
+    while ti < t.len() {
+        match p.get(pi).copied() {
+            Some(b'*') => {
+                star_p = pi;
+                star_t = ti;
+                pi += 1;
+            }
+            Some(c) if c == t[ti] => {
+                pi += 1;
+                ti += 1;
+            }
+            _ => {
+                if star_p != usize::MAX {
+                    // 回溯:让最近一个 `*` 多吞一个字符,从其后重新试探
+                    star_t += 1;
+                    ti = star_t;
+                    pi = star_p + 1;
+                } else {
+                    return false;
+                }
+            }
+        }
+    }
+    // 文本耗尽:pattern 剩余部分必须全是 `*`(可匹配空)
+    while p.get(pi) == Some(&b'*') {
+        pi += 1;
+    }
+    pi == p.len()
+}
+
+/// glob 参考实现（原迭代 DP,O(n·m) 时间 O(n·m) 空间,三重堆分配）
+///
+/// WHY 保留于 tests:零分配重写与原实现的逐位等价由 proptest 对拍锁定,
+/// 参考体即等价性的真值源;生产路径不再触达。
+#[cfg(test)]
+fn glob_match_dp_reference(pattern: &str, text: &str) -> bool {
     let p: Vec<char> = pattern.chars().collect();
     let t: Vec<char> = text.chars().collect();
     let (n, m) = (p.len(), t.len());
-    // dp[i][j]: pattern[..i] 是否匹配 text[..j]
     let mut dp = vec![vec![false; m + 1]; n + 1];
     dp[0][0] = true;
     for i in 1..=n {
@@ -802,4 +907,107 @@ fn evaluate_ref_matches_owned_verdict_bitwise() {
     assert!(pattern.matches("git", &["push"])); // 借用形态(&[&str])走同一泛型体
     assert!(!pattern.matches("git", &["pull".to_string()]));
     assert!(!pattern.matches("git", &["pull"]));
+}
+
+/// R1 等价性 proptest（ADR-260）——索引判决 vs 线性参考、零分配 glob vs DP 参考。
+/// WHY 独立 cfg(test) mod:proptest 是 dev-dependency,顶层裸 proptest! 会进入
+/// 非测试构建导致 dev-dep 缺失编译失败。
+#[cfg(test)]
+mod r1_equivalence_proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    /// glob 对拍字母表策略:三字母 + 元字符 `*` + 空格,长度 0..24
+    /// (覆盖空串/纯 `*`/连续 `*`/尾部 `*`/无 `*` 全形态)
+    fn glob_str() -> impl Strategy<Value = String> {
+        prop::collection::vec(
+            prop_oneof![Just('a'), Just('b'), Just('c'), Just('*'), Just(' ')],
+            0..24,
+        )
+        .prop_map(|chars| chars.into_iter().collect())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+    /// R1-1(ADR-260)索引等价锁:program 索引判定与线性扫描参考判决逐位一致。
+    ///
+    /// 域覆盖:程序名桶(大小写混杂含未登记名)、通配形态(全 `*`/前缀 `*`/
+    /// 含参精确)、参数个数(空/单/多)——桶内先添加序 = 全局先匹配序的
+    /// 等价性论证(ADR-260 §2)由本对拍兜底为机器事实。
+    #[test]
+    fn index_verdict_matches_linear_reference(
+        programs in proptest::prelude::prop::collection::vec(
+            proptest::prelude::prop_oneof![
+                Just("rm".to_string()), Just("RM".to_string()), Just("Git".to_string()),
+                Just("git".to_string()), Just("npm".to_string()), Just("nope".to_string()),
+            ],
+            0..8,
+        ),
+        globs in proptest::prelude::prop::collection::vec(
+            proptest::prelude::prop_oneof![
+                Just("*".to_string()), Just("push*".to_string()),
+                Just("install *".to_string()), Just("-rf *".to_string()),
+            ],
+            0..8,
+        ),
+        query_program in "rm|RM|git|GIT|npm|sh|nope",
+        query_args in proptest::prelude::prop::collection::vec(
+            proptest::prelude::prop_oneof![
+                Just("push".to_string()), Just("install".to_string()),
+                Just("-rf".to_string()), Just("status".to_string()),
+            ],
+            0..3,
+        ),
+    ) {
+        use PolicyAction::{Allow, Ask, Deny};
+        let actions = [Allow, Ask, Deny];
+        let mut policy = ExecPolicy::with_default_action(Deny);
+        let mut reference: Vec<(String, String, PolicyAction)> = Vec::new();
+        for (i, prog) in programs.iter().enumerate() {
+            let g = if globs.is_empty() {
+                "*".to_string()
+            } else {
+                globs[i % globs.len()].clone()
+            };
+            policy = policy.add_rule(ExecPolicyRule {
+                pattern: RulePattern::new(prog.clone(), g.clone()),
+                action: actions[i % actions.len()],
+            });
+            // 线性参考:与旧 evaluate_uncounted 相同的逐条试探(输入归一小写)
+            reference.push((prog.to_lowercase(), g, actions[i % actions.len()]));
+        }
+        let optimized = policy.evaluate(&query_program, &query_args);
+        let query_lower = query_program.to_lowercase();
+        let expected = reference
+            .iter()
+            .find(|(p, g, _)| {
+                if *p != query_lower {
+                    return false;
+                }
+                let joined = query_args.join(" ");
+                if joined.is_empty() && g.ends_with(" *") {
+                    return true;
+                }
+                glob_match_dp_reference(g, &joined)
+            })
+            .map_or(Deny, |(_, _, a)| *a);
+        prop_assert_eq!(optimized, expected, "索引判决偏离线性参考: query={:?}", query_program);
+    }
+
+    /// R1-3(ADR-260)零分配 glob 与原 DP 参考实现对拍(唯一元字符 `*`)。
+    #[test]
+    fn glob_zero_alloc_matches_dp_reference(
+        pattern in glob_str(),
+        text in glob_str(),
+    ) {
+        prop_assert_eq!(
+            glob_match(&pattern, &text),
+            glob_match_dp_reference(&pattern, &text),
+            "glob 判决分叉: pattern={:?} text={:?}",
+            pattern,
+            text
+        );
+    }
+    }
 }

@@ -86,6 +86,13 @@ harness = false
 name = "command_validator_bench"
 harness = false
 
+# R1(ADR-260): 判决体优化同轮对照(索引化零分配 vs 改造前线性判决)
+# spol_* 阈值键移交 X2 唯一 bench 期实测后登记(先实测后登记,ADR-239)。
+# 运行: cargo bench -p seccore --bench policy_eval -- --noplot
+[[bench]]
+name = "policy_eval"
+harness = false
+
 # E-5 lint ratchet opt-in (docs/reports/arch-quality-deep-review-2026-09-25.md)
 [lints]
 workspace = true
