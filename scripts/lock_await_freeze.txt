@@ -58,6 +58,7 @@ crates/nexus-app-server/src/sse.rs:121        # DESIGN SSE writer: single-connec
 #  shutdown() to the multi-line ".lock()...take()" chain must redden
 #  G-27/G-35.)
 crates/decb-governor/src/governor.rs:564      # SCANNER-DEBT `current_total` is `*total` copy; state guard already block-scoped
-crates/mcp-mesh/src/quantum/participant_client.rs:556 # SCANNER-DEBT `pooled` is a TcpStream removed from the pool; guard dies in and_then
+# Re-keyed 2026-11-07: c6eb9b6 shifted the .lock() chain 556->566 (ADR-253 D1 args); semantics re-verified
+crates/mcp-mesh/src/quantum/participant_client.rs:566 # SCANNER-DEBT `pooled` is a TcpStream removed from the pool; guard dies in and_then
 crates/pvl-layer/src/producer.rs:123          # SCANNER-DEBT `strategy` is `*read()` Copy value; read guard dies at stmt end
 crates/session-store/src/writer.rs:577        # SCANNER-DEBT `has_pending` is a bool; flush deliberately runs outside the lock (line moved 495->577 by R2 C-61; same site, scanner is lexical)

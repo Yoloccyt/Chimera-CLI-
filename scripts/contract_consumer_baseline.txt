@@ -39,10 +39,8 @@ ContractSpec
 CostEstimate
 Currency
 DeclaimPayload
-DispatchError  # ADR-238 D3: 工具派发错误按层归因（policy/sandbox/route/transport）；生产消费者为 gqep-executor，L8+ 消费方待接线后达 2
 DispatchFuture  # ADR-238 D1: 对象安全派发 future 的类型别名；随 DispatchError 同族，第二个生产消费者待接线
 DispatchOutcome  # ADR-238 D3: 一次工具派发的结果载体；与 DispatchError 成对定义，第二生产消费者待接线
-DispatchRequest  # ADR-238 D1: 一次工具派发请求的拥有型边界类型；ADR-241 D2 保留其为边界类型不改签名
 DispatchRequestRef  # ADR-241 D2: 借用化派发请求视图（热路径零分配载体）；拥有型 DispatchRequest 的加性姊妹类型，第二生产消费者待接线
 EmptyFormalProvider
 EndpointSpec
@@ -107,7 +105,6 @@ OutputProcessingContract
 PeakPeriod
 PersonaSummary
 PlanEdge
-PlanError
 PlanViolation
 PlatformGroundingSpec
 PolicyFormat
@@ -146,7 +143,6 @@ SensitiveKind
 SerializedPolicy
 ServiceTier
 ShouldRunVerdict
-SideEffectDecl
 SinkhornParams
 SkillLifecycleContract
 SkillLifecycleState
@@ -162,7 +158,6 @@ ToolInteractionContract
 ToolDispatcher  # ADR-238 D1: 装饰器链每环实现的对象安全派发 trait；生产消费者为 gqep-executor，L8+ 消费方待接线后达 2
 ToolNode
 ToolOp
-ToolPlan
 TurnId
 UsageReport
 ValidationRule

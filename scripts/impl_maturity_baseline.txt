@@ -2,7 +2,7 @@
 # Measured 2026-09-23 on the working tree (regenerate: --emit | grep -v "^#   ").
 # One row per (crate, label). Increase = RED. Row reaching 0 = delete the row.
 # An allowance must not outlive the debt it allowed.
-chimera-cli.NOT-IMPL-CN=6  # crates/chimera-cli/src/action_orchestrator.rs:15
+chimera-cli.NOT-IMPL-CN=7  # crates/chimera-cli/src/action_orchestrator.rs:15 (+1: exec_plan.rs:39「未实现」为 6475027/ADR-244 的 UnwiredToolExecutor fail-closed 文档声明——诚实失败注释而非未完成功能;基线 7b7e571 设于 10-26,晚于该提交 11-06,故计数滞后,2026-11-07 M0 补账)
 chimera-cli.PLACEHOLDER-EN=1  # crates/chimera-cli/src/composition.rs:80 (EvolutionOrchestrator::step 在 feature="r2_unfreeze" 档内自述 placeholder 并无条件返回 Ok(()),即 R2 fail-closed 熔断路径现状永远放行;CI 从未启用该 feature,故现网不可达 —— 记账而非豁免:解冻前必须实装或删除)
 chimera-mas.NOT-IMPL-CN=7  # crates/chimera-mas/src/quadrant.rs:341
 chimera-mas.PLACEHOLDER-CN=2  # crates/chimera-mas/src/delegation.rs:1
