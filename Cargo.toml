@@ -92,6 +92,10 @@ resolver = "2"
 #   版本号唯一权威源 = 本字段，派生文档(CODE_WIKI / nuxus规则 / CHANGELOG 节标题)须与之同批同步。
 version = "2.29.0-omega"
 edition = "2021"
+# MSRV floor（工程工单 C1 裁决，2026-11-08）：与 CI 钉定 dtolnay/rust-toolchain@1.97.1
+# 对齐（ci.yml 等 16 处；1.97.1 含 LLVM miscompilation 修复）。edition 维持 2021——
+# 2024 迁移（RPIT 捕获/unsafe 属性/set_var 语义）为独立后续项目，不入性能工单。
+rust-version = "1.97"
 authors = ["Aether CLI Team <team@aether.dev>"]
 license = "MIT"
 
