@@ -352,6 +352,18 @@ def mode_invariants(redlines, thresholds_doc, freeze):
         for p in th_problems:
             print(f"         {p}")
 
+    # I10 heredoc PATH_KEYWORDS 键集 == [[path_keywords]] 键集 (W5.0，与 I9 同构)
+    # WHY 同 I9：N-3 幽灵门残留（hnsw_tiered 词条 heredoc 漏接）的根修——
+    # 该词条在册却永不被 CI legacy 断言，本断言令此类漂移不可再现。
+    kw_keys = set(kw)
+    pk_problems = ci_pathkeywords_key_sync(BENCH_WORKFLOW_PATH, kw_keys)
+    if not _check(f"I10 bench_check.yml heredoc keys == [[path_keywords]] keys "
+                  f"({len(kw_keys)} keys; dict found={ci_pathkeywords_dict_present(BENCH_WORKFLOW_PATH)})",
+                  not pk_problems):
+        fails += 1
+        for p in pk_problems:
+            print(f"         {p}")
+
     # I4 兜底债棘轮: 列表只减不增, 且列表内每项当前值必须仍是 100ms 兜底
     pending = set(ratchet.get("calibration_pending", []))
     cap = int(ratchet.get("max_calibration_pending", len(pending)))
@@ -527,6 +539,9 @@ CI_RUNBENCH_RE = re.compile(r"^\s*run_bench\s+(\S+)\s+cargo bench -p (\S+) --ben
 # dict 体以「单独一行的 }」收尾（值均为带 # 注的整数字面量，无嵌套花括号），
 # 故 .*? 配 \n\s*} 不会越界到 heredoc 之外的下一个花括号。
 CI_THRESHOLDS_DICT_RE = re.compile(r"THRESHOLDS_NS\s*=\s*\{(.*?)\n\s*\}", re.S)
+# I10 的比对对象：同 heredoc 的 PATH_KEYWORDS dict（值均为字符串数组，同样无嵌套
+# 花括号、同形收尾）。键形状与阈值键相同（"key":），复用 CI_THRESHOLD_KEY_RE。
+CI_PATHKEYWORDS_DICT_RE = re.compile(r"PATH_KEYWORDS\s*=\s*\{(.*?)\n\s*\}", re.S)
 # 只认「行首可选空白 + 引号键 + :」；注行因前导 # 不会落入此形。
 CI_THRESHOLD_KEY_RE = re.compile(r'^\s*"([a-z0-9_]+)":', re.M)
 
@@ -590,6 +605,52 @@ def ci_threshold_dict_present(workflow_path):
         return False
     with open(workflow_path, encoding="utf-8-sig") as fh:
         return bool(CI_THRESHOLDS_DICT_RE.search(fh.read()))
+
+
+def _pathkeywords_sync_from_text(text, path_keyword_keys):
+    """I10 判定内核（纯文本）—— ci_pathkeywords_key_sync 的单判定拆分。
+
+    WHY 拆分：判定只有一份（F66「同构靠人工维持」病灶的对立面）；
+    selftest 夹具以纯文本即可构造 heredoc dict 形状，零文件 I/O。
+    """
+    m = CI_PATHKEYWORDS_DICT_RE.search(text)
+    if not m:
+        return []
+    ci = set(CI_THRESHOLD_KEY_RE.findall(m.group(1)))
+    table = set(path_keyword_keys)
+    problems = [f"path_keywords key in [[path_keywords]] but never present in CI heredoc: {k}"
+                for k in sorted(table - ci)]
+    problems += [f"path_keywords key in CI heredoc but absent from [[path_keywords]]: {k}"
+                 for k in sorted(ci - table)]
+    return problems
+
+
+def ci_pathkeywords_key_sync(workflow_path, path_keyword_keys):
+    """返回 I10 的分歧列表（空 = 对等或本文件无 dict 可查）。
+
+    WHY 需要它（W5.0，与 I9 同构）：I9 只对拍 THRESHOLDS_NS，PATH_KEYWORDS 的
+    heredoc 同步此前只靠注释维持——实测后果（N-3 幽灵门残留）：TOML 侧
+    hnsw_tiered 词条在册（ADR-192），heredoc 漏接 ⇒ 该 2ms 验值在 CI legacy
+    断言路径恒空转（bench_results 空列表 → ::warning:: + continue，skip 非阻塞），
+    而 I1/I7/I9/compare 四步全照绿。本断言把「PATH_KEYWORDS 键集两源对拍」
+    从注释变成机器判据。
+
+    返回 [] 的两种情况与 I9 相同：文件里根本没有 PATH_KEYWORDS dict 时不猜，
+    直接当作「无可查」；真实 workflow 有 dict 时才比。由调用方另用一条断言
+    保证真文件确实有 dict 可查（ci_pathkeywords_dict_present）。
+    """
+    if not os.path.exists(workflow_path):
+        return [f"workflow not found: {os.path.relpath(workflow_path, ROOT)}"]
+    with open(workflow_path, encoding="utf-8-sig") as fh:
+        return _pathkeywords_sync_from_text(fh.read(), path_keyword_keys)
+
+
+def ci_pathkeywords_dict_present(workflow_path):
+    """I10 的防伪绿前提：真实 workflow 里确实有 PATH_KEYWORDS dict 可查。"""
+    if not os.path.exists(workflow_path):
+        return False
+    with open(workflow_path, encoding="utf-8-sig") as fh:
+        return bool(CI_PATHKEYWORDS_DICT_RE.search(fh.read()))
 
 
 def keyword_overlaps(kw):
@@ -1361,6 +1422,38 @@ def mode_selftest():
         expect("selftest-11g real bench_check.yml heredoc is in sync with [[thresholds_ns]]",
                ci_threshold_key_sync(BENCH_WORKFLOW_PATH,
                                      load_toml(THRESHOLDS_PATH)["thresholds_ns"]), [])
+
+        # 断言 22a-22f：I10（W5.0，PATH_KEYWORDS 双源对拍）—— 与 I9（11b-11g）同构，
+        # 必须同样「有牙」：真仓对账 + 红路径缺一不成立。编号取 22x：19x/20x/21x 已被
+        # mode_compare/解析/ghost-key 夹具占用，不按位置续号（本文件标记唯一性纪律）。
+        # 注：夹具走 _pathkeywords_sync_from_text 纯文本内核，零文件 I/O、零路径构造。
+        def pk_heredoc(keys):
+            """I10 夹具：heredoc dict 形状的纯文本（与真文同形，无文件写入）。"""
+            return ("          PATH_KEYWORDS = {\n"
+                    + "".join(f'              "{k}": ["{k}"],\n' for k in keys)
+                    + "          }\n")
+
+        rt10 = {"alpha", "beta"}
+        expect("selftest-22a I10 clean when heredoc key set equals the table",
+               _pathkeywords_sync_from_text(pk_heredoc(["alpha", "beta"]), rt10), [])
+        expect("selftest-22b I10 fatal when a table key is missing from heredoc",
+               _pathkeywords_sync_from_text(pk_heredoc(["alpha"]), rt10),
+               ["path_keywords key in [[path_keywords]] but never present in CI heredoc: beta"])
+        expect("selftest-22c I10 fatal when heredoc carries an unregistered key",
+               _pathkeywords_sync_from_text(pk_heredoc(["alpha", "beta", "ghost"]), rt10),
+               ["path_keywords key in CI heredoc but absent from [[path_keywords]]: ghost"])
+        expect("selftest-22d I10 fatal when the workflow file is missing",
+               len(ci_pathkeywords_key_sync("selftest_no_such_workflow/nope10.yml", rt10)), 1)
+        # 21e：无 dict 时不猜（[]），但 present 探针必须报 False —— 与 11f 同理，
+        # 封住「提取失败被当成无分歧」的假绿口子。
+        no_pkdict = wf_text([("c1", "b1", "a1")], "nopkdict")
+        expect("selftest-22e I10 neutral without a dict, and the presence probe says so",
+               (ci_pathkeywords_key_sync(no_pkdict, rt10), ci_pathkeywords_dict_present(no_pkdict)),
+               ([], False))
+        # 21f：产环境对账 —— 本可当场抓住 hnsw_tiered 漏接的断言。
+        expect("selftest-22f real bench_check.yml heredoc is in sync with [[path_keywords]]",
+               ci_pathkeywords_key_sync(BENCH_WORKFLOW_PATH,
+                                        set(load_toml(THRESHOLDS_PATH)["path_keywords"])), [])
 
         # 断言 12/13：入口契约（F18 + F29）—— 过了 main() 的码才算数，
         # 只在注释里写"0=通过/1=违反/2=不可判定"不算（那是另一道"写了不跑"）。

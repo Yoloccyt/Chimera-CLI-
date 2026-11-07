@@ -533,6 +533,10 @@ jobs:
               "runx_serial_1ms":   ["runx_serial_1ms/64"],
               "runx_parallel_zero": ["runx_parallel_zero/64"],
               "runx_parallel_1ms": ["runx_parallel_1ms/64"],
+              # ADR-192：与 scripts/perf_thresholds.toml [path_keywords].hnsw_tiered 双写同步
+              # （N-3 幽灵门残留收口，W5.0）。词条与其余 82 键无双向子串关系（I2 已机器核），
+              # 插入位置不影响任何 first-match-wins 归类（hit 即 break，仅本词条命中的路径唯一）。
+              "hnsw_tiered": ["l2_knn_tiered/top10_recall/10000_tiered"],
           }
 
           criterion_dir = Path("target/criterion")
