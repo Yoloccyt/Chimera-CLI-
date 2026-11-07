@@ -161,12 +161,28 @@ pub struct BatchAttribution {
 type BatchItemFuture<'a> =
     Pin<Box<dyn Future<Output = (usize, Result<DispatchOutcome, DispatchError>)> + Send + 'a>>;
 
-/// 有界并发派发一批请求，结果按输入序返回
+/// 批量归因出口 — 依赖倒置的可观测性契约（W3 / F-03 / ADR-248）
+///
+/// WHY trait 而非直接依赖指标库：本 crate 保持**零指标依赖**（batch.rs 既有
+/// 纪律），上层（chimera-cli `TelemetryBatchSink` → event-bus `BusLogger`
+/// 计数器）实现本 trait 并经组合根注入。`record` 在归因快照生成后调用，
+/// **只在 `total > 0` 时发生**（空批次提前返回，不触发 record——防刷屏纪律
+/// 由结构保证而非调用方自觉）。
+pub trait BatchAttributionSink: Send + Sync {
+    /// 记录一次批量归因快照（每批恰好一次）
+    fn record(&self, attribution: &BatchAttribution);
+}
+
+/// 有界并发派发一批请求（带归因出口），结果按输入序返回
+///
+/// 与 [`dispatch_batch`] 的唯一差异：归因快照生成后调用 `sink.record`
+/// （`Some` 时）。派发路径零改动——`None` 与旧函数结果逐位等价。
 ///
 /// # 参数
 /// - `dispatcher`：链头派发器（四环链的 `SandboxedDispatcher` 或任意 `dyn ToolDispatcher`）
 /// - `requests`：请求列表；结果与之一一对应
 /// - `limits`：并发上界与双层超时
+/// - `sink`：归因出口；`None` = 旧行为
 ///
 /// # 返回
 /// [`BatchOutcome`]；`deadline` 放弃的槽位以
@@ -176,10 +192,11 @@ type BatchItemFuture<'a> =
 /// # 取消安全
 /// 本函数被外部 drop 时，`FuturesUnordered` 内未完成的 dispatch future 一并
 /// drop；由于未 spawn，不存在仍在后台运行的孤儿任务。
-pub async fn dispatch_batch<'a>(
+pub async fn dispatch_batch_with_sink<'a>(
     dispatcher: &'a dyn ToolDispatcher,
     requests: &'a [DispatchRequest],
     limits: BatchLimits,
+    sink: Option<&dyn BatchAttributionSink>,
 ) -> BatchOutcome {
     let total = requests.len();
     if total == 0 {
@@ -303,8 +320,24 @@ pub async fn dispatch_batch<'a>(
         success_ratio_bp = attribution.success_ratio_bp,
         "tool batch dispatch completed"
     );
+    // W3/ADR-248:归因出口在既有 debug! 之后调用——不削减既有观测，纯增量。
+    if let Some(sink) = sink {
+        sink.record(&attribution);
+    }
 
     outcome
+}
+
+/// 有界并发派发一批请求，结果按输入序返回（W3 前的既有入口，签名不变）
+///
+/// 语义 = [`dispatch_batch_with_sink`] 传 `None`（无归因出口）；派发路径与
+/// 结果逐位一致。既有调用方零改动（A5）。
+pub async fn dispatch_batch<'a>(
+    dispatcher: &'a dyn ToolDispatcher,
+    requests: &'a [DispatchRequest],
+    limits: BatchLimits,
+) -> BatchOutcome {
+    dispatch_batch_with_sink(dispatcher, requests, limits, None).await
 }
 
 #[cfg(test)]

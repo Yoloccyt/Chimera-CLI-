@@ -257,7 +257,15 @@ pub fn build_with_sharding(
     // BusLogger 自带 per-instance Registry（非全局默认），多次构造不冲突；
     // set_logger 为同步内联赋值，不影响后续 clone/&bus。指标导出(/metrics 或文件
     // dump)为 D1 后续增量，本步先接线使计数器真实累加。
-    bus.set_logger(BusLogger::new("chimera-cli"));
+    //
+    // W3(ADR-248 C-A): 装配时序为「构造 → 注册批量归因计数器 → set_logger」——
+    // 注册写的是 logger 内部 Registry，必须先于 Arc 收编（bus.rs:1113-1116 收值）；
+    // sink 句柄在下方 ToolRuntime 装配处经 with_batch_sink 注入。
+    let mut bus_logger = BusLogger::new("chimera-cli");
+    let tool_batch_sink = Arc::new(crate::metrics_sink::TelemetryBatchSink::register(
+        &mut bus_logger,
+    ));
+    bus.set_logger(bus_logger);
     // E-1 (ADR-191 D4): 可选 Critical WAL 持久化。默认关=保留 LogCriticalSink;
     // 设 CHIMERA_CRITICAL_WAL_PATH 则把“无 mpsc 订阅者”的 Critical 事件 JSONL 落盘,
     // 崩溃后 FileWalCriticalSink::replay 可审计(at-least-once)。走 env 而非新增
@@ -310,7 +318,10 @@ pub fn build_with_sharding(
         tool_rules,
         tool_default_action,
     )
-    .map_err(|e| anyhow::anyhow!("工具运行时四环链装配失败: {e}"))?;
+    .map_err(|e| anyhow::anyhow!("工具运行时四环链装配失败: {e}"))?
+    // W3(ADR-248):批量归因出口——execute_batch 的 BatchAttribution 经
+    // TelemetryBatchSink 递增 BusLogger 计数器（None=改造前行为，L1 等价）。
+    .with_batch_sink(tool_batch_sink);
     // M4-P2: C3 Critical 旁路注册上提为 build() 标准装配步骤（subscribe 在
     // engine 构造后、AppContext 移出前同步完成，§4.4 反模式 3 纪律）。
     spawn_critical_subscriber(&bus);

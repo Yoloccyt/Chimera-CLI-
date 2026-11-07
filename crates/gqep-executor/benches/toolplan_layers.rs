@@ -74,10 +74,7 @@ fn bench_toolplan_layers(c: &mut Criterion) {
 
     // (值组前缀, 是否显式声明 read_only)。两组共用同一 executor 与同一形状，
     // 唯一差异是 `side_effect` 字段 ⇒ 差值即「缺省保守串行」的代价。
-    let groups = [
-        ("readonly8_ms2", true),
-        ("undeclared8_ms2", false),
-    ];
+    let groups = [("readonly8_ms2", true), ("undeclared8_ms2", false)];
 
     let mut group = c.benchmark_group("toolplan_layers");
     group.sample_size(20);
@@ -95,10 +92,7 @@ fn bench_toolplan_layers(c: &mut Criterion) {
                 &concurrency,
                 |b, _| {
                     b.to_async(&rt).iter(|| async {
-                        let summary = runner
-                            .run(&plan)
-                            .await
-                            .expect("基准计划必须执行成功");
+                        let summary = runner.run(&plan).await.expect("基准计划必须执行成功");
                         assert_eq!(summary.tool_calls, 8);
                         assert!(!summary.truncated);
                     });

@@ -23,7 +23,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use seccore::execpolicy::ExecPolicy;
 
-use super::batch::{dispatch_batch, BatchLimits, BatchOutcome};
+use super::batch::{dispatch_batch_with_sink, BatchAttributionSink, BatchLimits, BatchOutcome};
 use super::chain::{DispatcherBuilder, SandboxedDispatcher};
 use super::dispatch::{DispatchError, DispatchFuture, DispatchRequest, ToolDispatcher};
 use super::inproc::InProcDispatcher;
@@ -44,6 +44,8 @@ pub struct ToolRuntime {
     /// 能力表就在现网静默失效，而单测因直接用裸执行器而全绿 ——
     /// 「测试证明不了接线」的典型形态。就地保留只有 1 处可能漏。
     capabilities: Option<Arc<dyn ToolExecutor>>,
+    /// 批量归因出口（W3/ADR-248）——`None` = 改造前行为（L1 等价，单点可回退）
+    batch_sink: Option<Arc<dyn BatchAttributionSink>>,
 }
 
 impl std::fmt::Debug for ToolRuntime {
@@ -92,6 +94,7 @@ impl ToolRuntime {
         Ok(Self {
             dispatcher,
             capabilities,
+            batch_sink: None,
         })
     }
 
@@ -182,7 +185,18 @@ impl ToolRuntime {
         Ok(Self {
             dispatcher,
             capabilities,
+            batch_sink: None,
         })
+    }
+
+    /// 注入批量归因出口（W3 / ADR-248；组合根唯一装配点调用）
+    ///
+    /// 消费 `self` 的 builder 形态，链在 `with_optional_delegate` 之后；
+    /// `None`（默认构造）= 改造前行为，L1 等价。
+    #[must_use]
+    pub fn with_batch_sink(mut self, sink: Arc<dyn BatchAttributionSink>) -> Self {
+        self.batch_sink = Some(sink);
+        self
     }
 
     /// 批量派发 — 有界并发 + 输入序结果（性能增量 2026-11-06）
@@ -204,7 +218,13 @@ impl ToolRuntime {
         requests: &[DispatchRequest],
         limits: BatchLimits,
     ) -> BatchOutcome {
-        dispatch_batch(&self.dispatcher, requests, limits).await
+        dispatch_batch_with_sink(
+            &self.dispatcher,
+            requests,
+            limits,
+            self.batch_sink.as_deref(),
+        )
+        .await
     }
 }
 

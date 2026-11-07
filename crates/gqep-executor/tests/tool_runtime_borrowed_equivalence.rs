@@ -22,7 +22,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use gqep_executor::tool_runtime::{
-    DispatchError, DispatchRequest, DispatchRequestRef, SandboxGate, SeccoreSandboxGate, ToolRuntime,
+    DispatchError, DispatchRequest, DispatchRequestRef, SandboxGate, SeccoreSandboxGate,
+    ToolRuntime,
 };
 use gqep_executor::ToolExecutor;
 use nexus_contracts::tool_dispatch::DispatchRequestRef as L0DispatchRequestRef;

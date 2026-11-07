@@ -102,6 +102,34 @@ struct TopicLabelSet {
     topic: TopicLabel,
 }
 
+/// 域中立自定义计数器句柄 — [`BusLogger::register_counter`] 的返回值
+///
+/// 内部持有 prometheus-client `Counter`（`Arc` 语义，Clone 共享同一底层
+/// 计数），上层把它装进自己的 Sink 结构体在热路径递增。渲染名 = 注册名 +
+/// `_total`（见 [`BusLogger::register_counter`] 的命名契约）。
+#[derive(Clone)]
+pub struct RegisteredCounter {
+    counter: Counter,
+}
+
+impl RegisteredCounter {
+    /// 累加 `v`
+    pub fn inc_by(&self, v: u64) {
+        self.counter.inc_by(v);
+    }
+
+    /// 累加 1
+    pub fn inc(&self) {
+        self.counter.inc();
+    }
+
+    /// 读取当前值（测试与诊断用）
+    #[must_use]
+    pub fn get(&self) -> u64 {
+        self.counter.get()
+    }
+}
+
 /// 事件总线日志记录器 — 提供全链路结构化日志埋点
 ///
 /// 每个 `EventBus` 实例配套一个 `BusLogger`,记录:
@@ -212,6 +240,34 @@ impl BusLogger {
         // 不会返回 Err(内存分配失败会 abort),因此安全忽略。
         let _ = encode(&mut buf, &self.registry);
         buf
+    }
+
+    /// 注册一个域中立自定义计数器（W3 / ADR-248 C-A 路线）
+    ///
+    /// 上层（如 chimera-cli 的批量归因 Sink）在**装配期**把业务计数器注册进
+    /// 本 logger 的 Registry，使 `render_metrics()` 一并导出。本 API 刻意
+    /// **不绑定任何业务语义**（无事件/工具/批量字样），保持 L1 的域中立。
+    ///
+    /// # 命名契约
+    ///
+    /// `name` **不得带 `_total` 后缀**——prometheus-client 对 Counter 在文本
+    /// 编码时自动追加（见 [`Self::new`] 的 WHY 注释），手动追加会变成
+    /// `_total_total`。注册 `"chimera_tool_batch_succeeded"` → 输出
+    /// `chimera_tool_batch_succeeded_total`。
+    ///
+    /// # Panics
+    ///
+    /// 同一 `BusLogger` 上重复注册同名计数器会 panic（prometheus-client
+    /// `Registry::register` 以名为键去重，重复注册属编程错误）。调用方应在
+    /// 装配期一次性注册——这与「注册先于 Arc 收编进 bus」的装配时序契约一致。
+    ///
+    /// WHY `&mut self`：prometheus-client 0.22 的 `Registry::register` 收
+    /// `&mut self`——这把注册约束在构造期（`set_logger` 收编后总线侧只持
+    /// 不可变引用），从类型系统上杜绝运行期动态注册。
+    pub fn register_counter(&mut self, name: &str, help: &str) -> RegisteredCounter {
+        let counter = Counter::default();
+        self.registry.register(name, help, counter.clone());
+        RegisteredCounter { counter }
     }
 
     /// 采集 Prometheus 指标(内部辅助方法)

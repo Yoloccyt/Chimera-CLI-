@@ -11,7 +11,8 @@ pub mod runtime;
 pub mod sandbox_gate;
 
 pub use batch::{
-    dispatch_batch, BatchAttribution, BatchLimits, BatchOutcome, BATCH_DEADLINE_PREFIX,
+    dispatch_batch, dispatch_batch_with_sink, BatchAttribution, BatchAttributionSink, BatchLimits,
+    BatchOutcome, BATCH_DEADLINE_PREFIX,
 };
 pub use chain::{DispatcherBuilder, SandboxedDispatcher};
 pub use dispatch::{

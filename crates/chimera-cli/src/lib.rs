@@ -78,6 +78,8 @@ pub mod exec_plan;
 pub mod experience_loop;
 /// TUI ↔ 编排器协议握手服务端(Concord W10,ADR-082:TuiHello 应答 + SEC-4 一次性)
 pub mod handshake;
+/// 批量归因指标 Sink(W3/F-03/ADR-248 C-A:TelemetryBatchSink → BusLogger 计数器)
+pub mod metrics_sink;
 /// Quest 分解编排器(消费 TuiChatSubmitted,经 QuestEngine 真实分解并流式回发)
 pub mod orchestrator;
 /// P1 候选③（ADR-211 Accepted）：`agent spawn` 前 mas-sched claim 准入
