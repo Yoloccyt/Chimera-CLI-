@@ -19,7 +19,7 @@ use anyhow::Result;
 use crate::cli::{Cli, Commands};
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
-use crate::permission::PermissionCtx;
+use crate::permission::{PermissionCtx, PermissionGate};
 
 /// P2-T9: ACP 桥（Agent Client Protocol,JSON-RPC 2.0 over stdio,转译层隔离）
 pub mod acp;
@@ -99,7 +99,16 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
         // 不消费 json/perm(纯字符串输出)
         Some(Commands::Help { command }) => help::execute(command.as_deref(), cli).await,
         Some(Commands::Run { prompt, execute }) => {
-            run::execute_with_ctx(ctx_ref(&ctx)?, prompt, cli.json, &perm, *execute).await
+            // ADR-247:权限门按进程 stdin 推断交互能力;测试经注入式构造覆盖三态
+            run::execute_with_ctx(
+                ctx_ref(&ctx)?,
+                prompt,
+                cli.json,
+                &PermissionGate::from_stdin(),
+                &perm,
+                *execute,
+            )
+            .await
         }
         // WI-02: exec 非交互契约 — 独立退出码语义（0/2/3/4）经 exec::exec_exit_code 映射；
         // std::process::exit 立即终止（exec 为 CI 管道场景，析构无业务依赖）

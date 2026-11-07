@@ -25,7 +25,8 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use nexus_core::{MultimodalInput, UserIntent};
+use gqep_executor::tool_runtime::{BatchLimits, BatchOutcome, DispatchError, DispatchRequest};
+use nexus_core::{MultimodalInput, Quest, UserIntent};
 use uuid::Uuid;
 
 use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET};
@@ -34,7 +35,7 @@ use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
 use crate::orchestrator::{build_error_reply, build_quest_reply, plan_chunks};
 use crate::output;
-use crate::permission::PermissionCtx;
+use crate::permission::{confirm_with, PermissionCtx, PermissionDecision, PermissionGate};
 use tokio_util::sync::CancellationToken;
 
 /// CallBudgetError → ChimeraCliError 映射(M2 接入点共用)
@@ -61,26 +62,164 @@ fn call_budget_to_cli_error(e: CallBudgetError) -> ChimeraCliError {
 /// W8 清理: chat.rs 原同值常量去重,统一引用本定义(单点维护)
 pub(crate) const DEFAULT_CHUNK_DELAY_MS: u64 = 20;
 
-/// `--execute` 未启用时的稳定拒绝文案(可被测试与文档引用)
+/// `--execute` 未获授权时的稳定拒绝文案(可被测试与文档引用)
 ///
-/// WHY 文案在 ADR-244 后再次修正：ADR-240 接线时称「尚无生产 ToolExecutor」，
-/// 但那之后 Wave E′ + ADR-244 D1 已在组合根**唯一装配**了真实
-/// `BuiltinToolExecutor`（policy → sandbox → route → transport 四环真实生效）。
-/// 因此当前拒绝的根因**不是**「缺执行器」，而是**本命令路径本身不消费工具运行时**：
-/// 只有 `chimera exec --plan` 走 `ctx.tool_runtime`。文案改为描述真实边界，
-/// 不再宣称传输环 fail-closed（那已是错误状态）。
+/// WHY 文案在 ADR-247 后再次修正：传输环与四环链自 ADR-244 起在组合根真实
+/// 装配，且 `run --execute` 已真实接入 `execute_batch`（F-13 首个生产调用方）——
+/// 拒绝的根因**不再是「不消费工具运行时」**，而是**授权前置未通过**：
+/// 非交互环境的权限三态为 `Unknown`，按 fail-closed 语义降级为 `Deny`
+/// （`PermissionGate::authorize`），不读 stdin、零副作用。需要执行时：交互
+/// 终端确认、`--yes` 显式授权，或改用 `chimera exec --plan`（CI 管道场景）。
 ///
-/// 稳定前缀 `execute_not_enabled:` 不变（脚本按前缀 grep），既有测试锁定。
+/// 稳定前缀 `execute_not_enabled:` 不变（脚本按前缀 grep）；文案正文保留
+/// 既有 5 条断言所需的子串（sandbox / composition root / chimera exec --plan /
+/// without --execute），既有测试零修改。
 pub const EXECUTE_REFUSAL_MSG: &str =
-    "execute_not_enabled: `run --execute` does not route into tool execution (the production \
-     ToolExecutor and the policy/sandbox rings are wired at the composition root, but only \
-     `chimera exec --plan <PATH|->` consumes them); run without --execute to inspect the plan, \
-     or use `chimera exec --plan` to execute";
+    "execute_not_enabled: tool execution was not authorized (non-interactive session: the \
+     permission gate fail-closed an Unknown decision to Deny — pass --yes, confirm in a \
+     terminal, or run without --execute). The four-ring chain (policy/sandbox/route/transport) \
+     and the ToolExecutor are wired at the composition root; non-interactive pipelines should \
+     use `chimera exec --plan <PATH|->` instead";
 
 /// 构造 `--execute` 拒绝错误(`NotImplemented`,退出码 2)
 #[must_use]
 pub fn execute_refusal() -> ChimeraCliError {
     ChimeraCliError::NotImplemented(EXECUTE_REFUSAL_MSG.to_string())
+}
+
+/// `--execute` 授权前置（ADR-247 D1,fail-closed）
+///
+/// - `Allow`（`--yes` / `--no-permission`）→ 直接放行,不读 stdin;
+/// - 非交互 `Unknown` → gate 已 fail-closed 降级为 `Deny`（计数器 + warn）
+///   → 稳定前缀拒绝（退出码 2、零副作用、不读 stdin）——脚本 grep 契约不变;
+/// - 交互 `Unknown` → confirm prompt（Ctrl+C 竞争返回 `UserCancelled`）;
+///   用户明确拒绝 → `UserCancelled`（退出码 4,而非 2——主动放弃不是「未实装」）。
+async fn ensure_execute_authorized(
+    gate: &PermissionGate,
+    perm: &PermissionCtx,
+    action: &str,
+) -> Result<(), ChimeraCliError> {
+    match gate.authorize(perm).decision {
+        PermissionDecision::Allow => Ok(()),
+        PermissionDecision::Deny => Err(execute_refusal()),
+        PermissionDecision::Unknown => {
+            if confirm_with(gate, perm, "run --execute 工具执行", action).await? {
+                Ok(())
+            } else {
+                Err(ChimeraCliError::UserCancelled)
+            }
+        }
+    }
+}
+
+/// Quest 任务 → `text.echo` 派发请求批量（ADR-247 D3,纯函数）
+///
+/// WHY 固定 `text.echo`:首个生产批量的工具来源为内置只读执行器（任务描述
+/// 回显,可端到端验证输入序契约);真实工具路由（P1 McpToolExecutor 等）扩展
+/// 此映射,不在本批引入网络/进程副作用面。
+#[must_use]
+pub fn build_batch_requests(quest: &Quest) -> Vec<DispatchRequest> {
+    quest
+        .tasks
+        .iter()
+        .map(|task| DispatchRequest {
+            tool_name: "text.echo".to_string(),
+            args_json: serde_json::json!({ "text": task.description }).to_string(),
+        })
+        .collect()
+}
+
+/// 经组合根唯一 ToolRuntime 批量执行 Quest 任务（F-13 首个生产调用方）
+///
+/// # 语义契约
+/// - 有界并发 + 输入序结果（`results[i]` ↔ 任务列表第 i 项,gqep 契约）;
+/// - `BatchLimits::default()`（8/30s/120s 双层超时）——并发度配置化留待 W5;
+/// - `call_with_budget` 包裹整批（120s 进程级预算 + 取消令牌,超时发既有
+///   `OperationTimedOut` 事件）——与 `create_quest` 同一防护口径;
+/// - 空分解（0 任务）为合法成功:零派发、退出码 0。
+pub async fn execute_quest_tool_batch(ctx: &AppContext, quest: &Quest) -> Result<BatchOutcome> {
+    let requests = build_batch_requests(quest);
+    if requests.is_empty() {
+        return Ok(BatchOutcome::empty());
+    }
+    let token = CancellationToken::new();
+    let outcome = call_with_budget(
+        ctx.tool_runtime
+            .execute_batch(&requests, BatchLimits::default()),
+        DEFAULT_CALL_BUDGET,
+        &token,
+        "run.execute_batch",
+        &ctx.bus,
+    )
+    .await
+    .map_err(call_budget_to_cli_error)?;
+    tracing::info!(
+        total = outcome.results.len(),
+        succeeded = outcome.succeeded,
+        failed = outcome.failed,
+        abandoned = outcome.abandoned,
+        not_started = outcome.not_started,
+        "run --execute 批量派发完成(F-13 首个生产调用方,ADR-247)"
+    );
+    Ok(outcome)
+}
+
+/// 批量结果 → CLI 错误归因（ADR-060 单一真值源,纯函数,不新造退出码）
+///
+/// 取**首个**失败逐条归因（顺序即输入序,可定位到第几条任务）:
+/// 策略/沙箱拒绝 → `PermissionDenied`(5);路由或非 deadline 传输失败 →
+/// `EngineError`(3);整批 deadline 超时 → `Timeout`(6)。
+/// WHY 无 `#[must_use]`:返回 `Result` 本身已天然 must_use（叠加即 double_must_use）。
+pub fn batch_outcome_to_cli_error(outcome: &BatchOutcome) -> Result<(), ChimeraCliError> {
+    for res in &outcome.results {
+        match res {
+            Ok(_) => {}
+            Err(DispatchError::Policy(msg)) | Err(DispatchError::Sandbox(msg)) => {
+                return Err(ChimeraCliError::PermissionDenied(msg.clone()));
+            }
+            Err(DispatchError::Route(msg)) => {
+                return Err(ChimeraCliError::EngineError(format!("route: {msg}")));
+            }
+            Err(DispatchError::Transport(msg)) => {
+                if msg.starts_with(gqep_executor::tool_runtime::BATCH_DEADLINE_PREFIX) {
+                    return Err(ChimeraCliError::Timeout(msg.clone()));
+                }
+                return Err(ChimeraCliError::EngineError(format!("transport: {msg}")));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 输出批量结果摘要（`json=true` 输出机器可读 envelope,否则人类可读逐条行）
+fn report_batch_outcome(outcome: &BatchOutcome, json: bool) -> Result<()> {
+    if json {
+        let items: Vec<serde_json::Value> = outcome
+            .results
+            .iter()
+            .map(|r| match r {
+                Ok(o) => serde_json::json!({ "status": "ok", "content": o.content_json }),
+                Err(e) => serde_json::json!({ "status": "error", "error": e.to_string() }),
+            })
+            .collect();
+        output::print_json(&serde_json::json!({
+            "results": items,
+            "succeeded": outcome.succeeded,
+            "failed": outcome.failed,
+            "abandoned": outcome.abandoned,
+            "not_started": outcome.not_started,
+        }))?;
+        return Ok(());
+    }
+    let total = outcome.results.len();
+    for (i, r) in outcome.results.iter().enumerate() {
+        match r {
+            Ok(o) => println!("[tool {}/{}] ok: {}", i + 1, total, o.content_json),
+            Err(e) => println!("[tool {}/{}] failed: {e}", i + 1, total),
+        }
+    }
+    println!("[done]");
+    Ok(())
 }
 
 /// 执行 run 命令 — 兼容层 thin wrapper（M4-P1）
@@ -91,26 +230,27 @@ pub fn execute_refusal() -> ChimeraCliError {
 ///
 /// `prompt` 为用户意图原始文本,`config` 为已加载的合并配置。
 ///
-/// `json` flag(Task 1.7):`true` 时输出 Quest 结构的 JSON envelope,
-/// 取代逐字符流式文本(便于脚本 `jq` 消费)。
+/// `json` flag(Task 1.7):`true` 时输出 JSON envelope,取代逐字符流式文本。
 ///
-/// `perm`(Task 1.11):当前未消费,预留供未来外部命令执行确认
-/// (如 `chimera run "执行 rm -rf"` 时调用 `permission::confirm`)。
+/// `gate`(ADR-247):权限门（生产入口传 `PermissionGate::from_stdin()`，测试
+/// 注入 `PermissionGate::new(interactive)`）——授权逻辑统收在
+/// [`execute_with_ctx`]，本 wrapper 不自带拒绝分支（E-1 半闭环由构造消除）。
 ///
-/// `execute`(T1-3):`true` 时在任何副作用之前返回 [`execute_refusal`];
-/// `false`(默认)时行为与改动前逐字等价。
+/// `perm`(Task 1.11):`--yes` / `--no-permission` 上下文，经 gate 消费。
+///
+/// `execute`(T1-3 + ADR-247):`true` 时先经 [`ensure_execute_authorized`]
+/// 授权前置（非交互 fail-closed 拒绝），通过后走 [`execute_quest_tool_batch`]
+/// 真实批量执行;`false`(默认)时行为与改动前逐字等价。
 pub async fn execute(
     prompt: &str,
     config: &ChimeraConfig,
     json: bool,
-    _perm: &PermissionCtx,
+    gate: &PermissionGate,
+    perm: &PermissionCtx,
     execute: bool,
 ) -> Result<()> {
-    if execute {
-        return Err(execute_refusal().into());
-    }
     let ctx = crate::composition::build(config)?;
-    execute_with_ctx(&ctx, prompt, json, _perm, execute).await
+    execute_with_ctx(&ctx, prompt, json, gate, perm, execute).await
 }
 
 /// run 命令主体 — 从组合根 AppContext 取共享 bus + engine（M4-P1）
@@ -119,17 +259,23 @@ pub async fn execute(
 /// 一律来自 `ctx`（dispatch 持有 AppContext，命令借用；engine 为 owned，
 /// 经 `&ctx.engine` 借用调用 `create_quest(&self)`）。
 ///
-/// `execute`(T1-3):`true` 时在**任何副作用之前**（未建 Quest、未发事件）
-/// 返回 [`execute_refusal`]——拒绝本身不得先执行一半。
+/// `execute`(T1-3 + ADR-247):`true` 时在**任何副作用之前**（未建 Quest、未发
+/// 事件）做授权前置——非交互 `Unknown → Deny` 返回 [`execute_refusal`]（退出码
+/// 2、稳定前缀、不读 stdin），交互 `Unknown` 走 confirm prompt，仅 `Allow` 才
+/// 继续;通过后 Quest 分解结果经 [`execute_quest_tool_batch`] 真实批量执行
+/// （F-13 首个生产调用方），结果按 ADR-060 矩阵归因退出码。
 pub async fn execute_with_ctx(
     ctx: &AppContext,
     prompt: &str,
     json: bool,
-    _perm: &PermissionCtx,
+    gate: &PermissionGate,
+    perm: &PermissionCtx,
     execute: bool,
 ) -> Result<()> {
+    // ADR-247 D1:授权前置必须在 create_quest 之前（拒绝路径零副作用——
+    // 既有测试锁定共享 bus 上零 Quest 事件）。授权点全命令唯一（E-1）。
     if execute {
-        return Err(execute_refusal().into());
+        ensure_execute_authorized(gate, perm, prompt).await?;
     }
 
     tracing::info!(prompt = %prompt, "收到单次任务");
@@ -168,7 +314,17 @@ pub async fn execute_with_ctx(
     .map_err(call_budget_to_cli_error)?
     .map_err(|e| ChimeraCliError::EngineError(build_error_reply(&e)))?;
 
-    // 4. 输出
+    // 4. 输出 / 执行
+    if execute {
+        // ADR-247(F-02/F-13):授权已通过——Quest 分解结果映射为 text.echo 批量,
+        // 经组合根唯一 ToolRuntime 有界并发派发(F-13 首个生产调用方),结果按
+        // ADR-060 矩阵归因退出码。W3 起逐批归因统一由 ToolBatchAttributed 承载,
+        // 本处 tracing::info! 为过渡态(不新增事件变体,棘轮余量 I2 顶格)。
+        let outcome = execute_quest_tool_batch(ctx, &quest).await?;
+        report_batch_outcome(&outcome, json)?;
+        batch_outcome_to_cli_error(&outcome)?;
+        return Ok(());
+    }
     if json {
         // JSON 模式:输出 Quest 结构的 envelope(机器可读)
         output::print_json(&quest)?;
@@ -224,7 +380,7 @@ async fn stream_to_stdout(reply: &str) {
 mod tests {
     use super::*;
     use crate::composition;
-    use crate::permission::PermissionCtx;
+    use crate::permission::{PermissionCtx, PermissionGate};
     use event_bus::NexusEvent;
 
     /// M4-P1：run 经 execute_with_ctx 走组合根共享 bus ——
@@ -236,7 +392,8 @@ mod tests {
         // §4.4 反模式 3：先 subscribe 再驱动命令，否则事件静默丢失
         let mut rx = ctx.bus.subscribe();
         let perm = PermissionCtx::default();
-        execute_with_ctx(&ctx, "分析依赖并给出优化建议", false, &perm, false)
+        let gate = PermissionGate::new(false);
+        execute_with_ctx(&ctx, "分析依赖并给出优化建议", false, &gate, &perm, false)
             .await
             .expect("run 正常路径应成功");
         let mut saw_quest_created = false;
@@ -292,7 +449,8 @@ mod tests {
         // §4.4 反模式 3：先 subscribe 再驱动命令，否则事件静默丢失
         let mut rx = ctx.bus.subscribe();
         let perm = PermissionCtx::default();
-        let result = execute_with_ctx(&ctx, "执行高风险工具链", false, &perm, true).await;
+        let gate = PermissionGate::new(false);
+        let result = execute_with_ctx(&ctx, "执行高风险工具链", false, &gate, &perm, true).await;
         let err = result.expect_err("--execute 应被拒绝");
         let cli_err = err
             .downcast_ref::<ChimeraCliError>()
@@ -340,8 +498,16 @@ mod tests {
     async fn run_wrapper_normal_path_unchanged() {
         let config = ChimeraConfig::default();
         let perm = PermissionCtx::default();
-        execute("分解需求：设计评审流程", &config, false, &perm, false)
-            .await
-            .expect("wrapper 正常路径应成功");
+        let gate = PermissionGate::new(false);
+        execute(
+            "分解需求：设计评审流程",
+            &config,
+            false,
+            &gate,
+            &perm,
+            false,
+        )
+        .await
+        .expect("wrapper 正常路径应成功");
     }
 }

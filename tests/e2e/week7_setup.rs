@@ -364,7 +364,7 @@ async fn test_week7_setup_mcp_mesh_executes_transaction() {
     // 执行 2 服务器量子事务
     let result = pipeline
         .mesh
-        .execute_transaction(vec!["srv-1".into(), "srv-2".into()], "query".into())
+        .execute_transaction(vec!["srv-1".into(), "srv-2".into()], "query".into(), vec![])
         .await
         .expect("MCP 事务执行失败");
     assert!(result.success, "2 服务器事务应成功");

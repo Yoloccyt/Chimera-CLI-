@@ -83,7 +83,7 @@ async fn test_week7_mcp_mesh_full_chain() {
     // 4. MCP Mesh 执行量子事务(L10 → execute_transaction,发布 McpMeshTransactionCompleted)
     let tx_result = pipeline
         .mesh
-        .execute_transaction(vec!["srv-1".into(), "srv-2".into()], "query".into())
+        .execute_transaction(vec!["srv-1".into(), "srv-2".into()], "query".into(), vec![])
         .await
         .expect("MCP 事务执行失败");
     assert!(tx_result.success, "2 服务器事务应成功");
@@ -362,7 +362,7 @@ async fn test_week7_quest_lsct_ssra_chtc_mcp_chain() {
     // 4. MCP Mesh 事务(L10 → 发布 McpMeshTransactionCompleted)
     let tx_result = pipeline
         .mesh
-        .execute_transaction(vec!["srv-1".into()], "compile".into())
+        .execute_transaction(vec!["srv-1".into()], "compile".into(), vec![])
         .await
         .expect("MCP 事务执行失败");
     assert!(tx_result.success, "单服务器事务应成功");

@@ -275,7 +275,7 @@ async fn test_stress_multi_crate_100_cycles() {
         // 操作 3:MCP 事务(L10 → publish McpMeshTransactionCompleted)
         let _ = pipeline
             .mesh
-            .execute_transaction(vec!["srv-1".into()], format!("query-{i}"))
+            .execute_transaction(vec!["srv-1".into()], format!("query-{i}"), vec![])
             .await
             .expect("MCP 事务失败");
         total_ops += 1;

@@ -74,7 +74,7 @@ async fn test_mcp_injection_sql_in_server_id() {
     // 事务应能正常执行(使用恶意 ID 作为参与者)
     let result = pipeline
         .mesh
-        .execute_transaction(vec![malicious_id.into()], "query".into())
+        .execute_transaction(vec![malicious_id.into()], "query".into(), vec![])
         .await
         .expect("含恶意 ID 的事务应成功(无 SQL 执行)");
     assert!(result.success, "事务应成功,SQL 注入载荷被中和");
@@ -228,7 +228,7 @@ async fn test_mcp_injection_participant_count_overflow() {
     let participants: Vec<String> = (0..33).map(|i| format!("srv-overflow-{i}")).collect();
     let err = pipeline
         .mesh
-        .execute_transaction(participants, "query".into())
+        .execute_transaction(participants, "query".into(), vec![])
         .await
         .unwrap_err();
     assert!(
@@ -259,7 +259,7 @@ async fn test_mcp_injection_empty_participant_list() {
 
     let result = pipeline
         .mesh
-        .execute_transaction(vec![], "query".into())
+        .execute_transaction(vec![], "query".into(), vec![])
         .await
         .expect("空参与者事务应被安全处理(无 panic)");
 
@@ -291,7 +291,7 @@ async fn test_mcp_injection_null_byte_in_op_string() {
     let malicious_op = "query\0rm -rf /";
     let result = pipeline
         .mesh
-        .execute_transaction(vec!["srv-1".into()], malicious_op.into())
+        .execute_transaction(vec!["srv-1".into()], malicious_op.into(), vec![])
         .await
         .expect("含 null 字节的 op 应被安全处理");
 
@@ -1093,7 +1093,7 @@ async fn test_week7_security_30_payloads_all_immune() {
     // 快速冒烟:验证管线在 30 载荷后仍正常工作
     let result = pipeline
         .mesh
-        .execute_transaction(vec!["srv-1".into()], "smoke".into())
+        .execute_transaction(vec!["srv-1".into()], "smoke".into(), vec![])
         .await
         .expect("30 载荷后 MCP 事务仍应正常");
     assert!(result.success, "管线在安全测试后应保持可用");

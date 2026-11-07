@@ -165,7 +165,14 @@ insta = "1.48.0"
 name = "chimera"
 path = "src/main.rs"
 
-# OnceLock 14 section 懒加载并发性能基准(SubTask S1)
+# run --execute 批量派发「串行 vs 有界并行」同轮对照基准(ADR-247/W2;
+# 经生产装配入口 with_optional_delegate 构造,runx_* 前缀键守 I2)
+# WHY harness = false:criterion 自带 main + 命令行解析,需禁用 libtest 默认 harness
+[[bench]]
+name = "run_execute_batch"
+harness = false
+
+# OnceLock 15 section 懒加载并发性能基准(SubTask S1;ADR-246 段数 14→15)
 # WHY harness = false:criterion 自带 main + 命令行解析,需禁用 libtest 默认 harness
 [[bench]]
 name = "config_concurrency_bench"

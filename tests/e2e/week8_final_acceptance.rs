@@ -316,7 +316,7 @@ fn test_week7_mesh_monitoring() {
         // L10 Interface:MCP Mesh 量子事务
         let tx = pipeline
             .mesh
-            .execute_transaction(vec!["srv-1".into(), "srv-2".into()], "w7-query".into())
+            .execute_transaction(vec!["srv-1".into(), "srv-2".into()], "w7-query".into(), vec![])
             .await
             .expect("MCP 事务失败");
         assert!(tx.success, "MCP Mesh 2 服务器事务应成功");

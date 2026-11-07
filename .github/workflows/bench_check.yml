@@ -158,6 +158,8 @@ jobs:
           run_bench tool_runtime_chain   cargo bench -p gqep-executor --bench tool_runtime_chain
           # ADR-252：PlanRunner 分层串/并发对照（declared vs undeclared side_effect）
           run_bench toolplan_layers      cargo bench -p gqep-executor --bench toolplan_layers
+          # ADR-247：run --execute 批量派发对照（F-13 首个生产调用方，生产装配入口端到端）
+          run_bench run_execute_batch    cargo bench -p chimera-cli --bench run_execute_batch
           run_bench cli_parse            cargo bench -p chimera-cli --bench cli_parse
           run_bench tui_tick             cargo bench -p chimera-tui --bench tui_tick_bench
           run_bench registry_lookup      cargo bench -p mcp-mesh --bench registry_lookup
@@ -390,6 +392,12 @@ jobs:
               "tplan_declared_parallel":   38_000_000,
               "tplan_undeclared_serial":   175_000_000,
               "tplan_undeclared_parallel": 160_000_000,
+              # ADR-247：runx_*（run --execute 批量对照；2026-11-07 实测 median 后登记，
+              # ms 档 ×2.5 / µs 档 ×8 余量）
+              "runx_serial_zero":  400_000,
+              "runx_parallel_zero": 450_000,
+              "runx_serial_1ms":   1_300_000_000,
+              "runx_parallel_1ms": 155_000_000,
           }
 
           # 路径关键词映射:criterion 目录名 → benchmark crate
@@ -520,6 +528,11 @@ jobs:
               "tplan_declared_parallel":   ["toolplan_layers/readonly8_ms2/8"],
               "tplan_undeclared_serial":   ["toolplan_layers/undeclared8_ms2/1"],
               "tplan_undeclared_parallel": ["toolplan_layers/undeclared8_ms2/8"],
+              # ADR-247：runx_* 叶子全路径（ADR-252 D2 同源纪律）
+              "runx_serial_zero":  ["runx_serial_zero/64"],
+              "runx_serial_1ms":   ["runx_serial_1ms/64"],
+              "runx_parallel_zero": ["runx_parallel_zero/64"],
+              "runx_parallel_1ms": ["runx_parallel_1ms/64"],
           }
 
           criterion_dir = Path("target/criterion")

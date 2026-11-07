@@ -114,6 +114,16 @@ tplan_declared_serial = 175000000
 tplan_declared_parallel = 38000000
 tplan_undeclared_serial = 175000000
 tplan_undeclared_parallel = 160000000
+# —— run --execute 批量派发（run_execute_batch bench，ADR-247/W2）——
+# 经生产装配入口 with_optional_delegate 构造 ToolRuntime，64 请求同轮对照。
+# 2026-11-07 本机 median（Windows timer granularity 抬高绝对值，同轮比值有效，
+# ADR-252 D5 同源口径）：1ms 档串行 521.85ms / 并行 61.78ms ⇒ 有界并行 8.45×；
+# 零延迟对照 49.39µs / 52.64µs（并行 +6.6% 属预期编排开销，ADR-239 D6）。
+# 余量：ms 档 ×2.5、µs 档 ×8（ADR-239 分级同源）。
+runx_serial_zero = 400000
+runx_parallel_zero = 450000
+runx_serial_1ms = 1300000000
+runx_parallel_1ms = 155000000
 # —— CLI 启动分段（cli_parse bench）——
 # clap 解析成本（实测 131/110/104 µs）：D4 把 parse 前置到 runtime 创建之前，
 # 这三档是「命令树构建 + 参数匹配」的纯 CPU 成本，锁定其不退化。
@@ -258,6 +268,11 @@ tplan_declared_serial = ["toolplan_layers/readonly8_ms2/1"]
 tplan_declared_parallel = ["toolplan_layers/readonly8_ms2/8"]
 tplan_undeclared_serial = ["toolplan_layers/undeclared8_ms2/1"]
 tplan_undeclared_parallel = ["toolplan_layers/undeclared8_ms2/8"]
+# ADR-247：runx_* 取 criterion 叶子全路径（防宽词互相窃取，ADR-252 D2 同源纪律）
+runx_serial_zero = ["runx_serial_zero/64"]
+runx_serial_1ms = ["runx_serial_1ms/64"]
+runx_parallel_zero = ["runx_parallel_zero/64"]
+runx_parallel_1ms = ["runx_parallel_1ms/64"]
 # CLI 启动分段（cli_parse bench）：解析 + 配置判定 + runtime 构建三段。
 # WHY 键名带 `cli_` 前缀族：与既有全部键互不为子串（I2），
 # 且 `cli_` 不被任何既有键包含（`cluster`/`client` 之类均不存在于本表）。
@@ -506,6 +521,12 @@ bench = "tool_runtime_chain"
 alias = "toolplan_layers"
 crate = "gqep-executor"
 bench = "toolplan_layers"
+
+# ADR-247：run --execute 批量派发串/并行同轮对照（生产装配入口端到端，F-13）
+[[run_bench]]
+alias = "run_execute_batch"
+crate = "chimera-cli"
+bench = "run_execute_batch"
 
 # CLI 解析成本基线：main.rs 的 D4（parse 前置）使 --version/--help 零 runtime
 # 成本，D5（配置按需）使 4 类命令免 14 段 Figment 解析——本 bench 是这两项

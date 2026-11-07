@@ -110,7 +110,7 @@ fn test_layer_dependencies() {
         // L10 Interface:MCP Mesh 量子事务,发布 McpMeshTransactionCompleted 事件
         let tx_result = pipeline
             .mesh
-            .execute_transaction(vec!["srv-1".into(), "srv-2".into()], "query".into())
+            .execute_transaction(vec!["srv-1".into(), "srv-2".into()], "query".into(), vec![])
             .await
             .expect("MCP 事务失败");
         assert!(tx_result.success, "2 服务器事务应成功");
