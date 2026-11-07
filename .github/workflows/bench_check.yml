@@ -156,6 +156,8 @@ jobs:
           run_bench tool_dispatch_layers cargo bench -p gqep-executor --bench tool_dispatch_layers
           run_bench tool_runtime_batch   cargo bench -p gqep-executor --bench tool_runtime_batch
           run_bench tool_runtime_chain   cargo bench -p gqep-executor --bench tool_runtime_chain
+          # ADR-252：PlanRunner 分层串/并发对照（declared vs undeclared side_effect）
+          run_bench toolplan_layers      cargo bench -p gqep-executor --bench toolplan_layers
           run_bench cli_parse            cargo bench -p chimera-cli --bench cli_parse
           run_bench tui_tick             cargo bench -p chimera-tui --bench tui_tick_bench
           run_bench registry_lookup      cargo bench -p mcp-mesh --bench registry_lookup
@@ -275,6 +277,12 @@ jobs:
               # （下方已补），而该 bench 每轮都跑（L166 run_bench）且 TOML 有 2ms 阈值
               # ⇒ 该阈值在 CI 永不被断言，且三道自证结构（I1/I7/compare）均看不见它。
               # 真正的键集对拍不变式尚未实现，已登记为待落单（ADR-225 §5 / 交付物 03 C-86）。
+              # 【2026-11-06 订正】上句的「尚未实现」已过期：该不变式落地为 **I9**
+              # （scripts/check_perf_redlines.py 的 ci_threshold_key_sync），把本 heredoc 的
+              # THRESHOLDS_NS 键集与 perf_thresholds.toml 的 [[thresholds_ns]] 键集双向对拍，
+              # 并先断言「dict 确实被提取到」以防空转。现测见
+              # `python scripts/check_perf_redlines.py invariants` 自报的 I9 行。
+              # 本段历史叙述保留，因为它记录的是「为什么需要 I9」的根因（M44 静默差集）。
               # gather 本地 median 305ms 为离群值（5 severe outliers；CI 侧 <100ms
               # 通过）→ 数据不可信，保留 100ms 兜底，calibration_pending 唯一存活项。
               "config_concurrency": 3_000_000,     # < 3ms（实测 1.21ms）
@@ -375,6 +383,13 @@ jobs:
               #   faae_hot_scoring/serial_24k 12.201ms（该键 max 组）→ ×2.5 余量 30ms
               "faae_scoring":        50_000_000,
               "faae_hot_scoring":    30_000_000,
+              # ADR-252：PlanRunner 只读层串/并发对照（本机 median × ms 档余量 ×2.5）。
+              # undeclared_parallel 现值 160ms 是「缺省保守串行」的改前上界，
+              # ADR-254 能力表落地后收紧到 ≈38ms（只收紧不放宽）。
+              "tplan_declared_serial":     175_000_000,
+              "tplan_declared_parallel":   38_000_000,
+              "tplan_undeclared_serial":   175_000_000,
+              "tplan_undeclared_parallel": 160_000_000,
           }
 
           # 路径关键词映射:criterion 目录名 → benchmark crate
@@ -498,6 +513,13 @@ jobs:
               # I2 已核:与全部既有键双向互不为子串）
               "faae_scoring":        ["faae_scoring/serial_24k", "faae_scoring/parallel_24k"],
               "faae_hot_scoring":    ["faae_hot_scoring/serial_24k", "faae_hot_scoring/parallel_24k"],
+              # 与 scripts/perf_thresholds.toml [path_keywords] 同步（ADR-252）。
+              # 取 criterion 叶子全路径 ⇒ /1 与 /8 各唯一命中，不被宽词窃取。
+              # I2 已核：与全部既有键双向互不为子串，重叠数不增。
+              "tplan_declared_serial":     ["toolplan_layers/readonly8_ms2/1"],
+              "tplan_declared_parallel":   ["toolplan_layers/readonly8_ms2/8"],
+              "tplan_undeclared_serial":   ["toolplan_layers/undeclared8_ms2/1"],
+              "tplan_undeclared_parallel": ["toolplan_layers/undeclared8_ms2/8"],
           }
 
           criterion_dir = Path("target/criterion")

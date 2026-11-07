@@ -101,6 +101,19 @@ tbatch_parallel_zero = 2000000
 # WHY 这两条是并行化的**核心收益判据**：4.4× 加速来自有界并发的真实摊薄。
 tbatch_serial_slow = 1200000000
 tbatch_parallel_slow = 400000000
+# —— PlanRunner 分层串/并发（toolplan_layers bench，ADR-252）——
+# 8 个只读 ToolCall 同层，每节点 sleep 2ms；declared = 计划显式写
+# side_effect:"read_only"，undeclared = 字段缺省 None。
+# 2026-11-06 本机 median：
+#   declared   c1 69.086ms / c8 14.901ms  ⇒ 显式声明时并发真生效（4.6×）
+#   undeclared c1 69.814ms / c8 63.804ms  ⇒ 未声明时 c8 ≈ c1，整层仍串行
+# WHY undeclared_parallel 现在放宽到 160ms：它是「缺省保守串行」的**改前上界**，
+# ADR-254 的执行器能力表落地后本键应收紧到 ≈38ms（只收紧不放宽）。
+# 余量 ms 档 ×2.5（与 tbatch_* 同源分级）。
+tplan_declared_serial = 175000000
+tplan_declared_parallel = 38000000
+tplan_undeclared_serial = 175000000
+tplan_undeclared_parallel = 160000000
 # —— CLI 启动分段（cli_parse bench）——
 # clap 解析成本（实测 131/110/104 µs）：D4 把 parse 前置到 runtime 创建之前，
 # 这三档是「命令树构建 + 参数匹配」的纯 CPU 成本，锁定其不退化。
@@ -234,6 +247,15 @@ tbatch_serial_zero = ["serial_ms0"]
 tbatch_parallel_zero = ["parallel_ms0"]
 tbatch_serial_slow = ["serial_ms1/64"]
 tbatch_parallel_slow = ["parallel_ms1_bound8/64"]
+# ADR-252：取 criterion **叶子全路径**为关键词（而非 `readonly8_ms2` 这类组名），
+# 使 `/1` 与 `/8` 两档各自唯一命中，避免宽关键词把并发档窃取进串行阈值。
+# I2 已用门自身的 keyword_overlaps 核过：与全部既有键双向互不为子串，
+# 重叠数维持 1 ≤ max_keyword_overlaps=1（既有唯一重叠对仍是
+# diff_engine_bench × writer_ansi，非本批引入）。
+tplan_declared_serial = ["toolplan_layers/readonly8_ms2/1"]
+tplan_declared_parallel = ["toolplan_layers/readonly8_ms2/8"]
+tplan_undeclared_serial = ["toolplan_layers/undeclared8_ms2/1"]
+tplan_undeclared_parallel = ["toolplan_layers/undeclared8_ms2/8"]
 # CLI 启动分段（cli_parse bench）：解析 + 配置判定 + runtime 构建三段。
 # WHY 键名带 `cli_` 前缀族：与既有全部键互不为子串（I2），
 # 且 `cli_` 不被任何既有键包含（`cluster`/`client` 之类均不存在于本表）。
@@ -474,6 +496,15 @@ alias = "tool_runtime_chain"
 crate = "gqep-executor"
 bench = "tool_runtime_chain"
 
+# ADR-252：PlanRunner 只读层「串行 vs 有界并发」对照升格 registered。
+# 该 bench 由 95376f8 引入却未登记任何台账 ⇒ inventory 判 unknown（红），
+# 且其读数不进 CI 阈值断言。升格而非 dev-only：它有真实并行性能语义，
+# 声明为 dev-only 等于把一把有 SLO 意义的尺子标成「无 SLO」＝降低门强度。
+[[run_bench]]
+alias = "toolplan_layers"
+crate = "gqep-executor"
+bench = "toolplan_layers"
+
 # CLI 解析成本基线：main.rs 的 D4（parse 前置）使 --version/--help 零 runtime
 # 成本，D5（配置按需）使 4 类命令免 14 段 Figment 解析——本 bench 是这两项
 # 优化的回归防护。
@@ -588,4 +619,3 @@ bench = "hnsw_tiered"
 alias = "faae_parallel"
 crate = "faae-router"
 bench = "faae_parallel_bench"
-
