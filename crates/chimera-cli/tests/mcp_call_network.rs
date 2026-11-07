@@ -27,12 +27,10 @@ use chimera_cli::permission::PermissionCtx;
 
 fn config_with_server(id: &str, url: &str) -> ChimeraConfig {
     let mut config = ChimeraConfig::default();
+    // ADR-255:McpServerConfig 收口为 id + url(死字段 command/args/auth 已移除)
     config.mcp.servers = vec![McpServerConfig {
         id: id.to_string(),
-        command: None,
-        args: None,
         url: Some(url.to_string()),
-        auth: None,
     }];
     config
 }

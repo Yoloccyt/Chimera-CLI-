@@ -167,6 +167,8 @@ pub const SEED_KEYS: &[&str] = &[
     "slash.unwired.fork",
     "slash.unwired.undo",
     "slash.unwired.redo",
+    // B1 同批:/mcp 注册为 Orchestrated 但 TUI 无 MCP 数据链,补具体指引(对齐 fork/undo/redo)
+    "slash.unwired.mcp",
     // 输入模式
     "mode.normal",
     "mode.insert",
@@ -750,6 +752,8 @@ fn lookup_table_3(key: &str) -> Option<&'static str> {
         "slash.unwired.fork" => "分叉:多会话存储未接线(预留)",
         "slash.unwired.undo" => "撤销:消息级撤销未接线,可用 Esc-Esc 回退",
         "slash.unwired.redo" => "重做:未接线(预留)",
+        // /mcp 具体指引:TUI 无 MCP 数据链(mcp-mesh 不入 TUI 依赖),指路 CLI 子命令
+        "slash.unwired.mcp" => "MCP 管理:请用 CLI 子命令 chimera mcp(list / inspect / call)",
         "mode.normal" => "普通",
         "mode.insert" => "输入",
         "mode.command" => "命令",

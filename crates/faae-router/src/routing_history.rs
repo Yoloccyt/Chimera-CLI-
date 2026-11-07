@@ -110,7 +110,9 @@ impl RoutingHistory {
 pub enum ExpertKind {
     /// 内置专家（faae 注册表既有）
     Builtin,
-    /// MCP 外部工具（client_v2 discover_and_register 注册,WI-22）
+    /// MCP 外部工具（mcp-mesh 注册;`client_v2` 的 discover/握手面在
+    /// 2026-08-28 ENOSPC 事故后仅为数据骨架,`discover_and_register` 恢复前
+    /// 本变体在生产中不产生实例,WI-22 闭环待续）
     Mcp,
 }
 

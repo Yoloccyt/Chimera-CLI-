@@ -244,12 +244,14 @@ fn orchestrated_fallback(name: &str, args: &str) -> DispatchPlan {
             payload: serde_json::json!({ "quest_id": args }).to_string(),
         };
     }
-    // fork/undo/redo:无对应后端(会话分叉 / 消息级撤销),降级为带具体
-    // 指引的诚实提示(区别于笼统 HonestTodo,告知替代路径)
+    // fork/undo/redo/mcp:无对应后端(会话分叉 / 消息级撤销 / TUI 侧 MCP 数据链),
+    // 降级为带具体指引的诚实提示(区别于笼统 HonestTodo,告知替代路径)。
+    // /mcp 的替代路径是 CLI 子命令 `chimera mcp`(mcp-mesh 不入 TUI 依赖面)。
     let hint = match name {
         "fork" => Some("slash.unwired.fork"),
         "undo" => Some("slash.unwired.undo"),
         "redo" => Some("slash.unwired.redo"),
+        "mcp" => Some("slash.unwired.mcp"),
         _ => None,
     };
     match hint {
@@ -508,6 +510,12 @@ mod tests {
         assert_eq!(
             plan(r.get("redo").unwrap(), ""),
             DispatchPlan::Instant(SlashEffect::UnwiredHint("slash.unwired.redo"))
+        );
+        // /mcp 同批对齐:注册为 Orchestrated 但 TUI 无 MCP 数据链,
+        // 落具体指引(指路 CLI `chimera mcp`)而非笼统 HonestTodo
+        assert_eq!(
+            plan(r.get("mcp").unwrap(), ""),
+            DispatchPlan::Instant(SlashEffect::UnwiredHint("slash.unwired.mcp"))
         );
         // FC-2:/compact 已接线 —— 直连编排域(compact 策展,ADR-081)
         assert_eq!(

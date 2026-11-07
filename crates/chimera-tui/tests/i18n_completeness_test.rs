@@ -654,6 +654,8 @@ const DYNAMICALLY_CONSTRUCTED_KEYS: &[&str] = &[
     "slash.unwired.fork",
     "slash.unwired.undo",
     "slash.unwired.redo",
+    // ADR-253 同批:/mcp 诚实降级指引(键由 slash_parser 携带,无字面量 t! 调用点)
+    "slash.unwired.mcp",
     // components::prefix_hint::prefix_hint_entries 返回 &'static str 键,
     // 渲染时才经 tr() 解析,源码中无 t!()/tr() 字面量调用点。
     "prefix.hint.g_top",

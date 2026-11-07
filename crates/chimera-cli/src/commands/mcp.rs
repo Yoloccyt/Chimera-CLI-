@@ -95,9 +95,10 @@ fn build_mesh(use_network: bool) -> McpMesh {
 ///
 /// - `url` 型：直接以 `url` 作为 endpoint 注册，`validate_endpoint`（SSRF）拒绝时
 ///   显式 warn（不静默跳过）；
-/// - stdio 型（无 `url`、有 `command`）：MCP mesh 只支持网络 endpoint，stdio 无法真实注册。
-///   这里合成 `stdio://localhost/<id>` 占位并尝试注册——SSRF 校验会拒绝 localhost，
-///   从而进入**显式 warn** 分支（满足「不得静默跳过」；若未来接受则正常注册）。
+/// - stdio 型（无 `url`、有 `command`）：MCP mesh 只支持网络 endpoint，stdio 无法
+///   真实注册。**直接显式 warn 后跳过**——不再合成 `stdio://localhost/<id>` 必败
+///   端点去借道 SSRF 拒绝（旧迂回模式），行为等价（registry 本就不收录 stdio），
+///   但意图直达、不依赖无关防线的副作用。
 fn register_configured_servers(mesh: &McpMesh, config: &ChimeraConfig) -> Result<()> {
     let mcp = &config.mcp;
 
@@ -107,33 +108,25 @@ fn register_configured_servers(mesh: &McpMesh, config: &ChimeraConfig) -> Result
             continue;
         }
 
-        let (endpoint, is_url) = match server.url.as_deref() {
-            Some(url) if !url.is_empty() => (url.to_string(), true),
-            _ => (format!("stdio://localhost/{}", server.id), false),
+        // stdio 型:mesh 仅支持网络 endpoint,显式 warn(不静默跳过)
+        let Some(url) = server.url.as_deref().filter(|u| !u.is_empty()) else {
+            tracing::warn!(
+                server_id = %server.id,
+                "stdio 服务器暂不支持注册（仅 url 型可注册），已跳过"
+            );
+            continue;
         };
-        let transport = if is_url { "url" } else { "stdio" };
-        let candidate = MeshServer::new(
-            server.id.clone(),
-            endpoint.clone(),
-            vec![transport.to_string()],
-        );
 
+        let candidate =
+            MeshServer::new(server.id.clone(), url.to_string(), vec!["url".to_string()]);
         match mesh.registry().register(candidate) {
             Ok(()) => {
-                tracing::info!(server_id = %server.id, %endpoint, "MCP 服务器已注册");
-            }
-            Err(err) if !is_url => {
-                tracing::warn!(
-                    server_id = %server.id,
-                    %endpoint,
-                    error = %err,
-                    "stdio 服务器暂不支持注册（仅 url 型可注册）"
-                );
+                tracing::info!(server_id = %server.id, endpoint = %url, "MCP 服务器已注册");
             }
             Err(err) => {
                 tracing::warn!(
                     server_id = %server.id,
-                    %endpoint,
+                    endpoint = %url,
                     error = %err,
                     "MCP 服务器注册被拒（SSRF 校验）"
                 );
@@ -263,8 +256,9 @@ async fn call_tool(
     // 真实调用 McpMesh::execute_transaction
     // WHY 返回 EngineError:目标 server 若未出现在本次注册（含 stdio 跳过/SSRF 拒绝），
     // execute_transaction 仍返回 ServerNotFound（既有语义保持不变）。
+    // args 全量透传（ADR-253 D1）：随 Prepare 帧抵达参与者，不再在 CLI 层静默丢弃。
     let result = mesh
-        .execute_transaction(vec![server.to_string()], tool.to_string())
+        .execute_transaction(vec![server.to_string()], tool.to_string(), args.to_vec())
         .await
         .map_err(|e| ChimeraCliError::EngineError(format!("MCP 工具调用失败: {e}")))?;
 

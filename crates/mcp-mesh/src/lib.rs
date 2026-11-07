@@ -29,7 +29,7 @@
 //! let mesh = McpMesh::new(MeshConfig::default());
 //! mesh.register_server(MeshServer::new("s-1", "203.0.113.1:8080", vec!["tool-a".into()])).unwrap();
 //!
-//! let result = mesh.execute_transaction(vec!["s-1".into()], "query".into()).await.unwrap();
+//! let result = mesh.execute_transaction(vec!["s-1".into()], "query".into(), Vec::new()).await.unwrap();
 //! assert!(result.success);
 //! # }
 //! ```

@@ -399,6 +399,10 @@ fn lookup_table_3(key: &str) -> Option<&'static str> {
         "slash.unwired.fork" => "Fork: multi-session storage not wired (reserved)",
         "slash.unwired.undo" => "Undo: message-level undo not wired; use Esc-Esc rewind",
         "slash.unwired.redo" => "Redo: not wired (reserved)",
+        // /mcp concrete hint: TUI has no MCP data link (mcp-mesh stays out of TUI deps); point to the CLI subcommand
+        "slash.unwired.mcp" => {
+            "MCP management: use the CLI subcommand `chimera mcp` (list / inspect / call)"
+        }
         "mode.normal" => "Normal",
         "mode.insert" => "Insert",
         "mode.command" => "Command",

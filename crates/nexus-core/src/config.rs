@@ -564,11 +564,15 @@ impl Default for CapabilityDecayConfig {
 }
 
 /// MCP 网格配置
+///
+/// WHY 无 `mesh` 子段(ADR-255):原 `McpMeshConfig`(transports/entanglement)
+/// 全仓零消费,且 `transports: [stdio, http]` 与实现矛盾(mcp-mesh 仅为
+/// 自定义 TCP 帧协议,无 stdio/HTTP 传输),属"有 schema 零消费"的死配置,
+/// 2026-11-07 随配置诚实化批次移除;旧配置文件中的 `mesh:` 键因容器
+/// `#[serde(default)]` 且无 `deny_unknown_fields` 被静默忽略,读取兼容。
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(default)]
 pub struct McpConfig {
-    /// Mesh 网格配置
-    pub mesh: McpMeshConfig,
     /// MCP 服务器列表
     pub servers: Vec<McpServerConfig>,
 }
@@ -576,75 +580,35 @@ pub struct McpConfig {
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
-            mesh: McpMeshConfig::default(),
             servers: default_mcp_servers(),
         }
     }
 }
 
-/// MCP Mesh 配置
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(default)]
-pub struct McpMeshConfig {
-    /// 传输协议:stdio / http
-    pub transports: Vec<String>,
-    /// 是否启用量子纠缠(QEEP)
-    pub entanglement: bool,
-}
-
-impl Default for McpMeshConfig {
-    fn default() -> Self {
-        Self {
-            transports: vec!["stdio".into(), "http".into()],
-            entanglement: true,
-        }
-    }
-}
-
-/// 单个 MCP 服务器配置(统一 struct,兼容 stdio/http/db 三种传输)
+/// 单个 MCP 服务器配置(url 型)
+///
+/// WHY 只有 `id` + `url`(ADR-255):原 `command`/`args`(stdio 模式)与
+/// `auth`(oauth/password)三字段有 schema 零消费——注册端只读 `url`,
+/// mcp-mesh 无 stdio 拉起、无任何认证透传逻辑,字段存在只会诱导"填了就
+/// 生效"的假象,随死配置收口移除;旧配置中的多余键被静默忽略,读取兼容。
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct McpServerConfig {
     /// 服务器 ID
     pub id: String,
-    /// stdio 模式:启动命令
-    pub command: Option<String>,
-    /// stdio 模式:命令参数
-    pub args: Option<Vec<String>>,
-    /// http/db 模式:URL
+    /// 服务端点(URL;须公网可达,loopback/保留段在注册阶段即被 SSRF 校验拒绝)
     pub url: Option<String>,
-    /// 认证方式:oauth / password / none
-    pub auth: Option<String>,
 }
 
-/// 默认 MCP 服务器列表(对齐 §10.2 模板)
+/// 默认 MCP 服务器列表
+///
+/// WHY 空列表(ADR-255):历史默认三条(filesystem=stdio / github /
+/// postgres=postgresql://localhost)**无一可真实调用**——stdio 不被注册端
+/// 支持、localhost 被 SSRF 拒绝、`api.github.com/mcp` 实测 404 且 mesh 无
+/// 认证能力;分发注定不可用的默认条目是"配置撒谎"。需要 MCP 服务器的
+/// 用户在 `~/.chimera/omega.yaml` 显式声明(模板含注释化示例)。
 pub fn default_mcp_servers() -> Vec<McpServerConfig> {
-    vec![
-        McpServerConfig {
-            id: "filesystem".to_string(),
-            command: Some("npx".to_string()),
-            args: Some(vec![
-                "-y".into(),
-                "@modelcontextprotocol/server-filesystem".into(),
-            ]),
-            url: None,
-            auth: None,
-        },
-        McpServerConfig {
-            id: "github".to_string(),
-            command: None,
-            args: None,
-            url: Some("https://api.github.com/mcp".to_string()),
-            auth: Some("oauth".to_string()),
-        },
-        McpServerConfig {
-            id: "postgres".to_string(),
-            command: None,
-            args: None,
-            url: Some("postgresql://localhost:5432/mcp".to_string()),
-            auth: Some("password".to_string()),
-        },
-    ]
+    Vec::new()
 }
 
 /// 在线进化(GSOE)配置
@@ -824,17 +788,17 @@ pub fn default_alerts() -> Vec<AlertConfig> {
 mod tests {
     use super::*;
 
-    /// 验证全部 14 个顶层 section + 13 个嵌套子类型可从 nexus_core::config 导入,
-    /// 且 Default impl 可用。
+    /// 验证全部 14 个顶层 section + 12 个嵌套子类型可从 nexus_core::config 导入,
+    /// 且 Default impl 可用。(ADR-255:McpMeshConfig 已随死配置收口移除)
     #[test]
     fn test_config_types_in_nexus_core() {
         use crate::config::{
             AbTestConfig, AlertConfig, AutoThresholdsConfig, BudgetConfig, CapabilityDecayConfig,
             ChimeraConfig, EvolutionConfig, GqepConfig, GrafanaConfig, KvbsrConfig, McpConfig,
-            McpMeshConfig, McpServerConfig, ModelRouterConfig, MonitoringConfig, MtpeConfig,
-            NexusConfig, OnlineLearningConfig, OsaConfig, PrometheusConfig, ProviderConfig,
-            PvlConfig, QuestConfig, RedTeamConfig, RepoWikiConfig, SeccoreConfig,
-            ThinkingToggleConfig, ThresholdEntry,
+            McpServerConfig, ModelRouterConfig, MonitoringConfig, MtpeConfig, NexusConfig,
+            OnlineLearningConfig, OsaConfig, PrometheusConfig, ProviderConfig, PvlConfig,
+            QuestConfig, RedTeamConfig, RepoWikiConfig, SeccoreConfig, ThinkingToggleConfig,
+            ThresholdEntry,
         };
 
         // 编译期验证:上述 27 个类型均存在且可导入
@@ -865,7 +829,8 @@ mod tests {
         );
         assert!(cfg.gqep.batch_size > 0, "gqep.batch_size > 0");
         assert!(!cfg.seccore.sandbox.is_empty(), "seccore.sandbox 非空");
-        assert!(!cfg.mcp.servers.is_empty(), "mcp.servers 非空");
+        // ADR-255:默认 servers 为空(历史默认三条无一可真实调用,不再分发)
+        assert!(cfg.mcp.servers.is_empty(), "mcp.servers 默认应为空");
         assert!(cfg.evolution.enabled, "evolution.enabled = true");
         assert!(
             cfg.monitoring.prometheus.enabled,
@@ -884,7 +849,6 @@ mod tests {
             GqepConfig::default(),
             KvbsrConfig::default(),
             McpConfig::default(),
-            McpMeshConfig::default(),
             McpServerConfig::default(),
             ModelRouterConfig::default(),
             MonitoringConfig::default(),

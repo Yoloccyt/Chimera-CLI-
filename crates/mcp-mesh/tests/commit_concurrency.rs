@@ -57,6 +57,7 @@ impl ParticipantClient for InflightClient {
         _s: &'a MeshServer,
         _t: &'a str,
         _op: &'a str,
+        _args: &'a [String],
     ) -> Pin<Box<dyn Future<Output = Result<(), mcp_mesh::McpError>> + Send + 'a>> {
         Box::pin(async { Ok(()) })
     }
@@ -141,8 +142,10 @@ async fn commit_phase_fanout_is_concurrent() {
     );
     let participants = register_servers(&mesh, N);
 
-    let task =
-        tokio::spawn(async move { mesh.execute_transaction(participants, "op".into()).await });
+    let task = tokio::spawn(async move {
+        mesh.execute_transaction(participants, "op".into(), Vec::new())
+            .await
+    });
 
     // 收齐 N 个到达（串行实现只会有 1 个 → 2s 超时直接失败，不挂死）
     for i in 0..N {
@@ -180,7 +183,7 @@ async fn commit_phase_failure_keeps_minimal_scope() {
     let participants = register_servers(&mesh, N);
 
     let result = mesh
-        .execute_transaction(participants, "op".into())
+        .execute_transaction(participants, "op".into(), Vec::new())
         .await
         .expect("execute_transaction 吞掉 commit 错误并返回 failed 结果");
     assert!(

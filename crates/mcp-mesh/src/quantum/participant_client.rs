@@ -74,6 +74,13 @@ pub enum TwoPcRequest {
         transaction_id: String,
         /// 操作描述(参与者据此判断能否提交,如 "write file X")
         op: String,
+        /// 操作参数(工具调用的实参列表)
+        ///
+        /// WHY `#[serde(default)]`:wire 向后兼容——旧帧无本字段仍可反序列化
+        /// (缺省为空 vec);新帧对旧接收方为被忽略的多余键(serde 默认忽略
+        /// 未知字段,本 enum 未启用 `deny_unknown_fields`)。
+        #[serde(default)]
+        args: Vec<String>,
     },
     /// Commit 请求:通知参与者正式提交
     Commit {
@@ -154,6 +161,7 @@ pub trait ParticipantClient: Send + Sync {
     /// - `server`:目标参与者(含 endpoint)
     /// - `transaction_id`:事务 ID
     /// - `op`:操作描述
+    /// - `args`:操作参数(工具调用的实参;无参调用传 `&[]`)
     ///
     /// # 返回
     /// - `Ok(())`:参与者 ACK,可以进入 Commit
@@ -163,6 +171,7 @@ pub trait ParticipantClient: Send + Sync {
         server: &'a MeshServer,
         transaction_id: &'a str,
         op: &'a str,
+        args: &'a [String],
     ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>>;
 
     /// 向指定参与者发送 commit 请求
@@ -255,6 +264,7 @@ impl ParticipantClient for InProcessClient {
         server: &'a MeshServer,
         _transaction_id: &'a str,
         _op: &'a str,
+        _args: &'a [String],
     ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
         let delay_ms = Self::simulated_delay_ms(&server.server_id);
         Box::pin(async move {
@@ -725,10 +735,12 @@ impl ParticipantClient for TcpParticipantClient {
         server: &'a MeshServer,
         transaction_id: &'a str,
         op: &'a str,
+        args: &'a [String],
     ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
         let request = TwoPcRequest::Prepare {
             transaction_id: transaction_id.to_string(),
             op: op.to_string(),
+            args: args.to_vec(),
         };
         Box::pin(async move { self.send_request(server, request).await })
     }
@@ -899,6 +911,7 @@ impl ParticipantClient for MockParticipantClient {
         server: &'a MeshServer,
         transaction_id: &'a str,
         op: &'a str,
+        _args: &'a [String],
     ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
         let should_fail = self.fail_prepare_on.contains(&server.server_id);
         Box::pin(async move {
@@ -996,10 +1009,25 @@ mod tests {
         let req = TwoPcRequest::Prepare {
             transaction_id: "tx-001".into(),
             op: "write file".into(),
+            args: vec!["--force".into()],
         };
         let json = serde_json::to_string(&req).expect("序列化失败");
         let restored: TwoPcRequest = serde_json::from_str(&json).expect("反序列化失败");
         assert_eq!(req, restored);
+    }
+
+    #[test]
+    fn test_two_pc_request_prepare_args_wire_backward_compat() {
+        // wire 向后兼容:旧版本帧无 args 字段,反序列化须以空 vec 缺省(ADR-253 D1 契约)
+        let legacy_json = r#"{"Prepare":{"transaction_id":"tx-legacy","op":"write file"}}"#;
+        let restored: TwoPcRequest =
+            serde_json::from_str(legacy_json).expect("旧格式必须可反序列化");
+        match restored {
+            TwoPcRequest::Prepare { args, .. } => {
+                assert!(args.is_empty(), "旧帧缺省 args 应为空 vec");
+            }
+            other => panic!("期望 Prepare 变体,得到 {other:?}"),
+        }
     }
 
     #[test]
@@ -1018,6 +1046,7 @@ mod tests {
         let prepare = TwoPcRequest::Prepare {
             transaction_id: "t1".into(),
             op: "op".into(),
+            args: Vec::new(),
         };
         let commit = TwoPcRequest::Commit {
             transaction_id: "t1".into(),
@@ -1039,7 +1068,7 @@ mod tests {
     async fn test_in_process_client_prepare_success() {
         let client = InProcessClient::new();
         let server = make_server("s-1");
-        let result = client.prepare(&server, "tx-1", "op").await;
+        let result = client.prepare(&server, "tx-1", "op", &[]).await;
         assert!(result.is_ok());
     }
 
@@ -1075,7 +1104,7 @@ mod tests {
         let client = MockParticipantClient::new();
         let server = make_server("s-1");
 
-        assert!(client.prepare(&server, "tx-1", "op").await.is_ok());
+        assert!(client.prepare(&server, "tx-1", "op", &[]).await.is_ok());
         assert!(client.commit(&server, "tx-1").await.is_ok());
         assert!(client.rollback(&server, "tx-1").await.is_ok());
     }
@@ -1085,7 +1114,10 @@ mod tests {
         let client = MockParticipantClient::new().fail_prepare("s-1");
         let server = make_server("s-1");
 
-        let err = client.prepare(&server, "tx-1", "op").await.unwrap_err();
+        let err = client
+            .prepare(&server, "tx-1", "op", &[])
+            .await
+            .unwrap_err();
         assert!(matches!(err, McpError::ProtocolError { .. }));
     }
 
@@ -1112,7 +1144,7 @@ mod tests {
         let client = MockParticipantClient::new();
         let server = make_server("s-1");
 
-        client.prepare(&server, "tx-1", "write").await.unwrap();
+        client.prepare(&server, "tx-1", "write", &[]).await.unwrap();
         client.commit(&server, "tx-1").await.unwrap();
         client.rollback(&server, "tx-1").await.unwrap();
 
@@ -1132,8 +1164,8 @@ mod tests {
         let s1 = make_server("s-1");
         let s2 = make_server("s-2");
 
-        assert!(client.prepare(&s1, "tx-1", "op").await.is_ok());
-        assert!(client.prepare(&s2, "tx-1", "op").await.is_err());
+        assert!(client.prepare(&s1, "tx-1", "op", &[]).await.is_ok());
+        assert!(client.prepare(&s2, "tx-1", "op", &[]).await.is_err());
     }
 
     // === TcpParticipantClient 测试(无真实网络,仅测试错误路径) ===
@@ -1146,7 +1178,7 @@ mod tests {
         let client = TcpParticipantClient::with_phase_timeout(100);
         let server = MeshServer::new("s-1", "203.0.113.1:1", vec![]);
 
-        let result = client.prepare(&server, "tx-1", "op").await;
+        let result = client.prepare(&server, "tx-1", "op", &[]).await;
         assert!(result.is_err());
         // 应该是 NetworkError(连接失败或超时)
         match result.unwrap_err() {
@@ -1171,10 +1203,16 @@ mod tests {
         let addr = listener.local_addr().expect("获取地址失败");
         let port = addr.port();
 
+        // 捕获参与者实际收到的请求帧(验证 args 透传到对端)
+        let received: Arc<std::sync::Mutex<Option<serde_json::Value>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let received_in_task = Arc::clone(&received);
+
         // 后台任务:接受连接,读取请求,返回 Ack
         tokio::spawn(async move {
             loop {
                 if let Ok((mut sock, _)) = listener.accept().await {
+                    let received_in_conn = Arc::clone(&received_in_task);
                     tokio::spawn(async move {
                         // 读取长度前缀
                         let mut len_buf = [0u8; 4];
@@ -1185,6 +1223,14 @@ mod tests {
                         let mut data = vec![0u8; len];
                         if sock.read_exact(&mut data).await.is_err() {
                             return;
+                        }
+                        // 记录首个到达的请求帧(即 Prepare),供断言 args 透传
+                        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&data) {
+                            let mut guard =
+                                received_in_conn.lock().unwrap_or_else(|e| e.into_inner());
+                            if guard.is_none() {
+                                *guard = Some(v);
+                            }
                         }
                         // 返回 Ack
                         let ack = serde_json::to_vec(&TwoPcResponse::Ack).unwrap();
@@ -1207,8 +1253,30 @@ mod tests {
             last_heartbeat: chrono::Utc::now(),
         };
 
-        let result = client.prepare(&server, "tx-echo-1", "test-op").await;
+        let args = vec!["--path".to_string(), "/tmp/a.txt".to_string()];
+        let result = client.prepare(&server, "tx-echo-1", "test-op", &args).await;
         assert!(result.is_ok(), "prepare 应成功: {result:?}");
+
+        // 验证 Prepare 帧真实携带了 args(协议透传,不静默丢弃)
+        // NOTE: serde enum 外部标签格式,载荷在 frame["Prepare"] 之下
+        let frame = received
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .expect("参与者应至少收到一个请求帧");
+        assert_eq!(
+            frame
+                .get("Prepare")
+                .and_then(|p| p.get("args"))
+                .and_then(|v| v.as_array()),
+            Some(
+                &args
+                    .iter()
+                    .map(|a| serde_json::json!(a))
+                    .collect::<Vec<_>>()
+            ),
+            "Prepare 帧必须携带完整 args 列表"
+        );
 
         let result = client.commit(&server, "tx-echo-1").await;
         assert!(result.is_ok(), "commit 应成功: {result:?}");
@@ -1261,7 +1329,7 @@ mod tests {
         };
 
         let err = client
-            .prepare(&server, "tx-nack-1", "op")
+            .prepare(&server, "tx-nack-1", "op", &[])
             .await
             .unwrap_err();
         assert!(matches!(err, McpError::ProtocolError { .. }));
@@ -1307,7 +1375,7 @@ mod tests {
 
         let start = std::time::Instant::now();
         let err = client
-            .prepare(&server, "tx-slow-1", "op")
+            .prepare(&server, "tx-slow-1", "op", &[])
             .await
             .unwrap_err();
         let elapsed = start.elapsed();
@@ -1330,7 +1398,7 @@ mod tests {
         let client: Arc<dyn ParticipantClient> = Arc::new(InProcessClient::new());
         let server = make_server("s-1");
 
-        let result = client.prepare(&server, "tx-1", "op").await;
+        let result = client.prepare(&server, "tx-1", "op", &[]).await;
         assert!(result.is_ok());
 
         let result = client.commit(&server, "tx-1").await;

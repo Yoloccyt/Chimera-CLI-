@@ -24,7 +24,7 @@ use async_trait::async_trait;
 use gqep_executor::tool_runtime::ToolRuntime;
 use gqep_executor::{PlanGuards, PlanRunner, PlanSummary, ToolExecutor};
 use nexus_contracts::spec::tool_plan::ToolPlan;
-use nexus_contracts::tool_plan::PlanError;
+use nexus_contracts::tool_plan::{PlanError, SideEffectDecl};
 use scc_cache::{ContextEntry, ContextId};
 
 use crate::composition::AppContext;
@@ -40,6 +40,17 @@ const FS_READ_MAX_BYTES: u64 = 256 * 1024;
 #[derive(Debug, Default, Clone, Copy)]
 pub struct BuiltinToolExecutor;
 
+/// 内置只读工具名集合 —— 与 `execute` 的分派臂同源
+///
+/// WHY 三件工具全部声明 `ReadOnly`:它们只做「回显参数」与「读文件/列目录」,
+/// 不写、不 fork 进程、不联网。声明后 `PlanRunner` 才会在计划**省略**
+/// `side_effect` 字段时把同层节点放进有界并发（ADR-254）—— 此前这类计划
+/// 整层串行，实测代价 ≈4.3×（`toolplan_layers/undeclared8_ms2/{1,8}`）。
+///
+/// 反向安全性:若将来给 `execute` 加了新的内置工具而忘记登记进本表，
+/// 它的属性是「未知」⇒ 保守串行 + 不路由 ⇒ fail-closed，不会误并行。
+const BUILTIN_READONLY_TOOLS: &[&str] = &["text.echo", "fs.read", "fs.list"];
+
 #[async_trait]
 impl ToolExecutor for BuiltinToolExecutor {
     async fn execute(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
@@ -54,6 +65,19 @@ impl ToolExecutor for BuiltinToolExecutor {
             "fs.list" => fs_list(args_json).await,
             other => Err(format!("unknown builtin tool: {other}")),
         }
+    }
+
+    fn capability_of(&self, tool_name: &str) -> Option<SideEffectDecl> {
+        BUILTIN_READONLY_TOOLS
+            .contains(&tool_name)
+            .then_some(SideEffectDecl::ReadOnly)
+    }
+
+    fn declared_tools(&self) -> Vec<String> {
+        BUILTIN_READONLY_TOOLS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect()
     }
 }
 
@@ -145,6 +169,19 @@ impl ToolExecutor for RuntimeToolExecutor {
     async fn execute(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
         ToolExecutor::execute(self.inner.as_ref(), tool_name, args_json).await
     }
+
+    /// 能力视图必须逐层转发到 [`ToolRuntime`]
+    ///
+    /// WHY 关键:`PlanRunner` 的 `layer_requires_serial` 拿到的是**装饰器链最外层**，
+    /// 任何一跳省略本方法都会让能力表在现网静默失效（而单测直接用 ProbeExecutor
+    /// 仍然全绿 —— 即「测试证明不了生产接线」的经典形态）。
+    fn capability_of(&self, tool_name: &str) -> Option<SideEffectDecl> {
+        ToolExecutor::capability_of(self.inner.as_ref(), tool_name)
+    }
+
+    fn declared_tools(&self) -> Vec<String> {
+        ToolExecutor::declared_tools(self.inner.as_ref())
+    }
 }
 
 /// 单操作超时执行器 — 每个工具调用独立 `tokio::time::timeout`
@@ -171,6 +208,15 @@ impl ToolExecutor for OpTimeoutExecutor {
             )),
         }
     }
+
+    // 能力视图逐层转发（见 RuntimeToolExecutor 的同名方法注释）
+    fn capability_of(&self, tool_name: &str) -> Option<SideEffectDecl> {
+        self.inner.capability_of(tool_name)
+    }
+
+    fn declared_tools(&self) -> Vec<String> {
+        self.inner.declared_tools()
+    }
 }
 
 /// 失败计数装饰器 — `PlanSummary` 无逐节点状态，本层统计工具失败节点数
@@ -191,6 +237,15 @@ impl ToolExecutor for CountingExecutor {
                 Err(err)
             }
         }
+    }
+
+    // 能力视图逐层转发（见 RuntimeToolExecutor 的同名方法注释）
+    fn capability_of(&self, tool_name: &str) -> Option<SideEffectDecl> {
+        self.inner.capability_of(tool_name)
+    }
+
+    fn declared_tools(&self) -> Vec<String> {
+        self.inner.declared_tools()
     }
 }
 
@@ -314,13 +369,19 @@ pub async fn run_plan_with_failures_timed(
     );
 
     let failed = Arc::new(AtomicUsize::new(0));
-    let counting = Arc::new(CountingExecutor {
+    // 装饰器顺序即**失败归因契约**（ADR-257），不可倒置：
+    // 计数层必须在超时层**之外**。倒置时（本行原实现）超时由外层产生、
+    // 内层 future 被直接 drop ⇒ `CountingExecutor` 的 Err 分支永不执行
+    // ⇒ 超时节点不计入 `failed_nodes` ⇒ 整个 `exec --plan` 以一个失败于
+    // 超时的计划返回 `status:"ok"` 与退出码 0（F-A1）。
+    // 顺序修正不新增字段、不改 JSON 形状、不引入开关，revert 即回原状。
+    let timed = Arc::new(OpTimeoutExecutor {
         inner: Arc::new(RuntimeToolExecutor { inner: runtime }),
-        failed: Arc::clone(&failed),
-    });
-    let executor: Box<dyn ToolExecutor> = Box::new(OpTimeoutExecutor {
-        inner: counting,
         per_op_timeout: Duration::from_millis(per_op_ms),
+    });
+    let executor: Box<dyn ToolExecutor> = Box::new(CountingExecutor {
+        inner: timed,
+        failed: Arc::clone(&failed),
     });
     let runner = PlanRunner::new(executor, guards).with_concurrency(concurrency);
 
@@ -356,6 +417,65 @@ fn write_scc_entry(ctx: &AppContext, summary: &PlanSummary, failed_nodes: usize)
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    /// 超时必须计入失败节点 —— 装饰器顺序即失败归因契约（F-A1 / ADR-257）
+    ///
+    /// 含**反向对照**:同一个慢执行器在「超时层在外、计数层在内」的旧顺序下
+    /// 必须重现「超时不计数」缺陷。没有这半边，正例可能只是恰好通过，
+    /// 本条测试就失去对「顺序」这一契约的约束力。
+    #[tokio::test]
+    async fn op_timeout_is_counted_as_failed_node() {
+        struct SlowExecutor;
+
+        #[async_trait]
+        impl ToolExecutor for SlowExecutor {
+            async fn execute(&self, tool_name: &str, _args: &str) -> Result<String, String> {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                Ok(format!("{tool_name}:done"))
+            }
+        }
+
+        // 正例：契约顺序（计数层在超时层之外）
+        let failed = Arc::new(AtomicUsize::new(0));
+        let timed = Arc::new(OpTimeoutExecutor {
+            inner: Arc::new(SlowExecutor) as Arc<dyn ToolExecutor>,
+            per_op_timeout: Duration::from_millis(10),
+        });
+        let counting: Arc<dyn ToolExecutor> = Arc::new(CountingExecutor {
+            inner: timed,
+            failed: Arc::clone(&failed),
+        });
+        let err = counting
+            .execute("bench.slow", "{}")
+            .await
+            .expect_err("200ms 工具在 10ms 预算下必须超时");
+        assert!(err.contains("timeout"), "错误文案应含 timeout，实得 {err:?}");
+        assert_eq!(
+            failed.load(Ordering::Relaxed),
+            1,
+            "超时节点必须计入 failed_nodes，否则 exec --plan 会以退出码 0 宣告成功"
+        );
+
+        // 反向对照：旧顺序必须重现缺陷
+        let failed_old = Arc::new(AtomicUsize::new(0));
+        let counting_old = Arc::new(CountingExecutor {
+            inner: Arc::new(SlowExecutor) as Arc<dyn ToolExecutor>,
+            failed: Arc::clone(&failed_old),
+        });
+        let inverted: Arc<dyn ToolExecutor> = Arc::new(OpTimeoutExecutor {
+            inner: counting_old,
+            per_op_timeout: Duration::from_millis(10),
+        });
+        inverted
+            .execute("bench.slow", "{}")
+            .await
+            .expect_err("倒置顺序同样应超时");
+        assert_eq!(
+            failed_old.load(Ordering::Relaxed),
+            0,
+            "反向对照未能重现「超时不计数」⇒ 本测试没有真正锁住顺序契约"
+        );
+    }
 
     /// 单操作超时三层收敛：CLI/配置默认 → 计划级 → 全局 gather（>0 才参与）
     #[test]

@@ -17,11 +17,13 @@
 //! (best-effort,不因部分超时而丢弃已成功响应)。
 
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::error::McpError;
+use crate::quantum::participant_client::ParticipantClient;
 use crate::server_registry::ServerRegistry;
 
 /// 超位置查询请求 — 描述一次并发 fanout 查询
@@ -143,7 +145,12 @@ impl QueryResult {
 ///
 /// # 流程
 /// 1. 校验参与者:所有 fanout_servers 必须在 registry 中注册且 alive
-/// 2. 用 `JoinSet` 并发 spawn 每个服务器的查询任务
+/// 2. 用 `JoinSet` 并发 spawn 每个服务器的查询任务,**经注入的
+///    [`ParticipantClient`] 抽象发查询**(Task 0.7.10 的既定设计:统一传输
+///    抽象,而非进程内伪造)——默认 `InProcessClient` 保持原进程内模拟语义
+///    (延迟 1-2ms + `result@…` 格式),`TcpParticipantClient` 走真实
+///    `QueryRequest`/`QueryResponse` 帧并复用连接池与 DNS rebinding 防御;
+///    传输失败如实标记 `success=false`,不再伪造成功
 /// 3. `tokio::time::timeout` 包装整体收集,超时返回已收集的部分结果
 /// 4. 任一服务器失败不阻断其他,失败结果标记 `success=false`
 ///
@@ -158,8 +165,10 @@ pub async fn execute_superposition_query(
     query: &SuperpositionQuery,
     registry: &ServerRegistry,
     heartbeat_timeout_ms: u64,
+    client: Arc<dyn ParticipantClient>,
 ) -> Result<Vec<QueryResult>, McpError> {
-    // 1. 校验所有参与者已注册且 alive
+    // 1. 校验所有参与者已注册且 alive(顺带收集 server 快照,避免任务内二次查表)
+    let mut servers = Vec::with_capacity(query.fanout_servers.len());
     for server_id in &query.fanout_servers {
         let server = registry
             .get(server_id)
@@ -171,27 +180,28 @@ pub async fn execute_superposition_query(
                 server_id: server_id.clone(),
             });
         }
+        servers.push(server);
     }
 
-    // 2. 并发 fanout:每个服务器 spawn 一个查询任务
+    // 2. 并发 fanout:每个服务器 spawn 一个查询任务,经注入的传输抽象发请求
     let mut set: JoinSet<QueryResult> = JoinSet::new();
     let query_id = query.query_id.clone();
     let query_text = query.query.clone();
 
-    for server_id in &query.fanout_servers {
-        let sid = server_id.clone();
+    for server in servers {
+        let sid = server.server_id.clone();
         let qid = query_id.clone();
         let qtext = query_text.clone();
+        let client = Arc::clone(&client);
         set.spawn(async move {
             let start = std::time::Instant::now();
-            // 模拟服务器端处理延迟(in-process mock,1-3ms 随机)
-            // WHY 模拟延迟:替代真实网络往返,验证并发 fanout 与超时机制
-            let processing_ms = 1 + (sid.bytes().fold(0u64, |acc, b| acc + b as u64) % 3);
-            tokio::time::sleep(Duration::from_millis(processing_ms)).await;
-
+            let result = client.query(&server, &qid, &qtext).await;
             let latency_ms = start.elapsed().as_millis() as u64;
-            // 模拟成功响应(payload = "query=<qtext>@<sid>")
-            QueryResult::ok(qid, sid, latency_ms, format!("result@{qtext}"))
+            match result {
+                Ok(payload) => QueryResult::ok(qid, sid, latency_ms, payload),
+                // 传输失败如实标记(网络错误/Nack),不伪造成功载荷
+                Err(e) => QueryResult::err(qid, sid, latency_ms, e.to_string()),
+            }
         });
     }
 
@@ -227,8 +237,11 @@ pub async fn execute_superposition_query(
 mod tests {
     use super::*;
     use crate::config::MeshConfig;
+    use crate::quantum::participant_client::InProcessClient;
     use crate::server_registry::{MeshServer, ServerRegistry};
     use chrono::Utc;
+    use std::future::Future;
+    use std::pin::Pin;
 
     fn make_registry_with_servers(n: usize) -> ServerRegistry {
         let registry = ServerRegistry::new(MeshConfig::default().registry_capacity);
@@ -241,11 +254,105 @@ mod tests {
         registry
     }
 
+    /// 默认进程内客户端(测试既有语义路径)
+    fn in_process_client() -> Arc<dyn ParticipantClient> {
+        Arc::new(InProcessClient::new())
+    }
+
+    /// 带标记 payload 的桩客户端 — 验证 fanout 走注入抽象而非进程内伪造
+    #[derive(Debug, Default)]
+    struct TaggedQueryClient;
+
+    impl ParticipantClient for TaggedQueryClient {
+        fn prepare<'a>(
+            &'a self,
+            _server: &'a MeshServer,
+            _transaction_id: &'a str,
+            _op: &'a str,
+            _args: &'a [String],
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn commit<'a>(
+            &'a self,
+            _server: &'a MeshServer,
+            _transaction_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn rollback<'a>(
+            &'a self,
+            _server: &'a MeshServer,
+            _transaction_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn query<'a>(
+            &'a self,
+            server: &'a MeshServer,
+            query_id: &'a str,
+            query: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+            Box::pin(async move { Ok(format!("tagged::{query}::{query_id}@{}", server.server_id)) })
+        }
+    }
+
+    /// 单服务器注入失败的桩 — 验证传输失败如实标记 success=false
+    #[derive(Debug, Default)]
+    struct FailQueryClient;
+
+    impl ParticipantClient for FailQueryClient {
+        fn prepare<'a>(
+            &'a self,
+            _server: &'a MeshServer,
+            _transaction_id: &'a str,
+            _op: &'a str,
+            _args: &'a [String],
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn commit<'a>(
+            &'a self,
+            _server: &'a MeshServer,
+            _transaction_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn rollback<'a>(
+            &'a self,
+            _server: &'a MeshServer,
+            _transaction_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn query<'a>(
+            &'a self,
+            server: &'a MeshServer,
+            _query_id: &'a str,
+            _query: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+            let sid = server.server_id.clone();
+            Box::pin(async move {
+                Err(McpError::NetworkError {
+                    server_id: sid,
+                    endpoint: String::new(),
+                    reason: "injected transport failure".into(),
+                })
+            })
+        }
+    }
+
     #[tokio::test]
     async fn test_superposition_single_server() {
         let registry = make_registry_with_servers(1);
         let query = SuperpositionQuery::new("test", vec!["s-0".into()], 100);
-        let results = execute_superposition_query(&query, &registry, 5000)
+        let results = execute_superposition_query(&query, &registry, 5000, in_process_client())
             .await
             .expect("查询失败");
         assert_eq!(results.len(), 1);
@@ -265,18 +372,61 @@ mod tests {
             },
             200,
         );
-        let results = execute_superposition_query(&query, &registry, 5000)
+        let results = execute_superposition_query(&query, &registry, 5000, in_process_client())
             .await
             .expect("查询失败");
         assert_eq!(results.len(), 5);
         assert!(results.iter().all(|r| r.success));
     }
 
+    /// 接线验收(Task 0.7.10 闭环):fanout 必须经注入的 `ParticipantClient`
+    /// 抽象发查询,payload 来自传输层而非进程内伪造
+    #[tokio::test]
+    async fn test_superposition_uses_injected_participant_client() {
+        let registry = make_registry_with_servers(2);
+        let query = SuperpositionQuery::new("probe", vec!["s-0".into(), "s-1".into()], 200);
+        let client: Arc<dyn ParticipantClient> = Arc::new(TaggedQueryClient);
+        let results = execute_superposition_query(&query, &registry, 5000, client)
+            .await
+            .expect("查询失败");
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.success));
+        for r in &results {
+            assert!(
+                r.payload.starts_with("tagged::"),
+                "payload 必须来自注入的传输抽象,实际: {}",
+                r.payload
+            );
+            // 桩格式 tagged::{query}::{query_id}@{server_id} — 三个关联字段都应到达
+            assert!(r.payload.contains(&format!("@{}", r.server_id)));
+            assert!(r.payload.contains(&query.query_id));
+        }
+    }
+
+    /// 传输失败必须如实标记 `success=false`,不得伪造成功载荷
+    #[tokio::test]
+    async fn test_superposition_marks_transport_failure() {
+        let registry = make_registry_with_servers(2);
+        let query = SuperpositionQuery::new("probe", vec!["s-0".into(), "s-1".into()], 200);
+        let client: Arc<dyn ParticipantClient> = Arc::new(FailQueryClient);
+        let results = execute_superposition_query(&query, &registry, 5000, client)
+            .await
+            .expect("校验通过即不返回 Err(失败以 QueryResult 承载)");
+        assert_eq!(results.len(), 2);
+        assert!(
+            results.iter().all(|r| !r.success),
+            "注入传输失败后所有结果应标记失败"
+        );
+        assert!(results
+            .iter()
+            .all(|r| r.payload.contains("injected transport failure")));
+    }
+
     #[tokio::test]
     async fn test_superposition_unregistered_server_rejected() {
         let registry = make_registry_with_servers(1);
         let query = SuperpositionQuery::new("test", vec!["s-0".into(), "unknown".into()], 100);
-        let err = execute_superposition_query(&query, &registry, 5000)
+        let err = execute_superposition_query(&query, &registry, 5000, in_process_client())
             .await
             .unwrap_err();
         assert!(matches!(err, McpError::ServerNotFound { .. }));
@@ -291,7 +441,7 @@ mod tests {
         registry.register(server).expect("注册失败");
 
         let query = SuperpositionQuery::new("test", vec!["s-dead".into()], 100);
-        let err = execute_superposition_query(&query, &registry, 1000)
+        let err = execute_superposition_query(&query, &registry, 1000, in_process_client())
             .await
             .unwrap_err();
         assert!(matches!(err, McpError::ServerUnreachable { .. }));

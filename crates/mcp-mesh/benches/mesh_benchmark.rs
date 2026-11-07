@@ -70,6 +70,7 @@ fn bench_transaction(c: &mut Criterion) {
                     mesh.execute_transaction(
                         black_box(participants.clone()),
                         black_box("bench".into()),
+                        Vec::new(),
                     )
                     .await
                     .expect("事务失败")
@@ -103,7 +104,8 @@ fn bench_concurrent_100_transactions(c: &mut Criterion) {
                     let mesh = std::sync::Arc::clone(&mesh);
                     let p = participants.clone();
                     handles.push(tokio::spawn(async move {
-                        mesh.execute_transaction(p, "bench-concurrent".into()).await
+                        mesh.execute_transaction(p, "bench-concurrent".into(), Vec::new())
+                            .await
                     }));
                 }
                 for h in handles {

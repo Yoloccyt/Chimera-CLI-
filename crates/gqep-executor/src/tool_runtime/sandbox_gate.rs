@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use seccore::{validate_command, validate_env, Command, CommandPolicy, EnvPolicy};
+use seccore::{validate_command_verdict, validate_env, CommandPolicy, EnvPolicy};
 
 use super::dispatch::{DispatchError, DispatchRequest};
 use nexus_contracts::tool_dispatch::DispatchRequestRef;
@@ -145,12 +145,9 @@ impl SandboxGate for SeccoreSandboxGate {
         // 派生策略按工具名记忆化（解题见 `policy_for`）；命中即零 clone。
         let policy = self.policy_for(&req.tool_name);
 
-        let cmd = Command {
-            program: req.tool_name.clone(),
-            args: vec![req.args_json.clone()],
-            env: HashMap::new(),
-        };
-        validate_command(&cmd, policy.as_ref())
+        // 纯判决入口：不再构造被丢弃的 Command/CommandSpec（ADR-256）。
+        // 判决体与 check_ref 同源 ⇒ 拥有/借用两条路不可能给出不同结论。
+        validate_command_verdict(&req.tool_name, &[req.args_json.as_str()], policy.as_ref())
             .map_err(|e| DispatchError::Sandbox(format!("{e}")))?;
 
         // 空 env 必然 Ok；保留调用以对齐「环境变量也要过策略」的语义。
@@ -170,12 +167,10 @@ impl SandboxGate for SeccoreSandboxGate {
         // 派生策略按工具名记忆化（与 `check` 同路径、同缓存）。
         let policy = self.policy_for(req.tool_name);
 
-        let cmd = Command {
-            program: req.tool_name.to_string(),
-            args: vec![req.args_json.to_string()],
-            env: HashMap::new(),
-        };
-        validate_command(&cmd, policy.as_ref())
+        // 与 check 同一入口、同一判决体。原先这里 to_string() 两次只为喂给
+        // 拥有型签名 —— 即「借用化省下的分配在入站处又付回去」，ADR-241 D6
+        // 记录的净收益 0 正是这个构造造成的；本行把它抹平。
+        validate_command_verdict(req.tool_name, &[req.args_json], policy.as_ref())
             .map_err(|e| DispatchError::Sandbox(format!("{e}")))?;
 
         let env: HashMap<String, String> = HashMap::new();

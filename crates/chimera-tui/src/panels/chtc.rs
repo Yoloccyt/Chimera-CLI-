@@ -3,11 +3,12 @@
 //! 对应架构层:L10 Interface
 //!
 //! # 设计决策(WHY)
-//! - 消费 `TuiState::chtc_state` 渲染 5 IDE 适配器(VSCode/JetBrains/Vim/Emacs/LSP)
+//! - 消费 `TuiState::chtc_state` 渲染 5 IDE 适配器(VSCode/IntelliJ/Vim/Emacs/Zed)
 //!   的兼容性评分、在线状态与最近请求类型分布。
-//! - 5 IDE 适配器列表与 chtc-bridge 的 enum dispatch 设计一致(§4.3),
-//!   覆盖主流编辑器生态。适配器类型字符串由事件 payload 提供,不在此处硬编码,
-//!   以兼容 chtc-bridge 后续扩展(如 Zed 替代 LSP 时无需修改面板)。
+//! - 5 IDE 适配器列表与 chtc-bridge 的 enum dispatch 设计一致(§4.3,
+//!   `IdeAdapterKind` 五变体),覆盖主流编辑器生态。适配器类型字符串由事件
+//!   payload 提供,不在此处硬编码,以兼容 chtc-bridge 后续扩展(增删适配器
+//!   无需修改面板)。
 //! - 兼容性评分 < 60 黄色高亮:60 分为常规百分制及格线,低于此值意味着适配器
 //!   在该 IDE 上存在显著兼容性问题(API 缺失/格式转换失败率高),需运维关注。
 //!   >= 80 绿色表示运行良好。60-79 用 Color::Reset(默认前景色),避免视觉噪音。

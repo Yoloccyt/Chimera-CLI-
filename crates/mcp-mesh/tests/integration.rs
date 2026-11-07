@@ -62,7 +62,7 @@ async fn test_five_server_basic_transaction() {
     let mesh = make_mesh_with_5_servers();
     let participants: Vec<String> = (0..5).map(|i| format!("s-{i}")).collect();
     let result = mesh
-        .execute_transaction(participants.clone(), "op".into())
+        .execute_transaction(participants.clone(), "op".into(), Vec::new())
         .await
         .expect("事务失败");
     assert!(result.success);
@@ -99,7 +99,7 @@ async fn test_1000_concurrent_transactions_no_deadlock() {
             // 所有任务在 barrier 处同步,然后并发执行,最大化竞争
             barrier.wait().await;
             let participants: Vec<String> = (0..5).map(|i| format!("s-{i}")).collect();
-            mesh.execute_transaction(participants, "stress".into())
+            mesh.execute_transaction(participants, "stress".into(), Vec::new())
                 .await
         }));
     }
@@ -174,7 +174,7 @@ async fn test_transaction_timeout_triggers_rollback() {
 
     let participants: Vec<String> = (0..5).map(|i| format!("s-{i}")).collect();
     let result = mesh
-        .execute_transaction(participants, "will-timeout".into())
+        .execute_transaction(participants, "will-timeout".into(), Vec::new())
         .await;
 
     // 应返回 TransactionTimeout 错误
@@ -200,7 +200,7 @@ async fn test_event_bus_publishes_transaction_completed() {
 
     let participants: Vec<String> = (0..5).map(|i| format!("s-{i}")).collect();
     let result = mesh
-        .execute_transaction(participants, "event-test".into())
+        .execute_transaction(participants, "event-test".into(), Vec::new())
         .await
         .expect("事务失败");
 
@@ -321,7 +321,7 @@ async fn test_1000_transactions_all_publish_events() {
     // 串行执行 total 次事务(避免并发竞争事件丢失)
     for _ in 0..total {
         let participants: Vec<String> = (0..5).map(|i| format!("s-{i}")).collect();
-        mesh.execute_transaction(participants, "event-stream".into())
+        mesh.execute_transaction(participants, "event-stream".into(), Vec::new())
             .await
             .expect("事务失败");
     }
@@ -356,7 +356,11 @@ async fn test_server_registry_lifecycle() {
 
     // 事务应失败(缺少 s-2)
     let err = mesh
-        .execute_transaction((0..5).map(|i| format!("s-{i}")).collect(), "missing".into())
+        .execute_transaction(
+            (0..5).map(|i| format!("s-{i}")).collect(),
+            "missing".into(),
+            Vec::new(),
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, McpError::ServerNotFound { .. }));
@@ -371,6 +375,7 @@ async fn test_server_registry_lifecycle() {
         .execute_transaction(
             (0..5).map(|i| format!("s-{i}")).collect(),
             "recovered".into(),
+            Vec::new(),
         )
         .await
         .expect("事务失败");
@@ -418,7 +423,7 @@ async fn test_mixed_query_and_transaction_load() {
         tx_handles.push(tokio::spawn(async move {
             let participants: Vec<String> = (0..5).map(|i| format!("s-{i}")).collect();
             mesh_tx
-                .execute_transaction(participants, "mixed".into())
+                .execute_transaction(participants, "mixed".into(), Vec::new())
                 .await
         }));
     }
@@ -454,7 +459,7 @@ async fn test_transaction_result_fields_consistency() {
     let mesh = make_mesh_with_5_servers();
     let participants: Vec<String> = (0..5).map(|i| format!("s-{i}")).collect();
     let result: TransactionResult = mesh
-        .execute_transaction(participants.clone(), "consistency".into())
+        .execute_transaction(participants.clone(), "consistency".into(), Vec::new())
         .await
         .expect("事务失败");
 

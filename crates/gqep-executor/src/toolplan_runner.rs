@@ -41,6 +41,30 @@ pub trait ToolExecutor: Send + Sync {
     /// # 返回
     /// 执行结果字符串（JSON 形态;失败返回 Err,由调用方按节点错误处理）
     async fn execute(&self, tool_name: &str, args_json: &str) -> Result<String, String>;
+
+    /// 自报该工具的副作用属性 —— 计划未写 `side_effect` 时的**派生真值源**
+    ///
+    /// WHY 默认实现返回 `None`（＝未知）而不是让每个实现方都必须声明:
+    /// 加性是硬要求 —— 既有实现（含测试夹具）零改动即保持今日行为，
+    /// `tests/toolplan_concurrency_proptest.rs` 的四条不变量因此原样成立。
+    ///
+    /// WHY 真值源放在执行器而不是工具名前缀表（`streaming_dispatch::SideEffect::classify`）:
+    /// 前缀表只认 `read:` / `query:` / `search:`，对 `text.echo` / `fs.read` / `fs.list`
+    /// 一律判 Write ⇒ 接了等于没接；而**要执行该工具的对象**才知道它是否只读。
+    /// 计划里的显式声明优先级仍高于本方法（见 `layer_requires_serial`）。
+    fn capability_of(&self, _tool_name: &str) -> Option<SideEffectDecl> {
+        None
+    }
+
+    /// 本执行器可服务的工具名全集 —— 路由环（`RouteLayer`）的注册表来源
+    ///
+    /// WHY 与 `capability_of` 并列而非另立注册表:同一个实现方既是「谁能执行」
+    /// 也是「执行什么属性」的唯一知情人；两处真值分叉就会重现
+    /// 「路由表恒空 ⇒ 环永不裁决」的现状。默认空集 ⇒ 路由环退回 fallback，
+    /// 与今日行为逐字一致。
+    fn declared_tools(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// 计划守卫 — WI-16 硬约束（可覆盖默认值）
@@ -147,10 +171,21 @@ impl PlanRunner {
     pub async fn run(&self, plan: &ToolPlan) -> Result<PlanSummary, PlanError> {
         let started = Instant::now();
         plan.validate(self.guards.max_steps)?;
-        // 只读模式:拒绝 Write 节点（Plan 模式投影）
+        // 只读模式:拒绝「非只读」节点（Plan 模式投影）
+        //
+        // 判据改用有效属性（声明 > 能力表 > 未知）而非只看 `Some(Write)`:
+        // 旧判据下**省略 `side_effect` 字段即可绕过只读模式** —— 一个实际写文件的
+        // 工具在 Plan 模式里照样被执行，与「投影拒绝写」的既定语义相悖（F-A21）。
+        // 未知按可能写处理，与 `layer_requires_serial` 同一保守口径。
         if self.guards.readonly_only {
             for n in &plan.nodes {
-                if n.side_effect == Some(SideEffectDecl::Write) {
+                if n.op == ToolOp::ToolCall
+                    && effective_side_effect(
+                        n,
+                        self.executor.as_ref(),
+                        n.tool_name.as_deref().unwrap_or_default(),
+                    ) != Some(SideEffectDecl::ReadOnly)
+                {
                     return Err(PlanError::IncompleteToolCall(n.id.clone()));
                 }
             }
@@ -208,7 +243,7 @@ impl PlanRunner {
         tool_calls: &mut usize,
         nodes_executed: &mut usize,
     ) -> bool {
-        if layer_requires_serial(layer) {
+        if layer_requires_serial(layer, self.executor.as_ref()) {
             self.exec_layer_serial(plan, layer, env, tool_calls, nodes_executed)
                 .await
         } else {
@@ -361,19 +396,37 @@ fn accumulate(
     env.insert(node.id.clone(), out);
 }
 
+/// 节点的有效副作用属性 —— 计划声明 > 执行器能力表 > 未知
+///
+/// WHY 这个优先级次序:显式声明是计划作者的意图，实现方不得推翻它
+/// （否则接入方可把写操作自报为只读来换取并发，层内写序不再由计划决定，
+/// 可复现性与审计链同时失效）；两者都不知道时返回 `None`，
+/// 由 `layer_requires_serial` 按「可能写」保守处理。
+fn effective_side_effect(
+    node: &ToolNode,
+    executor: &dyn ToolExecutor,
+    declared: &str,
+) -> Option<SideEffectDecl> {
+    node.side_effect
+        .or_else(|| executor.capability_of(declared))
+}
+
 /// 层副作用判定 — 该层是否必须整层串行
 ///
 /// 仅 `ToolOp::ToolCall` 可能产生副作用;纯数据算子（Map/Filter/Aggregate/Limit/Sort）
 /// 不产生副作用,可并发。串行充要条件:层内存在
-/// `op == ToolCall && side_effect != Some(SideEffectDecl::ReadOnly)`,
-/// 即显式 `Write` **或未声明（None）**都按「可能写」保守处理（未声明 ≠ 只读）。
+/// `op == ToolCall && 有效副作用 != Some(ReadOnly)`,
+/// 其中「有效副作用」按 `effective_side_effect` 取值 —— 显式声明优先，
+/// 其次执行器能力表，两者皆无 ⇒ 按「可能写」保守处理（未声明 ≠ 只读）。
 ///
-/// WHY:有副作用节点不可重排、不可并发——并发会让同层写入顺序由调度器决定,
+/// WHY 有副作用节点不可重排、不可并发——并发会让同层写入顺序由调度器决定,
 /// 结果不可复现,顺序契约与审计链的可审计性随之破坏。
-fn layer_requires_serial(layer: &[ToolNode]) -> bool {
-    layer
-        .iter()
-        .any(|n| n.op == ToolOp::ToolCall && n.side_effect != Some(SideEffectDecl::ReadOnly))
+fn layer_requires_serial(layer: &[ToolNode], executor: &dyn ToolExecutor) -> bool {
+    layer.iter().any(|n| {
+        n.op == ToolOp::ToolCall
+            && effective_side_effect(n, executor, n.tool_name.as_deref().unwrap_or_default())
+                != Some(SideEffectDecl::ReadOnly)
+    })
 }
 
 /// 分层 — 每节点深度 = 最长路径长度（Kahn 扩展）;同层节点互无依赖

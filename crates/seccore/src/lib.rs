@@ -118,7 +118,10 @@ pub use gvisor::GvisorRuntime;
 pub use merkle::{
     compute_merkle_root, hash_spec_canonical_input, verify_merkle_root, verify_spec_integrity,
 };
-pub use policy::{validate_command, validate_env, BlockedPattern, CommandPolicy, EnvPolicy};
+pub use policy::{
+    validate_command, validate_command_verdict, validate_env, BlockedPattern, CommandPolicy,
+    EnvPolicy,
+};
 // polish-v2.7 P1-4: 不可学习安全红线常量表(ADR-049 决策 3,AEGIS/Variant 审议否决依据)
 pub use policy::UNLEARNABLE_SECURITY_RULES;
 pub use sandbox::Sandbox;

@@ -116,19 +116,15 @@ seccore:
     recovery_interval_minutes: 10
 
 mcp:
-  mesh:
-    transports: [stdio, http]
-    entanglement: true
-  servers:
-    - id: filesystem
-      command: "npx"
-      args: ["-y", "@modelcontextprotocol/server-filesystem"]
-    - id: github
-      url: "https://api.github.com/mcp"
-      auth: oauth
-    - id: postgres
-      url: "postgresql://localhost:5432/mcp"
-      auth: password
+  # ADR-255:默认不分发任何 server 条目。mcp-mesh 当前为私有 2PC TCP 帧协议
+  # (ADR-253 §4),不实现 MCP JSON-RPC、无认证透传——标准 MCP 服务器
+  # (如 api.githubcopilot.com)即便注册成功也无法真实调用。
+  # 仅当对端实现同一 2PC 帧协议时才取消注释并配置(url 须公网可达,
+  # loopback/保留段在注册阶段即被 SSRF 校验拒绝):
+  # servers:
+  #   - id: my-participant
+  #     url: "https://participant.example.com:8443"
+  servers: []
 
 evolution:
   enabled: true

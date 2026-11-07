@@ -126,7 +126,8 @@ fn test_all_14_sections_lazy_accessible() {
     assert!(lazy.mtpe().expect("mtpe").default_prediction_depth > 0);
     assert!(lazy.gqep().expect("gqep").batch_size > 0);
     assert!(!lazy.seccore().expect("seccore").sandbox.is_empty());
-    assert!(!lazy.mcp().expect("mcp").servers.is_empty());
+    // ADR-255:默认 servers 为空(历史默认三条无一可真实调用,不再分发)
+    assert!(lazy.mcp().expect("mcp").servers.is_empty());
     assert!(lazy.evolution().expect("evolution").enabled);
     assert!(lazy.monitoring().expect("monitoring").prometheus.enabled);
 }

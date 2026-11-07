@@ -133,41 +133,18 @@ pub fn validate_command(
     policy: &CommandPolicy,
 ) -> Result<CommandSpec, SecCoreError> {
     // 构建完整命令字符串用于模式匹配(program + args)
+    // 与 validate_command_verdict 共用同一判决体：见该函数注释。
+    // 本函数只比纯判决多算一次风险分 —— 那是 CommandSpec 负载的需要，
+    // 派发热路径拿不到它（sandbox_gate 直接丢弃 Ok 负载）。
     let full_command = build_full_command_string(&cmd.program, &cmd.args);
-    let full_command_lower = full_command.to_lowercase();
 
-    // 步骤1:拦截模式匹配(按添加顺序检查,首个匹配即返回)
-    for pattern in &policy.blocked_patterns {
-        let pattern_lower = pattern.pattern.to_lowercase();
-        if full_command_lower.contains(&pattern_lower) {
-            warn!(
-                attack_type = ?pattern.attack_type,
-                command = %full_command,
-                pattern = %pattern.pattern,
-                "命令被策略拦截"
-            );
-            return Err(SecCoreError::CommandBlocked {
-                attack_type: pattern.attack_type,
-                detail: pattern.description.clone(),
-            });
-        }
+    if let Some(pattern) = find_blocked_pattern(&full_command, policy) {
+        return Err(blocked_error(pattern, &full_command));
     }
 
-    // 步骤2:白名单检查(拦截模式未匹配,但命令可能未授权)
-    let program_lower = cmd.program.to_lowercase();
-    if !policy.allowed_commands.contains(&program_lower) {
-        warn!(
-            program = %cmd.program,
-            "命令不在白名单,判定为 Abuse"
-        );
-        return Err(SecCoreError::CommandBlocked {
-            attack_type: AttackType::Abuse,
-            detail: format!("命令 '{}' 不在白名单", cmd.program),
-        });
-    }
+    check_whitelisted(&cmd.program, policy)?;
 
     // 步骤3:风险评估(D6 修复:返回 0-100 数值评分作为升级主信号)
-    // WHY: risk_score 是单一真相源,risk_level 由它派生,避免双源不一致
     let risk_score = assess_risk(&cmd.program, &cmd.args);
     let risk_level = RiskLevel::from_score(risk_score);
 
@@ -178,6 +155,114 @@ pub fn validate_command(
         risk_level,
         risk_score,
     })
+}
+
+/// ASCII 大小写不敏感子串查找。
+///
+/// 仅在**两侧皆 ASCII** 时与 `hay.to_lowercase().contains(&needle.to_lowercase())`
+/// 等价（选路条件见 `find_blocked_pattern`），故不对外暴露。
+fn contains_ascii_ci(hay: &str, needle: &str) -> bool {
+    let (hb, nb) = (hay.as_bytes(), needle.as_bytes());
+    // 与标准库 `contains("")` 恒真的语义对齐
+    if nb.is_empty() {
+        return true;
+    }
+    if nb.len() > hb.len() {
+        return false;
+    }
+    hb.windows(nb.len()).any(|w| {
+        w.iter()
+            .zip(nb.iter())
+            .all(|(h, n)| h.eq_ignore_ascii_case(n))
+    })
+}
+
+/// 步骤 1 的判决体 —— 拦截模式匹配（按添加顺序检查，首个匹配即返回）。
+///
+/// WHY 快路径的选路条件是「haystack 是否全 ASCII」而不是「needle 是否全 ASCII」：
+/// `str::to_lowercase()` 会把若干非 ASCII 码位折叠成 ASCII（U+212A KELVIN SIGN 折叠为
+/// `k`），若按 needle 选路，这类命中会被逐字符 ASCII 比较漏掉 —— 即安全判决被性能
+/// 优化吃掉。该跨域陷阱由
+/// `tests/dispatch_hot_path_verdict.rs::unicode_case_fold_edge_case_agrees_between_paths`
+/// 锁死；把条件写反那条测试即转红。
+///
+/// 非 ASCII 一侧仍走原 `to_lowercase()` 路径，且 haystack 的小写结果在多条模式间复用
+/// （原实现为每条模式重算一次 haystack 小写，是纯浪费）。
+fn find_blocked_pattern<'a>(
+    full_command: &str,
+    policy: &'a CommandPolicy,
+) -> Option<&'a BlockedPattern> {
+    let hay_ascii = full_command.is_ascii();
+    let mut hay_lower: Option<String> = None;
+    for pattern in &policy.blocked_patterns {
+        let hit = if hay_ascii && pattern.pattern.is_ascii() {
+            contains_ascii_ci(full_command, &pattern.pattern)
+        } else {
+            let lower = hay_lower.get_or_insert_with(|| full_command.to_lowercase());
+            lower.contains(&pattern.pattern.to_lowercase())
+        };
+        if hit {
+            return Some(pattern);
+        }
+    }
+    None
+}
+
+/// 拦截日志 + 错误构造 —— 两个入口共用，保证文案逐字一致。
+fn blocked_error(pattern: &BlockedPattern, full_command: &str) -> SecCoreError {
+    warn!(
+        attack_type = ?pattern.attack_type,
+        command = %full_command,
+        pattern = %pattern.pattern,
+        "命令被策略拦截"
+    );
+    SecCoreError::CommandBlocked {
+        attack_type: pattern.attack_type,
+        detail: pattern.description.clone(),
+    }
+}
+
+/// 步骤 2 的判决体 —— 白名单检查（拦截模式未匹配，但命令可能未授权）。
+fn check_whitelisted(program: &str, policy: &CommandPolicy) -> Result<(), SecCoreError> {
+    let program_lower = program.to_lowercase();
+    if !policy.allowed_commands.contains(&program_lower) {
+        warn!(
+            program = %program,
+            "命令不在白名单,判定为 Abuse"
+        );
+        return Err(SecCoreError::CommandBlocked {
+            attack_type: AttackType::Abuse,
+            detail: format!("命令 '{}' 不在白名单", program),
+        });
+    }
+    Ok(())
+}
+
+/// 纯判决入口 —— 只回答「放行 / 拦截及原因」。
+///
+/// WHY 新增而非改造 `validate_command`：后者签名返回 `CommandSpec`，而派发热路径
+/// （`tool_runtime::sandbox_gate`）整个丢弃该 Ok 负载，只为拿一个放行/拦截结论。
+/// 于是每次派发白付数笔分配 —— `Command` 的 program clone + args vec clone、
+/// `CommandSpec` 的 program clone + allowed_args clone，以及仅为填充该负载而算的
+/// `assess_risk`（内含 `to_lowercase` 与 `args.join(" ")`）。
+///
+/// 本入口与 `validate_command` 共用同一判决体（`find_blocked_pattern` +
+/// `check_whitelisted`）⇒ 不存在第二份实现，也就没有两入口判决分叉的可能
+/// （ADR-241 D3 同一条纪律：借用/拥有若各存一份安全逻辑，快路就成了旁路）。
+///
+/// 参数形态为借用（`&str` / `&[&str]`）⇒ 调用方零 clone。
+pub fn validate_command_verdict(
+    program: &str,
+    args: &[&str],
+    policy: &CommandPolicy,
+) -> Result<(), SecCoreError> {
+    let full_command = build_full_command_string(program, args);
+
+    if let Some(pattern) = find_blocked_pattern(&full_command, policy) {
+        return Err(blocked_error(pattern, &full_command));
+    }
+
+    check_whitelisted(program, policy)
 }
 
 /// 校验环境变量 — 拦截敏感信息泄露。
@@ -239,12 +324,19 @@ pub fn validate_env(
 ///
 /// 用于拦截模式的子串匹配。注意:此字符串仅用于静态分析,
 /// 不传递给 shell 执行(避免二次解析风险)。
-fn build_full_command_string(program: &str, args: &[String]) -> String {
-    let mut s = String::with_capacity(program.len() + 1);
+/// 拼接 program + args —— 判决的匹配对象由此唯一构造。
+///
+/// 泛型化（`S: AsRef<str>`）而非新增一个重载：让拥有型 `&[String]` 与借用型
+/// `&[&str]` 两个入口共用同一份拼接实现 —— 拼接形状一旦分叉，「pattern 命中与否」
+/// 就可能分叉，那是安全语义而非性能差异。现有 `&[String]` 调用点无需改动。
+fn build_full_command_string<S: AsRef<str>>(program: &str, args: &[S]) -> String {
+    // 一次算准容量：原实现预留 program.len()+1，args 多时必然多次重分配。
+    let cap = program.len() + args.iter().map(|a| a.as_ref().len() + 1).sum::<usize>();
+    let mut s = String::with_capacity(cap);
     s.push_str(program);
     for arg in args {
         s.push(' ');
-        s.push_str(arg);
+        s.push_str(arg.as_ref());
     }
     s
 }

@@ -30,11 +30,20 @@ use super::inproc::InProcDispatcher;
 use super::sandbox_gate::SeccoreSandboxGate;
 use crate::exec_tool_executor::ExecPolicyToolExecutor;
 use crate::toolplan_runner::ToolExecutor;
+use nexus_contracts::tool_plan::SideEffectDecl;
 
 /// 工具运行时 — 强制沙箱四环链的成品装配
 pub struct ToolRuntime {
     /// 四环齐备的派发器（唯一构造入口为 [`DispatcherBuilder::build`]）
     dispatcher: SandboxedDispatcher,
+    /// 原始 delegate 的能力视图 —— 仅供 `capability_of` / `declared_tools` 查询
+    ///
+    /// WHY 在构造点就地保留原 `Arc` 而不是让包装件逐层转发:派生链上跑的是
+    /// `ExecPolicyToolExecutor` 等包装件，能力自述属于**被包装的原始执行器**。
+    /// 转发要跨 4 个实现（Runtime/OpTimeout/Counting/ExecPolicy），漏任一层
+    /// 能力表就在现网静默失效，而单测因直接用裸执行器而全绿 ——
+    /// 「测试证明不了接线」的典型形态。就地保留只有 1 处可能漏。
+    capabilities: Option<Arc<dyn ToolExecutor>>,
 }
 
 impl std::fmt::Debug for ToolRuntime {
@@ -61,18 +70,29 @@ impl ToolRuntime {
         delegate: Arc<dyn ToolExecutor>,
         policy: Arc<ExecPolicy>,
     ) -> Result<Self, DispatchError> {
+        // 能力视图:包装前就地保留原 delegate（见结构体字段注释）
+        let capabilities: Option<Arc<dyn ToolExecutor>> = Some(Arc::clone(&delegate));
         let guarded: Arc<dyn ToolExecutor> =
             Arc::new(ExecPolicyToolExecutor::new(Arc::clone(&policy), delegate));
         let inproc: Arc<dyn ToolDispatcher> = Arc::new(InProcDispatcher::new(guarded));
+        // 路由表由执行器自报的工具名构成;未声明者仍落 fallback ⇒ 归因不变。
+        let mut routes: HashMap<String, Arc<dyn ToolDispatcher>> = HashMap::new();
+        if let Some(view) = capabilities.as_deref() {
+            for name in view.declared_tools() {
+                routes.insert(name, Arc::clone(&inproc));
+            }
+        }
         let dispatcher = DispatcherBuilder::new()
             .with_policy(Some(Arc::clone(&policy)))
             .with_sandbox(Some(Arc::new(SeccoreSandboxGate::default_secure())))
-            // 显式空路由表：全部流量走 fallback（单进程内没有按工具名的分流需求）
-            .with_route(Some(HashMap::new()))
+            .with_route(Some(routes))
             .with_fallback(Some(Arc::clone(&inproc)))
             .with_transport(Some(inproc))
             .build()?;
-        Ok(Self { dispatcher })
+        Ok(Self {
+            dispatcher,
+            capabilities,
+        })
     }
 
     /// 派发一次请求（四环链入口）
@@ -135,19 +155,34 @@ impl ToolRuntime {
             policy = policy.add_rule(rule);
         }
         let policy = Arc::new(policy);
+        // 能力视图:先取出原 delegate 的自述，再把 delegate 交给传输环。
+        // `None` 分支（尚未接入真实执行器）⇒ 视图指向 `UnwiredToolExecutor` 本身,
+        // 其 `declared_tools()` 为空 ⇒ 路由表空、能力未知 ⇒ 全量保守（与今日一致）。
+        let capabilities: Option<Arc<dyn ToolExecutor>> = delegate.clone();
         let transport_executor: Arc<dyn ToolExecutor> = match delegate {
             Some(exec) => Arc::new(ExecPolicyToolExecutor::new(Arc::clone(&policy), exec)),
             None => Arc::new(UnwiredToolExecutor),
         };
         let inproc: Arc<dyn ToolDispatcher> = Arc::new(InProcDispatcher::new(transport_executor));
+        // 路由表来源:执行器自报的工具名全集（ADR-255）。空集时与今日逐字一致
+        // —— 全部流量走 fallback，`unknown builtin tool` 归因保持不变。
+        let mut routes: HashMap<String, Arc<dyn ToolDispatcher>> = HashMap::new();
+        if let Some(view) = capabilities.as_deref() {
+            for name in view.declared_tools() {
+                routes.insert(name, Arc::clone(&inproc));
+            }
+        }
         let dispatcher = DispatcherBuilder::new()
             .with_policy(Some(Arc::clone(&policy)))
             .with_sandbox(Some(Arc::new(SeccoreSandboxGate::default_secure())))
-            .with_route(Some(HashMap::new()))
+            .with_route(Some(routes))
             .with_fallback(Some(Arc::clone(&inproc)))
             .with_transport(Some(inproc))
             .build()?;
-        Ok(Self { dispatcher })
+        Ok(Self {
+            dispatcher,
+            capabilities,
+        })
     }
 
     /// 批量派发 — 有界并发 + 输入序结果（性能增量 2026-11-06）
@@ -186,6 +221,21 @@ impl ToolExecutor for ToolRuntime {
             .await
             .map(|outcome| outcome.content_json)
             .map_err(|err| err.to_string())
+    }
+
+    /// 能力自述直接回落到原 delegate —— 四环链本身不改变工具的副作用属性
+    fn capability_of(&self, tool_name: &str) -> Option<SideEffectDecl> {
+        self.capabilities
+            .as_deref()
+            .and_then(|view| view.capability_of(tool_name))
+    }
+
+    /// 可服务工具名全集（供上层构造 `PlanRunner` 时同源取值）
+    fn declared_tools(&self) -> Vec<String> {
+        self.capabilities
+            .as_deref()
+            .map(|view| view.declared_tools())
+            .unwrap_or_default()
     }
 }
 

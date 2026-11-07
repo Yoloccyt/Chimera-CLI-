@@ -19,7 +19,8 @@
 //! - **红线 R8 说明**: 索引排序规模为 max_index_count 受限集合（小规模式排序可接受，
 //!   大规模索引应前置 CLV 近似检索，文档如实声明规模边界）
 //! - **body_provider 注入**: body 内容由调用方注入（避免本模块与 WikiStore
-//!   循环依赖），默认规则占位（铁律1 零运行时外部依赖）
+//!   循环依赖），未注入时返回**显式"未接线"占位**而非伪装成已加载的内容
+//!  （铁律1 零运行时外部依赖 + 诚实降级：占位不得诱导调用方误用）
 //! - **L5→L1 向下合规**: CLV 来自 nexus-core
 
 use std::collections::HashMap;
@@ -99,7 +100,7 @@ pub struct ProgressiveSkillLoader {
     skill_bodies: Arc<Mutex<HashMap<String, SkillBody>>>,
     /// 相似度门控阈值（钳制 [0.5, 0.95]）
     similarity_threshold: f32,
-    /// body 内容提供者（注入式；None = 默认规则占位）
+    /// body 内容提供者（注入式；None = 显式"未接线"占位，不伪装已加载）
     body_provider: Option<BodyProvider>,
 }
 
@@ -203,15 +204,19 @@ impl ProgressiveSkillLoader {
             return body.clone();
         }
         drop(cache);
-        // 未命中: 经注入提供者生成（默认规则占位）
+        // 未命中: 经注入提供者生成；未注入 provider 时返回显式"未接线"占位
+        // WHY 不再伪装("// Loaded {id}" 旧文案): 占位被当真实内容展示/执行即
+        // fail-open,与"仅索引"占位("// Not loaded")的诚实语义对齐
         let body = match &self.body_provider {
             Some(provider) => provider(skill_id),
             None => SkillBody {
                 skill_id: skill_id.to_string(),
-                code: format!("// Loaded {skill_id}"),
+                code: format!("// Body unavailable: body_provider not wired (skill '{skill_id}')"),
                 examples: Vec::new(),
                 tests: Vec::new(),
-                documentation: "Loaded on demand".to_string(),
+                documentation: "Body on Demand triggered, but no body_provider was injected; \
+                                the real content source must be wired by the host (L9/L10)"
+                    .to_string(),
             },
         };
         let mut cache = self.skill_bodies.lock().await;

@@ -220,7 +220,8 @@ impl McpMesh {
     /// 1. 校验 participants:已注册且 alive
     /// 2. 创建 `QuantumTransaction`(Init)
     /// 3. `tokio::time::timeout` 包装整体执行,超时即 Abort+Rollback
-    /// 4. Prepare 阶段:并发向所有参与者发 prepare(通过 `ParticipantClient`)
+    /// 4. Prepare 阶段:并发向所有参与者发 prepare(通过 `ParticipantClient`,
+    ///    op 与 args 全量透传至协议帧)
     /// 5. 全部 ACK → Commit 阶段 → 返回 success=true
     /// 6. 任一失败 → Abort + Rollback 阶段 → 返回 success=false
     /// 7. 发布 `McpMeshTransactionCompleted` 事件
@@ -233,6 +234,7 @@ impl McpMesh {
         &self,
         participants: Vec<String>,
         op: String,
+        args: Vec<String>,
     ) -> Result<TransactionResult, McpError> {
         // 1. 校验参与者数量
         if participants.len() > self.config.max_participants {
@@ -264,7 +266,7 @@ impl McpMesh {
 
         // 4. timeout 包装整体执行,超时即触发 Abort+Rollback
         let deadline = Duration::from_millis(self.config.transaction_timeout_ms);
-        let outcome = tokio::time::timeout(deadline, self.run_2pc(&mut tx, &op)).await;
+        let outcome = tokio::time::timeout(deadline, self.run_2pc(&mut tx, &op, &args)).await;
 
         // 用单独标志位记录超时,避免 outcome 部分移动后再借用
         let mut timed_out = false;
@@ -317,12 +319,13 @@ impl McpMesh {
         &self,
         tx: &mut QuantumTransaction,
         op: &str,
+        args: &[String],
     ) -> Result<Option<Vec<String>>, McpError> {
         // Init → Prepare
         tx.transition(TransactionState::Prepare)?;
 
         // Prepare 阶段:并发向所有参与者发 prepare
-        match self.prepare_phase(tx, op).await {
+        match self.prepare_phase(tx, op, args).await {
             Ok(()) => {
                 // 全部 ACK → Commit
                 tx.transition(TransactionState::Commit)?;
@@ -357,7 +360,13 @@ impl McpMesh {
     /// # 参数
     /// - `tx`:量子事务(提供 transaction_id 和 participant_servers)
     /// - `op`:操作描述
-    async fn prepare_phase(&self, tx: &QuantumTransaction, op: &str) -> Result<(), McpError> {
+    /// - `args`:操作参数(全量透传至协议帧,不在此层裁剪)
+    async fn prepare_phase(
+        &self,
+        tx: &QuantumTransaction,
+        op: &str,
+        args: &[String],
+    ) -> Result<(), McpError> {
         let max_retries = self.config.max_retries;
         let mut acked: Vec<String> = Vec::with_capacity(tx.participant_servers.len());
 
@@ -378,7 +387,7 @@ impl McpMesh {
                                 }
                             })?;
                             self.participant_client
-                                .prepare(&server, &tx.transaction_id, op)
+                                .prepare(&server, &tx.transaction_id, op, args)
                                 .await
                         }
                         .await;
@@ -441,7 +450,7 @@ impl McpMesh {
 
                 match self
                     .participant_client
-                    .prepare(&server, &tx.transaction_id, op)
+                    .prepare(&server, &tx.transaction_id, op, args)
                     .await
                 {
                     Ok(()) => {
@@ -703,7 +712,15 @@ impl McpMesh {
         self.publish_message_received(query.query_id.clone(), "superposition_query", &query)
             .await;
 
-        execute_superposition_query(&query, &self.registry, self.config.heartbeat_timeout_ms).await
+        execute_superposition_query(
+            &query,
+            &self.registry,
+            self.config.heartbeat_timeout_ms,
+            // 传输抽象统一注入(Task 0.7.10 闭环):默认 InProcessClient 保持
+            // 进程内模拟语义;--network 时走真实 QueryRequest TCP 帧
+            Arc::clone(&self.participant_client),
+        )
+        .await
     }
 
     /// 发布 `McpMessageReceived` 事件(best-effort,失败仅告警)
@@ -1108,6 +1125,7 @@ mod tests {
             _s: &'a MeshServer,
             _t: &'a str,
             _op: &'a str,
+            _args: &'a [String],
         ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
             Box::pin(async { Ok(()) })
         }
@@ -1169,7 +1187,7 @@ mod tests {
             .expect("注册失败");
 
         let result = mesh
-            .execute_transaction(vec!["s-0".into()], "op".into())
+            .execute_transaction(vec!["s-0".into()], "op".into(), Vec::new())
             .await
             .expect("默认预算内应能完成首次失败 + 重试（改前必超时）");
         assert!(result.success, "重试后 commit 应成功");
@@ -1257,7 +1275,7 @@ mod tests {
     async fn test_execute_transaction_single_server() {
         let mesh = make_mesh_with_servers(1);
         let result = mesh
-            .execute_transaction(vec!["s-0".into()], "test".into())
+            .execute_transaction(vec!["s-0".into()], "test".into(), Vec::new())
             .await
             .expect("事务失败");
         assert!(result.success);
@@ -1270,7 +1288,7 @@ mod tests {
         let mesh = make_mesh_with_servers(5);
         let participants: Vec<String> = (0..5).map(|i| format!("s-{i}")).collect();
         let result = mesh
-            .execute_transaction(participants.clone(), "test".into())
+            .execute_transaction(participants.clone(), "test".into(), Vec::new())
             .await
             .expect("事务失败");
         assert!(result.success);
@@ -1287,7 +1305,7 @@ mod tests {
         }
         let participants: Vec<String> = (0..33).map(|i| format!("s-{i}")).collect();
         let err = mesh
-            .execute_transaction(participants, "test".into())
+            .execute_transaction(participants, "test".into(), Vec::new())
             .await
             .unwrap_err();
         assert!(matches!(err, McpError::TooManyParticipants { .. }));
@@ -1297,7 +1315,11 @@ mod tests {
     async fn test_execute_transaction_unregistered_server() {
         let mesh = make_mesh_with_servers(1);
         let err = mesh
-            .execute_transaction(vec!["s-0".into(), "unknown".into()], "test".into())
+            .execute_transaction(
+                vec!["s-0".into(), "unknown".into()],
+                "test".into(),
+                Vec::new(),
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, McpError::ServerNotFound { .. }));
@@ -1325,7 +1347,7 @@ mod tests {
             .expect("注册失败");
 
         let result = mesh
-            .execute_transaction(vec!["s-1".into()], "test".into())
+            .execute_transaction(vec!["s-1".into()], "test".into(), Vec::new())
             .await
             .expect("事务失败");
 
@@ -1361,7 +1383,7 @@ mod tests {
         let mesh = make_mesh_with_servers(1);
         // 无 EventBus,事务应正常完成,不 panic
         let result = mesh
-            .execute_transaction(vec!["s-0".into()], "test".into())
+            .execute_transaction(vec!["s-0".into()], "test".into(), Vec::new())
             .await
             .expect("事务失败");
         assert!(result.success);
@@ -1449,7 +1471,7 @@ mod tests {
         let mesh = make_mesh_with_servers(1);
         // 注册后立即事务应成功
         let r1 = mesh
-            .execute_transaction(vec!["s-0".into()], "op1".into())
+            .execute_transaction(vec!["s-0".into()], "op1".into(), Vec::new())
             .await
             .expect("事务失败");
         assert!(r1.success);
@@ -1460,7 +1482,7 @@ mod tests {
         // 注销后事务应失败
         mesh.unregister_server("s-0").expect("注销失败");
         let err = mesh
-            .execute_transaction(vec!["s-0".into()], "op2".into())
+            .execute_transaction(vec!["s-0".into()], "op2".into(), Vec::new())
             .await
             .unwrap_err();
         assert!(matches!(err, McpError::ServerNotFound { .. }));

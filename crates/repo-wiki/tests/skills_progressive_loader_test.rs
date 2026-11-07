@@ -1,7 +1,8 @@
 //! Skills 渐进加载器集成测试 — 顶层 API + CLV 门控 + 缓存闭环（v3.4.0 §11.1）
 //!
 //! 覆盖: 顶层 API 可达性（re-export 验证）/ 相似度门控端到端 /
-//! Index First + Body on Demand 分界 / body_provider 注入 / proptest 门控不变量
+//! Index First + Body on Demand 分界 / body_provider 注入 / proptest 门控不变量 /
+//! 技能全链组合（SkillGraph 进化 → 索引映射 → 渐进加载）
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
@@ -102,6 +103,71 @@ async fn max_index_count_limits_candidates() {
     assert_eq!(loaded.len(), 3);
     let stats = loader.get_stats().await;
     assert_eq!(stats.bodies_loaded, 1);
+}
+
+// ----------------------------------------------------------
+// 技能全链组合（L5 内部协同 W3）: SkillGraph 进化 → 索引映射 → 渐进加载
+// ----------------------------------------------------------
+
+/// 锁定 L5 技能三链路的组合可用性: 图进化产出节点 → `skill_metadata_from_graph`
+/// 映射为索引 → loader 按 CLV 门控渐进加载。生产上游（轨迹 → SkillUsagePattern
+/// 生产者,受 R2 冻结治理）接线前,本测试保证链路本身随时可用、无需适配层改动;
+/// 同时验证无 body_provider 时占位**显式声明未接线**(不伪装已加载)。
+#[tokio::test]
+async fn skill_full_chain_graph_to_loader_composition() {
+    use repo_wiki::skill_graph::{SkillGraph, SkillUsagePattern};
+    use repo_wiki::skill_metadata_from_graph;
+
+    // 1. 图进化: 两个高频技能入图(频次 ≥ 3),序列相邻建依赖(parse → compile)
+    let mut graph = SkillGraph::new();
+    graph.evolve_with_patterns(&[
+        SkillUsagePattern {
+            skill_id: "parse".into(),
+            embedding: unit_clv(0),
+            frequency: 5,
+            success_rate: 0.9,
+            sequence: Vec::new(),
+        },
+        SkillUsagePattern {
+            skill_id: "compile".into(),
+            embedding: unit_clv(1),
+            frequency: 5,
+            success_rate: 0.8,
+            sequence: vec!["parse".into(), "compile".into()],
+        },
+    ]);
+    assert_eq!(graph.len(), 2, "频次 ≥ 3 的技能应入图");
+
+    // 2. 索引映射: 依赖沉淀为 tags,统计沉淀为 description
+    let index = skill_metadata_from_graph(&graph);
+    assert_eq!(index.len(), 2);
+    let compile = index
+        .iter()
+        .find(|m| m.skill_id == "compile")
+        .expect("compile 应在索引中");
+    assert_eq!(
+        compile.tags,
+        vec!["parse".to_string()],
+        "序列相邻依赖应沉淀为 tags"
+    );
+    assert!(
+        compile.description.contains("reuse_count=5"),
+        "复用统计应沉淀进 description,实际: {}",
+        compile.description
+    );
+
+    // 3. 渐进加载: 相似度门控选出 parse(dim 0 与任务同向),compile 正交被过滤
+    let mut loader = ProgressiveSkillLoader::new(0.5);
+    loader.register_index(index);
+    let loaded = loader.load_skills(&unit_clv(0), 10, 1).await;
+    assert_eq!(loaded.len(), 1, "正交技能应被门控过滤");
+    assert_eq!(loaded[0].metadata.skill_id, "parse");
+    // 无 body_provider: 占位必须显式声明未接线,不得伪装已加载
+    assert!(
+        loaded[0].body.code.contains("body_provider not wired"),
+        "占位 body 应显式声明未接线,实际: {}",
+        loaded[0].body.code
+    );
 }
 
 // ----------------------------------------------------------
