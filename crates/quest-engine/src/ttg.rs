@@ -45,7 +45,7 @@
 //! ```
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 use nexus_contracts::BudgetTier;
@@ -205,16 +205,21 @@ struct QuestModeEntry {
 /// - 单函数 ≤ 200 行
 /// - 无 unwrap()/expect() 在非测试代码
 /// - 所有 async fn 满足 Send + 'static
+#[derive(Clone)]
 pub struct TtgGovernor {
     /// TTG 配置(只读,构造后不变)
     config: TtgConfig,
     /// Quest 模式注册表(quest_id → 模式状态)
-    modes: Mutex<HashMap<String, QuestModeEntry>>,
+    ///
+    /// WHY Arc 内化(ADR-257 D1):Clone 产生**同一模式状态**的两个视图
+    /// (浅共享,非独立副本)——QuestEngine 浅 Clone 语义的字段级兑现。
+    modes: Arc<Mutex<HashMap<String, QuestModeEntry>>>,
     /// 预算联动切换的上次切换时间(quest_id → 时间戳)
     ///
     /// WHY 独立于 modes:滞后机制仅作用于预算联动切换,
     /// 手动覆盖不受滞后限制(上层显式指定应立即生效)
-    last_budget_switch: Mutex<HashMap<String, DateTime<Utc>>>,
+    /// WHY Arc 内化:同 modes(ADR-257 D1 浅共享)。
+    last_budget_switch: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
     /// 事件总线(可选)— 模式切换时发布 ThinkingModeSwitched 事件
     ///
     /// WHY Option:测试场景或纯计算用途无需事件总线,
@@ -224,7 +229,9 @@ pub struct TtgGovernor {
     ///
     /// WHY Option:与 event_bus 同生命周期,仅 with_event_bus 时创建。
     /// None 时 effective_tier() 直接返回 fallback,向后兼容。
-    arbitration: Option<ArbitrationLayer>,
+    /// WHY Arc 内化:Clone 共享同一仲裁层(含其 Parliament topic 订阅与
+    /// tier 状态)——订阅不可复制,共享即正确语义(ADR-257 D1)。
+    arbitration: Option<Arc<ArbitrationLayer>>,
 }
 
 impl TtgGovernor {
@@ -232,8 +239,8 @@ impl TtgGovernor {
     pub fn new(config: TtgConfig) -> Self {
         Self {
             config,
-            modes: Mutex::new(HashMap::new()),
-            last_budget_switch: Mutex::new(HashMap::new()),
+            modes: Arc::new(Mutex::new(HashMap::new())),
+            last_budget_switch: Arc::new(Mutex::new(HashMap::new())),
             event_bus: None,
             arbitration: None,
         }
@@ -250,11 +257,12 @@ impl TtgGovernor {
         // WHY 先创建 ArbitrationLayer 再 move event_bus:
         // ArbitrationLayer::new 借用 &EventBus,不消费所有权。
         // 但 event_bus 后续需要 move 到 Self,所以 arbitration 必须先创建。
-        let arbitration = ArbitrationLayer::new(&event_bus);
+        // （Arc 包装:ADR-257 D1 浅共享——Clone 共享同一仲裁层）
+        let arbitration = Arc::new(ArbitrationLayer::new(&event_bus));
         Self {
             config,
-            modes: Mutex::new(HashMap::new()),
-            last_budget_switch: Mutex::new(HashMap::new()),
+            modes: Arc::new(Mutex::new(HashMap::new())),
+            last_budget_switch: Arc::new(Mutex::new(HashMap::new())),
             event_bus: Some(event_bus),
             arbitration: Some(arbitration),
         }
@@ -266,7 +274,7 @@ impl TtgGovernor {
     /// 此方法允许延迟注入,避免强制要求构造顺序。
     /// 同时创建 ArbitrationLayer 订阅 Parliament topic 事件。
     pub fn set_event_bus(&mut self, event_bus: EventBus) {
-        self.arbitration = Some(ArbitrationLayer::new(&event_bus));
+        self.arbitration = Some(Arc::new(ArbitrationLayer::new(&event_bus)));
         self.event_bus = Some(event_bus);
     }
 

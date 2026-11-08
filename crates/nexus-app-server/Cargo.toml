@@ -34,6 +34,9 @@ quest-engine = { workspace = true }
 nexus-subagent = { workspace = true }
 # 意图 ID 生成（UUIDv7;与 nexus-subagent 同源）
 uuid = { workspace = true, features = ["v7"] }
+# AgentTask* 事件 deadline 字段构造（ADR-257 D4 事件闭环;workspace 内既有,
+# 非新增锁面——chrono 已为 event-bus/types 直接依赖）
+chrono = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

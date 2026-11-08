@@ -1,16 +1,14 @@
-//! SubAgent × Quest 执行引擎 — L10 侧适配器（**装配态：GATED-UNWIRED**）
+//! SubAgent × Quest 执行引擎 — L10 侧适配器（**装配态：WIRED**，ADR-257）
 //!
 //! 对应架构层: **L10 Interface**（nexus-app-server）
-//! 对应任务: **P4-T3**（W20 集成周:Phase 3 遗留接线②）
+//! 对应任务: **P4-T3**（W20 集成周:Phase 3 遗留接线②）→ **P2 装配接线**（ADR-257）
 //!
-//! # 装配态（2026-10-27 实测，M62/C-82）
-//! **零生产构造**：全仓 `SubAgentQuestEngine` 的构造点只有本文件的 `#[cfg(test)]`
-//! 段与本 crate 的重导出；`chimera-cli`（唯一组合根）内 `subagent`/`SubAgent`
-//! **0 命中** —— 即没有任何 CLI 面消费它。因此本模块的现在时态只能写
-//! 「提供 L10 侧适配器、待装配」，**不得**写「已接线」：`nexus-subagent` 的
-//! crate 边可达（G-09 管）与「装配点存在」（本文件的实际状态）是两件事。
-//! 接线路径见 ADR-225 §5 T-19；台账注记见 `scripts/dep_edge_freeze.txt` 的
-//! `nexus-app-server|nexus-subagent` 行。
+//! # 装配态（2026-11-08，ADR-257 D1/D5）
+//! **已接线**：组合根（chimera-cli composition.rs）经 `QuestEngine` 浅 Clone
+//! 构造本适配器并以 `Arc<tokio::sync::Mutex<…>>` 注入 AppContext.subagent_engine
+//! （ADR-257 D1 案 β 浅共享；D2 tokio 异步锁——join_next 收 `&mut` 的 JoinSet
+//! 所有权语义 ⇒ 同一实例 spawn/join 串行化，代价已登记）。第一波仅装配 +
+//! 句柄暴露，驱动入口由命令面后续波次挂接（ADR-257 D3）。
 //!
 //! # 设计（依赖铁律合规）
 //! [`nexus_subagent::SubAgentRuntime`]（L7）的 spawn 闭包需要真实执行体;
@@ -26,18 +24,28 @@
 
 use std::sync::Arc;
 
+use chrono::Utc;
+use event_bus::{EventBus, EventMetadata, NexusEvent, TaskPriority};
 use nexus_contracts::NexusError;
 use nexus_subagent::error::SubAgentError;
 use nexus_subagent::runtime::{SubAgentHandle, SubAgentRuntime, SubAgentTask};
 use nexus_subagent::types::SubAgentSpec;
 use quest_engine::QuestEngine;
 
-/// SubAgent Quest 执行引擎 — L10 侧适配器（GATED-UNWIRED；L10 → L7 + L9 向下合规）
+/// 适配器在 AgentTask* 事件中的委托方身份（ADR-257 D4：与 chimera-mas
+/// RootOrchestrator 的委托面共用三变体，按 from/to 归属区分——本适配器的
+/// 委托方恒为本常量，被委派方为 task_id）
+pub const SUBAGENT_ENGINE_ID: &str = "subagent-quest-engine";
+
+/// SubAgent Quest 执行引擎 — L10 侧适配器（WIRED，ADR-257；L10 → L7 + L9 向下合规）
 pub struct SubAgentQuestEngine {
     /// L7 运行时（拍卖 + JoinSet + 禁嵌套 + 规模上限）
     runtime: SubAgentRuntime,
     /// L9 引擎（Arc 共享;spawn 闭包需 'static + Send）
     engine: Arc<QuestEngine>,
+    /// 事件总线（可选;ADR-257 D4 事件闭环——spawn/join 发布 AgentTask* 三变体。
+    /// WHY Option:适配器自身单测无总线场景保持可用;组合根经 with_event_bus 注入）
+    bus: Option<EventBus>,
 }
 
 impl std::fmt::Debug for SubAgentQuestEngine {
@@ -55,7 +63,18 @@ impl SubAgentQuestEngine {
         Self {
             runtime: SubAgentRuntime::new(),
             engine: Arc::new(engine),
+            bus: None,
         }
+    }
+
+    /// 注入事件总线（ADR-257 D4 事件闭环）：spawn/join 闭环发布
+    /// `AgentTaskDelegated`/`AgentTaskCompleted`/`AgentTaskFailed`（既有变体,
+    /// 零新增;from/to 归属见 [`SUBAGENT_ENGINE_ID`]）。组合根装配时注入
+    /// 共享 bus——命令面订阅即可观测委托闭环。
+    #[must_use]
+    pub fn with_event_bus(mut self, bus: EventBus) -> Self {
+        self.bus = Some(bus);
+        self
     }
 
     /// 运行时可变引用（档案注册/诊断）
@@ -105,12 +124,64 @@ impl SubAgentQuestEngine {
                     Ok(quest.quest_id)
                 })
             });
-        self.runtime.spawn(spec, task, from_task)
+        let handle = self.runtime.spawn(spec, task, from_task)?;
+        // ADR-257 D4：委托事件发布（spawn_quest 为同步方法 ⇒ publish_blocking,
+        // §4.4 红线 #8;发布失败仅 warn——Normal 级事件,丢失可由 Completed/Failed
+        // 补偿,不得让事件面失败传染派发本身）
+        if let Some(bus) = &self.bus {
+            let event = NexusEvent::AgentTaskDelegated {
+                metadata: EventMetadata::new(SUBAGENT_ENGINE_ID),
+                from: SUBAGENT_ENGINE_ID.to_string(),
+                to: handle.task_id.clone(),
+                task_id: handle.task_id.clone(),
+                deadline: Utc::now() + chrono::Duration::hours(1),
+                priority: TaskPriority::Medium,
+            };
+            if let Err(err) = bus.publish_blocking(event) {
+                tracing::warn!(
+                    task_id = %handle.task_id,
+                    error = %err,
+                    "AgentTaskDelegated 发布失败(委托闭环事件,非派发本身)"
+                );
+            }
+        }
+        Ok(handle)
     }
 
     /// 等待下一任务完成（JoinSet 语义,调用方循环驱动）
+    ///
+    /// ADR-257 D4：结果回执发布——成功发 `AgentTaskCompleted`(from=完成方
+    /// task_id, to=委托方引擎), 失败发 `AgentTaskFailed`(Critical,mpsc 旁路
+    /// 保证投递;retry_count=0——本适配器不做重试语义)。
     pub async fn join_next(&mut self) -> Option<(String, Result<String, String>)> {
-        self.runtime.join_next().await
+        let (task_id, result) = self.runtime.join_next().await?;
+        if let Some(bus) = &self.bus {
+            let event = match &result {
+                Ok(quest_id) => NexusEvent::AgentTaskCompleted {
+                    metadata: EventMetadata::new(SUBAGENT_ENGINE_ID),
+                    from: task_id.clone(),
+                    to: SUBAGENT_ENGINE_ID.to_string(),
+                    task_id: task_id.clone(),
+                    result_summary: quest_id.clone(),
+                },
+                Err(e) => NexusEvent::AgentTaskFailed {
+                    metadata: EventMetadata::new(SUBAGENT_ENGINE_ID),
+                    from: task_id.clone(),
+                    to: SUBAGENT_ENGINE_ID.to_string(),
+                    task_id: task_id.clone(),
+                    error: e.clone(),
+                    retry_count: 0,
+                },
+            };
+            if let Err(err) = bus.publish(event).await {
+                tracing::warn!(
+                    task_id = %task_id,
+                    error = %err,
+                    "AgentTask 回执发布失败(闭环事件,非任务本身)"
+                );
+            }
+        }
+        Some((task_id, result))
     }
 }
 

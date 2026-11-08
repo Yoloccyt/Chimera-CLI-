@@ -37,8 +37,12 @@ use crate::error::QuestError;
 /// 文件结构:`~/.aether/checkpoints/<quest_id>/<checkpoint_id>.bin`
 /// 序列化格式:MessagePack(ADR-004,与 Event Bus 一致)
 /// 保留策略:最近 N 个检查点,超出删除最旧(避免磁盘膨胀)
+#[derive(Clone)]
 pub struct CheckpointManager {
     /// 检查点根目录(所有 Quest 的检查点按子目录组织)
+    ///
+    /// WHY derive Clone(ADR-257 D1):全部字段为路径/数目的值快照,Clone = 同一
+    /// 检查点存储的两个句柄(磁盘为共享真源)——QuestEngine 浅 Clone 语义一致。
     checkpoint_dir: PathBuf,
     /// 每个 Quest 保留的最大检查点数(超出删除最旧)
     max_keep: usize,

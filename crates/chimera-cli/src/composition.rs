@@ -118,6 +118,11 @@ pub struct AppContext {
     /// （ADR-244 D1）。此前 `exec` 路径局部再装配一份，导致同进程内两种传输语义
     /// （同名工具两种归因）；收敛后 `exec` 复用本字段，策略规则与默认动作单源。
     pub tool_runtime: Arc<gqep_executor::tool_runtime::ToolRuntime>,
+    /// SubAgent Quest 执行引擎（ADR-257 D1/D2：与 [`Self::engine`] 浅共享同一
+    /// Quest 注册表；tokio 异步锁允许跨 await 持有——join_next 收 `&mut`
+    /// （JoinSet 所有权语义），同一实例 spawn/join 串行化代价已登记 ADR-257）。
+    /// D3：第一波仅装配 + 句柄暴露，驱动入口由命令面后续波次挂接。
+    pub subagent_engine: Arc<tokio::sync::Mutex<nexus_app_server::SubAgentQuestEngine>>,
     /// WI-D1：跨厂商辩论激活输入。`None`=未启用（默认，主干恒绿）；
     /// `Some(names)`=组合根从 `config.model_router` 解析出的去重 provider 通道名，
     /// 供 `chimera parliament` 命令经 `CrossVendorDebate::from_provider_names` 注入。
@@ -283,6 +288,15 @@ pub fn build_with_sharding(
         }
     }
     let engine = QuestEngine::new(bus.clone());
+    // ADR-257 D1 案 β：QuestEngine 浅 Clone 共享给 SubAgentQuestEngine——
+    // 同一引擎状态的两个视图（Quest 注册表/事件总线共享，非独立副本）。
+    // D2：AppContext 持 Arc<tokio::sync::Mutex<…>>（join_next 收 &mut，
+    // JoinSet 所有权语义 ⇒ 同一实例 spawn/join 串行化，代价已登记 ADR-257）。
+    // D3：第一波仅装配 + 句柄暴露——「Quest 分解自动委托」机制不存在
+    // （deepdive §7.2 实证），驱动入口由命令面后续波次挂接，不虚构委托。
+    let subagent_engine = Arc::new(tokio::sync::Mutex::new(
+        nexus_app_server::SubAgentQuestEngine::new(engine.clone()).with_event_bus(bus.clone()),
+    ));
     // M12(ADR-185 D1/D3):gea + gqep 组合根装配——与 bus 同生命周期,
     // Arc 共享实例注入 mas orchestrator / doctor(非"构造即丢弃":
     // agent 命令经 with_gea 消费 gea,doctor 经 gather_collected 消费 gqep)。
@@ -386,6 +400,7 @@ pub fn build_with_sharding(
         gqep: Arc::new(gqep),
         sched: Arc::new(sched),
         scc,
+        subagent_engine,
         tool_runtime: Arc::new(tool_runtime),
         cross_vendor_providers,
         #[cfg(feature = "r2_unfreeze")]

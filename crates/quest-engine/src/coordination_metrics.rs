@@ -31,7 +31,7 @@
 //! - `record_cost` / `record_gain`:O(1) amortized(Vec push)
 //! - `compute_ratio`:O(1)(使用 EWMA 增量计算,非全量遍历)
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use serde::{Deserialize, Serialize};
@@ -539,9 +539,13 @@ impl Default for MetricsState {
 /// # 并发安全
 /// 遵循 §4.4 反模式 #1(禁止持锁 .await):所有方法为同步方法,
 /// `Mutex` 锁在方法返回时释放,不跨 `.await` 点。
+#[derive(Clone)]
 pub struct CoordinationMetricsCollector {
     /// 内部状态(Mutex 保护)
-    state: Mutex<MetricsState>,
+    ///
+    /// WHY Arc 内化(ADR-257 D1):Clone 共享同一度量状态(浅共享——两个视图
+    /// 记账到同一份 MetricsState,非各记各账)。
+    state: Arc<Mutex<MetricsState>>,
     /// 度量配置(只读,Clone 廉价)
     config: CoordinationMetricsConfig,
     /// 可选事件总线(P2-1 后续增强:发布 CoordinationRatioReported 事件)
@@ -560,7 +564,7 @@ impl CoordinationMetricsCollector {
     /// 创建带自定义配置的度量收集器(无 EventBus)
     pub fn with_config(config: CoordinationMetricsConfig) -> Self {
         Self {
-            state: Mutex::new(MetricsState::default()),
+            state: Arc::new(Mutex::new(MetricsState::default())),
             config,
             event_bus: None,
         }
@@ -576,7 +580,7 @@ impl CoordinationMetricsCollector {
     /// - `bus`:事件总线(EventBus 内部为 Arc,Clone 廉价)
     pub fn with_event_bus(config: CoordinationMetricsConfig, bus: EventBus) -> Self {
         Self {
-            state: Mutex::new(MetricsState::default()),
+            state: Arc::new(Mutex::new(MetricsState::default())),
             config,
             event_bus: Some(bus),
         }

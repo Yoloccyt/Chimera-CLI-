@@ -47,6 +47,15 @@ use crate::ttg::TtgGovernor;
 /// 可选配置 `CheckpointManager` 启用 LHQP 检查点持久化。
 /// 可选配置 `TtgGovernor` 启用基于复杂度和预算的自动思考模式选择。
 /// 可跨 async 任务共享(Send + Sync),所有方法满足 Send 约束。
+///
+/// # Clone 语义（ADR-257 D1 案 β：浅共享）
+///
+/// Clone 产生**同一引擎状态的两个视图**（非独立副本）：`quests`/`paused_quests`
+/// /`pending_samples` 为 Arc 分片容器（共享）、`event_bus` Clone=Arc（共享）、
+/// `metrics`/`ttg_governor`/`checkpoint_manager` 经 Arc 内化共享（ADR-257），
+/// 仅 `config` 为值快照复制。与 [`SubAgentQuestEngine`](nexus_app_server)
+/// 「共享 QuestEngine」的装配语义一致——两个视图对同一 Quest 注册表可见。
+#[derive(Clone)]
 pub struct QuestEngine {
     /// Quest 注册表(quest_id → Quest),DashMap 分片锁支持并发读写
     quests: Arc<DashMap<String, Quest>>,
@@ -975,6 +984,30 @@ mod tests {
             multimodal_inputs: vec![MultimodalInput::Text(text.into())],
             risk_level: 10,
         }
+    }
+
+    /// ADR-257 D1 案 β 浅共享语义锁：Clone 后两视图对同一 Quest 注册表可见——
+    /// 任一视图 create_quest，另一视图立即可查（非独立副本）。
+    #[tokio::test]
+    async fn quest_engine_clone_shares_state() {
+        let engine = QuestEngine::new(EventBus::new());
+        // 原视图先建一个 Quest
+        let q1 = engine.create_quest(make_intent("原始视图")).await.unwrap();
+        // Clone 出第二视图
+        let cloned = engine.clone();
+        // 第二视图能看到第一视图创建的 Quest（共享注册表）
+        assert!(
+            cloned.get_quest(&q1.quest_id).is_some(),
+            "Clone 视图必须看见原视图创建的 Quest"
+        );
+        // 反向：第二视图新建 Quest，原视图同样可见
+        let q2 = cloned.create_quest(make_intent("克隆视图")).await.unwrap();
+        assert!(
+            engine.get_quest(&q2.quest_id).is_some(),
+            "原视图必须看见 Clone 视图创建的 Quest"
+        );
+        // 两视图注册表规模一致（同一底层 DashMap）
+        assert_eq!(engine.list_quests().len(), cloned.list_quests().len());
     }
 
     #[test]
