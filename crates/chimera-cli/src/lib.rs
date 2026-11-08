@@ -78,6 +78,9 @@ pub mod exec_plan;
 pub mod experience_loop;
 /// TUI ↔ 编排器协议握手服务端(Concord W10,ADR-082:TuiHello 应答 + SEC-4 一次性)
 pub mod handshake;
+/// McpToolExecutor — `mcp.<server>.<tool>` 接入四环传输环(ADR-256:复合执行器
+/// 前缀分派 + 组合根唯一装配;传输恒 InProcessClient 零网络副作用)
+pub mod mcp_tool_executor;
 /// 批量归因指标 Sink(W3/F-03/ADR-248 C-A:TelemetryBatchSink → BusLogger 计数器)
 pub mod metrics_sink;
 /// Quest 分解编排器(消费 TuiChatSubmitted,经 QuestEngine 真实分解并流式回发)

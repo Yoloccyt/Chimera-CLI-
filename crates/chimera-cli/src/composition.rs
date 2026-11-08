@@ -311,8 +311,14 @@ pub fn build_with_sharding(
     // 传输语义（同名工具两种归因），且策略规则双源无编译期一致性保证。
     // 内置执行器仅暴露只读工具（路径受限、fs.read ≤256 KiB），未知工具恒 Err。
     let (tool_rules, tool_default_action) = tool_runtime_policy(config);
+    // ADR-256 D2：Builtin 与 Mcp 双 delegate 前缀分派组合——`mcp.<server>.<tool>`
+    // 进四环（policy/sandbox 前置完整），能力/路由表仅转发 Builtin（mcp 分支
+    // None/空集为诚实声明，`mcp.*` 恒走 fallback）。唯一装配点不变（ADR-244 D1）。
     let tool_delegate: Arc<dyn gqep_executor::ToolExecutor> =
-        Arc::new(crate::exec_plan::BuiltinToolExecutor);
+        Arc::new(crate::mcp_tool_executor::CompositeToolExecutor::new(
+            crate::exec_plan::BuiltinToolExecutor,
+            crate::mcp_tool_executor::McpToolExecutor::from_config(config),
+        ));
     let tool_runtime = gqep_executor::tool_runtime::ToolRuntime::with_optional_delegate(
         Some(tool_delegate),
         tool_rules,
