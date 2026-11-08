@@ -132,3 +132,46 @@ debug 树全量重建）：**passed=12143 / failed=13 / ignored=89**，
 doctest 失败全部归因登记 + 静态门全绿（invariants 85/85 与 I1-I10、
 I3/I7 56、I2=1≤1、static-only rc=0、G-85 28/28、coverage validate [OK]、
 event_ownership [OK]）。
+
+## 9. Tranche 2 结算（工程工单 D/E/F/G，2026-11-08）
+
+| 工单 | commit | 结果 | 证据 |
+| --- | --- | --- | --- |
+| D P1 四环接入 | e2627cf3 | ✅ | ADR-256 D1~D8；McpToolExecutor+CompositeToolExecutor+组合根装配；单元 7/7（512-case parse proptest）+ 集成 8/8（64-case 零网络 proptest）+ 回归四套件 + composition root 7 点不变 + 154 不变；**D8 诚实性声明（协议级 ACK 非业务结果）** |
+| E P2 装配接线 | 39d812b4 | ✅ **含规格前提修正** | ADR-257；deepdive「全字段 Clone」枚举遗漏三类型 → **Arc 内化**（TtgGovernor/CoordinationMetricsCollector/CheckpointManager）→ QuestEngine derive(Clone) 浅共享；D2 tokio Mutex 串行化代价登记；D4 适配器事件闭环（AgentTask* 三变体）；D5 契约头 WIRED；quest-engine 254/0（浅共享语义锁）+ subagent_wiring 7/7（SWARM 确定性 enforcement/事件闭环/双 proptest） |
+| F P3 注册面闭合 | 06581d15 | ✅ **含实施偏差登记** | ADR-258；DynamicEventRegistry 组合根构造（深审增补项 D1）+ register_all 幂等 14 hook.*（轨二不占 154）；**nexus-hook 为 optional 依赖 → cfg 门控（r2_island_repayment）——可达性棘轮 38 不变**（deepdive §8.3 无条件形态不可行）；契约头 CONSUMERS 0→1；event-bus lib.rs:39 陈旧注记修正；hook_wiring 5/5 + nexus-hook 5/5 零改动 |
+| G P4 U 项裁决 | 79aa1b70 | ✅ | ADR-259 九决策（U-05/07/09/11 预留、U-06 移交 TUI、**U-08 改判写面已接线**（Z-3+lib.rs 三订正段）、**U-20 改判已接线**（env dump 回归锁实证）、F-09 候选挂 OQ-27、F-12 维持）；panorama_adjudication_locks 5/5；零新增事件变体（六锁同批） |
+
+**W6 收官全量回归**：见 §10 追记（P1~P4 增量重建后首跑）。
+
+## 10. W6 全量回归追记（2026-11-09 完成）
+
+`cargo test --workspace --no-fail-fast --jobs 2`（P1~P4 增量重建后首跑）：
+**passed=12138 / failed=26 / ignored=87**，日志 `tmp/w6_regression.log`。
+
+**26 个 failed 逐项裁决（全部 = windows-gnu doctest 工件解析失败家族，
+非本批回归）**：
+
+- 失败分布 = **repo-wiki --doc 13 项 + scc-cache --doc 13 项**（两套 doctest
+  整体编译失败,非断言失败）；错误族 = E0462（staticlib instead of rlib）/
+  E0460（newer version of crate）/"required to be available in rlib format"
+  （decay_engine/nmc_encoder/tract_hir/tract_linalg 等依赖 rlib 缺位）——
+  同一 **windows-gnu proc-macro/依赖工件解析构建态问题**（Tranche 1 §8
+  已登记首例）。
+- **与本批改动的无关性证据**：① repo-wiki/scc-cache 本批零触碰（Tranche 2
+  Rust 面 = chimera-cli/nexus-app-server/quest-engine/nexus-hook/
+  event-bus 注释/session-store 注释）；② 同一轮 **12,138 非 doc 测试全绿**
+  （含 P1 mcp_tool_executor 15 项 / P2 subagent_wiring 7 项 / P4 locks 5 项
+  等全部新增）；③ 晨间旧 debug 树同套 doctest 全绿（§6）；④ 错误类型为
+  工件解析而非语义失败,且家族跨 crate 扩散（repo-wiki → +scc-cache）
+  ——与「构建态非确定性」诊断一致。
+- **根因推断【推断】**：rm -rf target/debug 后的单次 workspace 全重建在
+  windows-gnu 上落入 proc-macro/依赖 rlib 解析歧义工件态；与 cargo 的
+  多 feature-set 重复构建/hardlink 去重交互（待独立工单取证）。
+- **处置**：独立工单「repo-wiki/scc-cache doctest windows-gnu 工件态调查」
+  （升级覆盖两 crate）；验收口径 = 非 doc 12,138 全绿 + doctest 失败全族
+  归因登记；**不得以改 doctest 断言方式掩盖**。
+
+**W6 收官口径**：Tranche 1 + Tranche 2 全部工单（C/B/A/D/E/F/G）验收通过；
+ADR-249~259 + 265 落档；零新增事件变体（154 六锁不变）；可达性 38 不变；
+遗留 = §5 移交清单 + doctest 工件态独立工单。
