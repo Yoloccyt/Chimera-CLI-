@@ -123,6 +123,13 @@ pub struct AppContext {
     /// （JoinSet 所有权语义），同一实例 spawn/join 串行化代价已登记 ADR-257）。
     /// D3：第一波仅装配 + 句柄暴露，驱动入口由命令面后续波次挂接。
     pub subagent_engine: Arc<tokio::sync::Mutex<nexus_app_server::SubAgentQuestEngine>>,
+    /// hook.* 双轨注册表（ADR-258：P3 注册面闭合——14 个 hook.* 生命周期事件
+    /// 经 HookEventBridge::register_all 幂等注册;轨二不占 154 变体数。
+    /// r2_island_repayment feature 门控——nexus-hook 为 GATED 轨道 optional 依赖,
+    /// 默认构建零符号/零边,可达性棘轮 38 不变。触发实例经 trigger_from_audit
+    /// + register 挂载,消费方 get/serialize 拉取）。
+    #[cfg(feature = "r2_island_repayment")]
+    pub hook_registry: std::sync::Arc<event_bus::DynamicEventRegistry>,
     /// WI-D1：跨厂商辩论激活输入。`None`=未启用（默认，主干恒绿）；
     /// `Some(names)`=组合根从 `config.model_router` 解析出的去重 provider 通道名，
     /// 供 `chimera parliament` 命令经 `CrossVendorDebate::from_provider_names` 注入。
@@ -342,6 +349,18 @@ pub fn build_with_sharding(
     // W3(ADR-248):批量归因出口——execute_batch 的 BatchAttribution 经
     // TelemetryBatchSink 递增 BusLogger 计数器（None=改造前行为，L1 等价）。
     .with_batch_sink(tool_batch_sink);
+    // ADR-258（P3/U-03）：hook.* 双轨注册面闭合——DynamicEventRegistry 生产
+    // 构造点落组合根（深审增补项 D1：EventBus 不持有该 registry，挂 L1 需动
+    // 结构已否决）；register_all 幂等注册 14 个 hook.* 生命周期事件（轨二,
+    // 不占 154 变体数）。r2_island_repayment feature 门控（nexus-hook 为
+    // GATED 轨道 optional 依赖——默认构建零符号/零边，可达性棘轮 38 不变）。
+    // 同步构造 + 同步注册，无 spawn ⇒ subscribe-before-spawn 纪律天然成立。
+    #[cfg(feature = "r2_island_repayment")]
+    let hook_registry = {
+        let registry = std::sync::Arc::new(event_bus::DynamicEventRegistry::new());
+        nexus_hook::event_bridge::HookEventBridge::register_all(&registry);
+        registry
+    };
     // M4-P2: C3 Critical 旁路注册上提为 build() 标准装配步骤（subscribe 在
     // engine 构造后、AppContext 移出前同步完成，§4.4 反模式 3 纪律）。
     spawn_critical_subscriber(&bus);
@@ -401,6 +420,8 @@ pub fn build_with_sharding(
         sched: Arc::new(sched),
         scc,
         subagent_engine,
+        #[cfg(feature = "r2_island_repayment")]
+        hook_registry,
         tool_runtime: Arc::new(tool_runtime),
         cross_vendor_providers,
         #[cfg(feature = "r2_unfreeze")]

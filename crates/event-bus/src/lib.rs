@@ -36,7 +36,7 @@
 //! | [`segment_per`] | 约 0.4k 行 | 仅本 crate 测试 |
 //! | `membrane`（`MembraneFilter`） | 约 1k 行 | 仅本 crate bench |
 //! | `pattern_index`（`PatternIndex`） | 约 0.3k 行 | 仅本 crate bench |
-//! | `dynamic_registry` | 404 行 | **零引用**（crate 内外均 0 处 `crate::dynamic_registry`/`event_bus::dynamic_registry`） |
+//! | `dynamic_registry` | 404 行 | 引用方：nexus-hook/event_bridge.rs（轨二注册，P4-T3）+ chimera-cli 组合根生产构造点（ADR-258，2026-11-08 注记修正——原「零引用」为 nexus-hook 接线前旧态，与现势矛盾） |
 //!
 //! # 三个“看似同族、实则已接线”的模块（不得一并归入上表）
 //!
