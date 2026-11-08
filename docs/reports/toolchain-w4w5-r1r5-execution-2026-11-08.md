@@ -76,3 +76,59 @@
    修复 = `&[] as &[String]` 消歧，复跑 seccore doctest 7/0 绿。
 
 修后等效口径：**12155+ / 0 / 89**（doctest 修复 +1，flaky 复跑绿）。
+
+## 7. Tranche 1 结算（工程工单批准后执行，2026-11-08）
+
+| 工单 | commit | 结果 | 证据 |
+| --- | --- | --- | --- |
+| C rust-version | 0e4dfc31 | ✅ | workspace `rust-version="1.97"`（对齐 CI 1.97.1）；edition 2021 维持（C1 裁决） |
+| B RSS 峰值 | 62b07dec | ✅ | ADR-265 双口径（窗口峰值/生存期峰值）；explorer 实测 peak≥avg；G-85 28/28（重写曾丢 BOM，按门 FIX 恢复） |
+| A X2-N1 | 本批 | ✅ **160ms→32ms（收紧 5×）** | 九步程序全过：bench 执行器补能力表（§5.3 规格）→ pre_x3 快照装回（现态备份 tmp/x2_pre_restore_backup）→ 双轮 → 合理性门比值 0.95（ADR-252 D3 预言兑现）→ ceil(12.585×2.5)=32ms → 棘轮护栏 <160ms ✓ → 双源同 commit；首轮 undeclared c8 vs 改前基线 **−79.5%** |
+| A 三键 | 本批 | spol_* ✅ / actx_*/xloop_* 不采纳 | spol_opt_hit(350ns)/spol_opt_miss(300ns) 五处双写 + I2 机检零重叠 + I7 CI 行补齐；actx/xloop 按 ADR-249 D6 记录不采纳（ADR-251 §4 终裁） |
+| A F-07 | 本批 | ✅ | 基线机器再生（18 行同集硬门 ✓，test_ctor 计数刷新，尾注 152→154，头注同步），门 [OK] |
+| A F-08 | 本批 | ✅ 占位 | gqep-executor floor=45 占位行（tier=critical）；validate-config [OK]；终值待 CI coverage.yml |
+| A N-2/N-4/N-5 | 本批 | ✅ | adr_index「七份→八份」+ ADR-254 遗留句闭合标注；bench_check.yml 注释去整数化（47→动态现取）；bus.rs 四处 17⊆21 字面注释改指常量（断言消息留 OQ-16） |
+| A ADR-254 §6 | 本批 | ✅ 回填 | c1/c8 mean 表（8.1×/8.5×≥4×）+ 阈值收紧记录 + 测量面订正（/1 负载敏感不设阈值；改前基线=双缺省形态失去直接可比性） |
+
+**磁盘事件（登记）**：X2 前置核验发现 D 盘 97% 满（8.5G 可用 < 40GB 前置）——
+根因 = `target/debug` **109GB**（当日全量回归的全矩阵产物）。处置：移除
+target/debug（可再生缓存，release 工件保留），自由空间恢复至 118G（58%）；
+代价 = 收尾全量回归需重建 debug 树（该回归本就要跑，成本并入）。
+
+**Tranche 1 全量回归**：`cargo test --workspace --no-fail-fast --jobs 2`
+（debug 树重建后首跑），结果见 §8 追记。
+
+## 8. Tranche 1 全量回归追记（2026-11-08 完成）
+
+`cargo test --workspace --no-fail-fast --jobs 2`（target/debug 清理后首跑，
+debug 树全量重建）：**passed=12143 / failed=13 / ignored=89**，
+日志 `tmp/tranche1_regression.log`。
+
+**13 个 failed 逐项裁决（全部 = repo-wiki --doc 的 doctest 工件解析失败，
+非本批回归）**：
+
+- 失败集 = repo-wiki 全部 13 个 doctest（vector/config/search/memory_knn_store/
+  hnsw_store/lib），错误 = **E0462**（found staticlib `derive_builder_macro`
+  instead of rlib）与 **E0460**（found possibly newer version of crate
+  `image`/`rand`）——均为 **windows-gnu 下 proc-macro/依赖工件解析的构建态
+  问题**，非断言/语义失败。
+- **与本批改动的无关性证据**：① repo-wiki 本批零触碰（本批 Rust 面仅
+  rust-version 元数据 + bus.rs 注释 + bench-only 文件）；② 同一轮回
+  **12,143 个非 doc 测试全绿**（含 repo-wiki 全部单测）；③ 晨间旧 debug 树
+  同套 doctest 全绿（§6：12154/2/89）；④ 本批后三次复现尝试（单 crate 重
+  构建、proc-macro 工件清除、workspace 语境 doc 复跑）错误形态在
+  E0462/E0460 间迁移但均不消除——构建态问题而非代码问题。
+- **归因推断**：`rm -rf target/debug` 后的单次 workspace 全重建在 windows-gnu
+  上落下了 proc-macro 导入库（.dll.a）被 doctest extern 解析判定为
+  staticlib-kind 的工件态（多哈希并存歧义）；【推断】与 cargo 的
+  hardlink 去重/多 feature-set 重复构建交互有关——需独立 spike（登记未闭环）。
+- **环境附注**：修复尝试中的一次 `cargo build -p repo-wiki` 又引入 E0460
+  代际混杂——进一步佐证为工件态问题（本批代码零语义变更）。
+- **处置**：本批代码工件的验收以「12,143 非 doc 全绿 + doctest 失败归因
+  登记」收口；repo-wiki doctest 环境修复立独立工单（与 hnsw flaky 同批
+  处理，属 windows-gnu 构建态调查），**不得以改 doctest 断言方式掩盖**。
+
+**Tranche 1 代码面验收口径**：非 doc 12143 全绿（含本批新增测试）+
+doctest 失败全部归因登记 + 静态门全绿（invariants 85/85 与 I1-I10、
+I3/I7 56、I2=1≤1、static-only rc=0、G-85 28/28、coverage validate [OK]、
+event_ownership [OK]）。

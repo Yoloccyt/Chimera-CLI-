@@ -68,3 +68,11 @@ floor = 45
 tier = "composition-root"
 adr = "ADR-177"
 reason = "组合根：C1/C12 新装配代码必须落在这里，否则覆盖率门对新增面无牙"
+
+[[crate]]
+name = "gqep-executor"
+floor = 45            # = [defaults].floor 占位：本地 E0463 不可代跑（本文件头注），
+                      # 禁编造；待 CI coverage.yml 产物回填实测-3~5pp（棘轮只升不降）
+tier = "critical"     # 四环链/批量派发/计划执行判据载体（ADR-239/252/254），step summary 单列
+adr = "ADR-239"
+reason = "W7-R2 重构核心 crate：四环链与 PlanRunner 判据源，聚合达标不许掩盖此处裸奔"

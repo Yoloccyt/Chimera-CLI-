@@ -104,16 +104,30 @@ tbatch_parallel_slow = 400000000
 # —— PlanRunner 分层串/并发（toolplan_layers bench，ADR-252）——
 # 8 个只读 ToolCall 同层，每节点 sleep 2ms；declared = 计划显式写
 # side_effect:"read_only"，undeclared = 字段缺省 None。
-# 2026-11-06 本机 median：
+# 2026-11-06 本机 median（改前上界时代）：
 #   declared   c1 69.086ms / c8 14.901ms  ⇒ 显式声明时并发真生效（4.6×）
 #   undeclared c1 69.814ms / c8 63.804ms  ⇒ 未声明时 c8 ≈ c1，整层仍串行
-# WHY undeclared_parallel 现在放宽到 160ms：它是「缺省保守串行」的**改前上界**，
-# ADR-254 的执行器能力表落地后本键应收紧到 ≈38ms（只收紧不放宽）。
-# 余量 ms 档 ×2.5（与 tbatch_* 同源分级）。
+# 2026-11-08 X2-N1 收紧（bench 执行器补 capability_of/declared_tools 后，
+# deepdive §5.3/§5.4 九步程序；改前基线 = tmp/x1_criterion_backup/
+# toolplan_layers_pre_x3，装回作 base 实测首轮 undeclared c8 −79.5%）：
+#   第二轮 undeclared c8 mean=12.585ms / median=13.220ms ≈ readonly c8
+#   mean 13.234ms（比值 0.95——ADR-252 D3「≈readonly8/8」预言兑现）；
+#   new = ceil(12.585×2.5)=31.46 → 1ms 粒度 = 32ms（< 160ms 棘轮护栏 ✓，
+#   收紧 5×）。测量态=提交态；日志 tmp/x2_bench_toolplan.log。
+# /1 组（c1 107ms）本机负载敏感，仅作端到端对照不设阈值（c8/c1 ≥4× 判据
+# 由本轮 8.5× 实证）。
 tplan_declared_serial = 175000000
 tplan_declared_parallel = 38000000
 tplan_undeclared_serial = 175000000
-tplan_undeclared_parallel = 160000000
+tplan_undeclared_parallel = 32000000
+# —— seccore 判决体（policy_eval bench，ADR-260/工程工单 A-3）——
+# opt 臂 = 生产 ExecPolicy（索引+零分配），ref 臂 = 改造前线性判决（对照组，
+# 不设阈值——其值只作 ADR-260 §4 的对照证据）。阈值 = 实测 max median × 10
+# （ns 档 ×10，C6 校准同源余量）；hit/miss 各一键，词条跨 R∈{4,32,256} 三档
+# 取 max（legacy 断言为 max median 语义）。
+# 2026-11-08 本机 median：opt/hit 33.4~33.7ns / opt/miss 25.9~26.2ns。
+spol_opt_hit = 350
+spol_opt_miss = 300
 # —— run --execute 批量派发（run_execute_batch bench，ADR-247/W2）——
 # 经生产装配入口 with_optional_delegate 构造 ToolRuntime，64 请求同轮对照。
 # 2026-11-07 本机 median（Windows timer granularity 抬高绝对值，同轮比值有效，
@@ -268,6 +282,11 @@ tplan_declared_serial = ["toolplan_layers/readonly8_ms2/1"]
 tplan_declared_parallel = ["toolplan_layers/readonly8_ms2/8"]
 tplan_undeclared_serial = ["toolplan_layers/undeclared8_ms2/1"]
 tplan_undeclared_parallel = ["toolplan_layers/undeclared8_ms2/8"]
+# ADR-260：spol_* 取「opt 臂 + 场景」叶子路径（词条跨 R∈{4,32,256} 三档以
+# max median 语义归并为一键，legacy 断言取匹配路径集的最大值）；I2 已机检
+# 零重叠（两词条与全部既有 101 词条双向无子串关系，彼此互斥，2026-11-08）。
+spol_opt_hit = ["opt/hit_R"]
+spol_opt_miss = ["opt/miss_R"]
 # ADR-247：runx_* 取 criterion 叶子全路径（防宽词互相窃取，ADR-252 D2 同源纪律）
 runx_serial_zero = ["runx_serial_zero/64"]
 runx_serial_1ms = ["runx_serial_1ms/64"]
@@ -521,6 +540,13 @@ bench = "tool_runtime_chain"
 alias = "toolplan_layers"
 crate = "gqep-executor"
 bench = "toolplan_layers"
+
+# seccore 判决体 opt 臂（ADR-260）：hit/miss 各一键守生产 ExecPolicy 热路径；
+# ref 臂 = 改造前对照不设阈值（对照证据归 ADR-260 §4）
+[[run_bench]]
+alias = "spol_eval"
+crate = "seccore"
+bench = "policy_eval"
 
 # ADR-247：run --execute 批量派发串/并行同轮对照（生产装配入口端到端，F-13）
 [[run_bench]]

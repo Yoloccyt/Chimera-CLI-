@@ -130,18 +130,46 @@ revert ① ⇒ `layer_requires_serial` 回到今日判据，`undeclared` 阈值�
 未被路由使用的冗余视图（须同批摘除，否则 `check_dead_contract_apis` 精神不符）。
 安全前置（policy / sandbox 两环）在两种状态下都完整生效 —— 本批不触碰判决顺序。
 
-## 6. 实测追记（**待填 —— 本 ADR 落档时 bench 尚未跑完**）
+## 6. 实测追记（2026-11-08 回填 —— X2-N1 九步程序，deepdive §5.3/§5.4）
 
-本批的端到端吞吐判据是 `toolplan_layers/undeclared8_ms2/{1,8}` 的 c8/c1 ≥ 4×。
-该组数字**尚未取得**：`cargo bench -p gqep-executor --bench toolplan_layers`
-在撰写本节时仍在运行。
+**测量态**：commit `29a65da6` + 本 ADR 前置的 bench 执行器补声明
+（`benches/toolplan_layers.rs` SleepExecutor 增 `capability_of`/`declared_tools`
+覆写，bench-only 零生产语义，deepdive §5.3 原文规格）。
 
-- 完整输出目标文件：`tmp/x3_bench_toolplan.log`
-- 改前 estimates 快照：`tmp/x1_criterion_backup/toolplan_layers_pre_x3`
-- 阈值收紧动作（160 ms → 实测 median × 2.5）**在该比值实测前不得执行**。
+**命令**：`cargo bench -p gqep-executor --bench toolplan_layers -- --noplot`（双轮取第二轮）；
+完整日志：`tmp/x2_bench_toolplan.log`（deepdive 原引 `tmp/x3_bench_toolplan.log`
+为撰写期预定名，实际落盘为前者）。
 
-⇒ 在 §6 被真实读数填满并复核前，**本 ADR 的 D1 只能凭 §3 的结构性测试成立，
-不能声称「吞吐已达标」**。ADR-239/234 的「先实测后登记」在此按字面执行：
-未实测即不登记，宁可留白也不填推测值。
-（依 ADR-239 §2.6 与 ADR-241 D6 的先例：负结果与空白都是合法记录，编造不是。）
+**改前基线**：`tmp/x1_criterion_backup/toolplan_layers_pre_x3`（勘误 1 修订形态：
+核验既有快照完整性后直接引用——undeclared8_ms2/8 mean=63,804,161ns /
+median=58,348,375ns 与 ADR-252 登记值同源互证）；现 target 态装回前另存
+`tmp/x2_pre_restore_backup/toolplan_layers`（步骤 3.5 可逆性备份）。
+
+**c1/c8 mean 表（第二轮 estimates.json，mean 口径与 ADR-252 登记同源）**：
+
+| 组 | c1（串行） | c8（有界并行） | c8/c1 |
+| --- | --- | --- | --- |
+| readonly8_ms2 | 107,560,825 ns | 13,233,698 ns | 8.1× |
+| undeclared8_ms2 | 107,343,980 ns | 12,584,842 ns | 8.5× |
+
+**端到端判据 c8/c1 ≥ 4×：两值组均满足（8.1× / 8.5×）✓**。
+
+**能力表生效证据**：首轮 undeclared8_ms2/8 相对改前基线 change =
+**−79.456%（median）**[12.914ms vs 58.348ms]——ADR-252 D3 预言的
+「能力表落地后 undeclared c8 ≈ readonly c8」兑现：第二轮 undeclared c8
+mean 12.585ms vs readonly c8 mean 13.234ms，比值 0.95（合理性门 §5.4-⑤
+「≈2× 以内」以 0.95 通过）。
+
+**阈值收紧（步骤 ⑥⑦⑧）**：new = ceil(12,584,842 × 2.5) = 31,462,105 →
+1ms 粒度 = **32,000,000 ns**；棘轮护栏 new < 160,000,000 ✓（收紧 5×）；
+双源同 commit（`scripts/perf_thresholds.toml:117` 值 + 注释块重写 /
+`.github/workflows/bench_check.yml` heredoc 同值 32_000_000）。
+**测量面订正**：/1 组（c1 ≈107ms）本机负载敏感（pre_x3 时代 69ms），仅作
+端到端对照、不设阈值；改前基线为「双缺省形态」（执行器亦沉默）的历史读数
+（63.804/68.632ms），与本次「计划未声明+能力表声明」形态**失去直接可比性**
+——这正是本 §6 追记的登记义务（deepdive §5.3 语义登记义务条款）。
+
+⇒ 本 ADR 的 D1 自本追记起具备 L1（结构性测试）+ L4（criterion 同轮读数）
+双重支撑；「吞吐已达标」的声明范围 = `undeclared8_ms2` 并行分支
+c8/c1 ≥ 4× 判据与 ADR-252 D3 预言兑现，不及其他未测面。
 

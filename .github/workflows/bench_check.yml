@@ -8,7 +8,9 @@ name: Benchmark Check
 #   - push tag v*.*.*-omega(发布前最终验证)
 #   - workflow_dispatch(手动触发,便于调试)
 #
-# 运行 5 个 criterion benchmark,解析 estimates.json,断言中位延迟:
+# 运行全部 registered bench（run_bench 别名数以 `python scripts/check_perf_redlines.py
+# invariants` 的 I3/I7 行现取为准，勿把此数抄死——ADR-252 D5：注释整数必漂），
+# 解析 estimates.json,断言中位延迟。下列 5 条为首批历史示例（非全集）:
 #   - exit_code_matrix    < 10µs  (Task 0.2 ExitCode 矩阵分发)
 #   - diff_engine_bench   < 100µs (Task 0.4 v3-engine M2 增量 diff)
 #   - wal_recovery        < 100ms (Task 0.7 mcp-mesh 2PC WAL 恢复)
@@ -65,9 +67,10 @@ jobs:
     name: Benchmark Threshold Check
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # WHY: 兜底防卡死。**不在此登记 bench 数与典型耗时**：原注写「5 benchmark
-    # 编译+运行典型 3-8min」已严重失真 —— 本 workflow 实有 47 个 run_bench 别名
-    # （R2 登记册 M66，可用 `grep -c '^[[:space:]]*run_bench ' 本文件` 现取）。
+    # WHY: 兜底防卡死。**不在此登记 bench 数与典型耗时**：注释里写死的计数已两度
+    # 失真（「5 benchmark」→「47 个」→ 2026-11-07 实测 55 → 2026-11-08 实测 56）。
+    # 别名数的唯一权威源 = `check_perf_redlines.py invariants` 的 I3/I7 行
+    # （与 [[run_bench]] 逐对对拍，I7 门机械守护）。
     # 真实耗时只能在 CI 侧量（本地无 Linux runner 且全量 cargo 已被占），故本行
     # 只声明它是 guard；若超时被 kill，本 job 是红不是静默通过 —— 但预算是否
     # 够需首次 schedule 跑后用时长读数再定档（已列入待裁）。
@@ -158,6 +161,8 @@ jobs:
           run_bench tool_runtime_chain   cargo bench -p gqep-executor --bench tool_runtime_chain
           # ADR-252：PlanRunner 分层串/并发对照（declared vs undeclared side_effect）
           run_bench toolplan_layers      cargo bench -p gqep-executor --bench toolplan_layers
+          # ADR-260：seccore 判决体 opt 臂（spol_opt_hit/miss 两键守生产 ExecPolicy 热路径）
+          run_bench spol_eval            cargo bench -p seccore --bench policy_eval
           # ADR-247：run --execute 批量派发对照（F-13 首个生产调用方，生产装配入口端到端）
           run_bench run_execute_batch    cargo bench -p chimera-cli --bench run_execute_batch
           run_bench cli_parse            cargo bench -p chimera-cli --bench cli_parse
@@ -387,11 +392,16 @@ jobs:
               "faae_hot_scoring":    30_000_000,
               # ADR-252：PlanRunner 只读层串/并发对照（本机 median × ms 档余量 ×2.5）。
               # undeclared_parallel 现值 160ms 是「缺省保守串行」的改前上界，
-              # ADR-254 能力表落地后收紧到 ≈38ms（只收紧不放宽）。
+              # ADR-254 能力表落地后 X2-N1 收紧（2026-11-08 实测 12.585ms×2.5→32ms，
+              # 只收紧不放宽；改前基线 pre_x3 快照装回实测首轮 −79.5%）。
               "tplan_declared_serial":     175_000_000,
               "tplan_declared_parallel":   38_000_000,
               "tplan_undeclared_serial":   175_000_000,
-              "tplan_undeclared_parallel": 160_000_000,
+              "tplan_undeclared_parallel": 32_000_000,
+              # ADR-260：seccore 判决体 opt 臂（实测 max median ×10 ns 档余量，
+              # 2026-11-08；hit 33.7ns→350 / miss 26.2ns→300）
+              "spol_opt_hit":  350,
+              "spol_opt_miss": 300,
               # ADR-247：runx_*（run --execute 批量对照；2026-11-07 实测 median 后登记，
               # ms 档 ×2.5 / µs 档 ×8 余量）
               "runx_serial_zero":  400_000,
@@ -528,6 +538,9 @@ jobs:
               "tplan_declared_parallel":   ["toolplan_layers/readonly8_ms2/8"],
               "tplan_undeclared_serial":   ["toolplan_layers/undeclared8_ms2/1"],
               "tplan_undeclared_parallel": ["toolplan_layers/undeclared8_ms2/8"],
+              # ADR-260：spol_* 词条（跨 R∈{4,32,256} max median 归并；I2 已机检零重叠）
+              "spol_opt_hit":  ["opt/hit_R"],
+              "spol_opt_miss": ["opt/miss_R"],
               # ADR-247：runx_* 叶子全路径（ADR-252 D2 同源纪律）
               "runx_serial_zero":  ["runx_serial_zero/64"],
               "runx_serial_1ms":   ["runx_serial_1ms/64"],

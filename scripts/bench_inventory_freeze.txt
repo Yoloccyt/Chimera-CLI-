@@ -103,7 +103,6 @@ scc-cache|semantic_cache_bench|dev-only|语义缓存整体基准
 scc-cache|wal_recovery|dev-only|缓存 WAL 恢复开发基准(mcp-mesh 已有同名下界)
 seccore|asa_audit|dev-only|ASA 审计链路开发基准
 seccore|gvisor_bench|dev-only|gVisor 沙箱探针基准
-seccore|policy_eval|dev-only|ADR-260 判决体优化同轮裁决基准(spol_* 键移交 X2 登记)
 sesa-router|router_benchmark|dev-only|SESA 路由整体基准
 sesa-router|three_layer_routing|dev-only|三层路由实验基准
 session-store|replay_bench|dev-only|会话回放开发基准(session_store 已注册主链)

@@ -44,7 +44,7 @@ pub const CRITICAL_CHANNEL_CAPACITY: usize = 4096;
 ///
 /// WHY 常量而非硬编码:双清单同步红线(MCA M0 起)要求新增 Critical 事件
 /// 必须同时修改 severity() 与 is_critical_mpsc_event 两处;此常量供
-/// 守护测试断言旁路清单规模不回退(17 ⊆ 21)。
+/// 守护测试断言旁路清单规模不回退(mpsc 旁路清单 ⊆ severity()==Critical 清单,规模见下常量——注释不抄数字,2026-11-08 X2-N5 订正)。
 /// 常量规模本身由 `test_critical_double_list_d8_counts` +
 /// `mpsc_bypass_exact_*` + `credit_flow_test` 三处机器锁定;而正文里
 /// 「当前 N 类」这类自由文本计数、以及「常量 == `is_critical_mpsc_event` 臂数」
@@ -63,7 +63,7 @@ pub const CRITICAL_MPSC_VARIANTS: usize = 18;
 
 /// severity() 返回 Critical 的变体总数 — D-8 口径
 ///
-/// 21 = 17(mpsc 旁路)+ 4(历史 Critical 只走 broadcast:
+/// 总数 = CRITICAL_TOTAL 常量 = CRITICAL_MPSC_VARIANTS(mpsc 旁路)+ 4(历史 Critical 只走 broadcast:
 /// CheckpointSaved / ConsensusReached / SlowConsumerDropped / OrphanCallDetected)。
 /// 本任务不改变 4 个历史 Critical 事件的通道归属(既定设计,推演 D-8 裁决)。
 pub const CRITICAL_TOTAL: usize = 22;
@@ -132,7 +132,7 @@ impl NexusEvent {
 ///
 /// WHY 单独定义:AsaIntervention 的 severity() 曾返回 Normal(P1-W2.1.4 修复前),
 /// 旁路判定因此独立于 severity() 存在;修复后两清单语义已对齐,由 D-8/R7
-/// 互锁测试守护(17 ⊆ 21)。
+/// 互锁测试守护(mpsc 旁路清单 ⊆ severity()==Critical 清单)。
 ///
 /// # 双清单同步红线(MCA M0 起显式声明)
 /// 本函数与 `NexusEvent::severity()` 是两张独立清单:新增 Critical 事件
@@ -2629,8 +2629,9 @@ mod tests {
         }
     }
 
-    /// D-8 双清单计数守护(P1-T11):CRITICAL_MPSC_VARIANTS(17)、
-    /// CRITICAL_TOTAL(21)、17 ⊆ 21、LANE_FORBIDDEN_SHARD 一一对应
+    /// D-8 双清单计数守护(P1-T11):CRITICAL_MPSC_VARIANTS、
+    /// CRITICAL_TOTAL、mpsc ⊆ Critical、LANE_FORBIDDEN_SHARD 一一对应
+    /// (常量真值见 :62/:69 两侧定义——注释不再抄数字,防 M44 同型漂移;2026-11-08 X2-N5 订正)
     /// (第三轮 T1.3 纠漂:旧注 14/18 为 v2.3 补入 CertifyIssued/FailureRegistered
     ///  前的滞后值;断言体以常量为准故恒绿,漂移仅存于此注 —— I8 盲区见上方常量注)
     #[test]

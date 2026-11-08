@@ -61,7 +61,7 @@
 `spawn_experience_loop_wires_full_chain` / `prediction_verified_drives_card_generation`
 锁定（6/6 绿）。
 
-## 4. 阈值登记纪律（actx_* / xloop_assemble 移交 X2）
+## 4. 阈值登记纪律（X2 期裁决：spol_* 入册，actx_*/xloop_* 不采纳）
 
 5.1/5.2 的对照键（`actx_*` / `xloop_assemble`，终稿 §4.9）**不在本波登记**：
 「先实测后登记」（ADR-239）要求先取同轮读数，而全支唯一 bench 期在 X2
@@ -70,7 +70,15 @@
 则按 ADR-249 D6 先例记录不采纳）。5.2 收益画像本身较小（一次 SQLite open
 重叠），不构成阻塞项。
 
-## 5. 回滚
+**〔X2 期终裁（2026-11-08，工程工单 A-3）〕**：
+- **`spol_opt_hit`/`spol_opt_miss` 入册**（五处双写 + I2 机检零重叠 +
+  I7 CI 执行行补齐）：守 ADR-260 判决体热路径（实测 max median ×10 ns 档
+  余量，hit 350 / miss 300）——真守卫价值成立；
+- **`actx_*`/`xloop_assemble` 记录不采纳**（ADR-249 D6 先例）：5.1 的价值 =
+  健壮性（无界堆积防护，L1 并发骨架测试 + 表驱动矩阵已锁）、5.2 的价值 =
+  装配时延（一次 SQLite open 重叠，终稿自陈收益画像小）——两者均无
+  「防并行收益回退」的守护需求，为绿键新建低价值 criterion bench 属
+  反向施工；重评估触发 = 有界并发骨架出现回归事故或装配时延进入 SLO 面。
 
 - 5.1：`CHIMERA_ACTION_CONCURRENCY=unlimited` 恢复无界语义（L1，秒级）；
   `resolve_action_concurrency` 纯函数与全部测试保留（W2 回退先例）。

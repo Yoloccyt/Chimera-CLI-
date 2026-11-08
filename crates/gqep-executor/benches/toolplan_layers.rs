@@ -40,6 +40,22 @@ impl ToolExecutor for SleepExecutor {
         tokio::time::sleep(Duration::from_millis(self.delay_ms)).await;
         Ok(args_json.to_string())
     }
+
+    // X2-N1 前置（ADR-254 D1）：执行器自报只读能力（与生产 BuiltinToolExecutor
+    // 同形态，对齐 tests/toolplan_capability_table.rs:60 夹具先例）。WHY：生产
+    // 执行器自报只读而 bench 的 SleepExecutor 一直沉默 ⇒ undeclared8_ms2 组
+    // 此前测的是「执行器也不声明」的双缺省形态，非生产默认路径；补声明后
+    // undeclared8_ms2/8 才是 ADR-252 D3 预言的「≈readonly8/8」读数，×2.5
+    // 收紧才有依据（deepdive §5.3 原文规格）。
+    fn capability_of(&self, _tool_name: &str) -> Option<SideEffectDecl> {
+        Some(SideEffectDecl::ReadOnly)
+    }
+
+    // ADR-254 D4：declared_tools 供路由表建表；bench 不经 RouteLayer，
+    // 但实现它保持「能执行 ⇔ 已声明」的契约一致性（默认空集 = 撒谎）。
+    fn declared_tools(&self) -> Vec<String> {
+        (0..8).map(|i| format!("bench.readonly.{i}")).collect()
+    }
 }
 
 /// n 个只读 ToolCall 同层（无依赖 → 同一层）
