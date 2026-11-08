@@ -26,6 +26,13 @@
 //! > 因此本 crate 在现行生产链上仍处于 **DORMANT**（声明装配但生产关闭），段文件与树索引
 //! > 在生产路径上不产生数据；收口径选项与需 ADR 的部分见文末「装配态订正」段（不在此重复）。
 //!
+//! > **装配态三订正（2026-11-08，X2-U08/P4 深审 Z-3，工程工单 G）**：上段「DORMANT/生产
+//! > 装配未启用双写」已漂移——**写面已生产装配**：chimera-cli 组合根 composition.rs 的
+//! > `build_app_server(ctx)` 现走 `CbmrWriter::open` + `AppServer::with_session_store`
+//! > （CBMR 会话双写，C-63/ADR-224 D1/ADR-225 D4；N-4 降级分支：打开失败仅 warn 退回
+//! > with_backend 双写关闭，不单点失败）。读面 `replay_since` 维持无生产调用方（预留,
+//! > 现无断线重连 CLI 面,为绿接线=虚构消费）。口径：**写面 PRODUCTION-WIRED / 读面预留**。
+//!
 //! # 设计概览（Checkpoint 线性快照 → append-only 段 + 微批写）
 //!
 //! 会话持久化从「Checkpoint 线性快照」（L0 `nexus_contracts::Checkpoint`,
