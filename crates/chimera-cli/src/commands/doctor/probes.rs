@@ -399,8 +399,8 @@ pub fn scc_probe_verdict(entries: usize, accesses: u64, hit_rate: f32) -> (Healt
 ///   `StoreConfig::default().data_dir = "data/sessions"`（`session-store/src/types.rs`）;
 ///   **chimera-cli 不持 session-store 直接依赖边**（零新增内部依赖边纪律）,
 ///   故为同源字面锚点——session-store 若改默认值,须同批更新本锚点与测试。
-///   另:生产装配尚未构造 `CbmrWriter`（现测全库零生产构造点,WI-G11 读口已就绪待宿主接管）,
-///   缺席按"未启用/未初始化"记 Warn 而非 Fail（诚实登记,不虚构生产路径）。
+///   另:写面已接线（`composition.rs` 的 `CbmrWriter::open` → `AppServer::with_session_store`,宿主 `serve`/`acp`）;读面 `replay_since` 按 ADR-259 D3 维持预留,
+///   缺席按"未启用/未初始化"记 Warn 而非 Fail（诚实登记:目录就绪不等于会话已持久化）。
 ///
 /// 判定 = 纯函数:cmt 与 session 目录双就绪 → Ok;任一缺席 → Warn（未初始化/未启用,非故障）。
 /// probe 仅做 `Path::exists` 级静态检查（无 IO 阻塞语义、无 rusqlite 依赖）。

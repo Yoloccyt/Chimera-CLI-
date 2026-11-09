@@ -13,18 +13,20 @@
 #   - a build-script/proc-macro contract requires the entry at the root;
 #   - a deliberately-pinned production edge kept for migration reasons, with an
 #     ADR recording why (reference the ADR in the reason).
-#
-# Current state: empty (2026-09-12) - the E batch migrated chimera-mas's
-# bench-only deps to [dev-dependencies] and left zero gaps behind, so no
-# exception is needed. Keep it empty if you can.
 # =============================================================================
 
-# --- 2026-09-24 B5 架构减法批次：r2_island_repayment 预留位（7 条，非新增债务）---
-chimera-cli -> chtc-bridge # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 DECORATIVE 登记于 scripts/gated_wiring_baseline.txt(由 G-56/G-57 计数守);接线落地或删除后须回收本行
-chimera-cli -> csn-substitutor # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 DECORATIVE 登记于 scripts/gated_wiring_baseline.txt(由 G-56/G-57 计数守);接线落地或删除后须回收本行
-chimera-cli -> mtpe-executor # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 DECORATIVE 登记于 scripts/gated_wiring_baseline.txt(由 G-56/G-57 计数守);接线落地或删除后须回收本行
-chimera-cli -> nexus-hook # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 DECORATIVE 登记于 scripts/gated_wiring_baseline.txt(由 G-56/G-57 计数守);接线落地或删除后须回收本行
-chimera-cli -> sesa-router # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 DECORATIVE 登记于 scripts/gated_wiring_baseline.txt(由 G-56/G-57 计数守);接线落地或删除后须回收本行
-chimera-cli -> ssra-fusion # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 DECORATIVE 登记于 scripts/gated_wiring_baseline.txt(由 G-56/G-57 计数守);接线落地或删除后须回收本行
-# 说明：以上 7 条不判为「可删的 manifest 噪声」，因为删除会同时抽掉 B3-B4 的接线占位与
+# --- 2026-09-24 B5 架构减法批次：r2_island_repayment 预留位（非新增债务）---
+# 计数订正（2026-11-09, ADR-266/W0）：本段原记「7 条」属既存计数漂移——实际只有 6 条
+#   （chtc/csn/mtpe/nexus-hook/sesa/ssra）。本批删除 nexus-hook 行后为 **5 条**。
+# 删除理由：ADR-258/工单 F（commit 06581d15）已在 composition.rs 真实引用
+#   nexus_hook::event_bridge::HookEventBridge::register_all，「src 零引用」的豁免前提失效；
+#   按本表头部规则「an exception must not outlive the debt it excused」必须回收。
+# verdict 同步：gated_wiring_baseline.txt 已由 DECORATIVE 旋转为 PARTIAL（ADR-266），
+#   成因是 feature 级共享 enabler 计数抬升，**不代表这 5 岛已接线**（src 仍零引用）。
+chimera-cli -> chtc-bridge # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 PARTIAL 登记于 scripts/gated_wiring_baseline.txt(ADR-266 旋转;由 G-56/G-57 计数守);接线落地或删除后须回收本行
+chimera-cli -> csn-substitutor # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 PARTIAL 登记于 scripts/gated_wiring_baseline.txt(ADR-266 旋转;由 G-56/G-57 计数守);接线落地或删除后须回收本行
+chimera-cli -> mtpe-executor # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 PARTIAL 登记于 scripts/gated_wiring_baseline.txt(ADR-266 旋转;由 G-56/G-57 计数守);接线落地或删除后须回收本行
+chimera-cli -> sesa-router # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 PARTIAL 登记于 scripts/gated_wiring_baseline.txt(ADR-266 旋转;由 G-56/G-57 计数守);接线落地或删除后须回收本行
+chimera-cli -> ssra-fusion # r2_island_repayment 的 B3-B4 预留接线位;optional 声明+feature 数组实测在 chimera-cli 的 src/tests/benches 零引用,已按 PARTIAL 登记于 scripts/gated_wiring_baseline.txt(ADR-266 旋转;由 G-56/G-57 计数守);接线落地或删除后须回收本行
+# 说明：以上 5 条不判为「可删的 manifest 噪声」，因为删除会同时抽掉 B3-B4 的接线占位与
 #   ADR-160 可达性棘轮的既有账；债务可见性由 G-56/G-57 承担，本表只负责让 G-31 能抓到新幽灵。

@@ -369,7 +369,7 @@ pub async fn run_plan_with_failures_timed(
     );
 
     let failed = Arc::new(AtomicUsize::new(0));
-    // 装饰器顺序即**失败归因契约**（ADR-257），不可倒置：
+    // 装饰器顺序即**失败归因契约**（commit c6eb9b62），不可倒置：
     // 计数层必须在超时层**之外**。倒置时（本行原实现）超时由外层产生、
     // 内层 future 被直接 drop ⇒ `CountingExecutor` 的 Err 分支永不执行
     // ⇒ 超时节点不计入 `failed_nodes` ⇒ 整个 `exec --plan` 以一个失败于
@@ -418,7 +418,7 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    /// 超时必须计入失败节点 —— 装饰器顺序即失败归因契约（F-A1 / ADR-257）
+    /// 超时必须计入失败节点 —— 装饰器顺序即失败归因契约（F-A1 / commit c6eb9b62）
     ///
     /// 含**反向对照**:同一个慢执行器在「超时层在外、计数层在内」的旧顺序下
     /// 必须重现「超时不计数」缺陷。没有这半边，正例可能只是恰好通过，
