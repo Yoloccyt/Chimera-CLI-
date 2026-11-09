@@ -72,6 +72,13 @@ dry_run ? 预览 : mesh.execute_transaction（既有执行面）
   但 Injection / PrivilegeEscalation / SandboxEscape 等拦截模式对
   `tool_name + args` 完整生效 —— 这正是我们要的那层。
 
+**行为收窄（如实登记）**：此前 `mcp call` 对参数不做任何内容检查，因此含 `;`、
+`|`、`$(`、`chmod` 等子串的**合法**工具参数（例如 SQL 片段）现在会被沙箱拒绝。
+这是「命令面无安全前置」被补上的必然代价，不是误伤回归；`--no-permission` /
+`--yes` 只跳过交互确认，**不能**绕过 policy/sandbox（安全面无开关，ADR-242 §3.5）。
+若某工具确需此类参数，正确做法是收敛该工具的 args 形态或为它声明策略白名单，
+而不是在命令面加放行开关。
+
 ### D4 拒绝归因
 
 `ChimeraCliError::PermissionDenied`（exit 5，语义是「权限策略拒绝」而非「输入错误」），
