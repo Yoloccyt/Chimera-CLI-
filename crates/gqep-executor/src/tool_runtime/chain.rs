@@ -190,8 +190,25 @@ impl DispatcherBuilder {
         let routes = self.routes.ok_or_else(|| incomplete("routes"))?;
         let transport = self.transport.ok_or_else(|| incomplete("transport"))?;
 
+        // 第四环必须真实位于热路径（ADR-267）：路由命中臂与 fallback 各自经
+        // TransportLayer 转发。原实现只把 builder 的 transport 参数包进字段，
+        // route 两臂直挂裸 dispatcher ⇒ 生产实际只穿越三环，而文档称四环。
+        //
+        // WHY 用结构锁而非调用计数锁：TransportLayer::dispatch 是纯直转发
+        // （`self.inner.dispatch(req)`），「是否被穿越」在行为上不可观测 ——
+        // 任何 spy 计数在修与不修两种形态下读数相同。既有测试把同一个
+        // CountingTransport 同时喂给 route 与 transport，正是该盲区的体现；
+        // 判别力由 tests/transport_ring_traversal.rs 的结构锁 + 负对照提供。
+        let wrap_transport = |target: Arc<dyn ToolDispatcher>| -> Arc<dyn ToolDispatcher> {
+            Arc::new(TransportLayer::new(target))
+        };
+        let routes: HashMap<String, Arc<dyn ToolDispatcher>> = routes
+            .into_iter()
+            .map(|(name, target)| (name, wrap_transport(target)))
+            .collect();
+        let fallback = self.fallback.map(wrap_transport);
         let transport: Arc<dyn ToolDispatcher> = Arc::new(TransportLayer::new(transport));
-        let route = Arc::new(RouteLayer::new(routes, self.fallback));
+        let route = Arc::new(RouteLayer::new(routes, fallback));
         let sandbox = Arc::new(SandboxLayer::new(sandbox, route));
         let head: Arc<dyn ToolDispatcher> = Arc::new(PolicyLayer::new(policy, sandbox));
 
