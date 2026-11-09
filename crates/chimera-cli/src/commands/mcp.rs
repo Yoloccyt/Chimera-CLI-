@@ -86,6 +86,10 @@ pub async fn execute(
 /// - `use_network = true`：[`TcpParticipantClient`]，真实 TCP + 4 字节长度前缀 JSON 帧，
 ///   会连接注册端点（受 registry SSRF 校验约束；loopback/保留地址在 `register` 阶段即被拒）。
 fn build_mesh(use_network: bool) -> McpMesh {
+    // ADR-276 D2：第二参（event_bus）**刻意恒 None** —— 命令面 mesh 是一次性
+    // ephemeral 实例，没有长驻消费者；接总线只会造出「有发布无订阅」的零流量
+    // 事件，属 U-10 禁令（不为绿造无消费者构造点）。诊断面需要 mesh 事故事件时，
+    // 应接长驻宿主（tui/serve），不是在这里补一个 None → Some。
     if use_network {
         let client: Arc<dyn ParticipantClient> = Arc::new(TcpParticipantClient::new());
         McpMesh::with_participant_client(MeshConfig::default(), None, client)

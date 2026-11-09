@@ -84,6 +84,8 @@ impl McpToolExecutor {
     #[must_use]
     pub fn from_config(config: &ChimeraConfig) -> Self {
         let client: Arc<dyn ParticipantClient> = Arc::new(InProcessClient::new());
+        // ADR-276 D2：event_bus 恒 None（同 `commands/mcp.rs::build_mesh`）——
+        // 执行器持的是诊断/执行面 mesh，无长驻订阅者；接总线即虚构消费。
         let mesh = McpMesh::with_participant_client(MeshConfig::default(), None, client);
         for server in &config.mcp.servers {
             if server.id.is_empty() {

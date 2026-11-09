@@ -99,6 +99,13 @@ impl PermissionGate {
     }
 
     /// 三态评估（纯函数，不含降级与计数）
+    ///
+    /// ADR-276 D1：本函数**当前只产 Allow / Unknown 两态** —— `Deny` 只能由
+    /// [`Self::authorize`] 的非交互 fail-closed 降级产生。这不是缺陷，是分层：
+    /// `evaluate` 只回答「用户是否已显式授权」，规则式拒绝属策略层（ExecPolicy）。
+    /// 三态枚举与 `authorize` 的 Deny 臂**不得删除**：删除会把「未知」与「拒绝」
+    /// 压成两态，未来任何规则式拒绝源接入时无处安放（且 `PermissionDecision`
+    /// 是公开契约）。结构锁：`tests/zero_traffic_adjudication_locks.rs`。
     #[must_use]
     pub fn evaluate(&self, ctx: &PermissionCtx) -> PermissionDecision {
         if ctx.should_skip_prompt() {
@@ -116,6 +123,9 @@ impl PermissionGate {
                 decision: PermissionDecision::Allow,
                 downgraded: false,
             },
+            // ADR-276 D1：生产不可达但**结构性保留**（见 `evaluate` 文档）。
+            // 删除本臂会让三态坍缩为两态；保留它使 `evaluate` 将来接入规则源
+            // 时无需改动 `authorize` 的判决形状。
             PermissionDecision::Deny => PermissionAuthorization {
                 decision: PermissionDecision::Deny,
                 downgraded: false,

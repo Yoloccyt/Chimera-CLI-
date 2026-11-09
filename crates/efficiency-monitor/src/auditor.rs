@@ -481,6 +481,11 @@ impl RuntimeAuditor {
     /// **为 0**(`DecbCostCallback::record_cost` 无生产构造点),故生产利用率
     /// 恒为 0;此时返回 1.0 等于把「无观测」记成「满分」,与五维的证据纪律相反。
     /// 无观测一律给 NEUTRAL_SCORE;接上写侧(T-19)后本分支自然消失。
+    ///
+    /// ADR-276 D5：本维当前是**无载体**状态，不是「已评估且中性」——
+    /// DECB 写侧（`DecbCostCallback::record_cost` / `record_consumption`）在生产
+    /// 零构造点，故 `total_consumption` 恒 0。NEUTRAL 在此的含义是「没有证据」，
+    /// 不得被读成「预算纪律合格」。
     fn budget_discipline(&self) -> f32 {
         match self.decb.as_ref() {
             None => NEUTRAL_SCORE,
