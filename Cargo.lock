@@ -583,6 +583,7 @@ dependencies = [
  "nexus-contracts",
  "nexus-core",
  "nexus-hook",
+ "nexus-subagent",
  "nu-ansi-term",
  "omega-learner",
  "parliament",
@@ -3489,6 +3490,7 @@ name = "nexus-app-server"
 version = "2.29.0-omega"
 dependencies = [
  "async-trait",
+ "chrono",
  "dashmap",
  "event-bus",
  "nexus-contracts",
