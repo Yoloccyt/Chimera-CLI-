@@ -254,11 +254,23 @@ impl PlanRunner {
             }
         }
 
-        // 聚合回填:末节点结果（或 join 所有输出;简化:取最后一个执行节点）
-        let summary = match plan.nodes.last() {
-            Some(last) => env.get(&last.id).cloned().unwrap_or_else(|| "{}".into()),
-            None => "{}".into(),
-        };
+        // 聚合回填：取**拓扑终端**节点（无出边）中执行序最后的那一个（ADR-277）。
+        //
+        // WHY 不能用 `plan.nodes.last()`：那是**声明序**末位，不保证是拓扑终端 ——
+        // 当末位声明节点有后继时，它会先于后继执行，于是旧实现把「中间节点」的
+        // 结果当成了计划输出（正确性缺陷，不是性能问题）。反向锁：
+        // `tests/toolplan_terminal_aggregation.rs::plan_summary_uses_topological_terminal`。
+        // 多终端时按**声明序倒序**取「已执行」的第一个 —— 不能按层序取：
+        // `compute_layers` 的 frontier 由 HashMap 迭代构造，层内顺序不确定
+        // （本轮实测：同一计划在 c=1 与 c=2 下摘要有 50% 概率不同，
+        //  打红了 `readonly_dag_summary_equivalent`）。声明序是唯一稳定的定序。
+        let summary = plan
+            .nodes
+            .iter()
+            .rev()
+            .filter(|n| !plan.edges.iter().any(|e| e.from == n.id))
+            .find_map(|n| env.get(n.id.as_str()).cloned())
+            .unwrap_or_else(|| "{}".into());
         Ok(PlanSummary {
             plan_id: plan.id.clone(),
             summary,
