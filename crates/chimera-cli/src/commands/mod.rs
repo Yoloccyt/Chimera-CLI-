@@ -118,6 +118,7 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
             plan_concurrency,
             op_timeout_ms,
             plan_timeout_ms,
+            plan_strict,
         }) => {
             // E3′：`--plan` 走声明式计划执行内核；否则既有 prompt 路径逐字不变。
             let result = match plan {
@@ -129,6 +130,7 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
                         cli.json,
                         *op_timeout_ms,
                         *plan_timeout_ms,
+                        *plan_strict,
                     )
                     .await
                 }

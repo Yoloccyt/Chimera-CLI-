@@ -204,6 +204,7 @@ mod tests {
                     plan_concurrency: 8,
                     op_timeout_ms: None,
                     plan_timeout_ms: None,
+                    plan_strict: false,
                 }),
                 CommandClass::FullContext,
             ),
@@ -295,6 +296,7 @@ mod tests {
                 plan_concurrency: 8,
                 op_timeout_ms: None,
                 plan_timeout_ms: None,
+                plan_strict: false,
             }),
             Some(Commands::Quest {
                 action: QuestAction::List,

@@ -91,6 +91,30 @@ impl Default for PlanGuards {
     }
 }
 
+/// 截断原因 — 区分「计划级熔断」与「回填预算超限」（ADR-268）
+///
+/// WHY 由执行器返回枚举，而不是 CLI 侧用 `duration_ms >= plan_ms` 反推：
+/// 两个截断源的真值只有 `PlanRunner` 知道；反推会在「预算超限恰好发生在
+/// 计划级超时之前」时误判，把结构事实降级成启发式猜测。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TruncationReason {
+    /// 计划级超时熔断（`PlanGuards::timeout_ms`）
+    PlanTimeout,
+    /// 回填预算超限（`PlanGuards::budget_bytes`）
+    BudgetBytes,
+}
+
+impl TruncationReason {
+    /// 稳定字符串标识（CLI 的 JSON 字段用它；勿随意改名——脚本可能依赖）
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PlanTimeout => "plan_timeout",
+            Self::BudgetBytes => "budget_bytes",
+        }
+    }
+}
+
 /// 计划执行结果 — 聚合回填（模型视图）
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlanSummary {
@@ -104,8 +128,10 @@ pub struct PlanSummary {
     pub nodes_executed: usize,
     /// 总耗时（ms）
     pub duration_ms: u64,
-    /// 截断标记（回填预算超限）
+    /// 截断标记（计划级熔断**或**回填预算超限）
     pub truncated: bool,
+    /// 截断原因（仅 `truncated == true` 时非 `None`）
+    pub truncation: Option<TruncationReason>,
 }
 
 /// 计划运行器 — topo 序解释执行 DAG
@@ -197,11 +223,13 @@ impl PlanRunner {
         let mut tool_calls = 0usize;
         let mut nodes_executed = 0usize;
         let mut truncated = false;
+        let mut truncation: Option<TruncationReason> = None;
 
         for layer in &layers {
             // 单计划超时熔断（WI-16 守卫）
             if started.elapsed() > Duration::from_millis(self.guards.timeout_ms) {
                 truncated = true;
+                truncation = Some(TruncationReason::PlanTimeout);
                 break;
             }
             // 层内策略:副作用层串行,只读/纯算子层有界并发
@@ -211,6 +239,7 @@ impl PlanRunner {
             // 回填预算守卫:环境累积超限即截断（串行/并发两条路径同口径）
             if layer_truncated {
                 truncated = true;
+                truncation = Some(TruncationReason::BudgetBytes);
                 break;
             }
         }
@@ -227,6 +256,7 @@ impl PlanRunner {
             nodes_executed,
             duration_ms: started.elapsed().as_millis() as u64,
             truncated,
+            truncation,
         })
     }
 
@@ -827,6 +857,11 @@ mod tests {
         let r = PlanRunner::new(Box::new(MemExecutor), g);
         let summary = r.run(&plan).await.expect("执行成功");
         assert!(summary.truncated, "超预算必须截断标记");
+        assert_eq!(
+            summary.truncation,
+            Some(TruncationReason::BudgetBytes),
+            "回填预算截断必须归因 BudgetBytes（ADR-268）"
+        );
     }
 
     /// 同层并行 — 无依赖节点并行执行（WI-16 门禁:无冲突层内全并行）
@@ -916,5 +951,10 @@ mod tests {
         let r = PlanRunner::new(Box::new(SlowExecutor), g);
         let summary = r.run(&plan).await.expect("执行成功");
         assert!(summary.truncated, "超时必须截断返回");
+        assert_eq!(
+            summary.truncation,
+            Some(TruncationReason::PlanTimeout),
+            "计划级熔断必须归因 PlanTimeout（ADR-268）——与预算截断可区分"
+        );
     }
 }

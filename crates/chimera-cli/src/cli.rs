@@ -496,6 +496,13 @@ chimera exec 'x' ; echo $?                  # 退出码四类语义(0/2/3/4)"
         /// 全局 `gather_deadline_ms > 0` 时再对单操作取 min（`0` 表示关闭全局截止）。
         #[arg(long, value_name = "MS", value_parser = clap::value_parser!(u64).range(1..))]
         plan_timeout_ms: Option<u64>,
+        /// 严格模式：计划被截断（计划级超时或回填预算超限）时以退出码 4 失败
+        ///
+        /// 默认关闭 ⇒ `status` 与退出码与既有行为逐字一致（加性优先，ADR-268）。
+        /// 开启后截断计划的 `status` 变为 `"truncated"` 并复用 `IoError` 的稳定映射
+        /// 返回 4；未截断时行为不变。
+        #[arg(long)]
+        plan_strict: bool,
     },
     /// 协议宿主服务（WI-01 serve 形态）— JSON-RPC v1 over stdio
     ///

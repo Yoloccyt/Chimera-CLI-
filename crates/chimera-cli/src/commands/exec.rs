@@ -22,6 +22,7 @@
 
 use anyhow::Result;
 use nexus_contracts::spec::tool_plan::ToolPlan;
+use gqep_executor::toolplan_runner::TruncationReason;
 use nexus_core::{MultimodalInput, UserIntent};
 use serde::Serialize;
 use uuid::Uuid;
@@ -160,7 +161,7 @@ pub async fn execute_plan_with_ctx(
     concurrency: usize,
     json: bool,
 ) -> Result<()> {
-    execute_plan_with_timeouts(ctx, plan_path, concurrency, json, None, None).await
+    execute_plan_with_timeouts(ctx, plan_path, concurrency, json, None, None, false).await
 }
 
 /// `exec --plan` 的可显式超时版本（非破坏性扩展入口）
@@ -174,6 +175,7 @@ pub async fn execute_plan_with_timeouts(
     json: bool,
     op_timeout_ms: Option<u64>,
     plan_timeout_ms: Option<u64>,
+    plan_strict: bool,
 ) -> Result<()> {
     let (plan_ms, op_ms) = resolve_timeouts(ctx, op_timeout_ms, plan_timeout_ms)?;
     let plan = load_tool_plan(plan_path).await?;
@@ -186,14 +188,27 @@ pub async fn execute_plan_with_timeouts(
     )
     .await?;
 
+    // `--plan-strict`：只有显式开启且计划**确实**被截断时，才把截断升级为失败
+    // （ADR-268）。默认档位下 status 与退出码与既有行为逐字一致 —— 加性优先。
+    let strict_truncated = plan_strict && summary.truncated;
+    let status = if failed_nodes > 0 {
+        "failed"
+    } else if strict_truncated {
+        "truncated"
+    } else {
+        "ok"
+    };
+    let unexecuted_nodes = plan.nodes.len().saturating_sub(summary.nodes_executed);
     let report = PlanRunReport {
-        status: if failed_nodes == 0 { "ok" } else { "failed" },
+        status,
         plan_id: &summary.plan_id,
         summary: &summary.summary,
         tool_calls: summary.tool_calls,
         nodes_executed: summary.nodes_executed,
         failed_nodes,
         truncated: summary.truncated,
+        truncation_reason: summary.truncation.map(TruncationReason::as_str),
+        unexecuted_nodes,
         duration_ms: summary.duration_ms,
     };
     crate::output::emit(json, &report, || {
@@ -214,6 +229,19 @@ pub async fn execute_plan_with_timeouts(
         // 且不新增公共枚举变体（避免破坏性 API）。计划/解析类故障已由 EngineError 归 3。
         return Err(ChimeraCliError::IoError(std::io::Error::other(format!(
             "plan {} failed: {failed_nodes} node(s) returned tool errors",
+            summary.plan_id
+        )))
+        .into());
+    }
+    if strict_truncated {
+        // 复用 IoError→4 的既有稳定映射（不新增公共枚举变体）；
+        // 未开 `--plan-strict` 时本分支不可达 ⇒ 默认行为零变化。
+        let reason = summary
+            .truncation
+            .map(TruncationReason::as_str)
+            .unwrap_or("unknown");
+        return Err(ChimeraCliError::IoError(std::io::Error::other(format!(
+            "plan {} truncated ({reason}) under --plan-strict: {unexecuted_nodes} node(s) not executed",
             summary.plan_id
         )))
         .into());
@@ -300,6 +328,10 @@ struct PlanRunReport<'a> {
     nodes_executed: usize,
     failed_nodes: usize,
     truncated: bool,
+    /// 截断原因（`plan_timeout` / `budget_bytes`；未截断时为 null）
+    truncation_reason: Option<&'static str>,
+    /// 未执行节点数（仅截断时非零）
+    unexecuted_nodes: usize,
     duration_ms: u64,
 }
 

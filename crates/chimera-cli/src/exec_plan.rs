@@ -565,6 +565,7 @@ mod tests {
             nodes_executed: 1,
             duration_ms: 3,
             truncated: false,
+            truncation: None,
         };
         let got = await_outer_deadline(Duration::from_secs(5), async {
             Ok::<PlanSummary, PlanError>(expected.clone())
