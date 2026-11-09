@@ -503,6 +503,15 @@ chimera exec 'x' ; echo $?                  # 退出码四类语义(0/2/3/4)"
         /// 返回 4；未截断时行为不变。
         #[arg(long)]
         plan_strict: bool,
+        /// 只读投影：拒绝任何非只读节点（Plan 模式）
+        #[arg(long)]
+        plan_readonly: bool,
+        /// 计划步数上界覆写（只能**收紧**到 ≤ 默认 64）
+        #[arg(long, value_name = "N", value_parser = clap::value_parser!(u64).range(1..))]
+        plan_max_steps: Option<u64>,
+        /// 回填预算覆写（字节，只能**收紧**到 ≤ 默认 65536）
+        #[arg(long, value_name = "BYTES", value_parser = clap::value_parser!(u64).range(1..))]
+        plan_budget_bytes: Option<u64>,
     },
     /// 协议宿主服务（WI-01 serve 形态）— JSON-RPC v1 over stdio
     ///

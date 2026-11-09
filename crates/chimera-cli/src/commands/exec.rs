@@ -21,8 +21,8 @@
 //! Exec 分支应用，经 [`exec_exit_code`] 显式转换）。
 
 use anyhow::Result;
-use nexus_contracts::spec::tool_plan::ToolPlan;
 use gqep_executor::toolplan_runner::TruncationReason;
+use nexus_contracts::spec::tool_plan::ToolPlan;
 use nexus_core::{MultimodalInput, UserIntent};
 use serde::Serialize;
 use uuid::Uuid;
@@ -161,13 +161,30 @@ pub async fn execute_plan_with_ctx(
     concurrency: usize,
     json: bool,
 ) -> Result<()> {
-    execute_plan_with_timeouts(ctx, plan_path, concurrency, json, None, None, false).await
+    execute_plan_with_timeouts(
+        ctx,
+        plan_path,
+        concurrency,
+        json,
+        None,
+        None,
+        false,
+        Default::default(),
+    )
+    .await
 }
 
 /// `exec --plan` 的可显式超时版本（非破坏性扩展入口）
 ///
 /// 超时解析见 [`resolve_timeouts`]：缺省值与既有行为**逐字一致**
 /// （单操作 5s / 计划级 30s），显式值只能收紧、不能越过全局 `gather_deadline_ms`。
+///
+/// # 为什么允许 8 个参数（`clippy::too_many_arguments`）
+/// 这些参数是 `chimera exec --plan` 的 **CLI 面一一映射**（并发度 / JSON / 两个超时 /
+/// 严格档 / 守卫覆写），拆成结构体只会让「旗标 → 参数」的对应关系变间接，
+/// 而调用方只有命令层一处。若后续再增长（例如加 profile），应改为
+/// `PlanExecOptions` 结构体并同步 CLI 映射——已登记为后续重构项，不在本波做。
+#[allow(clippy::too_many_arguments)]
 pub async fn execute_plan_with_timeouts(
     ctx: &AppContext,
     plan_path: &std::path::Path,
@@ -176,6 +193,7 @@ pub async fn execute_plan_with_timeouts(
     op_timeout_ms: Option<u64>,
     plan_timeout_ms: Option<u64>,
     plan_strict: bool,
+    overrides: crate::exec_plan::PlanGuardOverrides,
 ) -> Result<()> {
     let (plan_ms, op_ms) = resolve_timeouts(ctx, op_timeout_ms, plan_timeout_ms)?;
     let plan = load_tool_plan(plan_path).await?;
@@ -185,6 +203,7 @@ pub async fn execute_plan_with_timeouts(
         concurrency,
         plan_ms,
         Some(op_ms),
+        overrides,
     )
     .await?;
 

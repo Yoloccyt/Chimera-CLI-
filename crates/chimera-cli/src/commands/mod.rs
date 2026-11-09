@@ -119,6 +119,9 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
             op_timeout_ms,
             plan_timeout_ms,
             plan_strict,
+            plan_readonly,
+            plan_max_steps,
+            plan_budget_bytes,
         }) => {
             // E3′：`--plan` 走声明式计划执行内核；否则既有 prompt 路径逐字不变。
             let result = match plan {
@@ -131,6 +134,15 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
                         *op_timeout_ms,
                         *plan_timeout_ms,
                         *plan_strict,
+                        crate::exec_plan::PlanGuardOverrides {
+                            readonly: *plan_readonly,
+                            // u64→usize 用 try_from 饱和转换：32 位宿主上超大值退化为 usize::MAX，
+                            // 随后 apply() 会把它夹回默认上界（只能收紧），不会放宽。
+                            max_steps: (*plan_max_steps)
+                                .map(|v| usize::try_from(v).unwrap_or(usize::MAX)),
+                            budget_bytes: (*plan_budget_bytes)
+                                .map(|v| usize::try_from(v).unwrap_or(usize::MAX)),
+                        },
                     )
                     .await
                 }

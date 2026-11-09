@@ -138,9 +138,19 @@ CI 与 `&&` 链判定的是退出码，不是 JSON 字段；只加字段等于�
 这正是「四件同批」中容易漏的一环（字段加了、夹具没跟），已在本批修好。
 教训：给 clap 枚举加字段时，`grep "Commands::Exec {"` 是必做的枚举-夹具对拍。
 
-### 6.1 `cli_parse` 同轮（待回填）
+### 6.1 `cli_parse` 同轮实测（已填）
 
-`cargo bench -p chimera-cli --bench cli_parse`（完整输出 `tmp/w2_bench_cli_parse.log`），
-判据：`cli_parse_run` / `cli_parse_help`（各 500000 ns）**不退化**。
-新增的是**一个 bool 旗标**，clap 的解析成本增量应在噪声内；若实测退化则须在
-本 ADR 登记并回退该旗标（不放宽阈值）。
+`cargo bench -p chimera-cli --bench cli_parse`（完整输出 `tmp/w2_bench_cli_parse.log`）：
+
+| 组 | median | 阈值 | 判定 |
+|---|---|---|---|
+| `cli_parse/help` | 185.93 µs | 500 µs | 未越线（2.7× 余量）；相对 base +17.6% |
+| `cli_parse/run` | 168.68 µs | 500 µs | 未越线；相对 base +0.6%（p=0.90，噪声内） |
+| `cli_parse/doctor` | 143.48 µs | 500 µs | 未越线；相对 base +11.3% |
+
+**归因诚实声明**：三组相对变化方向不一致（`run` 0.6% / `doctor` 11.3% / `help` 17.6%），
+且 cli_parse 的 base 同样是跨轮旧值 —— 与本 ADR-252/267 记录的 base 漂移同型。
+故**不声称**「+17.6% 由新增旗标造成」，也**不声称**「无影响」；
+可声称的只有：三组均**未越登记阈值**（500 µs），且 `run` 组在噪声内。
+若后续要把 cli_parse 也纳入「本批是否退化」的严格判定，须按 ADR-267 §5.1 的做法
+做**同代 A/B**（临时还原 `cli.rs`/`mod.rs`/`spec.rs` 再测），不得直接引用 `change`。

@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use chimera_cli::commands::exec;
 use chimera_cli::composition::build;
+use chimera_cli::exec_plan::PlanGuardOverrides;
 use chimera_cli::ChimeraConfig;
 
 /// 造一个**必然触发回填预算截断**的计划：n1 的 args_json 是一条 70 KiB 的 JSON 字符串，
@@ -48,7 +49,17 @@ async fn truncated_plan_default_off_still_ok() {
     let plan = write_truncating_plan(dir.path());
     let ctx = ctx();
     // 默认档：strict = false
-    let r = exec::execute_plan_with_timeouts(&ctx, &plan, 4, true, None, None, false).await;
+    let r = exec::execute_plan_with_timeouts(
+        &ctx,
+        &plan,
+        4,
+        true,
+        None,
+        None,
+        false,
+        PlanGuardOverrides::default(),
+    )
+    .await;
     // 注意：断言消息里的表达式会被**先求值**，故不能在这里写 expect_err
     // （Ok 时它会先 panic，掩盖真正的失败原因）。
     if let Err(e) = &r {
@@ -61,9 +72,18 @@ async fn truncated_plan_strict_on_yields_exit_4_with_reason() {
     let dir = tempfile::tempdir().expect("tempdir 应成功");
     let plan = write_truncating_plan(dir.path());
     let ctx = ctx();
-    let err = exec::execute_plan_with_timeouts(&ctx, &plan, 4, true, None, None, true)
-        .await
-        .expect_err("--plan-strict 下截断必须失败");
+    let err = exec::execute_plan_with_timeouts(
+        &ctx,
+        &plan,
+        4,
+        true,
+        None,
+        None,
+        true,
+        PlanGuardOverrides::default(),
+    )
+    .await
+    .expect_err("--plan-strict 下截断必须失败");
     let msg = err.to_string();
     assert!(msg.contains("truncated"), "消息须显式说明截断，实得: {msg}");
     assert!(
@@ -92,6 +112,16 @@ async fn non_truncated_plan_is_ok_under_strict() {
     let path = dir.path().join("small.plan.json");
     std::fs::write(&path, plan_json).expect("写计划文件应成功");
     let ctx = ctx();
-    let r = exec::execute_plan_with_timeouts(&ctx, &path, 4, true, None, None, true).await;
+    let r = exec::execute_plan_with_timeouts(
+        &ctx,
+        &path,
+        4,
+        true,
+        None,
+        None,
+        true,
+        PlanGuardOverrides::default(),
+    )
+    .await;
     assert!(r.is_ok(), "未截断的计划在严格档下必须照常成功");
 }

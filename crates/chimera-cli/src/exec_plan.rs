@@ -261,6 +261,45 @@ pub(crate) fn plan_guards_for(plan_timeout_ms: u64) -> PlanGuards {
     }
 }
 
+/// CLI 侧的守卫覆写 —— 全部可选，且**只能收紧**（ADR-269）
+///
+/// WHY 只收紧：既有默认（步数 64 / 回填 64KiB / 非只读）就是当前生产契约；
+/// 允许 CLI 放宽会让「同一个二进制在不同参数下有不同的资源上界」，
+/// 与 [`effective_op_timeout_ms`]「CLI 只能收紧」的既有纪律不一致。
+/// 缺省值（全部为空/false）与 [`plan_guards_for`] 输出**逐字相同**。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PlanGuardOverrides {
+    /// 只读投影：拒绝任何非只读节点（`PlanRunner` 会提前校验）
+    pub readonly: bool,
+    /// 步数上界覆写（只能 ≤ 默认）
+    pub max_steps: Option<usize>,
+    /// 回填预算覆写（只能 ≤ 默认）
+    pub budget_bytes: Option<usize>,
+}
+
+impl PlanGuardOverrides {
+    /// 应用到基线守卫：阈值取 min、只读取逻辑或 —— 绝不放宽
+    #[must_use]
+    pub fn apply(self, base: PlanGuards) -> PlanGuards {
+        PlanGuards {
+            readonly_only: base.readonly_only || self.readonly,
+            max_steps: self
+                .max_steps
+                .map_or(base.max_steps, |v| v.min(base.max_steps)),
+            budget_bytes: self
+                .budget_bytes
+                .map_or(base.budget_bytes, |v| v.min(base.budget_bytes)),
+            timeout_ms: base.timeout_ms,
+        }
+    }
+}
+
+/// 在 [`plan_guards_for`] 基线上应用 CLI 覆写；缺省覆写 ⇒ 与前者逐字相同
+#[must_use]
+pub(crate) fn plan_guards_with(plan_timeout_ms: u64, overrides: PlanGuardOverrides) -> PlanGuards {
+    overrides.apply(plan_guards_for(plan_timeout_ms))
+}
+
 /// 单操作超时上限（10 分钟）— 超出显式拒绝，不静默截断用户意图
 pub const MAX_OP_TIMEOUT_MS: u64 = 600_000;
 /// 计划级超时上限（1 小时）— 外层兜底为其 ×2
@@ -339,7 +378,15 @@ pub async fn run_plan_with_failures(
     concurrency: usize,
     plan_timeout_ms: u64,
 ) -> Result<(PlanSummary, usize), ChimeraCliError> {
-    run_plan_with_failures_timed(ctx, plan, concurrency, plan_timeout_ms, None).await
+    run_plan_with_failures_timed(
+        ctx,
+        plan,
+        concurrency,
+        plan_timeout_ms,
+        None,
+        PlanGuardOverrides::default(),
+    )
+    .await
 }
 
 /// [`run_plan_with_failures`] 的可显式指定单操作超时版本（非破坏性扩展入口）
@@ -352,8 +399,9 @@ pub async fn run_plan_with_failures_timed(
     concurrency: usize,
     plan_timeout_ms: u64,
     op_timeout_ms: Option<u64>,
+    overrides: PlanGuardOverrides,
 ) -> Result<(PlanSummary, usize), ChimeraCliError> {
-    let guards = plan_guards_for(plan_timeout_ms);
+    let guards = plan_guards_with(plan_timeout_ms, overrides);
 
     // ADR-244 D1：传输环 delegate 在组合根**唯一装配**（`composition::build`）。
     // 这里复用 `ctx.tool_runtime`，不再局部再装配 —— 否则同一进程会出现两种
