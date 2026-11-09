@@ -64,6 +64,22 @@ pub struct GqepExecutor {
     pub(crate) qeep: QeepProtocol,
 }
 
+/// 把一个源 future 包成 entangle 载体 —— **入波时**才调用（ADR-274 惰性装载）
+///
+/// WHY 独立函数：首波与补波必须走**同一条**装载路径。旧实现把装载内联在
+/// `futures.into_iter().map(...)` 里，补波却直接 `push` 已包装项 —— 两处一旦
+/// 分叉（例如补波忘了改），惰性与语义就会不一致而无测试察觉。
+fn admit_future<T: Send + 'static>(qeep: QeepProtocol, future: GqepFuture<T>) -> GqepFuture<T> {
+    Box::pin(async move {
+        // 将 GqepFuture 转换为 entangle 要求的 Future<Output=Result<T, QeepError>>
+        // 内部做 GqepError <-> QeepError 错误映射(entangle 要求 QeepError)
+        let mapped: Pin<Box<dyn Future<Output = Result<T, QeepErr>> + Send>> =
+            Box::pin(async move { future.await.map_err(map_gqep_to_qeep) });
+        // entangle 提供孤儿检测 + 单操作超时
+        qeep.entangle(mapped).await.map_err(map_qeep_to_gqep)
+    })
+}
+
 impl GqepExecutor {
     /// 创建新的 GQEP 执行器
     ///
@@ -188,29 +204,16 @@ impl GqepExecutor {
         // 故 `0` 等价串行、`10^9` 被截到静态帽，两者都不会退化为「无限制」。
         let bound = self.config.effective_bound();
 
-        // 将每个 future 经 QEEP entangle 包裹。
-        // WHY entangle:利用 OrphanGuard 在 future drop 时检测孤儿调用,
-        // 同时 entangle 内部用 tokio::time::timeout 提供单操作超时保护。
+        // 惰性装载（ADR-274）：backlog 只存**源** future（调用方已 boxed），
+        // QEEP entangle 包装在**入波时**才创建 —— 旧实现先对全部 N 个 future
+        // 装箱再入流，装箱峰值为 N；现在为 bound（N 由 `MAX_GATHER_FANOUT` 约束但
+        // 典型 N=11 探针 / N≤64 批量，收益是「峰值绑定到并发上界」而非渐近复杂度）。
         //
-        // WHY 先全部包装再分波入流（而非包装与入流合并）：包装本身**零副作用**——
-        // QEEP 注册与 OrphanGuard 创建都发生在 async 体**首次 poll**
-        // （`qeep-protocol/src/protocol.rs:283-284` 源码自述），故预包装不会
-        // 产生在飞额度；真正决定并发的是何时把元素 push 进 stream。
+        // WHY 可以推迟包装：包装本身**零副作用** —— QEEP 注册与 OrphanGuard 创建
+        // 都发生在 async 体**首次 poll**（`qeep-protocol/src/protocol.rs:283-284`
+        // 源码自述），未入波的源 future 也从未被 poll ⇒ 无在飞额度、无孤儿标记，
+        // 与旧实现逐位等价。
         let qeep = self.qeep.clone();
-        let wrapped: Vec<GqepFuture<T>> = futures
-            .into_iter()
-            .map(move |future| -> GqepFuture<T> {
-                let qeep = qeep.clone();
-                // 将 GqepFuture 转换为 entangle 要求的 Future<Output=Result<T, QeepError>>
-                // 内部做 GqepError <-> QeepError 错误映射(entangle 要求 QeepError)
-                Box::pin(async move {
-                    let mapped: Pin<Box<dyn Future<Output = Result<T, QeepErr>> + Send>> =
-                        Box::pin(async move { future.await.map_err(map_gqep_to_qeep) });
-                    // entangle 提供孤儿检测 + 单操作超时
-                    qeep.entangle(mapped).await.map_err(map_qeep_to_gqep)
-                })
-            })
-            .collect();
 
         // 分批入流：首波至多 bound 个，其余留在 backlog 队尾等完成一个补一个。
         // WHY 载体始终是 `FuturesUnordered`（不换成 buffer_unordered）：
@@ -218,15 +221,15 @@ impl GqepExecutor {
         // 直接把可观测的放弃面换成静默丢失（破 UNLEARNABLE #3）——ADR-202 因此否决。
         // 本实现只改**入流节奏**，不改数据结构，故不违 `agents.md` 「并发收集用
         // FuturesUnordered」红线（ADR-202 §6 裁决）。
-        let mut backlog: VecDeque<GqepFuture<T>> = wrapped.into_iter().collect();
+        let mut backlog: VecDeque<GqepFuture<T>> = futures.into_iter().collect();
         // WHY 不加 `mut`：`FuturesUnordered::push` 取 `&self`（内部无锁队列），
         // 只有下游消费它的地方才需要可变借用。
         let stream: FuturesUnordered<GqepFuture<T>> = FuturesUnordered::new();
         while stream.len() < bound {
-            let Some(next) = backlog.pop_front() else {
+            let Some(raw) = backlog.pop_front() else {
                 break;
             };
-            stream.push(next);
+            stream.push(admit_future(qeep.clone(), raw));
         }
 
         // 流式收集结果,应用全局 gather deadline(双层超时的外层)
@@ -325,10 +328,15 @@ impl GqepExecutor {
         start: Instant,
         total: u32,
     ) -> GatherStats<T> {
+        // `total` 已知 ⇒ 两个结果容器一次定容，避免扩容时的搬移与峰值翻倍。
+        // （容量只是上界，`len()` 仍是真实产出数；四段守恒的记账口径不变。）
+        let capacity = total as usize;
         let mut succeeded: u32 = 0;
-        let mut values: Vec<T> = Vec::new();
+        let mut values: Vec<T> = Vec::with_capacity(capacity);
         let mut failed: u32 = 0;
-        let mut errors: Vec<GqepError> = Vec::new();
+        let mut errors: Vec<GqepError> = Vec::with_capacity(capacity);
+        // 补波用的协议句柄（与首波同一个实例；QeepProtocol: Clone 为廉价句柄拷贝）
+        let qeep = self.qeep.clone();
 
         let deadline_ms = self.config.gather_deadline_ms;
 
@@ -349,8 +357,9 @@ impl GqepExecutor {
                     }
                 }
                 // 补波：固定 FIFO 波序，禁止按结果价值重排（否则引入不确定性 / R4 尾部饥饿）
-                if let Some(next) = backlog.pop_front() {
-                    stream.push(next);
+                // 入波时才装箱（ADR-274 惰性装载）—— 与首波同一条装载路径。
+                if let Some(raw) = backlog.pop_front() {
+                    stream.push(admit_future(qeep.clone(), raw));
                 }
             }
         };
