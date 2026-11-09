@@ -5,6 +5,11 @@
 //! 独立测试二进制:全局分配器替换只影响本文件;单 #[test] 串行执行防并行污染。
 //! CountingAlloc 模式复用 nexus-contracts/benches/util_micro.rs 先例
 //! (R1 的 tests/policy_zero_alloc.rs 同款)。
+//!
+//! 注:本文件**不能**加 `#![forbid(unsafe_code)]` —— 它实现全局计数分配器
+//! (`unsafe impl GlobalAlloc`),这是测量堆分配次数的必要手段,且只影响本测试二进制。
+
+#![allow(clippy::unwrap_used, clippy::expect_used)] // test code idiom; E-5 targets production code
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicUsize, Ordering::Relaxed};
@@ -86,7 +91,7 @@ async fn dispatch_hot_paths_within_alloc_budget() {
     let _ = runtime.dispatch(&req).await; // 热身:惰性初始化不计入
     let before = ALLOCS.load(Relaxed);
     let _ = runtime.dispatch(&req).await;
-    let used = (ALLOCS.load(Relaxed) - before) as usize;
+    let used = ALLOCS.load(Relaxed) - before;
     println!("single_dispatch_allow allocs = {used}");
     assert!(
         used <= budget::SINGLE_DISPATCH_ALLOW,
@@ -103,7 +108,7 @@ async fn dispatch_hot_paths_within_alloc_budget() {
     let _ = runtime
         .execute_batch(&requests, BatchLimits::default())
         .await;
-    let used = (ALLOCS.load(Relaxed) - before) as usize;
+    let used = ALLOCS.load(Relaxed) - before;
     println!("batch_8_allow allocs = {used}");
     assert!(
         used <= budget::BATCH_8_ALLOW,
