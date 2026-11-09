@@ -735,6 +735,9 @@ serde = { workspace = true }
 # WHY: 发布构建需最小化 binary 体积以满足 < 50MB 约束。
 # - strip:        移除调试符号,大幅减小体积
 # - panic=abort:  避免 unwind 表展开(代价:panic 直接退出,不 unwind)
+#   ⚠️ 连带后果（ADR-271）：catch_unwind 在 release 下**无效** —— 工具执行中的 panic
+#   会中止整个进程；工具链只承诺 Err 级 fail-soft，不承诺 panic 隔离。
+#   若未来要求真隔离，须先重开 <50MB/<100MB 体积 SLO 裁决，不得在本行悄悄改成 unwind。
 # - opt-level=z:  优化目标为体积最小(比 "s" 更激进,比 3 体积小但速度略低)
 # - lto=true:     跨 crate 链接时优化,消除死代码
 # - codegen-units=1: 单 codegen unit,最大化优化空间(代价:编译变慢,release 可接受)

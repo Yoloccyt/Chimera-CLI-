@@ -15,6 +15,16 @@
 //! ```text
 //! ToolPlan(1 次模型往返) → topo 序执行(M 子调用 0 往返) → PlanSummary 回填(1 次)
 //! ```
+//!
+//! # panic 姿态（ADR-271，诚实声明）
+//!
+//! `[profile.release]` 开 `panic = "abort"`（体积 SLO 的刻意权衡，见根 `Cargo.toml`）
+//! ⇒ **工具执行中的 panic 会中止整个进程**，且 `catch_unwind` 在 release 下**抓不住**
+//! （abort 不走 unwind）。因此本层只承诺 **Err 级 fail-soft**（缺字段/执行失败转为
+//! 节点错误文本），**不承诺** panic 隔离。
+//!
+//! 反向锁 `tests/panic_posture_lock.rs` 断言：本声明在场 + 工具路径**零 `catch_unwind`** ——
+//! 防止有人加一个在 release 下无效、却制造「已隔离」错觉的包装。
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
