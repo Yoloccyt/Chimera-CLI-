@@ -33,7 +33,6 @@ use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
 use crate::orchestrator::{build_error_reply, build_quest_reply};
 use crate::permission::PermissionCtx;
-use tokio_util::sync::CancellationToken;
 
 /// CallBudgetError → ChimeraCliError 映射(exec WI-02 契约版,M2)
 ///
@@ -101,8 +100,8 @@ pub async fn execute_with_ctx(
     //    mca-gateway per-endpoint 口径)+ CancellationToken;超时发
     //    OperationTimedOut 事件。预算错误映射走 call_budget_to_exec_error
     //    (WI-02 契约:预算类故障归退出码 3,不落全局 Timeout 变体)。
-    //    token 为新建未触发令牌,预留全局取消链路接线。
-    let token = CancellationToken::new();
+    //    token 取进程级取消根（ADR-270）：Ctrl+C 触发即取消在飞调用。
+    let token = crate::call_budget::cancel_root().clone();
     let quest = match call_with_budget(
         engine.create_quest(intent),
         DEFAULT_CALL_BUDGET,

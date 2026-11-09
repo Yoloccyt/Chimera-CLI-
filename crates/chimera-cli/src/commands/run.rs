@@ -36,7 +36,6 @@ use crate::error::ChimeraCliError;
 use crate::orchestrator::{build_error_reply, build_quest_reply, plan_chunks};
 use crate::output;
 use crate::permission::{confirm_with, PermissionCtx, PermissionDecision, PermissionGate};
-use tokio_util::sync::CancellationToken;
 
 /// CallBudgetError → ChimeraCliError 映射(M2 接入点共用)
 ///
@@ -142,7 +141,7 @@ pub async fn execute_quest_tool_batch(ctx: &AppContext, quest: &Quest) -> Result
     if requests.is_empty() {
         return Ok(BatchOutcome::empty());
     }
-    let token = CancellationToken::new();
+    let token = crate::call_budget::cancel_root().clone();
     let outcome = call_with_budget(
         ctx.tool_runtime
             .execute_batch(&requests, BatchLimits::default()),
@@ -301,8 +300,8 @@ pub async fn execute_with_ctx(
     //    M2:经 call_with_budget 注入本层超时(120s,对齐 mca-gateway per-endpoint
     //    口径)——绕过 gateway 时 create_quest 挂起不再永久阻塞;超时发
     //    OperationTimedOut 事件并映射为既有 Timeout 退出码 6(纯增量防护,
-    //    不收紧正常路径行为)。token 为新建未触发令牌,预留全局取消链路接线。
-    let token = CancellationToken::new();
+    //    不收紧正常路径行为)。token 取进程级取消根（ADR-270）：Ctrl+C 即取消。
+    let token = crate::call_budget::cancel_root().clone();
     let quest = call_with_budget(
         engine.create_quest(intent),
         DEFAULT_CALL_BUDGET,

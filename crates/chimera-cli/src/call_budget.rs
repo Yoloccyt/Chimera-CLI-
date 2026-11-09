@@ -68,6 +68,32 @@ pub enum CallBudgetError {
     },
 }
 
+/// 进程级取消根 —— SIGINT（Ctrl+C）→ `cancel()`（ADR-270）
+///
+/// WHY 进程级单例 + 恒 1 个监听 task：用户按 Ctrl+C 的语义是「停掉当前前台操作」，
+/// 不是「停掉某一次调用」。一处监听、一处触发，避免多个命令各挂监听器互相竞争；
+/// 监听 task 有界（恒 1），不违本仓的无界 spawn 禁令。
+///
+/// WHY 无 runtime 时静默跳过：纯同步上下文（部分单测）里挂不了 task；此时令牌
+/// 仍是「新建且永不触发」的既有行为 —— fail-safe，不 panic、不改变语义。
+static CANCEL_ROOT: std::sync::OnceLock<CancellationToken> = std::sync::OnceLock::new();
+
+/// 取进程级取消令牌；首次调用时注册 Ctrl+C 监听（幂等）
+pub fn cancel_root() -> &'static CancellationToken {
+    CANCEL_ROOT.get_or_init(|| {
+        let token = CancellationToken::new();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let signal_token = token.clone();
+            handle.spawn(async move {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    signal_token.cancel();
+                }
+            });
+        }
+        token
+    })
+}
+
 /// 统一调用预算包装 — 超时 + CancellationToken 注入
 ///
 /// 三分支语义(与任务清单对齐):
