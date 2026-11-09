@@ -309,22 +309,40 @@ pub fn build_with_sharding(
     // agent 命令经 with_gea 消费 gea,doctor 经 gather_collected 消费 gqep)。
     // gea 构造可失败(config 校验),失败即装配失败——mas_gea_config 为
     // crate 内常量恒合法,此处 ? 仅保留未来配置面扩展的诚实错误路径。
+    // ADR-275（W9）：分段计时（零行为变化）。
+    //
+    // 下面四段（gea / gqep / sched / scc）彼此无数据依赖，只共享 `bus.clone()`——
+    // 是装配期并行的天然候选。但「可并行」不等于「值得并行」：并行要付线程
+    // spawn 的固定成本（≈293µs/线程，见 coordinator.rs 先例）。先用数据裁决，
+    // 再决定是否引入 `join!`/`thread::scope`；结论见 ADR-275 D2（否决并行）。
+    let phase_t = std::time::Instant::now();
     let gea =
         gea_activator::GeaActivator::new(chimera_mas::gea_bridge::mas_gea_config(), bus.clone())
             .context("组合根装配 GeaActivator 失败(config 校验)")?;
     // E01-E08 静态编制 → gea 动态画像(幂等,启动期一次性)
     chimera_mas::gea_bridge::register_mas_experts(&gea);
+    let gea_ms = phase_t.elapsed().as_secs_f64() * 1000.0;
+
+    let phase_t = std::time::Instant::now();
     let gqep = gqep_executor::GqepExecutor::new(gqep_executor::GqepConfig::default(), bus.clone());
+    let gqep_ms = phase_t.elapsed().as_secs_f64() * 1000.0;
     // P1 候选③（ADR-211 Accepted 2026-10-12）:mas-sched claim 准入调度器。
     // WHY with_rate_limit: broker 护栏（防轮询风暴）随批携带；ephemeral 进程内
     // 单次 claim 不触发阈值，跨进程防护留待常驻宿主（serve/tui）复用同一实例。
     // 运行期开关为 env 三态 CHIMERA_SCHED_CLAIM（off 默认），非 feature。
+    let phase_t = std::time::Instant::now();
     let sched = mas_sched::SimplePeerScheduler::with_rate_limit(60, 60_000);
+    let sched_ms = phase_t.elapsed().as_secs_f64() * 1000.0;
+
+    let phase_t = std::time::Instant::now();
     // M13(ADR-161 路径①):scc-cache 组合根装配——默认配置(容量 256,零 IO 轻构造),
     // 与 bus 同生命周期;doctor scc_cache 探针每次运行经 ctx.scc 真实消费
     // stats()(非"构造即丢弃");CacheHit/Miss 事件仅由真实缓存访问触发,
     // 装配本身零事件流量(零行为变化)。
     let scc = scc_cache::SccCache::new(scc_cache::SccConfig::default(), bus.clone());
+    let scc_ms = phase_t.elapsed().as_secs_f64() * 1000.0;
+
+    let phase_t = std::time::Instant::now();
     // ADR-240 W2-T1 + ADR-244 D1：装配工具运行时四环链（policy → sandbox → route → transport）。
     //
     // WHY 在组合根：沙箱层是全局安全前置，命令层装配必然漏路径。
@@ -349,6 +367,15 @@ pub fn build_with_sharding(
     // W3(ADR-248):批量归因出口——execute_batch 的 BatchAttribution 经
     // TelemetryBatchSink 递增 BusLogger 计数器（None=改造前行为，L1 等价）。
     .with_batch_sink(tool_batch_sink);
+    let tool_runtime_ms = phase_t.elapsed().as_secs_f64() * 1000.0;
+    tracing::debug!(
+        gea_ms,
+        gqep_ms,
+        sched_ms,
+        scc_ms,
+        tool_runtime_ms,
+        "composition phase timings"
+    );
     // ADR-258（P3/U-03）：hook.* 双轨注册面闭合——DynamicEventRegistry 生产
     // 构造点落组合根（深审增补项 D1：EventBus 不持有该 registry，挂 L1 需动
     // 结构已否决）；register_all 幂等注册 14 个 hook.* 生命周期事件（轨二,
