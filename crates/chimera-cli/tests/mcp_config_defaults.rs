@@ -46,7 +46,7 @@ async fn list_chain_with_injected_url_server_succeeds() {
         no_permission: false,
     };
 
-    mcp::execute(&McpAction::List, &cfg, false, &perm, false)
+    mcp::execute(&McpAction::List, &cfg, false, &perm, false, None)
         .await
         .expect("mcp list 链路应成功(注册 → 列表 → 输出)");
 }
@@ -66,7 +66,7 @@ async fn list_chain_with_ssrf_blocked_server_still_succeeds() {
         no_permission: false,
     };
 
-    mcp::execute(&McpAction::List, &cfg, false, &perm, false)
+    mcp::execute(&McpAction::List, &cfg, false, &perm, false, None)
         .await
         .expect("SSRF 被拒时应 warn 跳过而非整体失败");
 }

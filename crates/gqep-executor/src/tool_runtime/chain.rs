@@ -40,23 +40,31 @@ impl PolicyLayer {
 
 impl ToolDispatcher for PolicyLayer {
     fn dispatch<'a>(&'a self, req: &'a DispatchRequest) -> DispatchFuture<'a> {
-        let action = self
-            .policy
-            .evaluate(&req.tool_name, std::slice::from_ref(&req.args_json));
-        match action {
-            PolicyAction::Allow => self.next.dispatch(req),
-            PolicyAction::Deny => {
-                let msg = format!("denied: policy rejected tool '{}'", req.tool_name);
-                Box::pin(async move { Err(DispatchError::Policy(msg)) })
-            }
-            PolicyAction::Ask => {
-                let msg = format!(
-                    "ask_required: policy requests approval for tool '{}'",
-                    req.tool_name
-                );
-                Box::pin(async move { Err(DispatchError::Policy(msg)) })
-            }
+        match evaluate_policy(&self.policy, req) {
+            Ok(()) => self.next.dispatch(req),
+            Err(err) => Box::pin(async move { Err(err) }),
         }
+    }
+}
+
+/// 策略环判决 — **唯一判决体**（`PolicyLayer` 与 `ToolRuntime::admit` 共用）
+///
+/// WHY 抽成自由函数：命令面准入前置（ADR-273）也要做同一判决，但**不能**
+/// 重新实现一遍 —— 文案/三态映射一旦分叉，两条路径就会给出不同结论。
+pub(crate) fn evaluate_policy(
+    policy: &ExecPolicy,
+    req: &DispatchRequest,
+) -> Result<(), DispatchError> {
+    match policy.evaluate(&req.tool_name, std::slice::from_ref(&req.args_json)) {
+        PolicyAction::Allow => Ok(()),
+        PolicyAction::Deny => Err(DispatchError::Policy(format!(
+            "denied: policy rejected tool '{}'",
+            req.tool_name
+        ))),
+        PolicyAction::Ask => Err(DispatchError::Policy(format!(
+            "ask_required: policy requests approval for tool '{}'",
+            req.tool_name
+        ))),
     }
 }
 
@@ -74,11 +82,32 @@ impl SandboxLayer {
 
 impl ToolDispatcher for SandboxLayer {
     fn dispatch<'a>(&'a self, req: &'a DispatchRequest) -> DispatchFuture<'a> {
-        match self.gate.check(req) {
+        match check_sandbox(self.gate.as_ref(), req) {
             Ok(()) => self.next.dispatch(req),
             Err(err) => Box::pin(async move { Err(err) }),
         }
     }
+}
+
+/// 沙箱环判决 — 唯一判决体（`SandboxLayer` 与 `ToolRuntime::admit` 共用）
+pub(crate) fn check_sandbox(
+    gate: &dyn SandboxGate,
+    req: &DispatchRequest,
+) -> Result<(), DispatchError> {
+    gate.check(req)
+}
+
+/// 准入前置判决 = policy → sandbox 两环（顺序与链内一致）
+///
+/// 只跑前两环，**不触碰 route/transport**：调用方（命令面）随后自己执行工具，
+/// 因此这里绝不能落到执行面（否则二次执行）。
+pub(crate) fn evaluate_admission(
+    policy: &ExecPolicy,
+    gate: &dyn SandboxGate,
+    req: &DispatchRequest,
+) -> Result<(), DispatchError> {
+    evaluate_policy(policy, req)?;
+    check_sandbox(gate, req)
 }
 
 /// 路由层 — 精确工具名命中，否则 fallback，再否则 Route 错误

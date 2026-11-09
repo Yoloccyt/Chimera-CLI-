@@ -214,8 +214,14 @@ pub async fn dispatch(cli: &Cli, cfg: &ChimeraConfig) -> Result<()> {
             parliament::execute_with_ctx(ctx_ref(&ctx)?, proposal, cli.json || *json, &perm).await
         }
         // Task 1.8: MCP 量子网格管理 — 全局 --json 传递;perm 供 mcp call 使用;dry_run 供 mcp call 预览
+        // ADR-273：仅 `mcp call` 取 AppContext（消费唯一 ToolRuntime 做 policy+sandbox
+        // 前置）；list/inspect/serve 仍 NoContext，零装配税。
         Some(Commands::Mcp { action }) => {
-            mcp::execute(action, cfg, cli.json, &perm, cli.dry_run).await
+            let runtime = match action {
+                crate::cli::McpAction::Call { .. } => Some(ctx_ref(&ctx)?.tool_runtime.as_ref()),
+                _ => None,
+            };
+            mcp::execute(action, cfg, cli.json, &perm, cli.dry_run, runtime).await
         }
         // Task 1.9: 红队安全审计 — 全局 --json 优先,子命令级 --json 兼容保留
         Some(Commands::Audit { json, severity }) => {

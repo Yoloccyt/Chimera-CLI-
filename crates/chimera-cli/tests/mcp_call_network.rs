@@ -42,6 +42,19 @@ fn auto_perm() -> PermissionCtx {
     }
 }
 
+/// 准入前置全放行的 ToolRuntime（本文件只验传输选择，不验策略）
+///
+/// delegate=None ⇒ 传输环装恒拒绝执行器，但本文件从不派发（只调 `admit`），
+/// 故不影响断言；policy 显式 Allow 以保持与 ADR-246 缺省一致。
+fn allow_runtime() -> gqep_executor::tool_runtime::ToolRuntime {
+    gqep_executor::tool_runtime::ToolRuntime::with_optional_delegate(
+        None,
+        vec![],
+        seccore::execpolicy::PolicyAction::Allow,
+    )
+    .expect("准入环组装应成功")
+}
+
 /// 默认路径必须成功且**不发网络请求**。
 ///
 /// 证据选择：端点用 RFC 5737 TEST-NET-3（`203.0.113.1:9`，可注册但不可路由）。
@@ -57,7 +70,8 @@ async fn default_call_never_opens_network() {
         network: false,
     };
 
-    mcp::execute(&action, &config, true, &auto_perm(), false)
+    let runtime = allow_runtime();
+    mcp::execute(&action, &config, true, &auto_perm(), false, Some(&runtime))
         .await
         .expect("默认（InProcess）路径应成功，且不触网");
 }
@@ -74,7 +88,8 @@ async fn network_flag_does_not_bypass_ssrf_guard() {
         network: true,
     };
 
-    let err = mcp::execute(&action, &config, true, &auto_perm(), false)
+    let runtime = allow_runtime();
+    let err = mcp::execute(&action, &config, true, &auto_perm(), false, Some(&runtime))
         .await
         .expect_err("loopback 端点必须被 SSRF 校验拒绝");
     let msg = format!("{err:?}");

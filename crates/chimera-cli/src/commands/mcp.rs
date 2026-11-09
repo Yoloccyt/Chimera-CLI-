@@ -35,12 +35,16 @@ use crate::permission::{self, PermissionCtx};
 /// `json` flag(Task 1.7):`true` 时各子命令输出 JSON envelope。
 /// `perm`(Task 1.11):仅 `mcp call` 消费,用于破坏性操作前确认。
 /// `dry_run`(Task 2.2):仅 `mcp call` 消费,`true` 时只输出预览不执行。
+/// `runtime`(ADR-273):仅 `mcp call` 消费 —— 组合根**唯一** ToolRuntime，
+/// 用于执行前的 policy + sandbox 准入前置（`list/inspect/serve` 传 `None`，
+/// 三者分类为 NoContext，不付装配税）。
 pub async fn execute(
     action: &McpAction,
     config: &ChimeraConfig,
     json: bool,
     perm: &PermissionCtx,
     dry_run: bool,
+    runtime: Option<&gqep_executor::tool_runtime::ToolRuntime>,
 ) -> Result<()> {
     tracing::info!(?action, dry_run, "MCP 量子网格管理操作");
 
@@ -69,7 +73,7 @@ pub async fn execute(
                     "mcp call: 已显式启用真实 TCP 传输（可能产生网络请求）"
                 );
             }
-            call_tool(&mesh, server, tool, args, perm, json, dry_run).await
+            call_tool(&mesh, server, tool, args, perm, json, dry_run, runtime).await
         }
         McpAction::Inspect { server } => inspect_server(&mesh, server, json).await,
     }
@@ -221,10 +225,13 @@ struct McpCallPayload<'a> {
 /// `mcp call <server> <tool> [args]` — 调用 MCP 工具(SubTask 1.8.4)
 ///
 /// 触发 permission prompt(除非 `--yes` / `--no-permission`)。
-/// 确认后通过 `McpMesh::execute_transaction` 调用工具。
+/// 确认后先过 policy + sandbox 准入前置（ADR-273），再通过
+/// `McpMesh::execute_transaction` 调用工具。
 /// 目标服务器未在本次注册中出现时，仍返回 `McpError::ServerNotFound`（既有语义）。
 ///
-/// `dry_run=true`(Task 2.2):permission 确认后只输出预览,不调用 execute_transaction。
+/// `dry_run=true`(Task 2.2):permission 与准入前置都通过后只输出预览,
+/// 不调用 execute_transaction（预览必须反映真实结论，故前置不可跳过）。
+#[allow(clippy::too_many_arguments)] // 7 个参数均为命令面既有语义位;合并成结构体属独立重构
 async fn call_tool(
     mesh: &McpMesh,
     server: &str,
@@ -233,6 +240,7 @@ async fn call_tool(
     perm: &PermissionCtx,
     json: bool,
     dry_run: bool,
+    runtime: Option<&gqep_executor::tool_runtime::ToolRuntime>,
 ) -> Result<()> {
     // Task 1.11.4:破坏性操作前调用 confirm(MCP 工具可能执行任意代码)
     let details = format!("Server: {server}, Tool: {tool}, Args: {:?}", args);
@@ -242,6 +250,29 @@ async fn call_tool(
             ChimeraCliError::PermissionDenied(format!("用户拒绝调用 MCP 工具 {tool}")).into(),
         );
     }
+
+    // ADR-273：命令面安全前置 —— 复用组合根**唯一** ToolRuntime 的 policy+sandbox 两环。
+    //
+    // WHY 在 confirm 之后：confirm 是「用户意图」闸门，policy/sandbox 是「机器规则」
+    // 闸门，两道独立 —— 用户同意不能替代策略放行，策略放行也不能替代用户同意。
+    // WHY 在 dry_run 之前：预览必须反映真实结论；若预览说"会调用"而实跑被策略拒绝，
+    // dry-run 就失去意义。
+    // WHY 用 admit 而非 dispatch：dispatch 会落到传输环**真的执行**工具，造成二次
+    // 执行，且执行者是组合根那套 MCP 执行器而非本命令的 ephemeral mesh（两套生命周期）。
+    let admission_req = gqep_executor::tool_runtime::DispatchRequest {
+        tool_name: format!("mcp.{server}.{tool}"),
+        args_json: serde_json::to_string(args).unwrap_or_else(|_| "[]".into()),
+    };
+    runtime
+        .ok_or_else(|| {
+            ChimeraCliError::EngineError(
+                "内部装配错误：mcp call 缺少 ToolRuntime（分类应为 FullContext）".into(),
+            )
+        })?
+        .admit(&admission_req)
+        .map_err(|e| {
+            ChimeraCliError::PermissionDenied(format!("MCP 工具调用被安全前置拒绝: {e}"))
+        })?;
 
     // Task 2.2:dry-run 模式只输出预览,不实际执行
     // WHY 在 permission 之后:确保预览前仍经过权限确认,避免绕过安全检查

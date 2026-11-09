@@ -27,10 +27,20 @@ use super::batch::{dispatch_batch_with_sink, BatchAttributionSink, BatchLimits, 
 use super::chain::{DispatcherBuilder, SandboxedDispatcher};
 use super::dispatch::{DispatchError, DispatchFuture, DispatchRequest, ToolDispatcher};
 use super::inproc::InProcDispatcher;
-use super::sandbox_gate::SeccoreSandboxGate;
+use super::sandbox_gate::{SandboxGate, SeccoreSandboxGate};
 use crate::exec_tool_executor::ExecPolicyToolExecutor;
 use crate::toolplan_runner::ToolExecutor;
 use nexus_contracts::tool_plan::SideEffectDecl;
+
+/// 准入前置环组 — 与四环链**共用同一 `Arc`**（单一策略/沙箱实例）
+///
+/// WHY 单独存一份而不是从链里反取：环是私有装饰器，反取需要下行转换；
+/// 存同源 `Arc` 只是两次引用计数递增，却让 [`ToolRuntime::admit`] 与链内
+/// 前两环共用同一判决体（`chain::evaluate_policy` / `chain::check_sandbox`）。
+struct AdmissionRings {
+    policy: Arc<ExecPolicy>,
+    sandbox: Arc<dyn SandboxGate>,
+}
 
 /// 工具运行时 — 强制沙箱四环链的成品装配
 pub struct ToolRuntime {
@@ -46,6 +56,8 @@ pub struct ToolRuntime {
     capabilities: Option<Arc<dyn ToolExecutor>>,
     /// 批量归因出口（W3/ADR-248）——`None` = 改造前行为（L1 等价，单点可回退）
     batch_sink: Option<Arc<dyn BatchAttributionSink>>,
+    /// 准入前置环组（见 [`ToolRuntime::admit`]）
+    admission: AdmissionRings,
 }
 
 impl std::fmt::Debug for ToolRuntime {
@@ -84,9 +96,11 @@ impl ToolRuntime {
                 routes.insert(name, Arc::clone(&inproc));
             }
         }
+        // 准入环组与链内同源：同一个 policy 与 sandbox Arc 既进链、也存给 admit()。
+        let sandbox: Arc<dyn SandboxGate> = Arc::new(SeccoreSandboxGate::default_secure());
         let dispatcher = DispatcherBuilder::new()
             .with_policy(Some(Arc::clone(&policy)))
-            .with_sandbox(Some(Arc::new(SeccoreSandboxGate::default_secure())))
+            .with_sandbox(Some(Arc::clone(&sandbox)))
             .with_route(Some(routes))
             .with_fallback(Some(Arc::clone(&inproc)))
             .with_transport(Some(inproc))
@@ -95,6 +109,7 @@ impl ToolRuntime {
             dispatcher,
             capabilities,
             batch_sink: None,
+            admission: AdmissionRings { policy, sandbox },
         })
     }
 
@@ -118,6 +133,22 @@ impl ToolRuntime {
     ) -> super::dispatch::BorrowedDispatchFuture<'a> {
         use super::dispatch::BorrowedToolDispatcher;
         self.dispatcher.dispatch_borrowed(req)
+    }
+
+    /// 准入前置：只穿越 policy → sandbox 两环，**不触碰 route/transport**（不执行工具）
+    ///
+    /// WHY 需要独立入口（ADR-273）：命令面（`chimera mcp call`）要在自己执行工具之前
+    /// 复用同一个策略/沙箱实例做安全前置。走 [`Self::dispatch`] 会落到传输环**真的执行**
+    /// 工具 —— 那会造成二次执行，且执行者是组合根装配的 MCP 执行器，而不是命令面自己的
+    /// ephemeral mesh（两套生命周期，ADR-256 已登记）。
+    ///
+    /// 契约：对同一请求，判决与链内前两环**逐字一致**（同源 `Arc` + 同一判决体）。
+    pub fn admit(&self, req: &DispatchRequest) -> Result<(), DispatchError> {
+        super::chain::evaluate_admission(
+            &self.admission.policy,
+            self.admission.sandbox.as_ref(),
+            req,
+        )
     }
 
     /// 生产接线（组合根用）：策略可配置 + 委托执行器可缺省
@@ -175,9 +206,11 @@ impl ToolRuntime {
                 routes.insert(name, Arc::clone(&inproc));
             }
         }
+        // 准入环组与链内同源（见 `new` 同注释）。
+        let sandbox: Arc<dyn SandboxGate> = Arc::new(SeccoreSandboxGate::default_secure());
         let dispatcher = DispatcherBuilder::new()
             .with_policy(Some(Arc::clone(&policy)))
-            .with_sandbox(Some(Arc::new(SeccoreSandboxGate::default_secure())))
+            .with_sandbox(Some(Arc::clone(&sandbox)))
             .with_route(Some(routes))
             .with_fallback(Some(Arc::clone(&inproc)))
             .with_transport(Some(inproc))
@@ -186,6 +219,7 @@ impl ToolRuntime {
             dispatcher,
             capabilities,
             batch_sink: None,
+            admission: AdmissionRings { policy, sandbox },
         })
     }
 

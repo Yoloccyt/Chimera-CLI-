@@ -84,6 +84,14 @@ pub fn plan(cmd: Option<&Commands>) -> CommandPlan {
         | Some(Doctor { .. }) => CommandPlan::FullContext {
             sharding: ShardingPolicy::Off,
         },
+        // ADR-273：`mcp call` 需要 AppContext —— 复用组合根唯一 ToolRuntime 的
+        // policy+sandbox 两环做准入前置（此前命令面直调 mesh，无策略/沙箱）。
+        // one-shot（秒级退出）⇒ Off。必须排在下面的 `Mcp { .. }` 之前。
+        Some(Commands::Mcp {
+            action: crate::cli::McpAction::Call { .. },
+        }) => CommandPlan::FullContext {
+            sharding: ShardingPolicy::Off,
+        },
         // 不装配 AppContext → 分片策略无意义
         Some(
             Help { .. }
@@ -187,6 +195,24 @@ mod tests {
             (
                 Some(Commands::Mcp {
                     action: McpAction::List,
+                }),
+                CommandClass::NoContext,
+            ),
+            // ADR-273：call 需 AppContext（准入前置）；inspect 仍零装配
+            (
+                Some(Commands::Mcp {
+                    action: McpAction::Call {
+                        server: "s".into(),
+                        tool: "t".into(),
+                        args: vec![],
+                        network: false,
+                    },
+                }),
+                CommandClass::FullContext,
+            ),
+            (
+                Some(Commands::Mcp {
+                    action: McpAction::Inspect { server: "s".into() },
                 }),
                 CommandClass::NoContext,
             ),
@@ -320,6 +346,15 @@ mod tests {
                 json: false,
                 fix: false,
             }),
+            // ADR-273：mcp call 是 one-shot FullContext ⇒ Off
+            Some(Commands::Mcp {
+                action: McpAction::Call {
+                    server: "s".into(),
+                    tool: "t".into(),
+                    args: vec![],
+                    network: false,
+                },
+            }),
         ];
         for cmd in off_cases {
             assert_eq!(
@@ -350,6 +385,14 @@ mod tests {
             }),
             Some(Commands::Chat),
             Some(Commands::Serve),
+            Some(Commands::Mcp {
+                action: McpAction::Call {
+                    server: "s".into(),
+                    tool: "t".into(),
+                    args: vec![],
+                    network: false,
+                },
+            }),
         ];
         for cmd in cmds {
             assert_eq!(
