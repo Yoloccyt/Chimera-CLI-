@@ -270,6 +270,7 @@
 | ADR-269 | `PlanGuards` 三字段的 CLI 投影入口（只收紧，缺省逐字不变） | **✅ Accepted(2026-11-09)** `ADR-269-planguards-cli-overrides.md`；D1 `PlanGuardOverrides` + `apply()`：阈值取 min、只读取逻辑或，绝不放宽 |
 | ADR-270 | 取消通道的生产者接线：进程级取消根 + 单个 Ctrl+C 监听 | **✅ Accepted(2026-11-09)** `ADR-270-cancellation-producer-wiring.md`；D1 `OnceLock` 根 token + 恒 1 个监听 task；D2 本波不发新事件（复用 `CallBudgetError::Cancelled`） |
 | ADR-271 | panic 姿态裁决：诚实声明优先，维持 `panic = "abort"` | **✅ Accepted(2026-11-09)** `ADR-271-panic-posture-honest-declaration.md`；三案对照选 A：不改全局 profile（体积 SLO），声明「release 下 `catch_unwind` 无效、隔离非本仓承诺」+ 3 文本锁 |
+| ADR-272 | doctor 探针诚实化 + 异步路径探测 + 门补盲 | **✅ Accepted(2026-11-09)** `ADR-272-doctor-honesty-and-async-probe-io.md`；D1 LLM 维删 `sleep 238ms` + 纳秒奇偶 50/50，文案自陈「连通性未探测 — mock 探针」（不实装真实 ping：回环风险；不降 Warn：过度悲观）；D2 5 个路径探针 `Path::exists` → `tokio::fs::try_exists`，`--fix` 写盘走 `spawn_blocking`，collector 改「就绪布尔注入」纯函数；D3 门判据由「禁 `std::fs::`」扩为「且禁 `.exists(`」，覆盖 5 探针且无豁免；D4 不为其余探针复制弱心跳判据（L1 结构判据优先，ADR-234）。实测（同轮 A/B）：墙钟 288.9→50.5ms（−82.5%）、gather latency 246.3→1.25ms（−99.5%），区间不重叠 |
 | ADR-277 | PlanRunner 固定开销正式否决；只修「聚合取拓扑终端」的正确性缺陷 | **✅ Accepted(2026-11-09)** `ADR-277-planrunner-fixed-cost-rejection-and-terminal-aggregation.md`；D1 四项 µs 级固定开销否决（`MAX_STEPS=64`）；D2 聚合改「声明序倒序取首个无出边且已执行节点」；D3 层序非稳定定序（`HashMap` frontier ⇒ 摘要随并发漂移，被 `readonly_dag_summary_equivalent` 捕获） |
 
 > **ADR-084/085 登记说明 (2026-08-19)**:ADR-084(L6 Router Phase 6)为在途开发落档物,物理文件已存在但此前未入索引;本次随 ADR-085 一并登记,adr_index 总数 85 → **86**。

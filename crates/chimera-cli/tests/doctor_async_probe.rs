@@ -7,11 +7,14 @@
 //! 其他探针**并发**执行 —— 同步文件 IO 会**阻塞所在 Tokio worker 线程**，
 //! 使并发探针的墙钟收益被抵消（ADR-241 P-08）。
 //!
-//! 本文件锁定三件事：
+//! 本文件锁定五件事：
 //! 1. **源码层**：该探针内零 `std::fs::` 调用（用 `tokio::fs` 取代）；
 //! 2. **功能层**：可写父目录仍返回 `Ok`，不可写仍返回 `Warn`（行为未变）；
 //! 3. **并发层**：探针执行期间**不占用** Tokio worker —— 用一个同 runtime
 //!    的独立任务证明它能在探针 IO 期间继续推进。
+//! 4. **模块级（ADR-272 补盲）**：`probes.rs` 内零阻塞路径探测 —— 判据从
+//!    「不含 `std::fs::`」扩为「且不含 `.exists(`」，覆盖全部 5 个路径探针；
+//! 5. **诚实层（ADR-272）**：LLM 探针成功文案必须自陈 mock，且结论确定。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
@@ -134,5 +137,65 @@ async fn sqlite_path_probe_does_not_block_worker() {
     assert!(
         ticks > 0,
         "探针 IO 期间心跳任务应能取得执行机会（若为 0，说明探针阻塞了 worker）"
+    );
+}
+
+/// 门补盲（ADR-272）：`probes.rs` **整个模块**零阻塞路径存在性探测。
+///
+/// WHY 从「只禁 `std::fs::`」扩到「禁 `.exists(`」：`Path::exists` 是阻塞 stat，
+/// 而旧判据只锚 `std::fs::` —— 于是 `probes.rs` 里 7 处 `Path::exists` 全部在门内
+/// **恒绿**（门绿由缺陷撑着，F-07）。现判据覆盖 5 个路径探针：
+/// config_file / cargo_lock / sqlite_path / storage_health / model_asset_health。
+#[test]
+fn probes_module_has_no_sync_path_exists() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("commands")
+        .join("doctor")
+        .join("probes.rs");
+    let text = std::fs::read_to_string(&path).expect("应能读取 probes.rs");
+
+    assert!(
+        !text.contains(".exists("),
+        "probes.rs 内不得出现 `Path::exists`（应改用 tokio::fs::try_exists）"
+    );
+    assert!(
+        !text.contains("std::fs::"),
+        "probes.rs 内不得有同步文件 IO（应改用 tokio::fs）"
+    );
+    assert!(
+        text.matches("tokio::fs::try_exists").count() >= 5,
+        "5 个路径探针都应走 tokio::fs::try_exists，实际命中 {} 处",
+        text.matches("tokio::fs::try_exists").count()
+    );
+}
+
+/// 诚实化（ADR-272）：LLM 探针的成功文案必须自陈 mock，且结论确定。
+///
+/// 旧实现 sleep 238ms + 纳秒奇偶 50/50：每次 doctor 必然多付 238ms，
+/// 且成功文案写成固定 `ping` 延迟，等于把 mock 伪装成真实 RTT。
+#[tokio::test]
+async fn llm_probe_message_declares_mock_and_is_deterministic() {
+    let cfg = ChimeraConfig::default();
+    let a = chimera_cli::commands::doctor::probes_check_llm_provider(&cfg).await;
+    let b = chimera_cli::commands::doctor::probes_check_llm_provider(&cfg).await;
+
+    assert_eq!(a.name, "llm_provider");
+    assert_eq!(a.status, b.status, "结论必须确定（旧实现 50/50 随机）");
+    assert_eq!(a.message, b.message, "文案必须逐字确定");
+    assert!(
+        a.message.contains("mock"),
+        "必须自陈 mock，实际: {}",
+        a.message
+    );
+    assert!(
+        a.message.contains("未探测"),
+        "必须声明连通性未探测，实际: {}",
+        a.message
+    );
+    assert!(
+        !a.message.contains("ping"),
+        "不得伪装真实 RTT，实际: {}",
+        a.message
     );
 }

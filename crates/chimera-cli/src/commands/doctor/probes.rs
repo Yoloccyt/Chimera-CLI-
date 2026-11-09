@@ -16,7 +16,10 @@ use super::*;
 pub(super) async fn check_config_file(fix: bool, config_path: &Path) -> HealthCheck {
     let path_display = config_path.display().to_string();
 
-    if config_path.exists() {
+    // WHY tokio::fs::try_exists：本探针与其余探针在 `gather_collected` 中并发执行，
+    // 同步 `Path::exists` 会在 worker 线程上做一次阻塞 stat（ADR-241 P-08 同口径）。
+    // `try_exists` 的错误分支（如权限拒绝）映射为 false，与 `exists()` 语义等价。
+    if tokio::fs::try_exists(config_path).await.unwrap_or(false) {
         HealthCheck {
             name: "config_file",
             description: "配置文件路径与有效性",
@@ -26,19 +29,31 @@ pub(super) async fn check_config_file(fix: bool, config_path: &Path) -> HealthCh
     } else {
         // 文件不存在
         if fix {
-            // --fix: 自动生成默认配置文件
-            match config::init_config_file(config_path) {
-                Ok(_) => HealthCheck {
+            // --fix: 自动生成默认配置文件。写盘是同步 IO（含 create_dir_all），
+            // 经 spawn_blocking 卸载，避免与其余探针并发时占用 worker。
+            let path_owned = config_path.to_path_buf();
+            let generated =
+                tokio::task::spawn_blocking(move || config::init_config_file(&path_owned)).await;
+            match generated {
+                Ok(Ok(_)) => HealthCheck {
                     name: "config_file",
                     description: "配置文件路径与有效性",
                     status: HealthStatus::Ok,
                     message: format!("配置文件缺失,已自动生成默认配置: {path_display}"),
                 },
-                Err(e) => HealthCheck {
+                Ok(Err(e)) => HealthCheck {
                     name: "config_file",
                     description: "配置文件路径与有效性",
                     status: HealthStatus::Fail,
                     message: format!("配置文件缺失且自动生成失败: {path_display} — {e}"),
+                },
+                Err(join_err) => HealthCheck {
+                    name: "config_file",
+                    description: "配置文件路径与有效性",
+                    status: HealthStatus::Fail,
+                    message: format!(
+                        "配置文件缺失且自动生成任务未完成: {path_display} — {join_err}"
+                    ),
                 },
             }
         } else {
@@ -61,7 +76,7 @@ pub(super) async fn check_config_file(fix: bool, config_path: &Path) -> HealthCh
 pub(super) async fn check_cargo_lock() -> HealthCheck {
     let lock_path = Path::new("Cargo.lock");
 
-    if lock_path.exists() {
+    if tokio::fs::try_exists(lock_path).await.unwrap_or(false) {
         HealthCheck {
             name: "cargo_lock",
             description: "Cargo.lock 依赖完整性",
@@ -122,7 +137,7 @@ pub(super) async fn check_sqlite_path(cfg: &ChimeraConfig) -> HealthCheck {
         };
     };
 
-    if !parent_dir.exists() {
+    if !tokio::fs::try_exists(parent_dir).await.unwrap_or(false) {
         return HealthCheck {
             name: "sqlite_path",
             description: "SQLite 数据库路径可读写",
@@ -196,16 +211,17 @@ pub(super) async fn check_event_bus(bus: &EventBus) -> HealthCheck {
 
 /// 检查 6:LLM Provider 健康度(Wave 2 Task 4)
 ///
-/// 复用 `llm` 包内的 `FALLBACK_PROVIDER_NAMES` 常量（单一真值源），
-/// 模拟连通性探测（238ms 延迟 + 50/50 判定）。
+/// 复用 `llm` 包内的 `FALLBACK_PROVIDER_NAMES` 常量（单一真值源）。
 ///
-/// **不**实装真实 mca-gateway 探测,真实接入由后续 Task 替换(与 `llm::execute` 错开避免回环)。
-///
+/// **只做配置解析校验，不做连通性探测**（ADR-272）：
 /// - 默认 Provider = `cfg.model_router.providers` 首位;空时回退 8 个内置 default 名
 ///   (deepseek / zhipu / minimax / volcano / moonshot / stepfun / alicloud / custom)
-/// - 探测用 `SystemTime` 纳秒奇偶决定 OK/FAIL(50/50),模拟 238ms 网络延迟
-/// - `tokio::time::timeout(3s, ...)` 包裹,超时或失败 → `Warn`(Degraded)
+/// - 真实连通性探测需接 mca-gateway，属独立波次；在探针内直调 `llm::execute`
+///   会引入 doctor → llm::execute 的间接依赖，mca 接入后有回环风险。
 /// - `--fix` 行为:LLM 维**不可**自动修复,需用户运行 `chimera llm set-default <name>`
+///
+/// WHY 结论必须显式自陈 mock：旧实现 sleep 238ms + 纳秒奇偶 50/50，并把成功文案
+/// 写成固定 `ping` 延迟 —— 那是把 mock 伪装成真实 RTT，doctor 的判决随之不可信。
 pub(super) async fn check_llm_provider(cfg: &ChimeraConfig) -> HealthCheck {
     // 单一真值源：直接引用 `llm` 包内常量（勿在探针里再写一份副本）。
     use crate::commands::llm::FALLBACK_PROVIDER_NAMES;
@@ -222,39 +238,16 @@ pub(super) async fn check_llm_provider(cfg: &ChimeraConfig) -> HealthCheck {
         FALLBACK_PROVIDER_NAMES[0].to_string()
     };
 
-    // 模拟连通性探测 — 238ms sleep + SystemTime 纳秒奇偶判定 OK/FAIL
-    //
-    // WHY 不调 `llm::execute`:会产生 doctor → llm::execute → ? 的间接依赖,虽
-    // 当前不构成循环,但后续 mca-gateway 接入后回环风险增高;独立实现更稳健。
-    let probe = async {
-        tokio::time::sleep(std::time::Duration::from_millis(238)).await;
-        let epoch_ns = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.subsec_nanos())
-            .unwrap_or(0);
-        epoch_ns.is_multiple_of(2)
-    };
-
-    // 3s 超时包裹,失败/超时统一映射为 `Degraded`(即 `HealthStatus::Warn`)
-    match tokio::time::timeout(std::time::Duration::from_secs(3), probe).await {
-        Ok(true) => HealthCheck {
-            name: "llm_provider",
-            description: "LLM Provider 健康度",
-            status: HealthStatus::Ok,
-            message: format!("LLM: ✓ default={default_provider}, ping 238ms"),
-        },
-        Ok(false) => HealthCheck {
-            name: "llm_provider",
-            description: "LLM Provider 健康度",
-            status: HealthStatus::Warn,
-            message: format!("LLM: ✗ default={default_provider} unreachable (mock 50/50 探测失败)"),
-        },
-        Err(_elapsed) => HealthCheck {
-            name: "llm_provider",
-            description: "LLM Provider 健康度",
-            status: HealthStatus::Warn,
-            message: format!("LLM: ✗ default={default_provider} unreachable (timeout 3s)"),
-        },
+    // 旧实现 238ms sleep + 纳秒奇偶 50/50 已删除（ADR-272）：结论必须确定，
+    // 且不得为 mock 付出真实延迟。这里只汇报「配置可解析」这一件真事，
+    // 并在文案里显式声明「连通性未探测」，避免 Ok 被读成「连通正常」。
+    HealthCheck {
+        name: "llm_provider",
+        description: "LLM Provider 健康度",
+        status: HealthStatus::Ok,
+        message: format!(
+            "LLM: default={default_provider}（仅校验配置可解析;连通性未探测 — mock 探针,真实探测待接 mca-gateway）"
+        ),
     }
 }
 
@@ -403,7 +396,7 @@ pub fn scc_probe_verdict(entries: usize, accesses: u64, hit_rate: f32) -> (Healt
 ///   缺席按"未启用/未初始化"记 Warn 而非 Fail（诚实登记:目录就绪不等于会话已持久化）。
 ///
 /// 判定 = 纯函数:cmt 与 session 目录双就绪 → Ok;任一缺席 → Warn（未初始化/未启用,非故障）。
-/// probe 仅做 `Path::exists` 级静态检查（无 IO 阻塞语义、无 rusqlite 依赖）。
+/// probe 仅做路径存在性静态检查（异步 `tokio::fs::try_exists`；无 rusqlite 依赖）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct StorageHealth {
     /// scc 缓存条目数（stats() 只读快照）
@@ -448,33 +441,38 @@ impl StorageHealth {
     }
 }
 
-/// 收集三后端就绪信号（目录参数注入以便测试;纯 `Path::exists` 静态检查）
+/// 收集三后端就绪信号：就绪布尔由调用方（异步探针或测试）探测后注入。
+///
+/// WHY 不在此处做 `Path::exists`：本函数被 async 探针调用，同步 stat 会阻塞
+/// worker；路径存在性探测统一走 `tokio::fs::try_exists`（ADR-272）。
 pub(super) fn collect_storage_health(
     cache: &scc_cache::SccCache,
-    cmt_root: &Path,
-    session_dir: &Path,
+    cmt_dir_ready: bool,
+    session_dir_ready: bool,
 ) -> StorageHealth {
     let stats = cache.stats();
     StorageHealth {
         scc_entries: stats.entry_count,
         scc_accesses: cache.access_count(),
-        cmt_dir_ready: cmt_root.exists(),
-        session_dir_ready: session_dir.exists(),
+        cmt_dir_ready,
+        session_dir_ready,
     }
 }
 
 /// 检查 10:L3 存储三后端（WI-G12）— scc（共享句柄统计）/ cmt（经验库目录）/
 /// session-store（段目录,锚点见 [`StorageHealth`] 注释）只读信号聚合
 ///
-/// 只读:零变异、零事件发布;`Path::exists` 静态检查（无 IO 阻塞语义、无 rusqlite）。
-pub(super) fn check_storage_health(cache: &scc_cache::SccCache) -> HealthCheck {
+/// 只读:零变异、零事件发布;路径探测走 `tokio::fs::try_exists`（不阻塞 worker）。
+pub(super) async fn check_storage_health(cache: &scc_cache::SccCache) -> HealthCheck {
     let cmt_root = crate::experience_loop::experience_db_path()
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_default();
     // 锚点 = session-store 默认段目录（同源字面锚点,见 StorageHealth 注释）
     let session_dir = PathBuf::from("data/sessions");
-    let health = collect_storage_health(cache, &cmt_root, &session_dir);
+    let cmt_dir_ready = tokio::fs::try_exists(&cmt_root).await.unwrap_or(false);
+    let session_dir_ready = tokio::fs::try_exists(&session_dir).await.unwrap_or(false);
+    let health = collect_storage_health(cache, cmt_dir_ready, session_dir_ready);
     HealthCheck {
         name: "storage_health",
         description: "L3 存储三后端健康度",
@@ -500,7 +498,7 @@ pub(super) const NMC_MANIFEST_PATH: &str = "assets/nmc/manifest.toml";
 /// WHY 只查约定目录而不读 `NmcConfig`:chimera-cli **不依赖** nmc-encoder
 /// （现核 Cargo.toml 无该边），引入依赖去取默认 `model_dir` 会新增一条
 /// L10→L2 内部依赖边（违 G-33 零新增边）;故与第 10 探针同构，只做
-/// `Path::exists` 静态检查（零变异、零事件发布、无 rusqlite）。
+/// 路径存在性静态检查（异步 `tokio::fs::try_exists`；零变异、零事件发布、无 rusqlite）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ModelAssetHealth {
     /// NMC 资产目录就绪（存在 = 已 fetch）
@@ -540,14 +538,17 @@ impl ModelAssetHealth {
     }
 }
 
-/// 收集模型资产面信号（路径参数注入以便测试;纯 `Path::exists` 静态检查）
+/// 收集模型资产面信号：就绪布尔由调用方（异步探针或测试）探测后注入。
+///
+/// WHY 不在此处做 `Path::exists`：同 [`collect_storage_health`]，同步 stat
+/// 会在 async 探针里阻塞 worker（ADR-272）。
 pub(super) fn collect_model_asset_health(
-    asset_dir: &Path,
-    manifest_path: &Path,
+    nmc_asset_dir_ready: bool,
+    manifest_present: bool,
 ) -> ModelAssetHealth {
     ModelAssetHealth {
-        nmc_asset_dir_ready: asset_dir.exists(),
-        manifest_present: manifest_path.exists(),
+        nmc_asset_dir_ready,
+        manifest_present,
     }
 }
 
@@ -556,8 +557,14 @@ pub(super) fn collect_model_asset_health(
 /// 路径为**仓内约定相对路径**（与 fetch 脚本默认一致）；从任意工作目录跑
 /// 二进制时目录不存在 → 报 Warn「未启用」，与第 10 探针的 `data/sessions`
 /// 字面锚点同一口径。
-pub(super) fn check_model_assets() -> HealthCheck {
-    let health = collect_model_asset_health(Path::new(NMC_ASSET_DIR), Path::new(NMC_MANIFEST_PATH));
+pub(super) async fn check_model_assets() -> HealthCheck {
+    let nmc_asset_dir_ready = tokio::fs::try_exists(Path::new(NMC_ASSET_DIR))
+        .await
+        .unwrap_or(false);
+    let manifest_present = tokio::fs::try_exists(Path::new(NMC_MANIFEST_PATH))
+        .await
+        .unwrap_or(false);
+    let health = collect_model_asset_health(nmc_asset_dir_ready, manifest_present);
     HealthCheck {
         name: "model_asset_health",
         description: "模型资产面(NMC 多模态)",

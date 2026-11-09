@@ -24,9 +24,11 @@
 //!   不反映长生命周期 TUI 进程的真实状态(TUI 有独立 mesh + bus)。
 //! - **`--fix` 仅修复配置文件**:11 项中仅"配置文件缺失"可自动修复(生成默认 omega.yaml);
 //!   其余项(Cargo.lock / SQLite 路径 / MCP / EventBus / LLM Provider / 认证密钥 / 沙箱 / SCC 缓存 / L3 存储三后端 / 模型资产面)需用户手动处理。
-//! - **LLM 维**走独立 mock 探测(238ms sleep + 50/50 判定)而非调用 `llm::execute`,
-//!   避免 doctor → llm → dispatch → ... 链式回环;真实 mca-gateway 接入在后续 Task 完成。
-//! - **3s 超时**:`tokio::time::timeout` 包裹 LLM 探测,失败不阻塞其余 10 维度的渲染。
+//! - **LLM 维只做配置解析校验，不探测连通性**（ADR-272）：旧实现 sleep 238ms +
+//!   50/50 随机判定并把成功文案写成固定 `ping` 延迟，等于把 mock 伪装成真实 RTT。
+//!   真实 mca-gateway 探测属独立波次，且不应直调 `llm::execute`（回环风险）。
+//! - **探针 IO 纪律**：路径存在性一律 `tokio::fs::try_exists`，写盘经 `spawn_blocking`；
+//!   探针并发执行，同步 IO 会占用 worker（ADR-241 P-08 / ADR-272）。
 
 use anyhow::Result;
 use event_bus::EventBus;
@@ -125,8 +127,8 @@ pub async fn execute_with_ctx(
 /// 索引 tag 设计:每个探针 future 携 `(索引, 结果)`——gather 返回完成序的
 /// values,此处按索引还原注册序,保证报告输出顺序与串行版逐字节一致。
 /// 超时空底:探针恒 `Ok`,值缺失仅源于 gqep 单操作/全局超时,以 FAIL 占位
-/// 保证报告项数恒等于探针数(该 tail 实践中不可达:LLM 探针自带 3s 内部超时,
-/// 其余探针均快路径)。
+/// 保证报告项数恒等于探针数(该 tail 实践中不可达:全部探针为毫秒级快路径,
+/// 无长驻等待——LLM 探针的 238ms mock 睡眠已按 ADR-272 删除)。
 ///
 /// W3-2:探针 0/2 复用 `main` 已加载的 `cfg` 与解析后的配置路径——
 /// 删除探针内两次全量配置加载(debug ≈7.5ms),并修复
@@ -140,8 +142,9 @@ async fn run_probes_parallel(
 ) -> Vec<HealthCheck> {
     const PROBE_COUNT: usize = 11;
 
-    // cfg 以 owned clone 移入 future('static 约束);Clone 代价 = 一次配置结构拷贝,
-    // 远小于 LLM 探针 238ms 睡眠——并行净收益不受影响。
+    // cfg 以 owned clone 移入 future('static 约束);Clone 代价 = 一次配置结构拷贝。
+    // 注:ADR-272 删除了 LLM 探针的 238ms mock 睡眠后，该拷贝在总耗时中的占比上升，
+    // 但仍是常量级；探针并发收益的实测口径见 ADR-272 §6。
     // scc 句柄同理(SccCache Clone = Arc 引用计数,廉价):M13 第 9 探针消费
     // 组合根装配的共享缓存实例,而非探针内自建 ephemeral(那是装配态空转)。
     let cfg_owned = cfg.clone();
@@ -178,8 +181,8 @@ async fn run_probes_parallel(
         Box::pin(async move { Ok((6, check_auth_keys())) }),
         Box::pin(async move { Ok((7, check_seccore())) }),
         Box::pin(async move { Ok((8, check_scc_cache(&scc_owned))) }),
-        Box::pin(async move { Ok((9, check_storage_health(&scc_owned_b))) }),
-        Box::pin(async move { Ok((10, check_model_assets())) }),
+        Box::pin(async move { Ok((9, check_storage_health(&scc_owned_b).await)) }),
+        Box::pin(async move { Ok((10, check_model_assets().await)) }),
     ];
 
     let outcome = ctx.gqep.gather_collected(probes).await;
@@ -220,6 +223,14 @@ use probes::*;
 /// 此处只做可见性放宽，不复制任何行为。
 pub async fn probes_check_sqlite_path(cfg: &ChimeraConfig) -> HealthCheck {
     check_sqlite_path(cfg).await
+}
+
+/// LLM Provider 探针的公开入口（供集成测试验收「诚实 mock 文案」）
+///
+/// 与 [`probes_check_sqlite_path`] 同构的零逻辑转发：判定逻辑仍在
+/// `probes::check_llm_provider`，此处只放宽可见性。
+pub async fn probes_check_llm_provider(cfg: &ChimeraConfig) -> HealthCheck {
+    check_llm_provider(cfg).await
 }
 
 // 人类可读渲染已迁至 `commands/doctor/report.rs`（T2.5 拆分）。
@@ -455,25 +466,22 @@ mod tests {
         assert!(msg.contains("session-store 段目录 就绪"), "{msg}");
     }
 
-    /// 三后端集成:真实 scc 句柄 + 注入目录（tempdir）→ 信号逐项正确
+    /// 三后端信号聚合:就绪布尔注入 → 逐项沉淀。
+    ///
+    /// 路径探测已上移到异步探针（`tokio::fs::try_exists`，ADR-272）;
+    /// 本测只锁「布尔 → 字段 → 判定/文案」这一段纯逻辑。
     #[test]
     fn storage_health_collects_three_backend_signals() {
         let cache = scc_cache::SccCache::new(scc_cache::SccConfig::new(), EventBus::new());
-        let dir = std::env::temp_dir().join(format!("doctor_storage_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let missing = dir.join("definitely-absent");
 
-        let health = collect_storage_health(&cache, &dir, &missing);
+        let health = collect_storage_health(&cache, true, false);
         assert_eq!(health.scc_entries, 0, "装配初期 scc 空仓");
-        assert!(health.cmt_dir_ready, "注入目录存在 → cmt 就绪");
-        assert!(!health.session_dir_ready, "缺失目录 → session 缺席");
+        assert!(health.cmt_dir_ready, "注入就绪 → cmt 就绪");
+        assert!(!health.session_dir_ready, "注入缺席 → session 缺席");
         assert_eq!(health.verdict(), HealthStatus::Warn, "单缺席 → Warn");
 
-        let all_ready = collect_storage_health(&cache, &dir, &dir);
+        let all_ready = collect_storage_health(&cache, true, true);
         assert_eq!(all_ready.verdict(), HealthStatus::Ok, "双就绪 → Ok");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ============================================================
@@ -522,9 +530,9 @@ mod tests {
     }
 
     /// 探针入口:约定路径采集（仓库根跑时 manifest 在位;资产目录通常未 fetch）
-    #[test]
-    fn model_asset_probe_names_and_never_fail() {
-        let check = check_model_assets();
+    #[tokio::test]
+    async fn model_asset_probe_names_and_never_fail() {
+        let check = check_model_assets().await;
         assert_eq!(check.name, "model_asset_health");
         assert_eq!(check.description, "模型资产面(NMC 多模态)");
         assert!(
@@ -563,7 +571,7 @@ mod tests {
     #[tokio::test]
     async fn test_doctor_storage_health_probe_uses_assembled_cache() {
         let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
-        let check = check_storage_health(&ctx.scc);
+        let check = check_storage_health(&ctx.scc).await;
         assert_eq!(check.name, "storage_health");
         assert_eq!(check.description, "L3 存储三后端健康度");
         assert!(
