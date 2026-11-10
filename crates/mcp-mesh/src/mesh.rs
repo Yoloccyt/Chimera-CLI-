@@ -1039,69 +1039,6 @@ impl McpMesh {
     pub fn pending_compensation_count(&self) -> usize {
         self.pending_compensations.len()
     }
-
-    /// 启动后台探活任务(Task 0.7 v2.9.0-omega SubTask 0.7.13)
-    ///
-    /// `tokio::spawn` 一个周期任务,每隔 `config.background_probe_interval_ms`
-    /// 遍历注册表,注销超过 `heartbeat_timeout_ms` 未心跳的僵尸服务器。
-    ///
-    /// # fire-and-forget 评估(§4.4 反模式 #7)
-    ///
-    /// 此任务符合 fire-and-forget 适用条件:
-    /// - **幂等**:注销僵尸服务器是幂等操作(已注销的再次注销无副作用)
-    /// - **非关键路径**:不参与 2PC 事务流程,失败仅导致僵尸服务器占用注册表
-    ///   更长时间(下次探活仍会清理)
-    /// - **不影响数据一致性**:注册表状态可由心跳重建(服务器重新注册即可)
-    ///
-    /// 因此 fire-and-forget 模式可接受,失败仅记日志。`JoinHandle` 返回给调用方
-    /// 以便测试时主动 abort(避免泄漏)。
-    ///
-    /// # 返回
-    /// `Some(JoinHandle)` 表示后台任务已启动;`None` 表示 `background_probe_interval_ms = 0`(禁用)。
-    pub fn start_background_probe(&self) -> Option<JoinHandle<()>> {
-        let interval_ms = self.config.background_probe_interval_ms;
-        if interval_ms == 0 {
-            debug!("background_probe_interval_ms = 0,后台探活禁用");
-            return None;
-        }
-
-        let registry = Arc::clone(&self.registry);
-        let heartbeat_timeout_ms = self.config.heartbeat_timeout_ms;
-
-        Some(tokio::spawn(async move {
-            let interval = Duration::from_millis(interval_ms);
-            info!(
-                interval_ms,
-                heartbeat_timeout_ms, "McpMesh 后台探活任务启动"
-            );
-
-            loop {
-                tokio::time::sleep(interval).await;
-
-                // 遍历所有已注册服务器,注销僵尸
-                let all_ids = registry.list_all();
-                let mut dead_count = 0;
-                for sid in &all_ids {
-                    if let Some(server) = registry.get(sid) {
-                        if !server.is_alive(heartbeat_timeout_ms) {
-                            let _ = registry.unregister(sid);
-                            dead_count += 1;
-                        }
-                    }
-                }
-
-                if dead_count > 0 {
-                    warn!(
-                        cleaned = dead_count,
-                        remaining = registry.len(),
-                        "后台探活清理僵尸服务器"
-                    );
-                } else {
-                    debug!(alive = registry.len(), "后台探活:所有服务器心跳正常");
-                }
-            }
-        }))
-    }
 }
 
 #[cfg(test)]

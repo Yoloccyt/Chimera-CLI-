@@ -59,13 +59,6 @@ pub struct MeshConfig {
     /// 无法在 const 上下文构造,故用 Option。`None` 时由 mesh.rs 启动时解析。
     #[serde(default)]
     pub wal_path: Option<PathBuf>,
-
-    /// 后台探活任务周期(毫秒,Task 0.7 v2.9.0-omega)
-    ///
-    /// 默认 60000(60s)。McpMesh 启动时 spawn 后台任务,周期遍历 `list_alive`
-    /// 清理僵尸服务器(超过 `heartbeat_timeout_ms` 未心跳)。
-    /// 设为 0 则禁用后台探活(仅适合测试场景)。
-    pub background_probe_interval_ms: u64,
 }
 
 impl Default for MeshConfig {
@@ -78,7 +71,6 @@ impl Default for MeshConfig {
             registry_capacity: 256,
             durable: true,
             wal_path: None,
-            background_probe_interval_ms: 60_000,
         }
     }
 }
@@ -99,7 +91,6 @@ mod tests {
         // Task 0.7 v2.9.0-omega 新增字段
         assert!(config.durable, "durable 默认应为 true");
         assert!(config.wal_path.is_none(), "wal_path 默认应为 None");
-        assert_eq!(config.background_probe_interval_ms, 60_000);
     }
 
     #[test]
@@ -112,7 +103,6 @@ mod tests {
             registry_capacity: 512,
             durable: false,
             wal_path: Some(PathBuf::from("/tmp/test.wal")),
-            background_probe_interval_ms: 30_000,
         };
         let json = serde_json::to_string(&config).expect("序列化失败");
         let restored: MeshConfig = serde_json::from_str(&json).expect("反序列化失败");
@@ -123,12 +113,13 @@ mod tests {
         assert_eq!(restored.registry_capacity, 512);
         assert!(!restored.durable);
         assert_eq!(restored.wal_path, Some(PathBuf::from("/tmp/test.wal")));
-        assert_eq!(restored.background_probe_interval_ms, 30_000);
     }
 
     #[test]
     fn test_config_serde_backward_compatible_wal_path_default() {
-        // 旧配置文件不含 wal_path 字段,反序列化时应使用默认值 None
+        // 旧配置文件不含 wal_path 字段,反序列化时应使用默认值 None；
+        // 同时验证 ADR-283 删除的 background_probe_interval_ms 字段被容忍
+        // （MeshConfig 无 deny_unknown_fields，旧文件含该字段仍可读）。
         let old_json = r#"{
             "transaction_timeout_ms": 200,
             "heartbeat_timeout_ms": 5000,
