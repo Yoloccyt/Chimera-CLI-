@@ -1,0 +1,95 @@
+# 性能契约实跑门 —— 让「已声明的 [[redline]] / [[slo]]」真的被测量
+# =============================================================================
+# 背景（本 workflow 存在的理由，全部有 2026-11-10 实测出处）：
+#   ① 11 条 [[redline]] 中 9 条的指标既无 thresholds_ns 键、其 bench 也不在
+#      run_bench —— 静态 lint（文件/fn/阈值标记存在）全绿，数值从未被断言；
+#   ② 6 条 [[slo]] 中 5 条的 bench 不在 run_bench，且 check_perf_redlines.py 的
+#      `slo` 模式**没有任何 workflow 调用者** —— 实跑断言的代码存在但从不运行；
+#   ③ mode_slo 旧实现把「redline < measured <= SLO」也打印 PASS，80% 红线是标签
+#      不是门（ADR-278 已修为阻断，本 workflow 是其唯一 CI 执行面）。
+#
+# 归属真值源：scripts/perf_redlines.toml 的 [[slo]] / [[redline_exec]] / [[excluded]]
+#   - 本文件不写死 bench 清单，只调用两个模式；
+#   - 「声明了但无执行路径」由不变式 I11 判红（scripts/check_perf_redlines.py）。
+#
+# 观察期（当前状态）：perf-contract-exec 为 continue-on-error: true。
+#   ⏱ 切换阻塞条件：连续 2 晚全绿且无 SKIP（rc=2）后，把该 job 改为 false，
+#      并在 ADR-278 记录切换提交。SKIP 表示判据未命中预期对象 —— 不得以放宽
+#      filter/阈值的方式消掉它，应修正 filter 或登记 [[excluded]]（owner+expiry）。
+# =============================================================================
+name: Perf contract execution (SLO + RL)
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: perf-contract-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 静态契约自证：秒级、无 cargo 调用、阻塞
+  # ---------------------------------------------------------------------------
+  perf-contract-static:
+    name: Perf contract static invariants (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Static gates (lint + inventory + invariants + ignored)
+        run: python3 scripts/check_perf_redlines.py --static-only
+
+  # ---------------------------------------------------------------------------
+  # 实跑契约：criterion bench 断言（SLO 80% 红线 + RL assert_ns）
+  # ---------------------------------------------------------------------------
+  perf-contract-exec:
+    name: Perf contract execution (slo + redline)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # 观察期：先积累读数，再切阻塞（条件见文件头）。
+    continue-on-error: true
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_CACHE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # 与 ci.yml / slo.yml 同口径钉定工具链：阈值是绝对时间，编译器版本
+      # 直接改变内联/向量化决策，浮动 stable 会让红/绿不可归因到代码。
+      - uses: dtolnay/rust-toolchain@1.97.1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: Swatinem/rust-cache@v2 # zizmor: ignore[cache-poisoning]
+        with:
+          workspaces: '.'
+
+      - name: Setup sccache
+        uses: mozilla/sccache-action@v0.0.11
+
+      # SKIP（rc=2）意味着 filter 没命中预期对象 —— 门未运行，不等于绿。
+      # 两个步骤都不加 `|| true`：rc 由门自己编码（0/1/2），观察期由 job 级
+      # continue-on-error 承担，红/绿语义不被 shell 吞掉。
+      - name: SLO bench assertions (80% redline is the gate)
+        run: python3 scripts/check_perf_redlines.py slo
+
+      - name: Red-line bench assertions (assert_ns)
+        run: python3 scripts/check_perf_redlines.py redline

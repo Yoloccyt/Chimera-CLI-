@@ -90,7 +90,11 @@ threshold = "SSE_EVENT_TARGET_US"
 name = "window_select"
 crate = "hcw-window"
 bench_file = "window_select"
-filter = "window_select/"
+# 单值过滤器（ADR-278）：该 group 有 4 个档位（L0_4K/L1_32K/L2_128K/L3_1M）。
+# 旧值 "window_select/" 命中 4 条 benchmark，而旧 mode_slo 只读**第一条**
+# （恰好是最轻档 L0_4K）—— 等于 SLO 在断言最便宜的场景。取最重档 L3_1M 作保守判据，
+# 与 decay_compute 取 aggressive 同一原则；0/多命中一律 rc=2（不可判定）。
+filter = "window_select/L3_1M"
 slo_sec = 0.001000000
 redline_sec = 0.000800000
 unit = "ms"
@@ -157,4 +161,110 @@ redline_sec = 0.000040000
 unit = "us"
 slo_display = "50us"
 redline_display = "40us"
+
+# ============================================================================
+# [[redline_exec]] / [[excluded]] — 红线的**运行期执行映射**（ADR-278，不变式 I11）
+#
+# 为什么需要：[[redline]] 自带的三项静态 lint 只证明「文件 / fn / 阈值标记存在」，
+# 不证明该指标**被任何命令测量过**。实测（2026-11-10）：11 条 redline 中 9 条的
+# 指标既无 thresholds_ns 键、其 bench 也不在 run_bench —— 静态 lint 全绿，数值
+# 从未被断言。I11 要求每条 [[redline]] 恰好满足以下之一：
+#   - [[redline_exec]] 映射到真实执行面（bench / slo / nextest）
+#   - [[excluded]] 显式豁免（owner + expiry + reason，只减不增）
+#
+# surface 取值：
+#   bench    —— 由 mode_redline 直接跑 criterion bench，按 assert_ns 断言
+#   slo      —— 复用 [[slo]] 的实跑断言（同一 bench 同一 filter，避免重复执行）
+#   nextest  —— 由 slo.yml 的 -E 过滤器执行的 #[ignore] p95 测试
+# assert_ns —— 运行期阈值（纳秒），仅 surface=bench 必填
+# filter    —— criterion benchmark id；必须**恰好匹配 1 条 time 行**，
+#              0 条或多于 1 条 ⇒ mode_redline 退 2（不可判定，不冒充绿）
+# ============================================================================
+
+[[redline_exec]]
+id = "RL-01"
+surface = "bench"
+crate = "chimera-mas"
+bench = "mas_benchmark"
+filter = "window_select/l3_ultra_complex"
+assert_ns = 1000000
+
+[[redline_exec]]
+id = "RL-02"
+surface = "bench"
+crate = "chimera-mas"
+bench = "mas_benchmark"
+filter = "mlc_l2_knn_top10_4096/top10"
+assert_ns = 5000000
+
+[[redline_exec]]
+id = "RL-03"
+surface = "bench"
+crate = "decay-engine"
+bench = "decay_bench"
+filter = "single_decay_step_latency/time_decay"
+assert_ns = 1000
+
+[[redline_exec]]
+id = "RL-04"
+surface = "bench"
+crate = "repo-wiki"
+bench = "vector_bench"
+filter = "single_thread_knn_latency/1000"
+assert_ns = 10000000
+
+[[redline_exec]]
+id = "RL-05"
+surface = "nextest"
+crate = "repo-wiki"
+test = "test_hnsw_10k_p95_below_50ms"
+workflow = "slo.yml"
+
+[[redline_exec]]
+id = "RL-06"
+surface = "nextest"
+crate = "repo-wiki"
+test = "test_hnsw_100k_p95_below_50ms"
+workflow = "slo.yml"
+
+[[redline_exec]]
+id = "RL-07"
+surface = "bench"
+crate = "event-bus"
+bench = "membrane_delivery_bench"
+filter = "membrane_e2e_delivery/publish_to_recv"
+assert_ns = 10000000
+
+[[redline_exec]]
+id = "RL-09"
+surface = "slo"
+slo = "linucb_40arm"
+
+[[redline_exec]]
+id = "RL-10"
+surface = "bench"
+crate = "mca-gateway"
+bench = "mca_hot_paths"
+filter = "cost_estimate_1m_tokens_peak"
+assert_ns = 1000
+
+[[redline_exec]]
+id = "RL-11"
+surface = "bench"
+crate = "mca-gateway"
+bench = "mca_hot_paths"
+filter = "sse_normalize_100_text_deltas"
+# 量纲换算（2026-11-10 实测纠正）：redline 原文是「<5us/**事件**」，而该 bench
+# 每次迭代喂 **100 帧**（mca_hot_paths.rs 的 for i in 0..100）。直接拿 5us 当
+# 批量阈值会把 1.07us/事件 实测误判成 107us 超限。批量阈值 = 5us × 100。
+assert_ns = 500000
+
+# RL-08 = 50 agent 内存峰值 <=130MB。它不是时间阈值，无法用 criterion time 断言；
+# 且其真实构造轨阻塞于「MAS 多 Agent 常驻进入生产」（ADR-263 D3），当前为公式估算。
+# 到期后必须重新裁决：接线（新增内存采样断言）或续期（附新证据）。
+[[excluded]]
+id = "RL-08"
+owner = "nexus-omega"
+expiry = "2026-12-31"
+reason = "memory-peak metric (MB) is not expressible as criterion time; real 50-agent construction is blocked on MAS production residency (ADR-263 D3)"
 

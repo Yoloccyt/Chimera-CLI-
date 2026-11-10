@@ -10,6 +10,7 @@
   thresholds  解析 target/criterion/**/new/estimates.json 并断言 36 项阈值
   compare     双跑比对 heredoc 输出(--legacy-out)与 py 核结果, 逐键必须一致
   slo         Part 2: 实跑 criterion bench 并对 80% 红线断言 (需 cargo bench)
+  redline     Part 2b: 实跑 [[redline_exec]] 的 bench 条目并按 assert_ns 断言
   ignored     #[ignore] 测试归属登记门 (slo-blocking/slo-daily/unignore/manual-only)
   emit-ignored 打印尚未登记的 #[ignore] 测试行（供登记表增量维护）
   emit-slo-filter 从归属清单生成 slo-blocking 集的 nextest -E 过滤器表达式
@@ -70,6 +71,10 @@ BENCH_FREEZE_PATH = os.path.join(HERE, "bench_inventory_freeze.txt")
 IGNORED_FREEZE_PATH = os.path.join(HERE, "ignored_test_inventory_freeze.txt")
 # I7 的比对对象: CI 侧真实执行 bench 的清单所在 workflow
 BENCH_WORKFLOW_PATH = os.path.join(ROOT, ".github", "workflows", "bench_check.yml")
+# I11 的比对对象: 红线/SLO 的**实跑**工作流（mode_slo + mode_redline 的 CI 调用者）
+PERF_EXEC_WORKFLOW_PATH = os.path.join(ROOT, ".github", "workflows", "perf_redline.yml")
+# RL-05/06 的 nextest 执行归属（slo.yml 的 -E 过滤器）
+SLO_WORKFLOW_PATH = os.path.join(ROOT, ".github", "workflows", "slo.yml")
 
 # criterion 单位 -> 秒的乘数。三态微符号 (U+00B5 / U+03BC / ASCII u) 必须兼容:
 # criterion 以 UTF-8 输出 "µs", 若宿主按 GBK 解码会得到 "μs"(U+03BC), 而老脚本
@@ -93,6 +98,14 @@ def load_toml(path):
         sys.exit(2)
     with open(path, "rb") as fh:
         return tomllib.loads(fh.read().decode("utf-8-sig"))
+
+
+def _read_text(path):
+    """读取 UTF-8(-BOM) 文本；缺文件返回空串（由调用方决定如何判定）。"""
+    if not os.path.exists(path):
+        return ""
+    with open(path, encoding="utf-8-sig") as fh:
+        return fh.read()
 
 
 def read_pipe_table(path):
@@ -327,8 +340,11 @@ def mode_invariants(redlines, thresholds_doc, freeze):
             print(f"         overlap: {a} in {b}")
 
     # I3 registered 双向等价 (由 inventory 的 STALE 检查覆盖, 此处断言集合非空)
-    reg_pairs = {(rb["crate"], rb["bench"]) for rb in thresholds_doc.get("run_bench", [])}
-    if not _check(f"I3 run_bench list non-empty and pair-unique ({len(reg_pairs)})",
+    # 身份 = (crate, bench, alias): 同一 bench 允许多个 filter 分组（各用独立 alias），
+    # 旧的 (crate, bench) 集合会把它们折叠成一条，令分组增删不可见。
+    reg_pairs = {(rb["crate"], rb["bench"], rb.get("alias", ""))
+                 for rb in thresholds_doc.get("run_bench", [])}
+    if not _check(f"I3 run_bench list non-empty and triple-unique ({len(reg_pairs)})",
                   reg_pairs):
         fails += 1
 
@@ -362,6 +378,25 @@ def mode_invariants(redlines, thresholds_doc, freeze):
                   not pk_problems):
         fails += 1
         for p in pk_problems:
+            print(f"         {p}")
+
+    # I11 性能契约可执行性（ADR-278）: 每条 redline/slo 必须有运行期执行面或显式豁免。
+    # WHY: [[redline]] 的静态 lint 只证明「文件/fn/阈值标记存在」——实测 9/11 条
+    # 既无 thresholds_ns 键、其 bench 也不在 run_bench，11 条静态全绿而数值从未断言。
+    # 本断言把「声明了就要跑」从注释变成判据；豁免必须带 owner + expiry + reason。
+    ce_problems = contract_exec_problems(
+        redlines,
+        {(c, b) for c, b, _rel in bench_inventory()},
+        _read_text(SLO_WORKFLOW_PATH),
+        _read_text(PERF_EXEC_WORKFLOW_PATH),
+    )
+    n_exec = len(redlines.get("redline_exec", []))
+    n_excl = len(redlines.get("excluded", []))
+    if not _check(
+            f"I11 every redline/slo has an execution path or exclusion "
+            f"(exec={n_exec} excluded={n_excl})", not ce_problems):
+        fails += 1
+        for p in ce_problems:
             print(f"         {p}")
 
     # I4 兜底债棘轮: 列表只减不增, 且列表内每项当前值必须仍是 100ms 兜底
@@ -558,12 +593,22 @@ def ci_runbench_sync(workflow_path, run_bench_entries):
         return [f"workflow not found: {os.path.relpath(workflow_path, ROOT)}"]
     with open(workflow_path, encoding="utf-8-sig") as fh:
         text = fh.read()
-    ci = {(m.group(2), m.group(3)): m.group(1) for m in CI_RUNBENCH_RE.finditer(text)}
-    table = {(e.get("crate"), e.get("bench")): e.get("alias") for e in run_bench_entries}
-    problems = [f"run by CI but absent from [[run_bench]]: {k}" for k in sorted(set(ci) - set(table))]
-    problems += [f"registered in [[run_bench]] but never run by CI: {k}" for k in sorted(set(table) - set(ci))]
-    problems += [f"alias drift: {k} ci={ci[k]} table={table[k]}"
-                 for k in sorted(set(ci) & set(table)) if ci[k] != table[k]]
+    # 以三元组为身份: 同一 (crate, bench) 允许有多个 filter 分组（各用不同 alias）。
+    # 旧的 (crate, bench) 字典会把它们静默折叠成"最后一个 alias"（与 I3 同病灶）。
+    ci = {(m.group(2), m.group(3), m.group(1)) for m in CI_RUNBENCH_RE.finditer(text)}
+    table = {(e.get("crate"), e.get("bench"), e.get("alias")) for e in run_bench_entries}
+    problems = []
+    ci_pairs = {(c, b) for c, b, _a in ci}
+    table_pairs = {(c, b) for c, b, _a in table}
+    problems += [f"registered in [[run_bench]] but never run by CI: {p}"
+                 for p in sorted(table_pairs - ci_pairs)]
+    problems += [f"run by CI but absent from [[run_bench]]: {p}"
+                 for p in sorted(ci_pairs - table_pairs)]
+    for pair in sorted(ci_pairs & table_pairs):
+        ci_aliases = sorted(a for c, b, a in ci if (c, b) == pair)
+        table_aliases = sorted(a for c, b, a in table if (c, b) == pair)
+        if ci_aliases != table_aliases:
+            problems.append(f"alias drift: {pair} ci={ci_aliases} table={table_aliases}")
     return problems
 
 
@@ -651,6 +696,107 @@ def ci_pathkeywords_dict_present(workflow_path):
         return False
     with open(workflow_path, encoding="utf-8-sig") as fh:
         return bool(CI_PATHKEYWORDS_DICT_RE.search(fh.read()))
+
+
+def contract_exec_problems(redlines, bench_pairs, slo_wf_text, exec_wf_text,
+                           today=None):
+    """I11 判定内核（纯函数）—— 「每条性能契约都有运行期执行面或显式豁免」。
+
+    WHY 单列成纯函数：负向夹具必须能只改被测那一条（F67 的教训），
+    而真实判定只有一份（F66「同构靠人工维持」的反面）。selftest 以纯文本构造
+    workflow，零文件 I/O。
+
+    参数:
+      redlines     perf_redlines.toml 的解析结果（redline/slo/redline_exec/excluded）
+      bench_pairs  盘上真实存在的 (crate, bench_stem) 集合
+      slo_wf_text  slo.yml 原文（RL-05/06 的 nextest 目标必须出现在其 -E 过滤器里）
+      exec_wf_text perf_redline.yml 原文（必须真的调用 `check_perf_redlines.py slo`）
+      today        日期（注入以便夹具构造"已过期"）
+
+    返回问题串列表；空 = 通过。
+    """
+    import datetime
+
+    if today is None:
+        today = datetime.date.today()
+    problems = []
+    redline_ids = [r["id"] for r in redlines.get("redline", [])]
+    slo_names = [s["name"] for s in redlines.get("slo", [])]
+    known = set(redline_ids) | set(slo_names)
+    execs = redlines.get("redline_exec", [])
+    excluded = redlines.get("excluded", [])
+    exec_ids = [e.get("id", "?") for e in execs]
+    excl_ids = [e.get("id", "?") for e in excluded]
+
+    for dup in sorted({i for i in exec_ids if exec_ids.count(i) > 1}):
+        problems.append(f"duplicate [[redline_exec]] id: {dup}")
+    for dup in sorted({i for i in excl_ids if excl_ids.count(i) > 1}):
+        problems.append(f"duplicate [[excluded]] id: {dup}")
+    for i in sorted(set(exec_ids) & set(excl_ids)):
+        problems.append(f"id is both executed and excluded: {i}")
+    for i in sorted((set(exec_ids) | set(excl_ids)) - known):
+        problems.append(f"exec/excluded maps unknown id: {i}")
+
+    # 每条 redline 必须有运行期执行面或显式豁免
+    for rid in redline_ids:
+        if rid not in exec_ids and rid not in excl_ids:
+            problems.append(f"redline has no execution path and no exclusion: {rid}")
+
+    # 每条 SLO 由 mode_slo 执行 —— 工作流必须真的调用它（否则 mode_slo 又是"写了不跑"）
+    slo_wired = bool(re.search(r"check_perf_redlines\.py\s+slo\b", exec_wf_text))
+    for name in slo_names:
+        if name in excl_ids:
+            continue
+        if not slo_wired:
+            problems.append(
+                "SLO has no execution caller "
+                "(perf_redline.yml must run `check_perf_redlines.py slo`): "
+                f"{name}")
+
+    for e in execs:
+        rid = e.get("id", "?")
+        surface = e.get("surface", "")
+        if surface == "bench":
+            for k in ("crate", "bench", "filter"):
+                if not e.get(k):
+                    problems.append(f"{rid}: surface=bench missing {k}")
+            if e.get("crate") and e.get("bench") and \
+                    (e["crate"], e["bench"]) not in bench_pairs:
+                problems.append(
+                    f"{rid}: bench file not found: {e['crate']}/{e['bench']}")
+            try:
+                if int(e.get("assert_ns", 0)) <= 0:
+                    problems.append(f"{rid}: assert_ns must be > 0")
+            except (TypeError, ValueError):
+                problems.append(f"{rid}: assert_ns is not an integer")
+        elif surface == "slo":
+            if e.get("slo") not in slo_names:
+                problems.append(f"{rid}: references unknown SLO: {e.get('slo')}")
+        elif surface == "nextest":
+            test = e.get("test", "")
+            if not test:
+                problems.append(f"{rid}: surface=nextest missing test")
+            elif test not in slo_wf_text:
+                problems.append(
+                    f"{rid}: nextest target not present in slo.yml filter: {test}")
+        else:
+            problems.append(f"{rid}: unknown surface: {surface}")
+
+    for e in excluded:
+        rid = e.get("id", "?")
+        for k in ("owner", "expiry", "reason"):
+            if not e.get(k):
+                problems.append(f"{rid}: exclusion missing {k}")
+        exp = e.get("expiry", "")
+        try:
+            exp_date = datetime.date.fromisoformat(exp)
+        except (TypeError, ValueError):
+            problems.append(f"{rid}: exclusion expiry is not ISO date: {exp!r}")
+            continue
+        if exp_date < today:
+            problems.append(
+                f"{rid}: exclusion expired on {exp} (owner={e.get('owner', '?')})")
+    return problems
 
 
 def keyword_overlaps(kw):
@@ -915,6 +1061,38 @@ def parse_criterion_time(txt):
         return None
 
 
+def slo_verdict(est_sec, redline_sec, slo_sec):
+    """SLO 三态判决：'pass' | 'fail_redline' | 'fail_slo'。
+
+    WHY 单列成纯函数：80% 红线是门还是标签，必须能被 selftest 零 I/O 断言；
+    旧实现把「redline < measured <= SLO」也打印 PASS，等于把门降级成注释。
+    """
+    if est_sec <= redline_sec:
+        return "pass"
+    if est_sec <= slo_sec:
+        return "fail_redline"
+    return "fail_slo"
+
+
+def single_criterion_time(out):
+    """从 cargo/criterion 输出取**唯一**一条可解析为时长的 time 行；否则 None。
+
+    WHY 不能只数 `time:` 行：存在 baseline 时 criterion 会额外打印 `change:` 块，
+    其内也含 `time: [-21.964% -20.163% -18.289%]`（单位是 %，不是时长）。旧实现
+    「恰好 1 条 time 行」会把带 baseline 的正常运行误判成不可判定（RL-07 实测：
+    cargo exit=0 却 SKIP）。因此先逐个 parse，单位不在 UNIT_TO_SEC 的自然被排除。
+    0 或多于 1 条**可解析测量** ⇒ None（不可判定），不把 filter 失配冒充成绿。
+    """
+    parsed = []
+    for body in re.findall(r"time:\s+\[([^\]]+)\]", out):
+        pu = parse_criterion_time(body)
+        if pu is not None and pu[1] in UNIT_TO_SEC:
+            parsed.append(pu)
+    if len(parsed) != 1:
+        return None
+    return parsed[0]
+
+
 def mode_slo(redlines):
     """实跑 criterion bench, 解析 'time: [lo est up unit]' 并对 80% 红线断言。
 
@@ -933,17 +1111,12 @@ def mode_slo(redlines):
         proc = subprocess.run(cmd, capture_output=True, text=True,
                               encoding="utf-8", errors="replace", cwd=ROOT)
         out = (proc.stdout or "") + (proc.stderr or "")
-        m = re.search(r"time:\s+\[([^\]]+)\]", out)
-        if not m:
-            skipped += 1
-            print("    [SKIP] no criterion time output "
-                  f"(cargo exit={proc.returncode}; bench may have failed to compile)")
-            continue
-        vals = m.group(1)
-        pu = parse_criterion_time(vals)
+        # 恰好 1 条 time 行（single_criterion_time）；0/多 ⇒ rc=2，不冒充绿。
+        pu = single_criterion_time(out)
         if pu is None:
             skipped += 1
-            print(f"    [SKIP] unparsable criterion line: {vals!r}")
+            print(f"    [SKIP] expected exactly 1 parsable criterion time line "
+                  f"(cargo exit={proc.returncode}; filter={slo['filter']!r})")
             continue
         estimate, unit = pu
         if unit not in UNIT_TO_SEC:
@@ -952,16 +1125,75 @@ def mode_slo(redlines):
             continue
         est_sec = estimate * UNIT_TO_SEC[unit]
         print(f"    measured: {estimate:g} {unit} = {est_sec:.9f} s")
-        if est_sec <= slo["redline_sec"]:
+        # 80% 红线是**门**，不是标签：文件头部与 mode_slo docstring 都如此声明。
+        # 旧实现把「redline < measured <= SLO」也打印 PASS，等于把 80% 线降级成注释；
+        # 若某条在 80% 处不稳定，正确做法是登记 [[excluded]]（owner+expiry），
+        # 而不是把阈值改成 100%（那会让门与文档再次分叉）。
+        verdict = slo_verdict(est_sec, slo["redline_sec"], slo["slo_sec"])
+        if verdict == "pass":
             print("    [PASS] below redline")
-        elif est_sec <= slo["slo_sec"]:
-            print("    [PASS] above redline but within SLO")
         else:
             fails += 1
-            print(f"    [FAIL] exceeds SLO ({slo['slo_display']})")
+            if verdict == "fail_redline":
+                print(f"    [FAIL] exceeds redline ({slo['redline_display']}), "
+                      f"within SLO ({slo['slo_display']})")
+            else:
+                print(f"    [FAIL] exceeds SLO ({slo['slo_display']})")
     print(f"\n  summary: failed={fails} skipped={skipped}")
     # 三态方言（深审 2026-09-25）：SKIP 意味着该条目未被测量，
     # 存在 SKIP 时零判定不得冒充全绿（"证不了自身读数的门不如无门"）。
+    if fails:
+        return rc_from_findings(fails)
+    if skipped:
+        return 2
+    return 0
+
+
+def mode_redline(redlines):
+    """实跑 [[redline_exec]] 中 surface=bench 的条目，并按 assert_ns 断言（ADR-278）。
+
+    为什么需要：[[redline]] 的静态 lint 只证明「文件/fn/阈值标记存在」，
+    本模式是「红线数值真的被测量」的唯一执行面。criterion 输出必须恰好 1 条
+    time 行；0 或多于 1 条 ⇒ rc=2（不可判定），不把 filter 失配冒充成绿。
+    """
+    import subprocess
+
+    execs = [e for e in redlines.get("redline_exec", [])
+             if e.get("surface") == "bench"]
+    if not execs:
+        print("[UNDECIDABLE] no [[redline_exec]] surface=bench entries")
+        return 2
+    print("=== Red-line runtime assertions (criterion time vs assert_ns) ===")
+    fails = skipped = 0
+    for e in execs:
+        rid = e["id"]
+        limit_ns = int(e["assert_ns"])
+        print(f"\n  [{rid}] {e['crate']}/{e['bench']} filter={e['filter']} "
+              f"(assert <= {_fmt_ns(limit_ns)})")
+        cmd = ["cargo", "bench", "--package", e["crate"], "--bench", e["bench"],
+               "--", "--noplot", "--quick", e["filter"]]
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", cwd=ROOT)
+        out = (proc.stdout or "") + (proc.stderr or "")
+        pu = single_criterion_time(out)
+        if pu is None:
+            skipped += 1
+            print(f"    [SKIP] expected exactly 1 parsable criterion time line "
+                  f"(cargo exit={proc.returncode}; filter={e['filter']!r})")
+            continue
+        estimate, unit = pu
+        if unit not in UNIT_TO_SEC:
+            skipped += 1
+            print(f"    [SKIP] unknown unit {unit!r} - extend UNIT_TO_SEC deliberately")
+            continue
+        est_ns = estimate * UNIT_TO_SEC[unit] * 1e9
+        print(f"    measured: {estimate:g} {unit} = {est_ns:.0f} ns")
+        if est_ns <= limit_ns:
+            print("    [PASS] below assert_ns")
+        else:
+            fails += 1
+            print(f"    [FAIL] exceeds assert_ns ({_fmt_ns(limit_ns)})")
+    print(f"\n  summary: failed={fails} skipped={skipped}")
     if fails:
         return rc_from_findings(fails)
     if skipped:
@@ -1455,6 +1687,88 @@ def mode_selftest():
                ci_pathkeywords_key_sync(BENCH_WORKFLOW_PATH,
                                         set(load_toml(THRESHOLDS_PATH)["path_keywords"])), [])
 
+        # 断言 23a-23i：I11 性能契约可执行性（ADR-278）。
+        # 纯函数夹具：零 cargo、零文件 I/O，只破坏被测那一条（F67 纪律）。
+        def _ce(rule, bench_pairs=None, slo_wf="", exec_wf=""):
+            return contract_exec_problems(rule, bench_pairs or set(), slo_wf, exec_wf)
+
+        ce_clean = {
+            "redline": [{"id": "R1"}],
+            "slo": [{"name": "S1"}],
+            "redline_exec": [{"id": "R1", "surface": "bench", "crate": "c",
+                              "bench": "b", "filter": "f", "assert_ns": 1000}],
+            "excluded": [],
+        }
+        ce_wired = "python3 scripts/check_perf_redlines.py slo\n"
+        expect("selftest-23a I11 clean when every contract has an execution path",
+               _ce(ce_clean, {("c", "b")}, "", ce_wired), [])
+        ce_noexec = copy.deepcopy(ce_clean)
+        ce_noexec["redline_exec"] = []
+        expect("selftest-23b I11 fatal when a redline has no execution path",
+               any("no execution path" in p
+                   for p in _ce(ce_noexec, {("c", "b")}, "", ce_wired)), True)
+        ce_unknown = copy.deepcopy(ce_clean)
+        ce_unknown["redline_exec"][0]["id"] = "R2"
+        expect("selftest-23c I11 fatal when exec maps an unknown id",
+               any("maps unknown id" in p
+                   for p in _ce(ce_unknown, {("c", "b")}, "", ce_wired)), True)
+        ce_noowner = copy.deepcopy(ce_clean)
+        ce_noowner["redline_exec"] = []
+        ce_noowner["excluded"] = [{"id": "R1", "owner": "", "expiry": "2099-01-01",
+                                   "reason": "x"}]
+        expect("selftest-23d I11 fatal when an exclusion has no owner",
+               any("missing owner" in p
+                   for p in _ce(ce_noowner, {("c", "b")}, "", ce_wired)), True)
+        ce_expired = copy.deepcopy(ce_noowner)
+        ce_expired["excluded"][0]["owner"] = "o"
+        ce_expired["excluded"][0]["expiry"] = "2000-01-01"
+        expect("selftest-23e I11 fatal when an exclusion is expired",
+               any("expired" in p
+                   for p in _ce(ce_expired, {("c", "b")}, "", ce_wired)), True)
+        expect("selftest-23f I11 fatal when the bench target is missing",
+               any("bench file not found" in p
+                   for p in _ce(ce_clean, set(), "", ce_wired)), True)
+        expect("selftest-23g I11 fatal when perf_redline.yml never calls `slo`",
+               any("no execution caller" in p
+                   for p in _ce(ce_clean, {("c", "b")}, "", "")), True)
+        ce_dup = copy.deepcopy(ce_clean)
+        ce_dup["redline_exec"].append(copy.deepcopy(ce_dup["redline_exec"][0]))
+        expect("selftest-23h I11 fatal on duplicate exec id",
+               any("duplicate [[redline_exec]]" in p
+                   for p in _ce(ce_dup, {("c", "b")}, "", ce_wired)), True)
+        # 产环境对账：真实表 + 真实 workflow + 真实 bench 清单必须全可执行。
+        expect("selftest-23i real perf tables are fully executable",
+               contract_exec_problems(
+                   real_rl, {(c, b) for c, b, _r in bench_inventory()},
+                   _read_text(SLO_WORKFLOW_PATH),
+                   _read_text(PERF_EXEC_WORKFLOW_PATH)),
+               [])
+
+        # 断言 24a-24e：SLO 判决语义（ADR-278）—— 80% 红线是门不是标签；
+        # 多 time 行必须不可判定而不是"读第一条"。
+        expect("selftest-24a SLO below redline passes",
+               slo_verdict(0.5, 0.8, 1.0), "pass")
+        expect("selftest-24b SLO between redline and SLO is RED (80% is a gate)",
+               slo_verdict(0.9, 0.8, 1.0), "fail_redline")
+        expect("selftest-24c SLO above SLO is RED",
+               slo_verdict(1.1, 0.8, 1.0), "fail_slo")
+        one_time = "  time:   [1.0000 ms 1.1000 ms 1.2000 ms]\n"
+        two_time = one_time + "  time:   [2.0000 ms 2.1000 ms 2.2000 ms]\n"
+        expect("selftest-24d exactly one time line is parsed",
+               single_criterion_time(one_time) is not None, True)
+        expect("selftest-24e zero or multiple parsable measurements are undecidable",
+               (single_criterion_time(""), single_criterion_time(two_time)),
+               (None, None))
+        # 24f：有 baseline 时 criterion 会多打一个 change: 块（单位 %），
+        # 它不是时长测量；旧「数 time 行」实现会把正常运行误判成不可判定（RL-07 实测）。
+        change_block = (
+            "                 change:\n"
+            "                        time:   [-21.964% -20.163% -18.289%] "
+            "(p = 0.05 > 0.05)\n"
+        )
+        expect("selftest-24f criterion change block does not make the measurement ambiguous",
+               single_criterion_time(one_time + change_block), (1.1, "ms"))
+
         # 断言 12/13：入口契约（F18 + F29）—— 过了 main() 的码才算数，
         # 只在注释里写"0=通过/1=违反/2=不可判定"不算（那是另一道"写了不跑"）。
         # 12：拼错的旗标必退 2（不可判定），而不是静默降级去跑默认模式拿一份没请求的判定。
@@ -1552,7 +1866,7 @@ def main(argv):
               "[--selftest|--static-only|MODE] [--json] [--strict] "
               "[--criterion-dir D] [--legacy-out F]")
         print("  MODE = all|static|lint|inventory|invariants|thresholds|compare|"
-              "slo|ignored|emit-ignored|emit-slo-filter|emit-overlaps")
+              "slo|redline|ignored|emit-ignored|emit-slo-filter|emit-overlaps")
         print(f"[UNDECIDABLE] 未知旗标: {' '.join(unknown)} —— 未执行任何判据；"
               "不把拼错的旗标降级成「跑默认模式」")
         return 2
@@ -1619,6 +1933,8 @@ def main(argv):
         return mode_compare(thresholds_doc, criterion_dir, legacy_out)
     if mode == "slo":
         return mode_slo(redlines)
+    if mode == "redline":
+        return mode_redline(redlines)
     if mode == "ignored":
         return mode_ignored()
     if mode == "emit-ignored":
