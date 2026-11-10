@@ -240,21 +240,51 @@ pub trait ParticipantClient: Send + Sync {
 /// delay_ms = 1 + (server_id.bytes().fold(0, |acc, b| acc + b as u64) % 2)
 /// ```
 /// 这确保不同服务器有确定性但不同的延迟,模拟真实网络异构性。
-#[derive(Debug, Clone, Default)]
-pub struct InProcessClient;
+#[derive(Debug, Clone)]
+pub struct InProcessClient {
+    /// `true` = 保留 1-2ms 模拟网络延迟（测试夹具）；`false` = 零延迟（生产进程内）。
+    simulate_latency: bool,
+}
+
+impl Default for InProcessClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl InProcessClient {
-    /// 创建进程内 mock 客户端
+    /// 创建进程内 mock 客户端，**保留** 1-2ms 模拟网络延迟。
+    ///
+    /// 测试夹具依赖该延迟模拟真实网络异构性；生产进程内路径请用 [`Self::instant`]。
     pub fn new() -> Self {
-        Self
+        Self {
+            simulate_latency: true,
+        }
+    }
+
+    /// 进程内**生产**路径：零模拟延迟。
+    ///
+    /// WHY：进程内没有网络，模拟 RTT 是纯虚构工作 —— 一次 `mcp call` 的
+    /// prepare + commit 会白付 2–4ms（ADR-280）。测试夹具继续用 [`Self::new`]，
+    /// 以保留「不同 server_id 有不同延迟」的确定性。
+    pub fn instant() -> Self {
+        Self {
+            simulate_latency: false,
+        }
     }
 
     /// 基于 server_id 哈希计算模拟延迟(1-2ms,确定性)
     ///
     /// WHY 哈希:与原 `prepare_phase` 占位实现一致,保持向后兼容。
-    /// 不同 server_id 产生不同延迟,模拟网络异构性,但不引入随机性(测试确定性)。
+    /// 不同 server_id 产生不同延迟,模拟真实网络异构性,但不引入随机性(测试确定性)。
     fn simulated_delay_ms(server_id: &str) -> u64 {
         1 + (server_id.bytes().fold(0u64, |acc, b| acc + b as u64) % 2)
+    }
+
+    /// 本次调用应等待的模拟延迟；`instant()` 返回 `None`（零等待）。
+    fn delay_for(&self, server_id: &str) -> Option<Duration> {
+        self.simulate_latency
+            .then(|| Duration::from_millis(Self::simulated_delay_ms(server_id)))
     }
 }
 
@@ -266,9 +296,11 @@ impl ParticipantClient for InProcessClient {
         _op: &'a str,
         _args: &'a [String],
     ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
-        let delay_ms = Self::simulated_delay_ms(&server.server_id);
+        let delay = self.delay_for(&server.server_id);
         Box::pin(async move {
-            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            if let Some(d) = delay {
+                tokio::time::sleep(d).await;
+            }
             Ok(())
         })
     }
@@ -278,9 +310,11 @@ impl ParticipantClient for InProcessClient {
         server: &'a MeshServer,
         _transaction_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
-        let delay_ms = Self::simulated_delay_ms(&server.server_id);
+        let delay = self.delay_for(&server.server_id);
         Box::pin(async move {
-            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            if let Some(d) = delay {
+                tokio::time::sleep(d).await;
+            }
             Ok(())
         })
     }
@@ -290,9 +324,11 @@ impl ParticipantClient for InProcessClient {
         server: &'a MeshServer,
         _transaction_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
-        let delay_ms = Self::simulated_delay_ms(&server.server_id);
+        let delay = self.delay_for(&server.server_id);
         Box::pin(async move {
-            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            if let Some(d) = delay {
+                tokio::time::sleep(d).await;
+            }
             Ok(())
         })
     }
@@ -303,9 +339,11 @@ impl ParticipantClient for InProcessClient {
         query_id: &'a str,
         query: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
-        let delay_ms = Self::simulated_delay_ms(&server.server_id);
+        let delay = self.delay_for(&server.server_id);
         Box::pin(async move {
-            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            if let Some(d) = delay {
+                tokio::time::sleep(d).await;
+            }
             // 模拟查询响应(与 superposition.rs 原 in-process mock 一致的格式)
             Ok(format!("result@{query}@{query_id}@{}", server.server_id))
         })
@@ -1000,6 +1038,30 @@ mod tests {
     fn make_server(id: &str) -> MeshServer {
         // 使用 RFC 5737 TEST-NET-3 地址,绕过 SSRF 校验
         MeshServer::new(id, format!("203.0.113.1:{id}"), vec!["cap-1".into()])
+    }
+
+    // === ADR-280：进程内零延迟构造 vs 测试夹具的模拟延迟 ===
+
+    #[test]
+    fn instant_client_skips_simulated_delay() {
+        assert!(
+            InProcessClient::instant().delay_for("srv-a").is_none(),
+            "instant() 必须零模拟延迟（进程内没有网络，模拟 RTT 是虚构工作）"
+        );
+    }
+
+    #[test]
+    fn new_client_keeps_deterministic_simulated_delay() {
+        use std::time::Duration;
+        let d = InProcessClient::new()
+            .delay_for("srv-a")
+            .expect("new() 必须保留模拟延迟（测试夹具依赖）");
+        assert!(d >= Duration::from_millis(1) && d <= Duration::from_millis(2));
+        assert_eq!(
+            InProcessClient::default().delay_for("srv-a"),
+            Some(d),
+            "Default 必须与 new() 同义（不得静默变成零延迟）"
+        );
     }
 
     // === 协议消息测试 ===

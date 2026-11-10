@@ -82,6 +82,56 @@ fn bench_transaction(c: &mut Criterion) {
     group.finish();
 }
 
+/// 构建使用**零延迟**进程内客户端的 Mesh（ADR-280 的生产形态）
+fn make_mesh_with_n_servers_instant(n: usize) -> McpMesh {
+    let config = MeshConfig {
+        heartbeat_timeout_ms: 300_000,
+        ..MeshConfig::default()
+    };
+    let client: std::sync::Arc<dyn mcp_mesh::ParticipantClient> =
+        std::sync::Arc::new(mcp_mesh::InProcessClient::instant());
+    let mesh = McpMesh::with_participant_client(config, None, client);
+    for i in 0..n {
+        let sid = format!("s-{i}");
+        let _ = mesh.register_server(MeshServer::new(sid, format!("203.0.113.1:{i}"), vec![]));
+    }
+    mesh
+}
+
+/// 基准:零延迟进程内客户端的 2PC 延迟（与 `2pc` 组同形，供 ADR-280 A/B）
+///
+/// WHY 单列一组而不是改原组：原组是「保留模拟延迟」的对照基线，
+/// 删掉它就再也无法证明「模拟延迟确实被移除」。
+fn bench_transaction_instant(c: &mut Criterion) {
+    let rt = Runtime::new().expect("创建 tokio runtime 失败");
+    let sizes: &[usize] = &[1, 3, 5];
+
+    let mut group = c.benchmark_group("mcp_mesh_transaction_instant");
+    group.sample_size(50);
+    group.measurement_time(std::time::Duration::from_secs(10));
+
+    for &n in sizes {
+        let mesh = make_mesh_with_n_servers_instant(n);
+        let participants = make_participants(n);
+
+        group.bench_with_input(BenchmarkId::new("2pc", n), &n, |b, &_| {
+            b.iter(|| {
+                rt.block_on(async {
+                    mesh.execute_transaction(
+                        black_box(participants.clone()),
+                        black_box("bench".into()),
+                        Vec::new(),
+                    )
+                    .await
+                    .expect("事务失败")
+                })
+            });
+        });
+    }
+
+    group.finish();
+}
+
 /// 基准:测量 5 服务器并发 100 事务批量延迟
 ///
 /// 此基准被 `#[ignore]` 标记,需 `--ignored` 显式运行,因为它耗时较长
@@ -121,6 +171,7 @@ fn bench_concurrent_100_transactions(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_transaction,
+    bench_transaction_instant,
     bench_concurrent_100_transactions
 );
 criterion_main!(benches);

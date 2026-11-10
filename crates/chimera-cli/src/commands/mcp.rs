@@ -18,9 +18,7 @@
 //!   必须调用 `permission::confirm` 获取用户确认(除非 `--yes` / `--no-permission`)。
 
 use anyhow::Result;
-use mcp_mesh::{
-    InProcessClient, McpMesh, MeshConfig, MeshServer, ParticipantClient, TcpParticipantClient,
-};
+use mcp_mesh::{McpMesh, MeshConfig, MeshServer, ParticipantClient, TcpParticipantClient};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -94,8 +92,8 @@ fn build_mesh(use_network: bool) -> McpMesh {
         let client: Arc<dyn ParticipantClient> = Arc::new(TcpParticipantClient::new());
         McpMesh::with_participant_client(MeshConfig::default(), None, client)
     } else {
-        let client: Arc<dyn ParticipantClient> = Arc::new(InProcessClient::new());
-        McpMesh::with_participant_client(MeshConfig::default(), None, client)
+        // 与组合根共用同一构造点：进程内零模拟延迟（ADR-280 D2）。
+        crate::mcp_tool_executor::in_process_mesh()
     }
 }
 
@@ -340,5 +338,24 @@ async fn inspect_server(mesh: &McpMesh, server_id: &str, json: bool) -> Result<(
             })
         }
         None => Err(ChimeraCliError::EngineError(format!("MCP 服务器不存在: {server_id}")).into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// 结构锁（ADR-280 D2）：`mcp call` 的进程内路径必须复用组合根的零延迟构造点。
+    /// 只检查 `#[cfg(test)]` 之前的源码，避免本条断言文本自指。
+    #[test]
+    fn production_in_process_mesh_uses_instant_client() {
+        let src = include_str!("mcp.rs");
+        let prod = src.split("#[cfg(test)]").next().unwrap_or("");
+        assert!(
+            prod.contains("in_process_mesh()"),
+            "mcp call 进程内路径必须复用组合根的零延迟构造点（ADR-280 D2）"
+        );
+        assert!(
+            !prod.contains("InProcessClient::new()"),
+            "生产路径不得回退到模拟延迟客户端（ADR-280 D2）"
+        );
     }
 }

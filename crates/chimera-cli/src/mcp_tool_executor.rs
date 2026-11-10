@@ -70,6 +70,17 @@ fn is_legal_server_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// 生产 ephemeral mesh 的唯一构造点：进程内**零延迟**客户端 + 默认（durable）配置。
+///
+/// WHY 收口：`mcp_tool_executor` 与 `commands/mcp` 两处生产根曾各建一次，
+/// 任一处漏改都会让「生产仍付 2–4ms 模拟 RTT」无声复活（ADR-280 D2）。
+/// `MeshConfig::default()` 刻意不变：WAL durability 与写入前的敏感载荷扫描保留。
+pub(crate) fn in_process_mesh() -> McpMesh {
+    let client: Arc<dyn ParticipantClient> = Arc::new(InProcessClient::instant());
+    // ADR-276 D2：event_bus 恒 None —— ephemeral mesh 无长驻订阅者；接总线即虚构消费。
+    McpMesh::with_participant_client(MeshConfig::default(), None, client)
+}
+
 /// MCP 工具执行器 — 组合根长持的 ephemeral mesh 委托（ADR-256 D2/D4）
 pub struct McpToolExecutor {
     /// 进程内 ephemeral mesh（同 mcp.rs 范式；executor 与宿主同生命周期）
@@ -83,10 +94,9 @@ impl McpToolExecutor {
     /// （ADR-256 §6.5：P1 无性能主张、无新事件发布点）。
     #[must_use]
     pub fn from_config(config: &ChimeraConfig) -> Self {
-        let client: Arc<dyn ParticipantClient> = Arc::new(InProcessClient::new());
         // ADR-276 D2：event_bus 恒 None（同 `commands/mcp.rs::build_mesh`）——
         // 执行器持的是诊断/执行面 mesh，无长驻订阅者；接总线即虚构消费。
-        let mesh = McpMesh::with_participant_client(MeshConfig::default(), None, client);
+        let mesh = in_process_mesh();
         for server in &config.mcp.servers {
             if server.id.is_empty() {
                 tracing::warn!("MCP 配置项缺少 server id，已跳过（mcp 工具执行器装配）");
@@ -261,6 +271,22 @@ mod tests {
 
     use crate::exec_plan::BuiltinToolExecutor;
     use proptest::prelude::*;
+
+    /// 结构锁（ADR-280 D2）：生产 ephemeral mesh 必须用零延迟客户端。
+    /// 只检查 `#[cfg(test)]` 之前的源码，避免本条断言文本自指。
+    #[test]
+    fn production_mesh_uses_instant_client_not_simulated() {
+        let src = include_str!("mcp_tool_executor.rs");
+        let prod = src.split("#[cfg(test)]").next().unwrap_or("");
+        assert!(
+            prod.contains("InProcessClient::instant()"),
+            "生产 ephemeral mesh 必须使用零延迟客户端（ADR-280 D2）"
+        );
+        assert!(
+            !prod.contains("InProcessClient::new()"),
+            "生产路径不得回退到模拟延迟客户端（ADR-280 D2）"
+        );
+    }
 
     #[test]
     fn parse_rejects_empty_prefix_body() {

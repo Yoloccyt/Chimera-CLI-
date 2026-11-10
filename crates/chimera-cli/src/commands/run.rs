@@ -22,8 +22,6 @@
 //! v2.9.0-omega Task 1.7:接受 `json` flag(JSON 成功 envelope 在本命令输出)
 //! v2.9.0-omega Task 1.11:接受 `perm`(Task 1.1 真实接入外部命令执行时使用)
 
-use std::time::Duration;
-
 use anyhow::Result;
 use gqep_executor::tool_runtime::{BatchLimits, BatchOutcome, DispatchError, DispatchRequest};
 use nexus_core::{MultimodalInput, Quest, UserIntent};
@@ -342,11 +340,12 @@ pub async fn execute_with_ctx(
 /// WHY 独立 async fn:chunk_delay 涉及 `tokio::time::sleep`,需在 async 上下文执行。
 /// 测试可通过 `CHIMERA_RUN_CHUNK_DELAY_MS=0` 环境变量禁用延迟以加速。
 async fn stream_to_stdout(reply: &str) {
-    let delay_ms = std::env::var("CHIMERA_RUN_CHUNK_DELAY_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_CHUNK_DELAY_MS);
-    let delay = Duration::from_millis(delay_ms);
+    // ADR-280：env 显式值 > TTY 判定 > 默认。非 TTY（管道/脚本）自动归零，
+    // 消除 N×20ms 的纯观感睡眠；TTY 下输出逐字节不变。
+    let delay = crate::orchestrator::stream_chunk_delay(
+        "CHIMERA_RUN_CHUNK_DELAY_MS",
+        DEFAULT_CHUNK_DELAY_MS,
+    );
 
     // 复用 orchestrator::plan_chunks 保证 CLI 与 TUI 切分逻辑一致
     use std::io::Write;
@@ -381,6 +380,7 @@ mod tests {
     use crate::composition;
     use crate::permission::{PermissionCtx, PermissionGate};
     use event_bus::NexusEvent;
+    use std::time::Duration;
 
     /// M4-P1：run 经 execute_with_ctx 走组合根共享 bus ——
     /// QuestCreated 对外部订阅者可见（此前命令自建私有 bus，事件零可见）。

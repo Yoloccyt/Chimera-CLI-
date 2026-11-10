@@ -245,12 +245,11 @@ async fn read_input_with_ctrl_c() -> Result<String, ChimeraCliError> {
 
 /// 从环境变量读取 chunk 延迟(与 run.rs 一致,便于测试禁用)
 fn chunk_delay_from_env() -> Duration {
-    let ms = std::env::var("CHIMERA_CHAT_CHUNK_DELAY_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        // W8 去重: 单点定义在 run.rs,此处引用(与 run 路径保持同一延迟源)
-        .unwrap_or(super::run::DEFAULT_CHUNK_DELAY_MS);
-    Duration::from_millis(ms)
+    // W8 去重: 单点定义在 run.rs;ADR-280: 非 TTY 自动归零,env 显式值优先。
+    crate::orchestrator::stream_chunk_delay(
+        "CHIMERA_CHAT_CHUNK_DELAY_MS",
+        super::run::DEFAULT_CHUNK_DELAY_MS,
+    )
 }
 
 /// 执行一轮 Quest 分解并流式输出到 stdout(SubTask 1.5.2)

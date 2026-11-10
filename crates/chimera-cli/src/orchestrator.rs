@@ -136,6 +136,32 @@ pub fn plan_chunks_batched(reply: &str, batch: usize) -> Vec<String> {
     batches
 }
 
+/// 流式 chunk 延迟解析（纯函数）：`env 显式值 > TTY 判定 > 默认`。
+///
+/// WHY 非 TTY 归零：`run`/`chat` 的 20ms/chunk 是**观感节流**；在管道/脚本
+/// 消费时它不做功，只把墙钟拉长（一次 1200 字符回复 ≈ 2s 纯睡眠，ADR-280）。
+/// env 显式值始终优先 —— 测试与显式调优依赖它。
+pub(crate) fn resolve_stream_chunk_delay(
+    env_value: Option<&str>,
+    stdout_is_tty: bool,
+    default_ms: u64,
+) -> std::time::Duration {
+    if let Some(ms) = env_value.and_then(|raw| raw.parse::<u64>().ok()) {
+        return std::time::Duration::from_millis(ms);
+    }
+    if !stdout_is_tty {
+        return std::time::Duration::ZERO;
+    }
+    std::time::Duration::from_millis(default_ms)
+}
+
+/// 生产入口：读取 env + 探测 stdout 是否为 TTY，再走纯函数。
+pub(crate) fn stream_chunk_delay(env_key: &str, default_ms: u64) -> std::time::Duration {
+    use std::io::IsTerminal;
+    let raw = std::env::var(env_key).ok();
+    resolve_stream_chunk_delay(raw.as_deref(), std::io::stdout().is_terminal(), default_ms)
+}
+
 /// 执行一轮 Quest 分解 + 流式发布:Thinking → 真实分解 → 逐字符 chunk → Completed → Idle。
 ///
 /// `chunk_delay` 为零时不 sleep(测试/bench 快速路径)。session_id 全程透传,
@@ -306,6 +332,46 @@ pub fn spawn_quest_orchestrator(
 mod tests {
     use super::*;
     use nexus_core::{Task, TaskStatus, ThinkingMode};
+
+    // === ADR-280：流式节流的三层优先级（纯函数，无 env/无 TTY 依赖） ===
+
+    #[test]
+    fn stream_delay_env_overrides_tty_and_default() {
+        use std::time::Duration;
+        assert_eq!(
+            resolve_stream_chunk_delay(Some("50"), false, 20),
+            Duration::from_millis(50),
+            "env 显式值必须压过非 TTY 归零"
+        );
+        assert_eq!(
+            resolve_stream_chunk_delay(Some("0"), true, 20),
+            Duration::ZERO,
+            "env=0 必须压过 TTY 默认"
+        );
+    }
+
+    #[test]
+    fn stream_delay_non_tty_is_zero() {
+        use std::time::Duration;
+        assert_eq!(resolve_stream_chunk_delay(None, false, 20), Duration::ZERO);
+        assert_eq!(
+            resolve_stream_chunk_delay(None, true, 20),
+            Duration::from_millis(20)
+        );
+    }
+
+    #[test]
+    fn stream_delay_invalid_env_falls_back_to_tty_rule() {
+        use std::time::Duration;
+        assert_eq!(
+            resolve_stream_chunk_delay(Some("not-a-number"), false, 20),
+            Duration::ZERO
+        );
+        assert_eq!(
+            resolve_stream_chunk_delay(Some("not-a-number"), true, 20),
+            Duration::from_millis(20)
+        );
+    }
 
     /// 构造 TuiChatSubmitted 事件(session_id 固定 "s1")
     fn submit(query: &str) -> NexusEvent {
