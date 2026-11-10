@@ -306,3 +306,99 @@ proptest! {
         prop_assert_eq!(probe.seq().len(), n, "每个节点必须执行一次");
     }
 }
+
+// ============================================================
+// 混层写屏障（ADR-281）— 确定性 #[tokio::test]（非 proptest）
+// ============================================================
+
+/// 扁平混层计划：(id, 是否只读)，无 edges ⇒ 全部落在同一层
+fn flat_mixed_plan(spec: &[(&str, bool)]) -> ToolPlan {
+    let nodes = spec
+        .iter()
+        .map(|(id, read)| {
+            if *read {
+                readonly_node(id)
+            } else {
+                maybe_write_node(id, true)
+            }
+        })
+        .collect();
+    ToolPlan {
+        id: "mixed-flat".into(),
+        nodes,
+        edges: Vec::new(),
+    }
+}
+
+/// 不变量 5：写节点是读段的屏障 —— 写之前的读段并发完成，写之后才跑下一段
+#[tokio::test]
+async fn mixed_layer_write_is_a_barrier_for_read_segments() {
+    let plan = flat_mixed_plan(&[
+        ("r0", true),
+        ("r1", true),
+        ("w", false),
+        ("r2", true),
+        ("r3", true),
+    ]);
+    let probe = Probe::new();
+    let summary = probe.runner(4).run(&plan).await.expect("混层计划应成功");
+
+    assert_eq!(summary.tool_calls, 5);
+    assert_eq!(summary.nodes_executed, 5);
+    let seq = probe.seq();
+    assert_eq!(seq.len(), 5, "每个节点必须执行一次");
+    assert_eq!(seq[2], "w", "写节点必须在两段只读之间，实际 {seq:?}");
+    let mut before = seq[..2].to_vec();
+    before.sort();
+    assert_eq!(before, vec!["r0".to_string(), "r1".to_string()]);
+    let mut after = seq[3..].to_vec();
+    after.sort();
+    assert_eq!(after, vec!["r2".to_string(), "r3".to_string()]);
+    assert!(probe.peak() >= 2, "读段内应并发，peak={}", probe.peak());
+    assert!(probe.peak() <= 4, "不得突破并发上界，peak={}", probe.peak());
+}
+
+/// 不变量 6：同层多个写节点按声明序执行，且被读段隔开（读写不并发）
+#[tokio::test]
+async fn mixed_layer_two_writes_keep_declaration_order() {
+    let plan = flat_mixed_plan(&[("w0", false), ("r0", true), ("w1", false)]);
+    let probe = Probe::new();
+    probe.runner(8).run(&plan).await.expect("混层计划应成功");
+    assert_eq!(
+        probe.seq(),
+        vec!["w0".to_string(), "r0".to_string(), "w1".to_string()],
+        "写节点必须按声明序、且被读段隔开"
+    );
+    assert_eq!(probe.peak(), 1, "读写不得并发");
+}
+
+/// 不变量 7：混层计划在 c=1 与 c=8 下 PlanSummary 逐字段相等（duration_ms 除外）
+#[tokio::test]
+async fn mixed_layer_summary_equivalent_across_concurrency() {
+    let plan = flat_mixed_plan(&[
+        ("r0", true),
+        ("r1", true),
+        ("w", false),
+        ("r2", true),
+        ("r3", true),
+    ]);
+    let base = Probe::new().runner(1).run(&plan).await.expect("c=1 应成功");
+    let conc = Probe::new().runner(8).run(&plan).await.expect("c=8 应成功");
+    assert_eq!(base.plan_id, conc.plan_id);
+    assert_eq!(base.summary, conc.summary);
+    assert_eq!(base.tool_calls, conc.tool_calls);
+    assert_eq!(base.nodes_executed, conc.nodes_executed);
+    assert_eq!(base.truncated, conc.truncated);
+}
+
+/// 不变量 8：同层多写跨运行稳定（防 `HashMap` 迭代序回潮）
+#[tokio::test]
+async fn same_layer_writes_are_stable_across_runs() {
+    let plan = flat_mixed_plan(&[("w2", false), ("w0", false), ("w1", false)]);
+    let expected = vec!["w2".to_string(), "w0".to_string(), "w1".to_string()];
+    for _ in 0..5 {
+        let probe = Probe::new();
+        probe.runner(8).run(&plan).await.expect("全写层应成功");
+        assert_eq!(probe.seq(), expected, "同层写序必须按声明序稳定");
+    }
+}

@@ -163,11 +163,17 @@ async fn unknown_capability_stays_serial_fail_closed() {
     );
 }
 
-/// 判据 3b：声明了部分工具时，未覆盖的那部分仍串行（能力表不是全局开关）
+/// 判据 3b（ADR-281 修订）：只**被覆盖的只读段**并行；未覆盖节点是写屏障
+///
+/// 旧契约「层内存在未知节点 ⇒ 整层串行」已被 ADR-281 收窄为「未知节点是屏障」：
+/// 屏障**之前/之间**的只读段并发，屏障节点单独串行，读写不并发。
+/// 本夹具 5 个 covered（t0..t4）在前、3 个未知（t5..t7）在后 ⇒ 只读段 peak = 5。
+/// 判别力：整层串行 ⇒ 1；无屏障整层并发 ⇒ 8；只有正确分段才会是 5。
+/// 屏障的顺序/不重叠语义由 `toolplan_concurrency_proptest.rs` 的混层不变量 5/6 锁定。
 #[tokio::test]
 async fn partial_capability_only_parallelizes_covered_names() {
     let n = 8;
-    // 只把 t0..t4 报为只读，t5..t7 未知 ⇒ 整层含未知节点 ⇒ 整层保守串行
+    // 只把 t0..t4 报为只读，t5..t7 未知 ⇒ 前 5 个构成只读段，后 3 个是屏障
     let covered = vec![
         "probe.tool.0".to_string(),
         "probe.tool.1".to_string(),
@@ -179,8 +185,8 @@ async fn partial_capability_only_parallelizes_covered_names() {
     r.run(&plan(n, None)).await.expect("计划必须执行成功");
     assert_eq!(
         peak.load(Ordering::SeqCst),
-        1,
-        "层内存在未声明能力的节点时，整层不得并行"
+        5,
+        "只读段（5 个 covered）应并发到 5；未知节点不得加入该段（整层串行=1，全并发=8）"
     );
 }
 

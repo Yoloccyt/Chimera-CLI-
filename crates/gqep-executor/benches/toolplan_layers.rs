@@ -15,6 +15,11 @@
 //!   而不是停在争论上。接入执行器能力表(ADR-254)后 c8 才应向
 //!   `readonly8_ms2/8` 靠拢 —— 阈值收紧即该改动的验收证据。
 //!
+//! ADR-281 新增 `mixed7r1w_ms2/*`：7 个只读 + 末尾 1 个显式 Write ⇒ 写屏障分段。
+//! c=1 ≈ 8×延迟；c=8 ≈ 读段 + 写 = 2×延迟；实测 c8/c1 = 5.82×（CI 保守 4.59×）。
+//! 该组只量收益；写屏障的顺序/不重叠语义由 `toolplan_concurrency_proptest.rs`
+//! 的混层不变量 5/6 锁定。
+//!
 //! 运行:
 //! ```powershell
 //! cargo bench -p gqep-executor --bench toolplan_layers
@@ -85,6 +90,39 @@ fn readonly_layer_plan(n: usize, declared: bool) -> ToolPlan {
     }
 }
 
+/// 7 个只读 + 1 个显式 Write（写节点放在声明序末位）同层
+///
+/// WHY 写放末位：只读段 `[r0..r6]` 一次性并发，随后写节点单独执行
+/// ⇒ c=8 理论墙钟 = 2ms（读段）+ 2ms（写）= 4ms，c=1 = 16ms，比值 4×。
+/// 写放中间会把层切成 3+4 两段读段，理论比值只有 ~2.7×，无法验证 ≥4× 门。
+fn mixed_layer_plan(readonly_n: usize) -> ToolPlan {
+    let mut nodes: Vec<ToolNode> = (0..readonly_n)
+        .map(|i| ToolNode {
+            id: format!("r{i}"),
+            op: ToolOp::ToolCall,
+            tool_name: Some(format!("bench.readonly.{i}")),
+            args_json: Some(format!(r#"{{"i":{i}}}"#)),
+            field: None,
+            predicate: None,
+            side_effect: Some(SideEffectDecl::ReadOnly),
+        })
+        .collect();
+    nodes.push(ToolNode {
+        id: "w".to_string(),
+        op: ToolOp::ToolCall,
+        tool_name: Some("bench.write".to_string()),
+        args_json: Some(r#"{"i":99}"#.to_string()),
+        field: None,
+        predicate: None,
+        side_effect: Some(SideEffectDecl::Write),
+    });
+    ToolPlan {
+        id: format!("bench-mixed-layer-{readonly_n}r1w"),
+        nodes,
+        edges: Vec::new(),
+    }
+}
+
 fn bench_toolplan_layers(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().expect("创建 tokio runtime 失败");
 
@@ -115,6 +153,33 @@ fn bench_toolplan_layers(c: &mut Criterion) {
                 },
             );
         }
+    }
+
+    // ADR-281：混层写屏障。7 个只读 + 末尾 1 个显式 Write。
+    // 理论墙钟：c=1 ≈ 8×2ms=16ms；c=8 ≈ 只读段 2ms + 写 2ms = 4ms ⇒ 4×。
+    // 若实现退化为整层串行，两组读数相等；若读写并发，写屏障语义被破坏
+    // （由 toolplan_concurrency_proptest 的混层不变量锁定，本组只量收益）。
+    let mixed_plan = mixed_layer_plan(7);
+    for concurrency in [1usize, 8] {
+        let runner = PlanRunner::new(
+            Box::new(SleepExecutor { delay_ms: 2 }),
+            PlanGuards::default(),
+        )
+        .with_concurrency(concurrency);
+        group.bench_with_input(
+            BenchmarkId::new("mixed7r1w_ms2", concurrency),
+            &concurrency,
+            |b, _| {
+                b.to_async(&rt).iter(|| async {
+                    let summary = runner
+                        .run(&mixed_plan)
+                        .await
+                        .expect("混层基准计划必须执行成功");
+                    assert_eq!(summary.tool_calls, 8);
+                    assert!(!summary.truncated);
+                });
+            },
+        );
     }
 
     group.finish();

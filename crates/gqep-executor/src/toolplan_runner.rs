@@ -282,7 +282,7 @@ impl PlanRunner {
         })
     }
 
-    /// 单层执行 — 按层的副作用性质选择串行/有界并发
+    /// 单层执行 — 全读并发 / 全写串行 / 混层按「写屏障」分段
     ///
     /// # 返回
     /// `true` = 回填预算超限（调用方置 `truncated` 并终止后续层）;
@@ -295,13 +295,84 @@ impl PlanRunner {
         tool_calls: &mut usize,
         nodes_executed: &mut usize,
     ) -> bool {
-        if layer_requires_serial(layer, self.executor.as_ref()) {
-            self.exec_layer_serial(plan, layer, env, tool_calls, nodes_executed)
-                .await
-        } else {
-            self.exec_layer_concurrent(plan, layer, env, tool_calls, nodes_executed)
-                .await
+        let read_flags: Vec<bool> = layer
+            .iter()
+            .map(|n| node_is_read_safe(n, self.executor.as_ref()))
+            .collect();
+        if read_flags.iter().all(|r| *r) {
+            return self
+                .exec_layer_concurrent(plan, layer, env, tool_calls, nodes_executed)
+                .await;
         }
+        if read_flags.iter().all(|r| !*r) {
+            return self
+                .exec_layer_serial(plan, layer, env, tool_calls, nodes_executed)
+                .await;
+        }
+        self.exec_layer_segmented(plan, layer, &read_flags, env, tool_calls, nodes_executed)
+            .await
+    }
+
+    /// 混层执行 — 以「可能写」节点为屏障切分为读段
+    ///
+    /// WHY 不是整层串行也不是全层并发：
+    /// - 整层串行会让 1 个写节点拖住同层最多 64 个只读节点（ADR-281 实测的退化点）；
+    /// - 全层并发会让写序由调度器决定（不可复现、审计链失序）。
+    ///
+    /// 读段内部并发、读段之间按声明序被写节点隔开、读写**不**并发 —— 既保住
+    /// 「写节点严格按声明序执行、读节点不跨越写节点观察外部状态」的既有语义，
+    /// 又让同段只读节点并行。
+    ///
+    /// 层内无边界（Kahn 分层保证），故读节点不依赖同层写节点的输出；跨段回填
+    /// 仍走同一 `accumulate`，不引入第二套预算/取消真值源（ADR-277 教训）。
+    async fn exec_layer_segmented(
+        &self,
+        plan: &ToolPlan,
+        layer: &[ToolNode],
+        read_flags: &[bool],
+        env: &mut HashMap<String, String>,
+        tool_calls: &mut usize,
+        nodes_executed: &mut usize,
+    ) -> bool {
+        let mut seg_start = 0usize;
+        for (idx, node) in layer.iter().enumerate() {
+            if read_flags[idx] {
+                continue;
+            }
+            if seg_start < idx
+                && self
+                    .exec_layer_concurrent(
+                        plan,
+                        &layer[seg_start..idx],
+                        env,
+                        tool_calls,
+                        nodes_executed,
+                    )
+                    .await
+            {
+                return true;
+            }
+            // 单节点写：复用串行路径，保持与「整层串行」逐字同口径的累计/预算判定。
+            if self
+                .exec_layer_serial(
+                    plan,
+                    std::slice::from_ref(node),
+                    env,
+                    tool_calls,
+                    nodes_executed,
+                )
+                .await
+            {
+                return true;
+            }
+            seg_start = idx + 1;
+        }
+        if seg_start < layer.len() {
+            return self
+                .exec_layer_concurrent(plan, &layer[seg_start..], env, tool_calls, nodes_executed)
+                .await;
+        }
+        false
     }
 
     /// 串行层执行 — 按既有层序逐节点 `await`（不 spawn、不并发）
@@ -463,30 +534,38 @@ fn effective_side_effect(
         .or_else(|| executor.capability_of(declared))
 }
 
-/// 层副作用判定 — 该层是否必须整层串行
+/// 单节点是否「读安全」——纯数据算子恒安全；ToolCall 需有效副作用 == ReadOnly。
 ///
-/// 仅 `ToolOp::ToolCall` 可能产生副作用;纯数据算子（Map/Filter/Aggregate/Limit/Sort）
-/// 不产生副作用,可并发。串行充要条件:层内存在
-/// `op == ToolCall && 有效副作用 != Some(ReadOnly)`,
-/// 其中「有效副作用」按 `effective_side_effect` 取值 —— 显式声明优先，
-/// 其次执行器能力表，两者皆无 ⇒ 按「可能写」保守处理（未声明 ≠ 只读）。
-///
-/// WHY 有副作用节点不可重排、不可并发——并发会让同层写入顺序由调度器决定,
-/// 结果不可复现,顺序契约与审计链的可审计性随之破坏。
-fn layer_requires_serial(layer: &[ToolNode], executor: &dyn ToolExecutor) -> bool {
-    layer.iter().any(|n| {
-        n.op == ToolOp::ToolCall
-            && effective_side_effect(n, executor, n.tool_name.as_deref().unwrap_or_default())
-                != Some(SideEffectDecl::ReadOnly)
-    })
+/// 「有效副作用」按 `effective_side_effect` 取值：显式声明优先，其次执行器能力表，
+/// 两者皆无 ⇒ 按「可能写」保守处理（未声明 ≠ 只读）。WHY 保守：并发会让同层写入
+/// 顺序由调度器决定 ⇒ 结果不可复现、审计链失序（ADR-254 D1 / ADR-281）。
+fn node_is_read_safe(node: &ToolNode, executor: &dyn ToolExecutor) -> bool {
+    node.op != ToolOp::ToolCall
+        || effective_side_effect(
+            node,
+            executor,
+            node.tool_name.as_deref().unwrap_or_default(),
+        ) == Some(SideEffectDecl::ReadOnly)
 }
 
 /// 分层 — 每节点深度 = 最长路径长度（Kahn 扩展）;同层节点互无依赖
 ///
-/// 返回按深度升序的层列表（层内顺序任意——并行执行无依赖）。
+/// 返回按深度升序的层列表；**层内按计划声明序**（稳定定序）。
 /// 实现:按「入度清零轮次」分层（Kahn 每轮弹出入度=0 的节点 = 一层）;
 /// 若放置节点数 < 总数 → 环（validate 已保证无环,防御性校验）。
+///
+/// WHY 层内必须显式按声明序排序：frontier 由 `HashMap` 迭代构造，层内顺序
+/// 不确定（ADR-277 D3 实测：两个终端同层时摘要随并发度漂移）。只读层并发时
+/// 顺序不影响结果；有写节点的层由 [`exec_layer_serial`] 逐节点执行，若沿用
+/// 不确定的层序，「同层写节点的执行顺序」会跨运行漂移 —— 审计链无法对齐。
 fn compute_layers(plan: &ToolPlan) -> Result<Vec<Vec<ToolNode>>, PlanError> {
+    // 声明序索引：层内排序键。
+    let decl: HashMap<&str, usize> = plan
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
     let mut indegree: HashMap<&str, usize> =
         plan.nodes.iter().map(|n| (n.id.as_str(), 0)).collect();
     let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -500,6 +579,9 @@ fn compute_layers(plan: &ToolPlan) -> Result<Vec<Vec<ToolNode>>, PlanError> {
         .filter(|(_, d)| **d == 0)
         .map(|(n, _)| *n)
         .collect();
+    frontier
+        .make_contiguous()
+        .sort_by_key(|n| decl.get(*n).copied().unwrap_or(usize::MAX));
     let mut placed = 0usize;
     while !frontier.is_empty() {
         let mut next = VecDeque::new();
@@ -525,6 +607,8 @@ fn compute_layers(plan: &ToolPlan) -> Result<Vec<Vec<ToolNode>>, PlanError> {
                 }
             }
         }
+        next.make_contiguous()
+            .sort_by_key(|n| decl.get(*n).copied().unwrap_or(usize::MAX));
         layer_nodes.push(layer);
         frontier = next;
     }
