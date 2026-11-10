@@ -156,14 +156,14 @@ RL-05/06 由 `slo.yml` 的 13 条 `#[ignore]` p95 测试执行（CI 权威，本
 
 ## 5. 回滚
 
-三个独立 commit，任一可单独 revert：
+**单 commit revert（实际落地形态）**。ADR 初稿设想拆成三个独立 commit
+（语义 / 表+I11 / mode_redline+workflow），落地时改为单 commit：I11、`[[redline_exec]]`
+表与 `perf_redline.yml` 三者**互锁**（新门四件同批纪律）——拆开会让中间态 I11 判红，
+且「门 + 被检对象」必须同批进出。
 
-1. `mode_slo` 语义 + `single_criterion_time` / `slo_verdict` + selftest 24x；
-2. `[[redline_exec]]` / `[[excluded]]` 表 + I3/I7 三元组 + I11 + selftest 23x；
-3. `mode_redline` + `perf_redline.yml` + ADR/索引。
-
-revert 任一 commit 后 I11 会红 —— 那是**如实反映空转契约回来了**，不是误报。
-若需临时安静，正确做法是同时撤 `[[redline_exec]]` 并登记债务，而不是放宽 I11。
+单 commit 回滚后 `mode_redline`/I11 一并消失，`--static-only` 回到旧口径；
+`mode_slo` 回到旧的「80% 不判红」语义（那是缺陷回来了，不是误报）。
+若需保留 I11 而只撤执行面，正确做法是给对应条目登记 `[[excluded]]`，不是放宽 I11。
 
 ## 6. 未采纳
 

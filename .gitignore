@@ -91,6 +91,8 @@ dist/
 !docs/reports/memory-bound-audit-2026-11-08.md
 # 例外：R1~R5 执行报告（ADR-249/251/260~264 决策链的波次结算与量化收益证据）
 !docs/reports/toolchain-w4w5-r1r5-execution-2026-11-08.md
+# 例外：W0~W5 运行时并发/资源效率执行报告（ADR-278~283 的波次结算与量化收益证据）
+!docs/reports/agent-runtime-deep-optimization-2026-11-10.md
 .claude/
 .trae/
 

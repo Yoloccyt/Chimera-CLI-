@@ -85,11 +85,13 @@ jobs:
       - name: Setup sccache
         uses: mozilla/sccache-action@v0.0.11
 
-      # SKIP（rc=2）意味着 filter 没命中预期对象 —— 门未运行，不等于绿。
-      # 两个步骤都不加 `|| true`：rc 由门自己编码（0/1/2），观察期由 job 级
-      # continue-on-error 承担，红/绿语义不被 shell 吞掉。
-      - name: SLO bench assertions (80% redline is the gate)
-        run: python3 scripts/check_perf_redlines.py slo
-
-      - name: Red-line bench assertions (assert_ns)
-        run: python3 scripts/check_perf_redlines.py redline
+      # 两步合成一步：若 slo 先失败，GitHub 会跳过后续 step，redline 的读数就丢了。
+      # 用 set +e 捕获两个 rc，最后统一裁决；观察期由 job 级 continue-on-error 承担。
+      # 两个模式都不加 `|| true`：rc 由门自己编码（0/1/2），红/绿语义不被 shell 吞掉。
+      - name: SLO + red-line bench assertions (both must report)
+        run: |
+          set +e
+          python3 scripts/check_perf_redlines.py slo; rc_slo=$?
+          python3 scripts/check_perf_redlines.py redline; rc_redline=$?
+          echo "slo rc=${rc_slo} redline rc=${rc_redline}"
+          if [ "$rc_slo" -ne 0 ] || [ "$rc_redline" -ne 0 ]; then exit 1; fi
