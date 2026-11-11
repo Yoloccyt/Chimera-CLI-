@@ -37,6 +37,7 @@ use crate::coordination_metrics::{
     InferenceGainSample,
 };
 use crate::dag::{sort_tasks_topologically, validate_dag};
+use crate::decompose::dependency_inference;
 use crate::error::QuestError;
 use crate::metrics_sync::PendingCoordSample;
 use crate::ttg::TtgGovernor;
@@ -332,7 +333,8 @@ impl QuestEngine {
     pub async fn create_quest(&self, intent: UserIntent) -> Result<Quest, QuestError> {
         // 1. 分解任务
         let tasks = self.decompose(&intent)?;
-        // 2. 校验 DAG 无环(规则分解器产出的线性链理论上无环,但防御性校验)
+        // 2. 校验 DAG 无环(Linear 产出线性链、HeuristicDag 产出前向边——
+        //    依赖只指向更早任务,结构上均无环;此处为防御性校验)
         validate_dag(&tasks)?;
         // 3. 依赖定序:把"quest.tasks 的 Vec 序恰好等于依赖序"从 decompose 的
         //    巧合升为显式不变量。下游多个消费者直接按 Vec 序取用——
@@ -416,14 +418,21 @@ impl QuestEngine {
     /// - 按 `。!?.?`(中英文句末标点)切分 raw_text 为句子
     /// - 每个非空句子作为一个 Task
     /// - 限制在 `max_tasks_per_quest` 内(超出截断)
-    /// - 依赖关系:线性链(task_i 依赖 task_{i-1}),确保执行顺序
+    /// - 依赖关系:按 `config.dependency_mode` 选择推断策略(WP-E 方案 C)——
+    ///   Linear(默认)= 线性链 task_i → task_{i-1},与旧硬编码逐字节等价;
+    ///   HeuristicDag = 句首序数/承接词产边,独立句无依赖(波次并行)
     /// - 若无有效句子,创建单个占位 Task
     fn decompose(&self, intent: &UserIntent) -> Result<Vec<Task>, QuestError> {
         let sentences = split_sentences(&intent.raw_text);
         let max = self.config.max_tasks_per_quest as usize;
 
         // 截断到上限,防止任务爆炸(架构红线:单 Quest ≤ 16 任务)
-        let sentences: Vec<&str> = sentences.into_iter().take(max).collect();
+        // WHY 收敛为 String:依赖推断策略接口(&[String])的所有权边界
+        let sentences: Vec<String> = sentences
+            .into_iter()
+            .take(max)
+            .map(str::to_string)
+            .collect();
 
         if sentences.is_empty() {
             // 无有效句子时创建占位任务,保证 Quest 至少有一个 Task
@@ -435,22 +444,23 @@ impl QuestEngine {
             }]);
         }
 
-        let mut tasks = Vec::with_capacity(sentences.len());
-        for (idx, sentence) in sentences.iter().enumerate() {
-            let task_id = format!("task-{idx}");
-            // 线性依赖链:第一个无依赖,其余依赖前一个
-            let dependencies = if idx == 0 {
-                vec![]
-            } else {
-                vec![format!("task-{}", idx - 1)]
-            };
-            tasks.push(Task {
-                task_id,
-                description: sentence.to_string(),
+        // WP-E 方案 C(用户裁决):按配置选择依赖推断策略。
+        // Linear(默认)与旧硬编码逐字节等价(decompose::tests::linear_matches_legacy
+        // 锁定);HeuristicDag 的依赖边只指向更早句子,结构上无环,
+        // 生产路径仍经 create_quest 的 validate_dag 防御校验。
+        let strategy = dependency_inference(self.config.dependency_mode);
+        let dependencies = strategy.infer(&sentences);
+
+        let tasks = sentences
+            .iter()
+            .enumerate()
+            .map(|(idx, sentence)| Task {
+                task_id: format!("task-{idx}"),
+                description: sentence.clone(),
                 status: TaskStatus::Pending,
-                dependencies,
-            });
-        }
+                dependencies: dependencies[idx].clone(),
+            })
+            .collect();
         Ok(tasks)
     }
 
@@ -1092,6 +1102,27 @@ mod tests {
         assert!(tasks[0].dependencies.is_empty());
         assert_eq!(tasks[1].dependencies, vec!["task-0"]);
         assert_eq!(tasks[2].dependencies, vec!["task-1"]);
+    }
+
+    /// WP-E 方案 C:HeuristicDag 模式下,句首承接词产生依赖边、独立句无依赖
+    #[test]
+    fn test_decompose_heuristic_dag_mode() {
+        let bus = EventBus::new();
+        let config = QuestConfig {
+            dependency_mode: crate::decompose::DependencyMode::HeuristicDag,
+            ..QuestConfig::default()
+        };
+        let engine = QuestEngine::with_config(bus, config);
+        let intent = make_intent("编译核心。然后运行测试。写文档。");
+        let tasks = engine.decompose(&intent).unwrap();
+        assert_eq!(tasks.len(), 3);
+        assert!(tasks[0].dependencies.is_empty(), "首句无前驱");
+        assert_eq!(
+            tasks[1].dependencies,
+            vec!["task-0"],
+            "「然后」承接词必须链到前一句"
+        );
+        assert!(tasks[2].dependencies.is_empty(), "独立句无依赖(可并行)");
     }
 
     #[test]

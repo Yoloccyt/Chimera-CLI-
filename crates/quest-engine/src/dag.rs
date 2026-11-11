@@ -27,18 +27,18 @@ use nexus_core::Task;
 
 use crate::error::QuestError;
 
-/// Kahn 单遍内核 — 悬空依赖校验 + 环检测 + 确定性拓扑序,O(V + E)
+/// Kahn 图状态 — 入度表(task_id → 入度)+ dependents 反向邻接索引(dep_id → 依赖它的节点)
 ///
-/// 算法步骤:
-/// 1. 校验全部依赖引用指向已存在的 task_id(悬空依赖即错)
-/// 2. 单遍构建入度表与 dependents 反向邻接索引(dep_id → 依赖它的节点)
-/// 3. 入度 0 节点按字典序入队;出队时经反向索引将后继入度减 1,
-///    新归零者按字典序批量入队(确定性契约)
-/// 4. 出队数 < 总节点数 → 存在环
+/// WHY 独立 type 别名:元组嵌套 HashMap 触发 clippy type_complexity;
+/// 命名后两个消费方(kahn_core/kahn_layers)的解构语义也更可读。
+type KahnState<'a> = (HashMap<&'a str, usize>, HashMap<&'a str, Vec<&'a str>>);
+
+/// Kahn 图状态构建 — 悬空依赖校验 + 入度表 + dependents 反向邻接索引
 ///
-/// WHY 返回拓扑序而非 ():纯校验调用(`validate_dag`)丢弃返回值,
-/// 排序开销(同层字典序)在 O(V log V) 上界内,换取单实现零漂移。
-fn kahn_core(tasks: &[Task]) -> Result<Vec<String>, QuestError> {
+/// WHY 从 kahn_core 提取共享(WP-E):`kahn_core`(拓扑序)与 `kahn_layers`
+/// (波次分层)消费同一份图状态,各写一份即两处潜在分叉——悬空/判环语义漂移。
+/// 提取后 `kahn_core` 的算法行为零变化(纯代码搬家,既有 proptest 守护)。
+fn build_kahn_state(tasks: &[Task]) -> Result<KahnState<'_>, QuestError> {
     // 1. 悬空依赖校验
     let task_ids: HashSet<&str> = tasks.iter().map(|t| t.task_id.as_str()).collect();
     for task in tasks {
@@ -70,6 +70,22 @@ fn kahn_core(tasks: &[Task]) -> Result<Vec<String>, QuestError> {
                 .push(task.task_id.as_str());
         }
     }
+    Ok((in_degree, dependents))
+}
+
+/// Kahn 单遍内核 — 悬空依赖校验 + 环检测 + 确定性拓扑序,O(V + E)
+///
+/// 算法步骤:
+/// 1. 校验全部依赖引用指向已存在的 task_id(悬空依赖即错)
+/// 2. 单遍构建入度表与 dependents 反向邻接索引(dep_id → 依赖它的节点)
+/// 3. 入度 0 节点按字典序入队;出队时经反向索引将后继入度减 1,
+///    新归零者按字典序批量入队(确定性契约)
+/// 4. 出队数 < 总节点数 → 存在环
+///
+/// WHY 返回拓扑序而非 ():纯校验调用(`validate_dag`)丢弃返回值,
+/// 排序开销(同层字典序)在 O(V log V) 上界内,换取单实现零漂移。
+fn kahn_core(tasks: &[Task]) -> Result<Vec<String>, QuestError> {
+    let (mut in_degree, dependents) = build_kahn_state(tasks)?;
 
     // 3. 入度 0 节点按字典序入队(确定性契约)
     let mut initial: Vec<&str> = in_degree
@@ -112,6 +128,60 @@ fn kahn_core(tasks: &[Task]) -> Result<Vec<String>, QuestError> {
     }
 }
 
+/// Kahn 逐层剥叶 — 与 kahn_core 同源图状态上的波次分层,O(V + E)
+///
+/// 算法:初始层 = 入度 0 节点(字典序);每层处理全部节点并将后继入度减 1,
+/// 新归零者组成下一层(字典序)。已分层节点数 < 总节点数 → 存在环
+/// (与 kahn_core 的出队判据同构:重复 task_id 使入度表去重,同样落此分支)。
+///
+/// WHY 不复用 kahn_core 的输出再二次分组:kahn_core 的同层节点可跨多轮
+/// 出队(依赖链长度不同),其序中同层节点不保证相邻,二次分组需另算层号;
+/// 直接剥叶一遍即得分层,且天然满足"层内字典序"确定性契约。
+fn kahn_layers(tasks: &[Task]) -> Result<Vec<Vec<String>>, QuestError> {
+    let (mut in_degree, dependents) = build_kahn_state(tasks)?;
+
+    // 初始层:入度 0 节点按字典序(确定性契约)
+    let mut current: Vec<&str> = in_degree
+        .iter()
+        .filter(|(_, &deg)| deg == 0)
+        .map(|(&id, _)| id)
+        .collect();
+    current.sort_unstable();
+
+    let mut layers: Vec<Vec<String>> = Vec::new();
+    let mut done = 0usize;
+    while !current.is_empty() {
+        let mut next: Vec<&str> = Vec::with_capacity(current.len());
+        let mut layer: Vec<String> = Vec::with_capacity(current.len());
+        for &id in &current {
+            layer.push(id.to_string());
+            done += 1;
+            // 经反向索引将后继入度减 1,新归零者进入下一层
+            if let Some(deps) = dependents.get(id) {
+                for &dep_id in deps {
+                    if let Some(deg) = in_degree.get_mut(dep_id) {
+                        *deg -= 1;
+                        if *deg == 0 {
+                            next.push(dep_id);
+                        }
+                    }
+                }
+            }
+        }
+        next.sort_unstable();
+        // current 已按字典序排序,layer 顺序天然字典序(确定性契约)
+        layers.push(layer);
+        current = next;
+    }
+
+    // 已分层节点数不足 → 存在环(与 kahn_core 判据同构)
+    if done < tasks.len() {
+        Err(QuestError::CyclicDependency)
+    } else {
+        Ok(layers)
+    }
+}
+
 /// 校验任务图无环 — 使用 Kahn 算法,有环返回 `CyclicDependency`
 ///
 /// 复杂度 O(V + E)(L9 优化 2.1:旧版出队循环内全表扫描为最坏
@@ -127,6 +197,21 @@ pub fn validate_dag(tasks: &[Task]) -> Result<(), QuestError> {
 /// 同层(入度同时归零)节点的顺序按 task_id 字典序保证确定性。
 pub fn topological_order(tasks: &[Task]) -> Result<Vec<String>, QuestError> {
     kahn_core(tasks)
+}
+
+/// 按拓扑分层 — 返回波次执行序:同层任务可并行,层间必须串行(依赖序)
+///
+/// WP-E(R7 批次):`run --execute` 的 HeuristicDag 波次路径消费本函数。
+///
+/// # 错误语义(与 `topological_order` 零漂移)
+/// 悬空依赖返回 `DecompositionFailed`,成环返回 `CyclicDependency`——
+/// 与 `kahn_core` 同源单实现(`build_kahn_state`),不养第二套判环语义。
+///
+/// # 确定性契约
+/// 层内按 task_id 字典序(与 `topological_order` 同层字典序一致);
+/// 同一任务集的分层输出永远一致。空输入返回空层表(0 层)。
+pub fn topological_layers(tasks: &[Task]) -> Result<Vec<Vec<String>>, QuestError> {
+    kahn_layers(tasks)
 }
 
 /// 按拓扑序重排任务表 —— 保证每个任务都排在其全部依赖之后
@@ -597,6 +682,114 @@ mod tests {
                 validate_dag(&cyclic),
                 Err(QuestError::CyclicDependency)
             ));
+        }
+    }
+
+    // ============================================================
+    // topological_layers — 波次分层(WP-E)的行为守护
+    // ============================================================
+
+    /// 线性链 → N 层每层恰 1 个任务(完全串行,无并行度)
+    #[test]
+    fn test_topological_layers_linear_chain() {
+        let tasks = vec![
+            make_task("a", vec![]),
+            make_task("b", vec!["a"]),
+            make_task("c", vec!["b"]),
+        ];
+        let layers = topological_layers(&tasks).unwrap();
+        assert_eq!(layers, vec![vec!["a"], vec!["b"], vec!["c"]]);
+    }
+
+    /// 菱形 DAG → 三层:b/c 同层并行,d 收尾
+    #[test]
+    fn test_topological_layers_diamond() {
+        let tasks = vec![
+            make_task("a", vec![]),
+            make_task("b", vec!["a"]),
+            make_task("c", vec!["a"]),
+            make_task("d", vec!["b", "c"]),
+        ];
+        let layers = topological_layers(&tasks).unwrap();
+        assert_eq!(layers, vec![vec!["a"], vec!["b", "c"], vec!["d"]]);
+    }
+
+    /// 空输入 → 空层表(0 层),不 panic
+    #[test]
+    fn test_topological_layers_empty() {
+        assert_eq!(topological_layers(&[]).unwrap(), Vec::<Vec<String>>::new());
+    }
+
+    /// 有环 → `CyclicDependency`,与 topological_order 同源
+    #[test]
+    fn test_topological_layers_cyclic() {
+        let tasks = vec![make_task("a", vec!["b"]), make_task("b", vec!["a"])];
+        assert!(matches!(
+            topological_layers(&tasks),
+            Err(QuestError::CyclicDependency)
+        ));
+    }
+
+    /// 悬空依赖 → `DecompositionFailed`,与 topological_order 同源
+    #[test]
+    fn test_topological_layers_dangling() {
+        let tasks = vec![make_task("a", vec!["nonexistent"])];
+        assert!(matches!(
+            topological_layers(&tasks),
+            Err(QuestError::DecompositionFailed(_))
+        ));
+    }
+
+    /// 层内字典序:输入乱序,同层输出必须按 task_id 排序(确定性契约)
+    #[test]
+    fn test_topological_layers_intra_layer_lexicographic() {
+        let tasks = vec![
+            make_task("c", vec![]),
+            make_task("b", vec![]),
+            make_task("a", vec![]),
+            make_task("z", vec!["a", "b", "c"]),
+        ];
+        let layers = topological_layers(&tasks).unwrap();
+        assert_eq!(layers, vec![vec!["a", "b", "c"], vec!["z"]]);
+    }
+
+    proptest! {
+        /// 分层三重不变量:排列守恒 + 任一任务的依赖都在更早层 + 层内字典序
+        #[test]
+        fn prop_layers_cover_all_and_dep_earlier(tasks in arb_acyclic_tasks()) {
+            let layers = topological_layers(&tasks).unwrap();
+
+            // 1. 排列守恒:全部层拼接 = 全部任务 id(不增不减)
+            let mut flat: Vec<String> = layers.iter().flatten().cloned().collect();
+            let mut ids: Vec<String> = tasks.iter().map(|t| t.task_id.clone()).collect();
+            flat.sort();
+            ids.sort();
+            prop_assert_eq!(flat, ids, "分层不得增删任务");
+
+            // 2. 依赖必在更早层(层间串行的正确性前提)
+            let layer_index: std::collections::HashMap<&str, usize> = layers
+                .iter()
+                .enumerate()
+                .flat_map(|(li, layer)| layer.iter().map(move |id| (id.as_str(), li)))
+                .collect();
+            for t in &tasks {
+                let li = layer_index[t.task_id.as_str()];
+                for d in &t.dependencies {
+                    prop_assert!(
+                        layer_index[d.as_str()] < li,
+                        "依赖 {} 必须在 {} 之前的层",
+                        d,
+                        t.task_id
+                    );
+                }
+            }
+
+            // 3. 层内字典序(确定性)
+            for layer in &layers {
+                let mut sorted = layer.clone();
+                sorted.sort();
+                prop_assert_eq!(layer, &sorted);
+            }
         }
     }
 }

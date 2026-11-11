@@ -49,6 +49,8 @@ pub mod config;
 pub mod control;
 pub mod coordination_metrics;
 pub mod dag;
+/// WP-E(R7 批次): 任务依赖推断策略接口(方案 C:策略 + 配置开关,默认 Linear)
+pub mod decompose;
 pub mod engine;
 pub mod error;
 /// Phase 9 §14.2: 长任务地图（TencentDB 机制：短摘要入上下文 + 详情外置 + 地图注入）
@@ -79,6 +81,10 @@ pub use ambient_mode::{
 };
 pub use checkpoint::CheckpointManager;
 pub use config::QuestConfig;
+// WP-E(R7 批次): 依赖推断策略公开 API(方案 C,chimera-cli run --execute 波次开关消费 DependencyMode)
+pub use decompose::{
+    dependency_inference, DependencyInference, DependencyMode, HeuristicDag, LinearChain,
+};
 // P2-1: 协调成本/推理增益比值度量(三重悖论推理悖论红线)
 pub use control::{
     handle_control_event, spawn_control_subscriber, spawn_control_subscriber_with_receiver,

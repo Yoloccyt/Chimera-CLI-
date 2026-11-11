@@ -294,7 +294,18 @@ pub fn build_with_sharding(
             ),
         }
     }
-    let engine = QuestEngine::new(bus.clone());
+    // WP-E（R7）：依赖推断模式经 env 三态开关接入（CHIMERA_QUEST_DEPENDENCY_MODE），
+    // 默认未设 = Linear = 历史行为（分解器线性链 + run --execute 单批派发，逐字节等价）。
+    // WHY 走 env 而非 ChimeraConfig：后者受 G-69 十五字段对拍门锁定，实验性开关
+    // 不值得为此扩 config schema——与 CHIMERA_SCHED_CLAIM（composition.rs:332）同惯例。
+    let mut quest_config = quest_engine::QuestConfig::default();
+    if let Ok(mode) = std::env::var("CHIMERA_QUEST_DEPENDENCY_MODE") {
+        if mode.trim().eq_ignore_ascii_case("heuristic-dag") {
+            quest_config.dependency_mode = quest_engine::decompose::DependencyMode::HeuristicDag;
+            tracing::info!("Quest 依赖推断已切换 HeuristicDag（波次并行执行）");
+        }
+    }
+    let engine = QuestEngine::with_config(bus.clone(), quest_config);
     // ADR-257 D1 案 β：QuestEngine 浅 Clone 共享给 SubAgentQuestEngine——
     // 同一引擎状态的两个视图（Quest 注册表/事件总线共享，非独立副本）。
     // D2：AppContext 持 Arc<tokio::sync::Mutex<…>>（join_next 收 &mut，

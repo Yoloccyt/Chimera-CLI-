@@ -10,6 +10,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::decompose::DependencyMode;
+
 /// Quest Engine 配置 — 控制任务分解上限与检查点频率
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuestConfig {
@@ -22,6 +24,14 @@ pub struct QuestConfig {
     ///
     /// WHY:0 表示禁用自动检查点;Week 2 阶段仅配置,实际持久化在后续阶段实现
     pub checkpoint_interval: u32,
+
+    /// 依赖推断模式(WP-E 方案 C 用户裁决,默认 Linear = 历史行为)
+    ///
+    /// WHY serde default:旧配置文件(无此字段)反序列化时回填 Linear,
+    /// 存量配置零兼容性问题;Linear 路径与旧硬编码逐字节等价,
+    /// 由 `decompose::tests::linear_matches_legacy` 锁定。
+    #[serde(default)]
+    pub dependency_mode: DependencyMode,
 }
 
 impl Default for QuestConfig {
@@ -29,6 +39,7 @@ impl Default for QuestConfig {
         Self {
             max_tasks_per_quest: 16,
             checkpoint_interval: 3,
+            dependency_mode: DependencyMode::default(),
         }
     }
 }
@@ -39,6 +50,7 @@ impl QuestConfig {
         Self {
             max_tasks_per_quest,
             checkpoint_interval,
+            dependency_mode: DependencyMode::default(),
         }
     }
 }
@@ -69,5 +81,17 @@ mod tests {
         let de: QuestConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(de.max_tasks_per_quest, cfg.max_tasks_per_quest);
         assert_eq!(de.checkpoint_interval, cfg.checkpoint_interval);
+        assert_eq!(de.dependency_mode, cfg.dependency_mode);
+    }
+
+    #[test]
+    fn test_config_missing_dependency_mode_defaults_linear() {
+        // WP-E 方案 C:旧配置文件无 dependency_mode 字段,必须回填 Linear
+        // (存量配置零兼容性问题——默认配置下行为零变化的配置面保证)
+        let json = r#"{"max_tasks_per_quest":16,"checkpoint_interval":3}"#;
+        let de: QuestConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(de.dependency_mode, DependencyMode::Linear);
+        assert_eq!(de.max_tasks_per_quest, 16);
+        assert_eq!(de.checkpoint_interval, 3);
     }
 }
