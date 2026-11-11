@@ -537,18 +537,39 @@ impl QuestEngine {
 
         // 6. 自动检查点:Task 完成 + interval>0 + 完成数是 interval 倍数
         //    WHY:仅 Completed 触发(非 Failed),Failed 由上层决定是否回滚
+        //    WP-C2/ADR-286:checkpoint_async=true(默认)时后台 spawn 保存,
+        //    把 ~4ms 磁盘固定开销移出状态更新关键路径;终态转换(all_terminal)
+        //    前的最后一次检查点**恒同步**(durability 关键点:complete_quest
+        //    发布 ExecutionCompleted 后上层可能立即销毁 Quest,后台任务来不及
+        //    快照就丢终态)。checkpoint_async=false 回滚为内联 await(历史行为)。
         if status == TaskStatus::Completed
             && self.config.checkpoint_interval > 0
             && completed > 0
             && completed.is_multiple_of(self.config.checkpoint_interval)
         {
             // 检查点保存失败不应阻断 Task 状态更新流程,仅记录告警
-            if let Err(e) = self.save_checkpoint(&quest_id_owned).await {
-                warn!(
-                    quest_id = %quest_id_owned,
-                    error = %e,
-                    "自动检查点保存失败(不影响 Task 状态更新)"
-                );
+            if all_terminal || !self.config.checkpoint_async {
+                if let Err(e) = self.save_checkpoint(&quest_id_owned).await {
+                    warn!(
+                        quest_id = %quest_id_owned,
+                        error = %e,
+                        "自动检查点保存失败(不影响 Task 状态更新)"
+                    );
+                }
+            } else {
+                // 后台保存:fire-and-forget(幂等操作失败仅日志,§4.4 #7 允许;
+                // QuestEngine Clone 为浅共享内核,任务内看到同一 Quest 状态)
+                let engine = self.clone();
+                let quest_id_bg = quest_id_owned.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = engine.save_checkpoint(&quest_id_bg).await {
+                        warn!(
+                            quest_id = %quest_id_bg,
+                            error = %e,
+                            "后台自动检查点保存失败(不影响 Task 状态更新)"
+                        );
+                    }
+                });
             }
         }
 
@@ -1516,5 +1537,113 @@ mod tests {
         let engine = QuestEngine::new(bus);
         let result = engine.adjust_priority("nonexistent", 200, "operator").await;
         assert!(matches!(result, Err(QuestError::QuestNotFound(_))));
+    }
+
+    /// WP-C2/ADR-286:async 模式下 update_task_status 返回后检查点最终落盘
+    ///
+    /// WHY 轮询而非即时断言:后台保存是 fire-and-forget,返回时刻不保证已
+    /// 落盘(这正是 async 语义);轮询窗口 5s 覆盖 spawn_blocking 调度抖动。
+    #[tokio::test]
+    async fn test_async_checkpoint_eventually_lands() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = QuestConfig {
+            checkpoint_interval: 1,
+            checkpoint_async: true,
+            ..QuestConfig::default()
+        };
+        let bus = EventBus::new();
+        let engine = QuestEngine::with_checkpoints(bus, config, dir.path().to_path_buf());
+        let intent = make_intent("做一件事。");
+        let quest = engine.create_quest(intent).await.unwrap();
+        // 状态机合法路径:Pending→Running→Completed
+        engine
+            .update_task_status(&quest.quest_id, "task-0", TaskStatus::Running)
+            .await
+            .unwrap();
+        engine
+            .update_task_status(&quest.quest_id, "task-0", TaskStatus::Completed)
+            .await
+            .unwrap();
+        // 后台任务最终落盘(interval=1 且 completed=1 是倍数 ⇒ 触发保存)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut landed = false;
+        while std::time::Instant::now() < deadline {
+            if !engine
+                .checkpoint_manager()
+                .unwrap()
+                .list_checkpoints(&quest.quest_id)
+                .unwrap()
+                .is_empty()
+            {
+                landed = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(landed, "async 模式下后台检查点必须在 5s 内落盘");
+    }
+
+    /// WP-C2/ADR-286:checkpoint_async=false 回滚为同步内联(历史行为)——
+    /// update_task_status 返回前检查点已落盘
+    #[tokio::test]
+    async fn test_sync_checkpoint_mode_persists_before_return() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = QuestConfig {
+            checkpoint_interval: 1,
+            checkpoint_async: false,
+            ..QuestConfig::default()
+        };
+        let bus = EventBus::new();
+        let engine = QuestEngine::with_checkpoints(bus, config, dir.path().to_path_buf());
+        let intent = make_intent("做一件事。");
+        let quest = engine.create_quest(intent).await.unwrap();
+        // 状态机合法路径:Pending→Running→Completed
+        engine
+            .update_task_status(&quest.quest_id, "task-0", TaskStatus::Running)
+            .await
+            .unwrap();
+        engine
+            .update_task_status(&quest.quest_id, "task-0", TaskStatus::Completed)
+            .await
+            .unwrap();
+        // 无轮询:同步语义保证返回即可见
+        let ids = engine
+            .checkpoint_manager()
+            .unwrap()
+            .list_checkpoints(&quest.quest_id)
+            .unwrap();
+        assert_eq!(ids.len(), 1, "同步模式返回前必须已落盘");
+    }
+
+    /// WP-C2/ADR-286:async 模式下终态转换(单任务 Quest 完成 = all_terminal)
+    /// 的检查点**恒同步**——返回即可见,不等后台任务
+    #[tokio::test]
+    async fn test_terminal_transition_saves_sync_in_async_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = QuestConfig {
+            checkpoint_interval: 1,
+            checkpoint_async: true,
+            ..QuestConfig::default()
+        };
+        let bus = EventBus::new();
+        let engine = QuestEngine::with_checkpoints(bus, config, dir.path().to_path_buf());
+        let intent = make_intent("唯一任务,完成即终态。");
+        let quest = engine.create_quest(intent).await.unwrap();
+        // 状态机合法路径:Pending→Running→Completed
+        engine
+            .update_task_status(&quest.quest_id, "task-0", TaskStatus::Running)
+            .await
+            .unwrap();
+        engine
+            .update_task_status(&quest.quest_id, "task-0", TaskStatus::Completed)
+            .await
+            .unwrap();
+        // all_terminal ⇒ 同步保存:无轮询,返回即刻可见
+        let ids = engine
+            .checkpoint_manager()
+            .unwrap()
+            .list_checkpoints(&quest.quest_id)
+            .unwrap();
+        assert_eq!(ids.len(), 1, "终态转换的检查点必须同步落盘(ADR-286)");
     }
 }

@@ -32,6 +32,20 @@ pub struct QuestConfig {
     /// 由 `decompose::tests::linear_matches_legacy` 锁定。
     #[serde(default)]
     pub dependency_mode: DependencyMode,
+
+    /// 自动检查点后台化(WP-C2/ADR-286,默认 true = 后台 spawn 保存)
+    ///
+    /// WHY 默认 true:`update_task_status` 的内联 `save_checkpoint().await`
+    /// 把 ~4ms 磁盘固定开销串进任务状态更新关键路径(实测 save(100 任务)
+    /// ≈4.0ms,瓶颈为磁盘 ~3.7ms);后台化后该税移出关键路径。durability
+    /// 语义变化(返回 ≠ 已落盘,崩溃窗口扩大至后台保存完成前)由两点兜底:
+    /// ① quest 终态转换前的最后一次检查点**恒同步**(关键转换不丢失);
+    /// ② interval 语义本就不要求逐步持久化(默认每 3 个任务才存一次)。
+    /// 回滚:置 `false` 恢复内联 await(历史行为)。
+    /// WHY 无去抖:interval 触发频率低(每 N 个完成 1 次),后台化已消除
+    /// 关键路径税,去抖的 per-quest 状态与竞态复杂度不划算(ADR-286 登记)。
+    #[serde(default)]
+    pub checkpoint_async: bool,
 }
 
 impl Default for QuestConfig {
@@ -40,6 +54,7 @@ impl Default for QuestConfig {
             max_tasks_per_quest: 16,
             checkpoint_interval: 3,
             dependency_mode: DependencyMode::default(),
+            checkpoint_async: true,
         }
     }
 }
@@ -51,6 +66,7 @@ impl QuestConfig {
             max_tasks_per_quest,
             checkpoint_interval,
             dependency_mode: DependencyMode::default(),
+            checkpoint_async: true,
         }
     }
 }
