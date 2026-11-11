@@ -1001,7 +1001,7 @@ jobs:
   # ============================================================
   # governance-shadow — govd pr profile, deliberately non-blocking (ADR-228 §3.6 / I7)
   # WHY: the 108 hard-coded steps above are the legacy execution surface. Before
-  # retiring any of them, run the same 133 light gates through govd for 3 green
+  # retiring any of them, run the same 135 light gates through govd for 3 green
   # runs (continue-on-error) and compare [SUM]/JUnit artifacts. Only then flip
   # this job to blocking and delete steps in batches. `--report junit` is
   # accepted for forward compatibility; govd always writes report.json/junit.xml.
@@ -1020,7 +1020,7 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: govd pr profile (133 light gates)
+      - name: govd pr profile (135 light gates)
         run: python3 -m scripts.govd run --profile pr --jobs 4 --report junit
 
       - name: Upload govd run artifacts
