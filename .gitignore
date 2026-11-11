@@ -93,6 +93,8 @@ dist/
 !docs/reports/toolchain-w4w5-r1r5-execution-2026-11-08.md
 # 例外：W0~W5 运行时并发/资源效率执行报告（ADR-278~283 的波次结算与量化收益证据）
 !docs/reports/agent-runtime-deep-optimization-2026-11-10.md
+# 例外：全链路性能与资源效率四阶段工单集（阶段0-3 + 契约变更清单；T0~T5 的证据锚点与 baseline 实测需入库存证）
+!docs/reports/agent-runtime-workorders-2026-11-11.md
 .claude/
 .trae/
 
