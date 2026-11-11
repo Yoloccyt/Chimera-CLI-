@@ -624,6 +624,27 @@ pub enum McpAction {
         /// 服务器 ID
         server: String,
     },
+    /// 超位置查询 — 同一查询并发扇出多服务器并聚合结果（WP-H/ADR-284 转正）
+    ///
+    /// 查询语义由各 MCP 服务器自行解释；任一服务器失败不阻断其他（结果标记
+    /// `success=false`），deadline 超时返回已收集的部分结果（best-effort）。
+    /// fanout 并发受 mcp-mesh `DEFAULT_MAX_QUERY_FANOUT` 上界钳制（排队语义）。
+    Query {
+        /// 查询语句
+        query: String,
+        /// 目标服务器 ID 列表（逗号分隔，如 `--servers s1,s2`）
+        #[arg(long, value_delimiter = ',')]
+        servers: Vec<String>,
+        /// 整体查询截止时间（毫秒），超时返回已收集的部分结果
+        #[arg(long, default_value_t = 500)]
+        deadline_ms: u64,
+        /// 启用真实 TCP 传输（默认 InProcess 客户端，**无网络副作用**）
+        ///
+        /// 与 `mcp call --network` 同口径：显式开启后经 `TcpParticipantClient`
+        /// 连接服务器 endpoint 发送 `QueryRequest` 帧。
+        #[arg(long)]
+        network: bool,
+    },
 }
 
 /// Agent 子命令动作

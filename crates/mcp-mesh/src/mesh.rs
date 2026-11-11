@@ -36,7 +36,9 @@ use uuid::Uuid;
 use crate::config::MeshConfig;
 use crate::error::McpError;
 use crate::quantum::participant_client::{InProcessClient, ParticipantClient};
-use crate::quantum::superposition::{execute_superposition_query, QueryResult, SuperpositionQuery};
+use crate::quantum::superposition::{
+    execute_superposition_query, QueryResult, SuperpositionQuery, DEFAULT_MAX_QUERY_FANOUT,
+};
 use crate::quantum::transaction::{QuantumTransaction, TransactionState, WalEntry};
 use crate::quantum::wal::WalStore;
 use crate::server_registry::{MeshServer, ServerRegistry};
@@ -728,6 +730,8 @@ impl McpMesh {
             // 传输抽象统一注入(Task 0.7.10 闭环):默认 InProcessClient 保持
             // 进程内模拟语义;--network 时走真实 QueryRequest TCP 帧
             Arc::clone(&self.participant_client),
+            // WP-H/ADR-284:fanout 并发上界(排队语义),消除无上界扇出资源风险
+            DEFAULT_MAX_QUERY_FANOUT,
         )
         .await
     }

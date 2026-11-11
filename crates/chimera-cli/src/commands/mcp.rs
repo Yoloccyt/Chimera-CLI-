@@ -7,6 +7,7 @@
 //! - `mcp serve` — 启动 MCP 服务器(当前 NotImplemented,指引 TUI 替代)
 //! - `mcp call <server> <tool> [args]` — 调用 MCP 工具(触发 permission prompt)
 //! - `mcp inspect <server>` — 输出服务器详情(注册时间 / 心跳 / 工具清单)
+//! - `mcp query <query> --servers a,b` — 超位置查询(多服务器扇出聚合,WP-H/ADR-284)
 //!
 //! # 设计决策(WHY)
 //! - **进程内 ephemeral mesh**:与 `chimera run` / `quest` 一致,每次调用创建独立 McpMesh。
@@ -18,7 +19,9 @@
 //!   必须调用 `permission::confirm` 获取用户确认(除非 `--yes` / `--no-permission`)。
 
 use anyhow::Result;
-use mcp_mesh::{McpMesh, MeshConfig, MeshServer, ParticipantClient, TcpParticipantClient};
+use mcp_mesh::{
+    McpMesh, MeshConfig, MeshServer, ParticipantClient, SuperpositionQuery, TcpParticipantClient,
+};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -47,11 +50,14 @@ pub async fn execute(
     tracing::info!(?action, dry_run, "MCP 量子网格管理操作");
 
     // 构造进程内 ephemeral McpMesh(与 chimera run 一致的设计)
-    // 默认 `InProcessClient`：**零网络副作用**。仅 `mcp call --network` 显式开关
-    // 才切到 `TcpParticipantClient`（真实 TCP，会连服务器 endpoint）。
-    let use_network = matches!(action, McpAction::Call { network: true, .. });
+    // 默认 `InProcessClient`：**零网络副作用**。仅 `mcp call --network` /
+    // `mcp query --network` 显式开关才切到 `TcpParticipantClient`（真实 TCP）。
+    let use_network = matches!(
+        action,
+        McpAction::Call { network: true, .. } | McpAction::Query { network: true, .. }
+    );
     let mesh = build_mesh(use_network);
-    // E4′:注册必须发生在 list/call/inspect 之前，否则 registry 恒空
+    // E4′:注册必须发生在 list/call/inspect/query 之前，否则 registry 恒空
     register_configured_servers(&mesh, config)?;
 
     match action {
@@ -74,6 +80,21 @@ pub async fn execute(
             call_tool(&mesh, server, tool, args, perm, json, dry_run, runtime).await
         }
         McpAction::Inspect { server } => inspect_server(&mesh, server, json).await,
+        McpAction::Query {
+            query,
+            servers,
+            deadline_ms,
+            network,
+        } => {
+            if *network {
+                // 副作用可见性（ADR-245 D4 同口径）：真实 TCP 生效时留痕
+                tracing::info!(
+                    servers = ?servers,
+                    "mcp query: 已显式启用真实 TCP 传输（可能产生网络请求）"
+                );
+            }
+            query_servers(&mesh, query, servers, *deadline_ms, json).await
+        }
     }
 }
 
@@ -339,6 +360,97 @@ async fn inspect_server(mesh: &McpMesh, server_id: &str, json: bool) -> Result<(
         }
         None => Err(ChimeraCliError::EngineError(format!("MCP 服务器不存在: {server_id}")).into()),
     }
+}
+
+/// `mcp query` 的 JSON 载荷（typed，字段名编译期校验）
+#[derive(Debug, Serialize)]
+struct McpQueryResultEntry {
+    server_id: String,
+    success: bool,
+    latency_ms: u64,
+    payload: String,
+}
+
+#[derive(Debug, Serialize)]
+struct McpQueryPayload {
+    query_id: String,
+    /// 目标 server 数（`results.len() < total` 即发生部分超时,best-effort 聚合）
+    total: usize,
+    succeeded: usize,
+    failed: usize,
+    results: Vec<McpQueryResultEntry>,
+}
+
+/// `mcp query <query> --servers a,b [--deadline-ms]` — 超位置查询（WP-H/ADR-284）
+///
+/// 同一查询并发扇出多服务器聚合结果（语义见 `McpAction::Query` doc）。
+/// 执行走 `McpMesh::superposition_query`（含 `McpMessageReceived` 事件发布
+/// 与 `DEFAULT_MAX_QUERY_FANOUT` 并发上界）——**完整生产路径**,非绕行直调。
+/// 未注册 / 心跳超时的 server 前置校验失败,整体 `EngineError`(退出码 3);
+/// 传输失败不阻断聚合,以 `success=false` 标记在结果中如实呈现。
+async fn query_servers(
+    mesh: &McpMesh,
+    query_text: &str,
+    servers: &[String],
+    deadline_ms: u64,
+    json: bool,
+) -> Result<()> {
+    if servers.is_empty() {
+        return Err(ChimeraCliError::EngineError(
+            "mcp query 需要 --servers 列表（如 --servers s1,s2）".into(),
+        )
+        .into());
+    }
+    let query = SuperpositionQuery::new(query_text, servers.to_vec(), deadline_ms);
+    let results = mesh.superposition_query(query).await?;
+    let succeeded = results.iter().filter(|r| r.success).count();
+    let payload = McpQueryPayload {
+        query_id: results
+            .first()
+            .map(|r| r.query_id.clone())
+            .unwrap_or_default(),
+        total: servers.len(),
+        succeeded,
+        failed: results.len() - succeeded,
+        results: results
+            .iter()
+            .map(|r| McpQueryResultEntry {
+                server_id: r.server_id.clone(),
+                success: r.success,
+                latency_ms: r.latency_ms,
+                payload: r.payload.clone(),
+            })
+            .collect(),
+    };
+    output::emit(json, &payload, || {
+        // 表格输出:Server ID / 状态 / 延迟 / 载荷(截断)
+        let rows: Vec<Vec<String>> = results
+            .iter()
+            .map(|r| {
+                // WHY 截断:终端表格可读性优先;完整载荷走 --json
+                let mut preview = r.payload.clone();
+                if preview.chars().count() > 48 {
+                    preview = format!("{}…", preview.chars().take(48).collect::<String>());
+                }
+                let status = if r.success { "ok" } else { "failed" };
+                vec![
+                    r.server_id.clone(),
+                    status.into(),
+                    format!("{}ms", r.latency_ms),
+                    preview,
+                ]
+            })
+            .collect();
+        output::print_table(&["Server ID", "状态", "延迟", "载荷"], &rows);
+        if payload.results.len() < payload.total {
+            output::print_info(&format!(
+                "部分超时：{}/{} 个 server 在 deadline({deadline_ms}ms) 内返回(best-effort 聚合)",
+                payload.results.len(),
+                payload.total
+            ));
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]

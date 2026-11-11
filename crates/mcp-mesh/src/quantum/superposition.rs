@@ -19,8 +19,18 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use uuid::Uuid;
+
+/// 超位置查询的默认 fanout 并发上界（WP-H/ADR-284 转正时加界）
+///
+/// WHY 需要上界：本模块是工单 T2 登记的结构死臂（零生产调用方），
+/// `JoinSet::spawn` 扇出无上界——转正为 `chimera mcp query` 生产出口后，
+/// 恶意/误配的超大 `fanout_servers` 列表会瞬间打满连接与内存。上界语义是
+/// **排队**（`Semaphore` 许可）而非拒绝：超出并发的 server 等待许可，
+/// deadline 语义不变（排队等待可能使其超时标记失败，属合理资源保护）。
+pub const DEFAULT_MAX_QUERY_FANOUT: usize = 16;
 
 use crate::error::McpError;
 use crate::quantum::participant_client::ParticipantClient;
@@ -158,6 +168,10 @@ impl QueryResult {
 /// - `ServerNotFound`:fanout_servers 中存在未注册服务器
 /// - `ServerUnreachable`:fanout_servers 中存在心跳超时服务器
 ///
+/// # 参数
+/// - `max_concurrency`:fanout 在飞并发上界（`Semaphore` 排队语义,非拒绝;
+///   0 按 1 处理）。生产调用方传 [`DEFAULT_MAX_QUERY_FANOUT`]
+///
 /// # 返回
 /// 成功返回所有服务器的 `QueryResult` 列表(顺序按完成时间,非输入顺序)。
 /// 即使部分服务器查询失败,也返回完整列表(由调用方过滤 `success=true`)。
@@ -166,6 +180,7 @@ pub async fn execute_superposition_query(
     registry: &ServerRegistry,
     heartbeat_timeout_ms: u64,
     client: Arc<dyn ParticipantClient>,
+    max_concurrency: usize,
 ) -> Result<Vec<QueryResult>, McpError> {
     // 1. 校验所有参与者已注册且 alive(顺带收集 server 快照,避免任务内二次查表)
     let mut servers = Vec::with_capacity(query.fanout_servers.len());
@@ -184,6 +199,9 @@ pub async fn execute_superposition_query(
     }
 
     // 2. 并发 fanout:每个服务器 spawn 一个查询任务,经注入的传输抽象发请求
+    //    WP-H/ADR-284:`Semaphore` 上界钳制在飞并发（排队而非拒绝），
+    //    消除死臂时代的无上界扇出资源风险。0 视为 1（防御：无意义的零并发）。
+    let permits = Arc::new(Semaphore::new(max_concurrency.max(1)));
     let mut set: JoinSet<QueryResult> = JoinSet::new();
     let query_id = query.query_id.clone();
     let query_text = query.query.clone();
@@ -193,7 +211,23 @@ pub async fn execute_superposition_query(
         let qid = query_id.clone();
         let qtext = query_text.clone();
         let client = Arc::clone(&client);
+        let permit_sem = Arc::clone(&permits);
         set.spawn(async move {
+            // WHY 在任务内取许可而非 spawn 前逐个 acquire:任务内 acquire 使
+            // 排队等待发生在 JoinSet 任务里,deadline 超时 abort 时可一并终止
+            let _permit = match permit_sem.acquire_owned().await {
+                Ok(p) => p,
+                Err(_closed) => {
+                    // Semaphore 永不 close（本模块无 close 调用点）,此臂不可达;
+                    // 按 fail-safe 处理为该 server 查询失败,不以 panic 破坏聚合
+                    return QueryResult::err(
+                        qid,
+                        sid,
+                        0,
+                        "fanout semaphore closed (unreachable)",
+                    );
+                }
+            };
             let start = std::time::Instant::now();
             let result = client.query(&server, &qid, &qtext).await;
             let latency_ms = start.elapsed().as_millis() as u64;
@@ -236,6 +270,7 @@ pub async fn execute_superposition_query(
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
     use crate::config::MeshConfig;
     use crate::quantum::participant_client::InProcessClient;
     use crate::server_registry::{MeshServer, ServerRegistry};
@@ -352,7 +387,13 @@ mod tests {
     async fn test_superposition_single_server() {
         let registry = make_registry_with_servers(1);
         let query = SuperpositionQuery::new("test", vec!["s-0".into()], 100);
-        let results = execute_superposition_query(&query, &registry, 5000, in_process_client())
+        let results = execute_superposition_query(
+                &query,
+                &registry,
+                5000,
+                in_process_client(),
+                DEFAULT_MAX_QUERY_FANOUT,
+            )
             .await
             .expect("查询失败");
         assert_eq!(results.len(), 1);
@@ -372,7 +413,13 @@ mod tests {
             },
             200,
         );
-        let results = execute_superposition_query(&query, &registry, 5000, in_process_client())
+        let results = execute_superposition_query(
+                &query,
+                &registry,
+                5000,
+                in_process_client(),
+                DEFAULT_MAX_QUERY_FANOUT,
+            )
             .await
             .expect("查询失败");
         assert_eq!(results.len(), 5);
@@ -386,7 +433,7 @@ mod tests {
         let registry = make_registry_with_servers(2);
         let query = SuperpositionQuery::new("probe", vec!["s-0".into(), "s-1".into()], 200);
         let client: Arc<dyn ParticipantClient> = Arc::new(TaggedQueryClient);
-        let results = execute_superposition_query(&query, &registry, 5000, client)
+        let results = execute_superposition_query(&query, &registry, 5000, client, DEFAULT_MAX_QUERY_FANOUT)
             .await
             .expect("查询失败");
         assert_eq!(results.len(), 2);
@@ -409,7 +456,7 @@ mod tests {
         let registry = make_registry_with_servers(2);
         let query = SuperpositionQuery::new("probe", vec!["s-0".into(), "s-1".into()], 200);
         let client: Arc<dyn ParticipantClient> = Arc::new(FailQueryClient);
-        let results = execute_superposition_query(&query, &registry, 5000, client)
+        let results = execute_superposition_query(&query, &registry, 5000, client, DEFAULT_MAX_QUERY_FANOUT)
             .await
             .expect("校验通过即不返回 Err(失败以 QueryResult 承载)");
         assert_eq!(results.len(), 2);
@@ -426,7 +473,13 @@ mod tests {
     async fn test_superposition_unregistered_server_rejected() {
         let registry = make_registry_with_servers(1);
         let query = SuperpositionQuery::new("test", vec!["s-0".into(), "unknown".into()], 100);
-        let err = execute_superposition_query(&query, &registry, 5000, in_process_client())
+        let err = execute_superposition_query(
+                &query,
+                &registry,
+                5000,
+                in_process_client(),
+                DEFAULT_MAX_QUERY_FANOUT,
+            )
             .await
             .unwrap_err();
         assert!(matches!(err, McpError::ServerNotFound { .. }));
@@ -441,10 +494,123 @@ mod tests {
         registry.register(server).expect("注册失败");
 
         let query = SuperpositionQuery::new("test", vec!["s-dead".into()], 100);
-        let err = execute_superposition_query(&query, &registry, 1000, in_process_client())
-            .await
-            .unwrap_err();
+        let err = execute_superposition_query(
+            &query,
+            &registry,
+            1000,
+            in_process_client(),
+            DEFAULT_MAX_QUERY_FANOUT,
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, McpError::ServerUnreachable { .. }));
+    }
+
+    /// 并发探测桩 — 记录在飞查询峰值（验证 Semaphore 上界生效）
+    ///
+    /// 进入 query 时在飞 +1、退出 -1，用 `fetch_max` 留存历史峰值。
+    /// WHY fetch_max 而非退出后读：退出重置为 0 会丢失峰值观测。
+    #[derive(Debug, Default)]
+    struct ConcurrencyProbeClient {
+        in_flight: std::sync::atomic::AtomicUsize,
+        peak: std::sync::atomic::AtomicUsize,
+    }
+
+    impl ConcurrencyProbeClient {
+        fn peak(&self) -> usize {
+            self.peak.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl ParticipantClient for ConcurrencyProbeClient {
+        fn prepare<'a>(
+            &'a self,
+            _server: &'a MeshServer,
+            _transaction_id: &'a str,
+            _op: &'a str,
+            _args: &'a [String],
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn commit<'a>(
+            &'a self,
+            _server: &'a MeshServer,
+            _transaction_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn rollback<'a>(
+            &'a self,
+            _server: &'a MeshServer,
+            _transaction_id: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn query<'a>(
+            &'a self,
+            _server: &'a MeshServer,
+            _query_id: &'a str,
+            _query: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+            Box::pin(async move {
+                let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                self.peak.fetch_max(now, Ordering::SeqCst);
+                // 让并发窗口可观测（否则任务过快完成，峰值恒 1）
+                tokio::time::sleep(Duration::from_millis(30)).await;
+                self.in_flight.fetch_sub(1, Ordering::SeqCst);
+                Ok("probe".into())
+            })
+        }
+    }
+
+    /// fanout 并发上界 — 15 servers + 上界 4 ⇒ 峰值 ≤ 4 且全部完成
+    ///
+    /// WHY 锁定：转正前 `JoinSet::spawn` 扇出无上界（工单 T2 登记的资源风险），
+    /// 本测试锁定 Semaphore 排队语义（排队而非拒绝：全部 server 都有结果）。
+    #[tokio::test]
+    async fn test_superposition_fanout_concurrency_bounded() {
+        let registry = make_registry_with_servers(15);
+        let servers: Vec<String> = (0..15).map(|i| format!("s-{i}")).collect();
+        let query = SuperpositionQuery::new("probe", servers, 5_000);
+        let client = Arc::new(ConcurrencyProbeClient::default());
+        let results = execute_superposition_query(
+            &query,
+            &registry,
+            5000,
+            client.clone(),
+            4, // 上界 4（刻意小于 server 数，逼出排队）
+        )
+        .await
+        .expect("查询失败");
+        assert_eq!(results.len(), 15, "排队语义：全部 server 都必须完成");
+        assert!(results.iter().all(|r| r.success));
+        let peak = client.peak();
+        assert!(
+            peak <= 4,
+            "在飞峰值 {peak} 超过上界 4 — Semaphore 未生效"
+        );
+        assert!(peak > 1, "峰值 {peak} == 1 说明并发完全没发生，测试失真");
+    }
+
+    /// max_concurrency = 0 按 1 处理（防御钳制）
+    #[tokio::test]
+    async fn test_superposition_zero_concurrency_clamped_to_one() {
+        let registry = make_registry_with_servers(3);
+        let query =
+            SuperpositionQuery::new("probe", vec!["s-0".into(), "s-1".into(), "s-2".into()], 5_000);
+        let client = Arc::new(ConcurrencyProbeClient::default());
+        let results = execute_superposition_query(&query, &registry, 5000, client.clone(), 0)
+            .await
+            .expect("查询失败");
+        assert_eq!(results.len(), 3);
+        assert!(
+            client.peak() <= 1,
+            "0 上界必须钳制为 1，实测峰值 {}",
+            client.peak()
+        );
     }
 
     #[test]
