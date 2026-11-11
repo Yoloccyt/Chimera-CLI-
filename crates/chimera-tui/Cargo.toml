@@ -4,8 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# TUI 面板总览:19 面板循环(22 PanelId 枚举,3 个标注'暂不注册'原因:
-# Timeline/OsaSparse/Sysinfo,详见 app/mod.rs 注册逻辑)
+# TUI 面板总览:面板枚举与焦点环以 src/types.rs 为唯一权威源
+# (PanelId / ALL / REGISTERED_FOCUS_ORDER;InjectionStrategy 经 FC-05 下线但仍占枚举位)。
+# 注册逻辑见 app/mod.rs;Sysinfo 已接线注册(Concord T1.4)。计数不在此登记以免漂移。
 # v3.1 重构:自研渲染引擎特性开关(ADR-029 / ADR-061)
 # WHY feature flag:自研引擎与现有 ratatui 路径双轨并存,逐面板迁移,
 # 每个里程碑可 cargo test --workspace 全绿、随时回滚。

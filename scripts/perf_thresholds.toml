@@ -3,15 +3,15 @@
 # 权威消费者：scripts/check_perf_redlines.py；
 # 迁移来源：bench_check.yml THRESHOLDS_NS / PATH_KEYWORDS / run_bench 行（2026-08-31 机械抽取）。
 #
-# 【2026-10-26 R2 订正（登记册 L51 / M65）】上行原写「同时被
-# .github/workflows/bench_check.yml 的 thresholds 步骤调用（消灭 heredoc 内嵌表）」
-# ——不成立。实测：bench_check.yml 仍自带 52 键 THRESHOLDS_NS heredoc（L182 的
-# python3 <<'PYEOF' 体内），且它是 CI「Assert thresholds」步的唯一实际数值腿；
-# check_perf_redlines.py 的 thresholds 模式从未被任何 workflow 调用（ci.yml 只跑
-# --selftest 与 --static-only）。⇒ 本文件当前是「第二份表」而非唯一真值源，
-# R1-T6 的切流尚未发生。已登记不变式补齐计划见 ADR-225 §5（heredoc 键集
-# == 本表 [thresholds_ns] 键集的机器对拍）；在那之前，两表差集会静默存在
-# （R2 M44 实例：本表有 hnsw_tiered 而 heredoc 无 ⇒ 该阈值在 CI 永不被断言）。
+# 【2026-11-11 T4 订正】历史上（2026-10-26 R2，登记册 L51/M65）本表曾是「第二份表」：
+# bench_check.yml 自带 THRESHOLDS_NS heredoc，check_perf_redlines.py 的 thresholds
+# 模式无 workflow 调用，两表差集静默存在（R2 M44：本表有 hnsw_tiered 而 heredoc 无）。
+# 该缺陷已被机器门根修：I9（heredoc THRESHOLDS_NS 键集 == 本表 [thresholds_ns] 键集，
+# 严格相等）与 I10（PATH_KEYWORDS 同构对拍）已实现并于 CI --static-only 跑
+# （check_perf_redlines.py:359-376；R2 M44 由 I9 根修、N-3 幽灵门残留由 I10 根修）。
+# ⇒ 本表现在是受机器对拍保护的双写面：改一处必须同批改另一处，否则 I9/I10 判红。
+# 键数以门自报为准（当前 85 keys，不用 awk 逐节计数）。残余缺口 M3：键集相等有门，
+# 但「值」一致性由 compare 模式承担而该模式未接任何 workflow ⇒ 值漂移仍无门（待裁决）。
 #
 # 不变式（由 py 核 --selftest 与常规模式共同断言）：
 #   I1 set(thresholds_ns) == set(path_keywords)
