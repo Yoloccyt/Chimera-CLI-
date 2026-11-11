@@ -24,7 +24,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
 use nexus_core::{Checkpoint, Quest};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -275,7 +274,8 @@ impl CheckpointManager {
 
     /// 保留最近 N 个检查点,删除其余(异步)
     ///
-    /// 按 created_at 降序排序,保留前 N 个,删除其余文件。
+    /// 按文件名字典序升序排序(UUIDv7 时间序,见 prune_old_blocking 的 WHY 注释),
+    /// 保留最新 N 个,删除其余文件;零解码,不读取 .bin 内容。
     /// WHY:避免磁盘膨胀,同时保留足够回滚点。
     pub async fn prune_old(&self, quest_id: &str, keep: usize) -> Result<(), QuestError> {
         let dir = self.checkpoint_dir.clone();
@@ -286,7 +286,7 @@ impl CheckpointManager {
             .map_err(|e| QuestError::CheckpointSaveFailed(format!("spawn_blocking join: {e}")))?
     }
 
-    /// 检查点清理的阻塞部分 — 列出 + 加载元数据 + 删除旧文件
+    /// 检查点清理的阻塞部分 — 列出 + 文件名排序 + 删除旧文件(零解码)
     ///
     /// WHY 独立静态函数:save_blocking 内部调用,需纯同步实现。
     fn prune_old_blocking(
@@ -319,18 +319,19 @@ impl CheckpointManager {
             return Ok(());
         }
 
-        // 逐个加载获取 created_at(使用阻塞版本,避免异步调用)
-        let mut checkpoints: Vec<(String, chrono::DateTime<Utc>)> = Vec::with_capacity(ids.len());
-        for id in &ids {
-            let file_path = quest_dir.join(format!("{id}.bin"));
-            if let Ok(cp) = Self::load_blocking(&file_path) {
-                checkpoints.push((cp.checkpoint_id, cp.created_at));
-            }
-        }
-
-        // 按 created_at 降序,保留前 keep 个,删除其余
-        checkpoints.sort_by_key(|(_, ts)| std::cmp::Reverse(*ts));
-        for (id, _) in checkpoints.iter().skip(keep) {
+        // WHY 文件名排序可替代 created_at:checkpoint_id = UUIDv7(前 48 bit 为毫秒
+        // 时间戳),文件名前缀 `cp-` 相同,字典序 ≈ 时间序。同毫秒内多个 v7 的相对
+        // 顺序虽不确定,但 save 为串行 await(每次落盘 ≈4ms 磁盘开销),同毫秒至多
+        // 1 个检查点,无实际影响;用户可见的"取最新"路径 load_latest_blocking 仍按
+        // created_at 排序,不受此处排序语义影响。
+        // WHY 零解码:旧实现为取 created_at 对每个文件做完整反序列化 + SHA-256 校验
+        // (O(N×payload));文件名排序仅 O(N log N) 字符串比较 + O(删量) unlink,
+        // 不读取任何 .bin 内容。
+        // 顺带修复:旧实现损坏文件(非法 msgpack)加载失败被 `if let Ok` 跳过,既不
+        // 参与排序也永不清理;新实现按文件名正常纳入删除范围。
+        ids.sort_unstable();
+        // ids.len() > keep 已由上方提前返回保证,此处不会下溢
+        for id in &ids[..ids.len() - keep] {
             let path = quest_dir.join(format!("{id}.bin"));
             if let Err(e) = fs::remove_file(&path) {
                 tracing::warn!(
@@ -585,7 +586,7 @@ mod tests {
         let cm = CheckpointManager::new(tmp.path().to_path_buf());
         let quest = make_quest("q-1", 1);
 
-        let mut newest_time = chrono::DateTime::<Utc>::MIN_UTC;
+        let mut newest_time = chrono::DateTime::<chrono::Utc>::MIN_UTC;
         for _ in 0..3 {
             std::thread::sleep(std::time::Duration::from_millis(5));
             let cp = cm.save(&quest).await.unwrap();
@@ -752,5 +753,77 @@ mod tests {
         let loaded = cm.load("q-mm", &cp.checkpoint_id).await.unwrap();
         let restored: Quest = rmp_serde::from_slice(&loaded.serialized_state).unwrap();
         assert_eq!(restored, quest);
+    }
+
+    /// 验证 prune 对损坏文件(非法 msgpack)也能正常清理:
+    /// 旧实现逐个 load_blocking 取 created_at,损坏文件加载失败被 `if let Ok` 跳过,
+    /// 既不参与排序也永不清理;零解码实现按文件名排序,损坏文件正常纳入删除范围。
+    /// (行为改进锁定:旧实现下本测试必红——损坏文件被永久保留)
+    #[tokio::test]
+    async fn prune_works_on_corrupted_files() {
+        let tmp = tempdir().unwrap();
+        // max_keep=5:3 次保存不触发 save 内部自动 prune,损坏文件由测试手工注入
+        let cm = CheckpointManager::new(tmp.path().to_path_buf());
+        let quest = make_quest("q-corrupt", 1);
+
+        let mut ids = Vec::new();
+        for _ in 0..3 {
+            // 微小延迟确保 UUIDv7 毫秒时间戳不同,文件名字典序严格对应保存顺序
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            let cp = cm.save(&quest).await.unwrap();
+            ids.push(cp.checkpoint_id);
+        }
+
+        // 手工写入损坏 .bin:UUIDv7 时间戳前缀全零(1970 年),字典序必然最旧
+        let quest_dir = tmp.path().join("q-corrupt");
+        let corrupted_name = "cp-00000000-0000-1000-8000-000000000000";
+        std::fs::write(
+            quest_dir.join(format!("{corrupted_name}.bin")),
+            b"\x00garbage-not-msgpack\xff",
+        )
+        .unwrap();
+
+        // 4 个文件,keep=2 → 删 2 个最旧:损坏文件 + 第 1 个正常检查点
+        cm.prune_old("q-corrupt", 2).await.unwrap();
+
+        let remaining = cm.list_checkpoints("q-corrupt").unwrap();
+        assert_eq!(remaining.len(), 2, "应保留 2 个检查点");
+        assert!(
+            !remaining.contains(&corrupted_name.to_string()),
+            "损坏文件应被 prune 删除(旧实现会永久保留)"
+        );
+        assert!(remaining.contains(&ids[1]), "第 2 新的正常检查点应保留");
+        assert!(remaining.contains(&ids[2]), "最新的正常检查点应保留");
+    }
+
+    /// 验证 prune 按文件名字典序(UUIDv7 时间序)保留最新 keep 个:
+    /// 零解码实现的保留集必须与旧实现按 created_at 排序的结果一致(语义不回退),
+    /// 且与用户可见的"取最新"路径 load_latest(按 created_at 排序,未改动)一致。
+    #[tokio::test]
+    async fn prune_keeps_latest_by_filename_order() {
+        let tmp = tempdir().unwrap();
+        let cm = CheckpointManager::new(tmp.path().to_path_buf());
+        let quest = make_quest("q-order", 1);
+
+        let mut ids = Vec::new();
+        for _ in 0..5 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            let cp = cm.save(&quest).await.unwrap();
+            ids.push(cp.checkpoint_id);
+        }
+
+        cm.prune_old("q-order", 2).await.unwrap();
+
+        let remaining = cm.list_checkpoints("q-order").unwrap();
+        assert_eq!(remaining.len(), 2, "应保留 2 个检查点");
+        assert!(remaining.contains(&ids[3]), "第 2 新的应保留");
+        assert!(remaining.contains(&ids[4]), "最新的应保留");
+
+        // load_latest 按 created_at 排序,应与 prune 保留的最新检查点一致
+        let latest = cm.load_latest("q-order").await.unwrap().unwrap();
+        assert_eq!(
+            latest.checkpoint_id, ids[4],
+            "load_latest 应返回最新保存的检查点"
+        );
     }
 }
