@@ -539,7 +539,7 @@ async fn handle_slash_command(
     match parsed.name.as_str() {
         "help" => handle_help(&registry),
         "clear" => handle_clear(),
-        "model" => handle_model(&parsed, config, perm),
+        "model" => handle_model(&parsed, config, perm).await?,
         // Result 返回的 handler 用 `?` 传播错误,使所有 match arm 统一为 `()` 类型
         "llm" => handle_llm(&parsed, config).await?,
         "quest" => handle_quest(&parsed, engine, config, perm).await?,
@@ -589,7 +589,11 @@ fn handle_clear() {
 /// WHY 用 `strategy` 字段而非 `default_channel`:`ModelRouterConfig`(nexus-core)只暴露
 /// `strategy` 字段(CostOptimized/SpeedOptimized/QualityOptimized/Auto/Failover),
 /// 与 CAF 四渠道(Quality/Balanced/Cost/Speed)概念映射但不完全一致。
-fn handle_model(parsed: &ParsedSlashCommand, config: &ChimeraConfig, perm: &PermissionCtx) {
+async fn handle_model(
+    parsed: &ParsedSlashCommand,
+    config: &ChimeraConfig,
+    perm: &PermissionCtx,
+) -> Result<()> {
     match parsed.first_arg() {
         None => {
             // 无参:显示当前 strategy + CAF 四渠道占位
@@ -602,15 +606,28 @@ fn handle_model(parsed: &ParsedSlashCommand, config: &ChimeraConfig, perm: &Perm
         Some(strategy) => {
             // 有参:内存态切换(后续 Task 接入 omega.yaml 持久化)
             if !perm.should_skip_prompt() {
-                // y/N prompt(同 spawn_tool_event_subscriber 模式)
+                // y/N prompt：N2 —— stdin 读取移入 spawn_blocking + ctrl_c select，
+                // 等待用户输入期间不占死 tokio worker（复用 permission.rs 同款模式）。
                 println!("[permission: model] 切换策略到 '{strategy}'? [y/N]");
-                let mut input = String::new();
-                if io::stdin().lock().read_line(&mut input).is_ok() {
-                    let confirmed = matches!(input.trim().to_lowercase().as_str(), "y" | "yes");
-                    if !confirmed {
-                        println!("[model] 已取消策略切换");
-                        return;
+                let confirmed = tokio::select! {
+                    biased;
+                    _ = tokio::signal::ctrl_c() => {
+                        eprintln!();
+                        false
                     }
+                    result = tokio::task::spawn_blocking(crate::permission::read_stdin_line) => {
+                        match result {
+                            Ok(Ok(input)) => {
+                                matches!(input.trim().to_lowercase().as_str(), "y" | "yes")
+                            }
+                            // 读取失败/panic 一律 fail-closed 取消（不自动确认切换）
+                            _ => false,
+                        }
+                    }
+                };
+                if !confirmed {
+                    println!("[model] 已取消策略切换");
+                    return Ok(());
                 }
             }
             // 内存态切换:构造 cfg 副本并修改 strategy 字段
@@ -621,6 +638,7 @@ fn handle_model(parsed: &ParsedSlashCommand, config: &ChimeraConfig, perm: &Perm
             println!("✓ strategy switched to: {strategy} (内存生效,待 omega.yaml 持久化接入)");
         }
     }
+    Ok(())
 }
 
 /// `/llm <action>` — 转发到 `chimera llm` 同语义(Task 3 of spec)
@@ -920,5 +938,21 @@ mod tests {
             no_permission: false,
         };
         assert!(expert.should_skip_prompt(), "--yes 应跳过 prompt");
+    }
+
+    /// N2：handle_model 异步化后，skip-prompt 路径（CI 无 TTY）不阻塞、不读 stdin，
+    /// 直接完成切换并返回 Ok。验证 async 转换正确且 skip-prompt 分支保留。
+    #[tokio::test]
+    async fn handle_model_skip_prompt_completes_async() {
+        let cfg = ChimeraConfig::default();
+        let ci = PermissionCtx {
+            yes: false,
+            no_permission: true,
+        };
+        let parsed = ParsedSlashCommand::parse("/model SpeedOptimized");
+        // skip-prompt ⇒ 不进 spawn_blocking/stdin 分支，直接切换返回 Ok
+        handle_model(&parsed, &cfg, &ci)
+            .await
+            .expect("skip-prompt 切换应成功");
     }
 }

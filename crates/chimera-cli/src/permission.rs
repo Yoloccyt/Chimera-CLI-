@@ -292,7 +292,8 @@ pub(crate) async fn confirm_with(
 /// 从 stdin 读取一行(spawn_blocking 中执行)
 ///
 /// 独立函数便于 `spawn_blocking` 调用(要求 `FnOnce + Send + 'static`)。
-fn read_stdin_line() -> io::Result<String> {
+/// pub(crate)：chat /model prompt 复用同款非阻塞读取（N2）。
+pub(crate) fn read_stdin_line() -> io::Result<String> {
     let mut input = String::new();
     io::stdin().lock().read_line(&mut input)?;
     Ok(input)
