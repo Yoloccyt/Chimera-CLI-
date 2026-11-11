@@ -1,7 +1,7 @@
 # Non-gate task families for govd (ADR-228 §3.2).
 # These rows are NOT gates: they never appear in gate_manifest.toml. `release`
 # merges every family; the other lanes merge only the `external` rows that name
-# them in `profiles`, so the pr ledger keeps meaning "133 light + 7 heavy".
+# them in `profiles`, so the pr ledger keeps meaning "135 light + 7 heavy".
 # `source` is one of gate|rust|external|diagnostic (G-138 enforces it).
 
 [[task]]

@@ -60,7 +60,7 @@ def load_all(profile_name=""):
     external rows that explicitly name them (ADR-228 §3.2).
 
     WHY `profiles` is required on external rows instead of merging all tasks: the
-    pr ledger must keep reading as "133 light + 7 heavy skipped". If six extra
+    pr ledger must keep reading as "135 light + 7 heavy skipped". If six extra
     out-of-profile tasks were loaded and then skipped, `skip=` would silently grow
     from 7 to 13 and the one number an operator watches would stop meaning
     "the disk-gated heavies".
