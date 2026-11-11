@@ -398,6 +398,9 @@ jobs:
               "tplan_declared_parallel":   38_000_000,
               "tplan_undeclared_serial":   175_000_000,
               "tplan_undeclared_parallel": 32_000_000,
+              # T1/ADR-281：混层 c8（重测 median 31.091ms×2.5→78ms；工单首轮 21.777ms
+              # 偏差 +42% 按 T1 步骤1 重算；防回退=退回串行 c8≈124ms>78ms 即红）
+              "tplan_mixed_parallel":      78_000_000,
               # ADR-260：seccore 判决体 opt 臂（实测 max median ×10 ns 档余量，
               # 2026-11-08；hit 33.7ns→350 / miss 26.2ns→300）
               "spol_opt_hit":  350,
@@ -538,6 +541,8 @@ jobs:
               "tplan_declared_parallel":   ["toolplan_layers/readonly8_ms2/8"],
               "tplan_undeclared_serial":   ["toolplan_layers/undeclared8_ms2/1"],
               "tplan_undeclared_parallel": ["toolplan_layers/undeclared8_ms2/8"],
+              # T1：混层 c8 叶子路径（用 7r1w_ms2/8 避开 command_validator 词条 "mixed" 子串串台，I2）
+              "tplan_mixed_parallel":      ["7r1w_ms2/8"],
               # ADR-260：spol_* 词条（跨 R∈{4,32,256} max median 归并；I2 已机检零重叠）
               "spol_opt_hit":  ["opt/hit_R"],
               "spol_opt_miss": ["opt/miss_R"],

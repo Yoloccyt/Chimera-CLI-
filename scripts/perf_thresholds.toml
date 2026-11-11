@@ -120,6 +120,14 @@ tplan_declared_serial = 175000000
 tplan_declared_parallel = 38000000
 tplan_undeclared_serial = 175000000
 tplan_undeclared_parallel = 32000000
+# —— 混层写屏障分段（toolplan_layers bench，ADR-281/T1）——
+# mixed7r1w_ms2/8（7 读+末尾 1 写，写屏障分段并发）。阈值 = 重测 median × 2.5
+# 向上取整到 ms 粒度（:115 惯例）。2026-11-11 重测两次 c8 median 30.899/31.091ms
+# （工单首轮 21.777ms，偏差 +42% > 20% ⇒ 按 T1 步骤1 用新 median 重算）；
+# ceil(31.091×2.5)=77.73 → 78ms（< 160ms 棘轮护栏 ✓）。c8 负载敏感（CI 宽），
+# 取较高 median 防 runner 假红；/1 组（c1 ~124ms）负载敏感不设阈值（:117 惯例）。
+# 防回退判据：退回整层串行 c8≈c1≈124ms > 78ms 即红。
+tplan_mixed_parallel = 78000000
 # —— seccore 判决体（policy_eval bench，ADR-260/工程工单 A-3）——
 # opt 臂 = 生产 ExecPolicy（索引+零分配），ref 臂 = 改造前线性判决（对照组，
 # 不设阈值——其值只作 ADR-260 §4 的对照证据）。阈值 = 实测 max median × 10
@@ -282,6 +290,11 @@ tplan_declared_serial = ["toolplan_layers/readonly8_ms2/1"]
 tplan_declared_parallel = ["toolplan_layers/readonly8_ms2/8"]
 tplan_undeclared_serial = ["toolplan_layers/undeclared8_ms2/1"]
 tplan_undeclared_parallel = ["toolplan_layers/undeclared8_ms2/8"]
+# T1：混层 c8 叶子路径。WHY 用 "7r1w_ms2/8" 而非含组名的全路径：command_validator
+# 的词条是 ["mixed"]，全路径 "mixed7r1w_ms2/8" 含子串 "mixed" 会触 I2 串台（工单
+# 首轮 I2 声明只核 tplan_* 同族漏了该短词条，重测纠正）。"7r1w_ms2/8"（7读1写签名）
+# 唯一匹配混层 c8 且不含 "mixed"，与全部既有词条双向互不为子串。
+tplan_mixed_parallel = ["7r1w_ms2/8"]
 # ADR-260：spol_* 取「opt 臂 + 场景」叶子路径（词条跨 R∈{4,32,256} 三档以
 # max median 语义归并为一键，legacy 断言取匹配路径集的最大值）；I2 已机检
 # 零重叠（两词条与全部既有 101 词条双向无子串关系，彼此互斥，2026-11-08）。
