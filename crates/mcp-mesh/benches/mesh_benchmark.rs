@@ -132,6 +132,57 @@ fn bench_transaction_instant(c: &mut Criterion) {
     group.finish();
 }
 
+/// T5 归因测量臂：与 instant 臂同形但 `durable=false`（WalStore=None，跳过 WAL
+/// append 及其内的 sensitive::scan）。WHY 单列：instant−nodur 差值即 WAL 路径
+/// 成本（2×open/write/sync_all + 2×敏感扫描），用于裁决句柄复用/sync_data 是否
+/// 值得。**仅测量臂，不改生产 durable（生产恒 true，无安全回归）**。
+fn make_mesh_with_n_servers_nodur(n: usize) -> McpMesh {
+    let config = MeshConfig {
+        heartbeat_timeout_ms: 300_000,
+        durable: false,
+        ..MeshConfig::default()
+    };
+    let client: std::sync::Arc<dyn mcp_mesh::ParticipantClient> =
+        std::sync::Arc::new(mcp_mesh::InProcessClient::instant());
+    let mesh = McpMesh::with_participant_client(config, None, client);
+    for i in 0..n {
+        let sid = format!("s-{i}");
+        let _ = mesh.register_server(MeshServer::new(sid, format!("203.0.113.1:{i}"), vec![]));
+    }
+    mesh
+}
+
+/// 基准:零延迟 + 非 durable 的 2PC 延迟（T5 第三臂，与 instant 臂同参数同场景）
+fn bench_transaction_nodur(c: &mut Criterion) {
+    let rt = Runtime::new().expect("创建 tokio runtime 失败");
+    let sizes: &[usize] = &[1, 3, 5];
+
+    let mut group = c.benchmark_group("mcp_mesh_transaction_nodur");
+    group.sample_size(50);
+    group.measurement_time(std::time::Duration::from_secs(10));
+
+    for &n in sizes {
+        let mesh = make_mesh_with_n_servers_nodur(n);
+        let participants = make_participants(n);
+
+        group.bench_with_input(BenchmarkId::new("2pc", n), &n, |b, &_| {
+            b.iter(|| {
+                rt.block_on(async {
+                    mesh.execute_transaction(
+                        black_box(participants.clone()),
+                        black_box("bench".into()),
+                        Vec::new(),
+                    )
+                    .await
+                    .expect("事务失败")
+                })
+            });
+        });
+    }
+
+    group.finish();
+}
+
 /// 基准:测量 5 服务器并发 100 事务批量延迟
 ///
 /// 此基准被 `#[ignore]` 标记,需 `--ignored` 显式运行,因为它耗时较长
@@ -172,6 +223,7 @@ criterion_group!(
     benches,
     bench_transaction,
     bench_transaction_instant,
+    bench_transaction_nodur,
     bench_concurrent_100_transactions
 );
 criterion_main!(benches);
