@@ -58,6 +58,17 @@ pub async fn execute_with_ctx(ctx: AppContext, config: &ChimeraConfig) -> Result
     }
 }
 
+/// N4：把 handle_op 失败转译为 `AppEvent::Error` 帧（客户端可感知操作失败）。
+/// code 用稳定标签 `OperationFailed`；message 携带错误的 Display 文本。
+/// serve/acp 共用（handle_op 错误类型为 ServerError），经 `RpcCodec::encode_notification`
+/// 编码为 `app.event` 通知。泛型 Display 以适配任意错误类型。
+pub(crate) fn op_error_event(e: &impl std::fmt::Display) -> nexus_contracts::app::AppEvent {
+    nexus_contracts::app::AppEvent::Error {
+        code: "OperationFailed".into(),
+        message: e.to_string().into(),
+    }
+}
+
 /// 事件循环主体 — 逐帧接收/处理/推送（EOF 即正常结束）
 ///
 /// # 参数
@@ -104,7 +115,13 @@ async fn serve_loop(server: &AppServer, transport: &dyn AppTransport) -> Result<
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "chimera serve: 操作处理失败");
+                // N4：操作失败回 AppEvent::Error 帧（best-effort，回帧失败仅告警），
+                // 客户端可感知失败；不中断循环。修复前仅 warn 不回帧。
+                let err_event = op_error_event(&e);
+                if let Err(send_err) = transport.send_event(&err_event).await {
+                    tracing::warn!(error = %send_err, "chimera serve: 错误事件回帧发送失败");
+                }
+                tracing::warn!(error = %e, "chimera serve: 操作处理失败，已回错误事件");
             }
         }
     }
@@ -182,6 +199,38 @@ mod tests {
         assert!(
             kinds.iter().any(|k| k == "thread_started"),
             "坏帧不得终止会话，后续正常帧应被处理；实际 kinds: {kinds:?}"
+        );
+    }
+
+    /// N4：handle_op 失败 → serve_loop 回 AppEvent::Error 帧（客户端可感知操作失败），
+    /// 且不中断循环（后续正常帧仍处理）。修复前仅 warn 不回帧。
+    #[tokio::test]
+    async fn serve_loop_replies_error_event_on_handle_op_failure() {
+        let ctx = crate::composition::build(&ChimeraConfig::default()).expect("装配应成功");
+        let server = crate::composition::build_app_server(ctx).await;
+        // 第 1 帧 = TurnSubmit 未知 thread（handle_op 失败）；第 2 帧 = 正常 ThreadStart
+        let ops = vec![
+            AppOp::TurnSubmit {
+                thread_id: ThreadId::new("unknown-thread"),
+                input: nexus_contracts::app::UserInput {
+                    text: "x".into(),
+                    extras: None,
+                },
+            },
+            AppOp::ThreadStart(ThreadStartParams::new("g1", "r1")),
+        ];
+        let transport = MockTransport::new(ops);
+        serve_loop(&server, &transport)
+            .await
+            .expect("EOF 应使循环正常退出");
+        let kinds = transport.sent_kinds();
+        assert!(
+            kinds.iter().any(|k| k == "error"),
+            "handle_op 失败必须回 AppEvent::Error 帧；实际 kinds: {kinds:?}"
+        );
+        assert!(
+            kinds.iter().any(|k| k == "thread_started"),
+            "失败不得终止会话，后续正常帧应被处理；实际 kinds: {kinds:?}"
         );
     }
 

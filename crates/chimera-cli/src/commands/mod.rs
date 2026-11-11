@@ -373,6 +373,7 @@ pub(crate) mod testutil {
                 AppEvent::ThreadStarted { .. } => "thread_started",
                 AppEvent::ItemChanged { .. } => "item_changed",
                 AppEvent::ApprovalRequested { .. } => "approval_requested",
+                AppEvent::Error { .. } => "error",
                 _ => "other",
             };
             self.sent_kinds.lock().unwrap().push(tag.to_string());

@@ -96,6 +96,10 @@ pub fn translate_event(ev: &AppEvent) -> Option<serde_json::Value> {
             "method": "session/request_permission",
             "params": { "action": "approve" },
         })),
+        AppEvent::Error { code, message } => Some(serde_json::json!({
+            "method": "session/error",
+            "params": { "code": code, "message": message },
+        })),
         _ => None,
     }
 }
@@ -193,7 +197,13 @@ async fn acp_loop(server: &AppServer, transport: &dyn AppTransport) -> Result<()
                 }
             }
             Err(e) => {
-                tracing::warn!(error = %e, "chimera acp: 操作处理失败");
+                // N4：操作失败回 AppEvent::Error 帧（经 RpcCodec 编码为 app.event 通知），
+                // 客户端可感知失败；不中断循环。修复前仅 warn 不回帧。
+                let err_event = crate::commands::serve::op_error_event(&e);
+                if let Err(send_err) = transport.send_event(&err_event).await {
+                    tracing::warn!(error = %send_err, "chimera acp: 错误事件回帧发送失败");
+                }
+                tracing::warn!(error = %e, "chimera acp: 操作处理失败，已回错误事件");
             }
         }
     }
