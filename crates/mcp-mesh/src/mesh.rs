@@ -350,8 +350,9 @@ impl McpMesh {
     /// Prepare 阶段 — 并发向所有参与者发送 prepare 请求(带 max_retries 重试)
     ///
     /// 通过 `ParticipantClient::prepare` 发送请求,用 `FuturesUnordered` 并发 fanout。
-    /// 任一参与者失败(Nack / 网络错误)按指数退避(50ms / 100ms)重试,达 `max_retries`
-    /// 仍失败则整体失败,触发 Abort+Rollback。
+    /// 首次失败(NetworkError)的参与者各自拥有独立的并行重试 future(独立指数退避
+    /// 50ms / 100ms),重试墙钟 ≈ 最慢一臂而非各臂之和;Nack(ProtocolError)立即
+    /// fail-fast;重试耗尽仍失败则整体失败,触发 Abort+Rollback。
     ///
     /// Task 0.7 v2.9.0-omega 新增:
     /// - 指数退避重试(`max_retries` 控制,默认 2,退避 50ms / 100ms)
@@ -370,9 +371,9 @@ impl McpMesh {
         let max_retries = self.config.max_retries;
         let mut acked: Vec<String> = Vec::with_capacity(tx.participant_servers.len());
 
-        // WHY 逐个参与者串行重试而非并发重试:并发重试需要复杂的状态机跟踪每个参与者的
-        // 重试次数,且 prepare 阶段允许部分慢参与者。这里采用并发首次 + 失败者串行重试
-        // 的混合策略:首次并发 fanout,失败的参与者按指数退避串行重试。
+        // WP-A:重试并行化 — 首次并发 fanout 后,每个失败 sid 拥有独立的并行重试
+        // future(独立退避计数,见下方 retry_futures)。旧实现"并发重试需复杂状态机"
+        // 的理由不成立:per-sid 重试各管各的退避计数,无需全局状态机。
         let mut futures: FuturesUnordered<_> =
             tx.participant_servers
                 .iter()
@@ -414,71 +415,79 @@ impl McpMesh {
             }
         }
 
-        // WHY 重新收集失败的参与者 sid:上面的 async move 块消耗了 sid,需从原列表找回
-        // 这里简化:首次并发失败的参与者通过 acked 集合差集计算
-        let failed_sids: Vec<String> = tx
-            .participant_servers
-            .iter()
-            .filter(|sid| !acked.contains(sid))
-            .cloned()
+        // WP-A 重试并行化:每个失败 sid 一个独立重试 future(独立退避计数),用
+        // FuturesUnordered 并发驱动 — 重试墙钟 ≈ max(各臂) 而非 Σ(各臂)。
+        // WHY 并行安全:prepare 是 2PC 的幂等询问,允许重发;每 sid 退避互不干扰,
+        // 无需全局状态机;收集循环收到 ProtocolError 即 return,未完成 future 随
+        // FuturesUnordered 一起 drop(零 tokio::spawn,无孤儿任务,drop 即取消)。
+        // failed_participants 已携带 (sid, 首次错误),无需再按 acked 差集重算 sid 列表。
+        let mut retry_futures: FuturesUnordered<_> = failed_participants
+            .into_iter()
+            .map(|(sid, first_err)| {
+                async move {
+                    // first_err 兜底:全部重试失败时返回最后一次错(至少有首次错)
+                    let mut last_err = first_err;
+                    for attempt in 0..max_retries {
+                        // 指数退避(默认预算可完成一次重试):50ms * 2^min(attempt, 6)
+                        // (50ms / 100ms / 200ms / 400ms / 800ms / 1600ms / 3200ms 封顶)
+                        let backoff_ms = backoff_ms(50, attempt);
+                        tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+
+                        let server =
+                            self.registry
+                                .get(&sid)
+                                .ok_or_else(|| McpError::ServerNotFound {
+                                    server_id: sid.clone(),
+                                })?;
+
+                        match self
+                            .participant_client
+                            .prepare(&server, &tx.transaction_id, op, args)
+                            .await
+                        {
+                            Ok(()) => return Ok(sid),
+                            Err(e) => {
+                                warn!(
+                                    transaction_id = %tx.transaction_id,
+                                    server_id = %sid,
+                                    attempt = attempt + 1,
+                                    max_retries,
+                                    error = %e,
+                                    "Prepare 重试失败"
+                                );
+                                // ProtocolError(Nack)上抛交由收集循环 fail-fast,
+                                // 其余参与者的重试 future 随 return 被 drop(无孤儿任务)
+                                if matches!(e, McpError::ProtocolError { .. }) {
+                                    return Err(e);
+                                }
+                                last_err = e;
+                            }
+                        }
+                    }
+                    // 重试耗尽:返回本 sid 最后一次的错误
+                    Err(last_err)
+                }
+            })
             .collect();
 
-        // 指数退避重试失败的参与者(仅 NetworkError)
-        for sid in failed_sids {
-            let mut last_err = failed_participants
-                .iter()
-                .find(|(s, _)| s == &sid)
-                .map(|(_, e)| e.clone())
-                .unwrap_or_else(|| McpError::NetworkError {
-                    server_id: sid.clone(),
-                    endpoint: String::new(),
-                    reason: "unknown".into(),
-                });
-
-            for attempt in 0..max_retries {
-                // 指数退避(默认预算可完成一次重试):50ms * 2^min(attempt, 6)
-                // (50ms / 100ms / 200ms / 400ms / 800ms / 1600ms / 3200ms 封顶)
-                let backoff_ms = backoff_ms(50, attempt);
-                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-
-                let server = self
-                    .registry
-                    .get(&sid)
-                    .ok_or_else(|| McpError::ServerNotFound {
-                        server_id: sid.clone(),
-                    })?;
-
-                match self
-                    .participant_client
-                    .prepare(&server, &tx.transaction_id, op, args)
-                    .await
-                {
-                    Ok(()) => {
-                        acked.push(sid.clone());
-                        break;
+        // 收集重试结果:ProtocolError 立即 fail-fast(return 即 drop 其余臂);
+        // 其他最终失败先记录、继续等剩余臂跑完,全部结束后统一裁决(最终一致性)。
+        let mut final_err: Option<McpError> = None;
+        while let Some(result) = retry_futures.next().await {
+            match result {
+                Ok(sid) => acked.push(sid),
+                Err(e) => {
+                    if matches!(e, McpError::ProtocolError { .. }) {
+                        return Err(e);
                     }
-                    Err(e) => {
-                        warn!(
-                            transaction_id = %tx.transaction_id,
-                            server_id = %sid,
-                            attempt = attempt + 1,
-                            max_retries,
-                            error = %e,
-                            "Prepare 重试失败"
-                        );
-                        // ProtocolError 不再重试
-                        if matches!(e, McpError::ProtocolError { .. }) {
-                            return Err(e);
-                        }
-                        last_err = e;
-                    }
+                    // 多 sid 失败时返回首个最终失败者的 last_err(具体是哪个 sid 与
+                    // 串行版可能不同,可接受:run_2pc 仅用于日志 + Abort 判定,不区分 sid)
+                    final_err.get_or_insert(e);
                 }
             }
-
-            // 检查最终是否成功(若 acked 中已包含 sid,说明重试成功)
-            if !acked.contains(&sid) {
-                return Err(last_err);
-            }
+        }
+        if let Some(e) = final_err {
+            return Err(e);
         }
 
         // Task 0.7 SubTask 0.7.3: Prepare 成功后写 WAL Prepare entry
@@ -1138,6 +1147,275 @@ mod tests {
         assert_eq!(backoff_ms(50, 6), 3200);
         assert_eq!(backoff_ms(50, 70), 3200, "位移超 6 必被封印");
         assert_eq!(backoff_ms(50, u32::MAX), 3200);
+    }
+
+    // === WP-A: prepare 重试并行化(失败者串行指数退避 → per-sid 并行重试) ===
+
+    /// prepare 单步脚本 — `ScriptedPrepareClient` 按 sid 按调用序消费
+    ///
+    /// WHY 枚举而非直接存 `Result`:错误需按目标 sid 构造(携带真实 server_id /
+    /// endpoint),脚本只描述"行为形状",错误构造放在 future 内。
+    #[derive(Clone, Debug)]
+    enum PrepareScriptStep {
+        /// sleep 指定时长后返回 NetworkError(模拟网络故障;ZERO = 立即失败)
+        NetworkErrAfter(Duration),
+        /// sleep 指定时长后返回 Ok(模拟慢参与者重试后恢复)
+        OkAfter(Duration),
+        /// 立即返回 ProtocolError(模拟 Nack — 协议层明确拒绝,重试无意义)
+        ProtocolErr,
+    }
+
+    /// 测试专用脚本化 Mock:按 server_id 配置 prepare 逐次调用行为
+    ///
+    /// 与 `MockParticipantClient`(静态 per-sid 失败注入)不同,本 Mock:
+    /// - **按调用序消费脚本**:每 sid 第 n 次调用取脚本第 n 步,耗尽后重复末步
+    ///   ("持续失败"脚本只需写一步)
+    /// - **可注入延迟**:步内 tokio sleep 模拟慢参与者(真实计时,延迟取短值控制测试时长)
+    /// - **记录每 sid 调用次数**:验证 fail-fast 截断与重试次数
+    struct ScriptedPrepareClient {
+        scripts: HashMap<String, Vec<PrepareScriptStep>>,
+        prepare_calls: Mutex<HashMap<String, usize>>,
+    }
+
+    impl ScriptedPrepareClient {
+        fn new(scripts: Vec<(&str, Vec<PrepareScriptStep>)>) -> Self {
+            Self {
+                scripts: scripts
+                    .into_iter()
+                    .map(|(sid, steps)| (sid.to_string(), steps))
+                    .collect(),
+                prepare_calls: Mutex::new(HashMap::new()),
+            }
+        }
+
+        fn prepare_calls(&self, sid: &str) -> usize {
+            self.prepare_calls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(sid)
+                .copied()
+                .unwrap_or(0)
+        }
+    }
+
+    impl ParticipantClient for ScriptedPrepareClient {
+        fn prepare<'a>(
+            &'a self,
+            server: &'a MeshServer,
+            _transaction_id: &'a str,
+            _op: &'a str,
+            _args: &'a [String],
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            // 锁内快照本步脚本并计数,锁外 await(§4.4 反模式 #1:禁止持锁跨 .await)
+            let step = {
+                let mut calls = self.prepare_calls.lock().unwrap_or_else(|e| e.into_inner());
+                let n = calls.entry(server.server_id.clone()).or_insert(0);
+                let idx = *n;
+                *n += 1;
+                self.scripts.get(&server.server_id).and_then(|script| {
+                    let last = script.len().saturating_sub(1);
+                    script.get(idx.min(last)).cloned()
+                })
+            };
+            Box::pin(async move {
+                match step {
+                    Some(PrepareScriptStep::OkAfter(delay)) => {
+                        tokio::time::sleep(delay).await;
+                        Ok(())
+                    }
+                    Some(PrepareScriptStep::NetworkErrAfter(delay)) => {
+                        tokio::time::sleep(delay).await;
+                        Err(McpError::NetworkError {
+                            server_id: server.server_id.clone(),
+                            endpoint: server.endpoint.clone(),
+                            reason: "Scripted 注入: prepare 网络失败".into(),
+                        })
+                    }
+                    Some(PrepareScriptStep::ProtocolErr) => Err(McpError::ProtocolError {
+                        server_id: server.server_id.clone(),
+                        reason: "Scripted 注入: prepare 被拒绝(Nack)".into(),
+                    }),
+                    // 未配置脚本的 sid 默认成功(与 MockParticipantClient 默认全成功一致)
+                    None => Ok(()),
+                }
+            })
+        }
+
+        fn commit<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn rollback<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn query<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _q: &'a str,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+            Box::pin(async { Ok("ok".to_string()) })
+        }
+    }
+
+    /// 构造注入 `ScriptedPrepareClient` 的 Mesh。
+    ///
+    /// WHY `durable: false`:避免测试向磁盘写 WAL 文件(纯内存行为,更干净)。
+    /// WHY `transaction_timeout_ms: 30_000`:被测预算是重试墙钟而非事务超时,
+    /// 大预算消除 16 线程并行下 200ms 默认值的 flaky(v2.21.0 同款教训)。
+    fn make_scripted_mesh(client: Arc<ScriptedPrepareClient>, sids: &[&str]) -> McpMesh {
+        let config = MeshConfig {
+            transaction_timeout_ms: 30_000,
+            max_retries: 2,
+            durable: false,
+            ..Default::default()
+        };
+        let mesh =
+            McpMesh::with_participant_client(config, None, client as Arc<dyn ParticipantClient>);
+        for (i, sid) in sids.iter().enumerate() {
+            // RFC 5737 TEST-NET-3 地址绕过 SSRF 校验
+            mesh.register_server(MeshServer::new(
+                (*sid).to_string(),
+                format!("203.0.113.1:{i}"),
+                vec![],
+            ))
+            .expect("注册失败");
+        }
+        mesh
+    }
+
+    /// WP-A:两个慢参与者的重试必须重叠执行(墙钟 ≈ max(各臂) 而非 Σ)。
+    ///
+    /// 场景:两参与者首次 prepare 立即 NetworkError,重试调用各自耗时 60ms 后成功。
+    /// 并行版墙钟 ≈ 50ms(退避) + 60ms(重试 RTT) = 110ms;
+    /// 串行版(旧实现)≈ (50 + 60) × 2 = 220ms。断言 < 150ms 只在两臂重叠时成立。
+    ///
+    /// WHY 真实计时而非 `start_paused`:start_paused 需 tokio `test-util` feature,
+    /// 为本测试给 mcp-mesh 加 feature 超出 WP-A 只改 mesh.rs 的约束;真实 sleep
+    /// 取 60ms 让并行余量(≈110ms → 阈值 150ms)吸收 Windows timer 精度与调度抖动。
+    #[tokio::test]
+    async fn prepare_retry_parallel_wallclock() {
+        let client = Arc::new(ScriptedPrepareClient::new(vec![
+            (
+                "s-0",
+                vec![
+                    PrepareScriptStep::NetworkErrAfter(Duration::ZERO),
+                    PrepareScriptStep::OkAfter(Duration::from_millis(60)),
+                ],
+            ),
+            (
+                "s-1",
+                vec![
+                    PrepareScriptStep::NetworkErrAfter(Duration::ZERO),
+                    PrepareScriptStep::OkAfter(Duration::from_millis(60)),
+                ],
+            ),
+        ]));
+        let mesh = make_scripted_mesh(Arc::clone(&client), &["s-0", "s-1"]);
+
+        let start = tokio::time::Instant::now();
+        let result = mesh
+            .execute_transaction(vec!["s-0".into(), "s-1".into()], "op".into(), Vec::new())
+            .await
+            .expect("首次失败 + 重试成功后事务应完成");
+        let elapsed = start.elapsed();
+
+        assert!(result.success, "两参与者重试成功后应 Commit");
+        assert_eq!(result.committed_servers.len(), 2);
+        assert!(
+            elapsed < Duration::from_millis(150),
+            "两臂重试应重叠(并行墙钟 ≈110ms),实际 {elapsed:?} — 若 ≈220ms 说明退化为串行"
+        );
+        // 每参与者恰 2 次 prepare:首次失败 + 1 次重试成功
+        assert_eq!(client.prepare_calls("s-0"), 2);
+        assert_eq!(client.prepare_calls("s-1"), 2);
+    }
+
+    /// WP-A:任一臂返回 ProtocolError(Nack)必须立即 fail-fast,截断其余臂的重试。
+    ///
+    /// s-0 排参与者首位且持续 NetworkError:旧串行实现会先耗尽它的 2 次重试
+    /// (3 次调用)并返回 NetworkError;并行实现中 s-1 的 ProtocolError 在
+    /// t≈50ms(退避后)先到,立即整体失败,s-0 的重试被截断(≤2 次调用)。
+    #[tokio::test]
+    async fn prepare_retry_parallel_fail_fast_on_protocol_error() {
+        let client = Arc::new(ScriptedPrepareClient::new(vec![
+            // s-0:持续 NetworkError(脚本耗尽后重复末步)
+            (
+                "s-0",
+                vec![PrepareScriptStep::NetworkErrAfter(Duration::ZERO)],
+            ),
+            // s-1:首次 NetworkError,重试返回 ProtocolError(Nack)
+            (
+                "s-1",
+                vec![
+                    PrepareScriptStep::NetworkErrAfter(Duration::ZERO),
+                    PrepareScriptStep::ProtocolErr,
+                ],
+            ),
+        ]));
+        let mesh = make_scripted_mesh(Arc::clone(&client), &["s-0", "s-1"]);
+        let tx = QuantumTransaction::with_id(
+            "tx-fail-fast".to_string(),
+            vec!["s-0".into(), "s-1".into()],
+        );
+
+        // 直接观测 prepare_phase 的错误变体(execute_transaction 会吞掉 McpError)
+        let err = mesh
+            .prepare_phase(&tx, "op", &[])
+            .await
+            .expect_err("ProtocolError 必须 fail-fast 整体失败");
+        assert!(
+            matches!(err, McpError::ProtocolError { .. }),
+            "应上抛 ProtocolError 而非其它错误,实际 {err:?}"
+        );
+        let s0_calls = client.prepare_calls("s-0");
+        assert!(
+            s0_calls <= 2,
+            "s-0 的重试应被 fail-fast 截断(≤2 次),实际 {s0_calls} 次 — 3 次说明未截断"
+        );
+        assert_eq!(client.prepare_calls("s-1"), 2, "s-1 首次 + 1 次重试(Nack)");
+    }
+
+    /// WP-A:重试耗尽必须返回 last_err(NetworkError)且 Abort+Rollback 正常终结。
+    ///
+    /// 行为守恒测试(新旧实现均应通过):单参与者持续 NetworkError,
+    /// max_retries=2 → 首次 + 2 次重试 = 3 次调用后整体失败;
+    /// `execute_transaction` 全路径走 Abort → Rollback,事务以 success=false 终结。
+    #[tokio::test]
+    async fn prepare_retry_exhausted_returns_error() {
+        let client = Arc::new(ScriptedPrepareClient::new(vec![(
+            "s-0",
+            vec![PrepareScriptStep::NetworkErrAfter(Duration::ZERO)],
+        )]));
+        let mesh = make_scripted_mesh(Arc::clone(&client), &["s-0"]);
+
+        // 1) 直接观测 prepare_phase 的错误变体(execute_transaction 会吞掉 McpError)
+        let tx = QuantumTransaction::with_id("tx-exhausted".to_string(), vec!["s-0".into()]);
+        let err = mesh
+            .prepare_phase(&tx, "op", &[])
+            .await
+            .expect_err("重试耗尽应返回 last_err");
+        assert!(
+            matches!(err, McpError::NetworkError { .. }),
+            "重试耗尽应返回最后一次 NetworkError,实际 {err:?}"
+        );
+        assert_eq!(client.prepare_calls("s-0"), 3, "首次 + 2 次重试");
+
+        // 2) 全路径:prepare 失败 → Abort → Rollback,事务正常终结(success=false)
+        let result = mesh
+            .execute_transaction(vec!["s-0".into()], "op".into(), Vec::new())
+            .await
+            .expect("prepare 失败应走 Abort+Rollback 正常返回,而非 Err 或挂起");
+        assert!(!result.success, "prepare 重试耗尽的事务必须失败");
     }
 
     fn make_mesh_with_servers(n: usize) -> McpMesh {
