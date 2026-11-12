@@ -297,7 +297,7 @@ async fn test_load_latest_returns_most_recent() {
     let mut newest_time = chrono::DateTime::<chrono::Utc>::MIN_UTC;
     for _ in 0..3 {
         std::thread::sleep(Duration::from_millis(5));
-        let cp = cm.save(&quest).await.unwrap();
+        let cp = cm.save(Arc::new(quest.clone())).await.unwrap();
         newest_time = cp.created_at;
     }
 
@@ -580,7 +580,7 @@ async fn test_save_load_not_blocking_runtime() {
     let quest = make_large_quest("q-save-blocking", 50);
 
     // 将 save 放到独立任务,与轻量任务并发执行
-    let save_handle = tokio::spawn(async move { cm.save(&quest).await });
+    let save_handle = tokio::spawn(async move { cm.save(Arc::new(quest)).await });
 
     let lightweight = yield_ten_times();
     // C-83（M63）：原为 100ms。本测试要证的是「save 不阻塞 runtime」——
@@ -611,7 +611,10 @@ async fn test_load_latest_not_blocking_runtime() {
     let quest = make_large_quest("q-load-blocking", 50);
 
     // 先保存一个检查点,使 load_latest 有文件可读
-    let _ = cm.save(&quest).await.expect("前置 save 应成功");
+    let _ = cm
+        .save(Arc::new(quest.clone()))
+        .await
+        .expect("前置 save 应成功");
 
     let cm = Arc::new(cm);
     let cm2 = Arc::clone(&cm);
@@ -646,7 +649,7 @@ async fn test_concurrent_save_load_correctness() {
     for _ in 0..5 {
         let cm = Arc::clone(&cm);
         let quest = quest.clone();
-        save_set.spawn(async move { cm.save(&quest).await });
+        save_set.spawn(async move { cm.save(Arc::new(quest)).await });
     }
 
     let mut checkpoint_ids = Vec::new();

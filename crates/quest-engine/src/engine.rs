@@ -260,10 +260,12 @@ impl QuestEngine {
             .as_ref()
             .ok_or_else(|| QuestError::CheckpointSaveFailed("checkpoints disabled".into()))?;
         // 获取 Quest 快照(get_quest 内部 clone,不持锁返回)
+        // WHY Arc::new(quest) 而非引用:cm.save 以 Arc<Quest> 收编编码入阻塞池,
+        // 此处为已有所有权的零拷贝移交(引用计数 +1)
         let quest = self
             .get_quest(quest_id)
             .ok_or_else(|| QuestError::QuestNotFound(quest_id.to_string()))?;
-        let checkpoint = cm.save(&quest).await?;
+        let checkpoint = cm.save(Arc::new(quest)).await?;
 
         // 发布 CheckpointSaved 事件(Critical,EventBus 据此优先投递)
         let event = NexusEvent::CheckpointSaved {
@@ -284,25 +286,24 @@ impl QuestEngine {
     /// 从最新检查点恢复 Quest — 发布 CheckpointLoaded 事件
     ///
     /// 流程:
-    /// 1. 加载最新检查点(load_latest 按 created_at 排序)
-    /// 2. 反序列化为 Quest
-    /// 3. 存入注册表(覆盖现有条目)
-    /// 4. 发布 CheckpointLoaded 事件
+    /// 1. 加载最新检查点并解码 Quest(load_latest_quest:磁盘 IO + 完整性校验 +
+    ///    MessagePack 解码 + 副本克隆全部在阻塞线程池内执行,WP-05)
+    /// 2. 存入注册表(覆盖现有条目)
+    /// 3. 发布 CheckpointLoaded 事件
     pub async fn restore_from_checkpoint(&self, quest_id: &str) -> Result<Quest, QuestError> {
         let cm = self
             .checkpoint_manager
             .as_ref()
             .ok_or_else(|| QuestError::CheckpointNotFound("checkpoints disabled".into()))?;
-        let checkpoint = cm.load_latest(quest_id).await?.ok_or_else(|| {
-            QuestError::CheckpointNotFound(format!("no checkpoint for {quest_id}"))
-        })?;
-
-        // 反序列化 Quest 状态(MessagePack → Quest)
-        let quest: Quest = rmp_serde::from_slice(&checkpoint.serialized_state)
-            .map_err(|e| QuestError::SerializationError(format!("msgpack decode quest: {e}")))?;
+        let (checkpoint, registry_quest, quest) =
+            cm.load_latest_quest(quest_id).await?.ok_or_else(|| {
+                QuestError::CheckpointNotFound(format!("no checkpoint for {quest_id}"))
+            })?;
 
         // 存入注册表(若已存在则覆盖,模拟"崩溃后重启"场景)
-        self.quests.insert(quest_id.to_string(), quest.clone());
+        // WHY 无 clone:注册表副本已在阻塞池内克隆完毕(见 load_latest_quest),
+        // 此处仅所有权移动,async 线程零 payload 拷贝
+        self.quests.insert(quest_id.to_string(), registry_quest);
 
         // 发布 CheckpointLoaded 事件
         let event = NexusEvent::CheckpointLoaded {

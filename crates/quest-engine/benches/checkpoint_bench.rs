@@ -10,6 +10,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use std::hint::black_box;
+use std::sync::Arc;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
@@ -43,14 +44,16 @@ fn bench_checkpoint_save(c: &mut Criterion) {
     let rt = tokio::runtime::Runtime::new().unwrap();
     let mut group = c.benchmark_group("checkpoint_save");
     for &n in &[10usize, 100, 1000] {
-        let quest = make_quest("q-bench", n);
+        // WHY Arc 在计时外构造:save 以 Arc<Quest> 收编编码入阻塞池;迭代内
+        // 仅引用计数克隆(纳秒级),payload 拷贝不混入测量
+        let quest = Arc::new(make_quest("q-bench", n));
         group.bench_with_input(BenchmarkId::from_parameter(n), &quest, |b, quest| {
             b.iter_batched(
                 // 每次全新临时目录,隔离 prune_old 对连续 save 的干扰
                 || tempdir().unwrap(),
                 |tmp| {
                     let cm = CheckpointManager::new(tmp.path().to_path_buf());
-                    rt.block_on(cm.save(black_box(quest))).unwrap();
+                    rt.block_on(cm.save(black_box(quest.clone()))).unwrap();
                 },
                 criterion::BatchSize::SmallInput,
             );
@@ -64,9 +67,9 @@ fn bench_checkpoint_list(c: &mut Criterion) {
     // 预建一个含多个检查点的 Quest 目录(max_keep=5,故实际保留 5 个)
     let tmp = tempdir().unwrap();
     let cm = CheckpointManager::new(tmp.path().to_path_buf());
-    let quest = make_quest("q-list", 100);
+    let quest = Arc::new(make_quest("q-list", 100));
     for _ in 0..5 {
-        rt.block_on(cm.save(&quest)).unwrap();
+        rt.block_on(cm.save(Arc::clone(&quest))).unwrap();
     }
     c.bench_function("checkpoint_list/100tasks_5cp", |b| {
         b.iter(|| cm.list_checkpoints(black_box("q-list")).unwrap());

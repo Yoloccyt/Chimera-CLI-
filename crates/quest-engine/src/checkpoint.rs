@@ -23,6 +23,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use nexus_core::{Checkpoint, Quest};
 use serde::{Deserialize, Serialize};
@@ -66,19 +67,46 @@ impl CheckpointManager {
 
     /// 保存检查点 — 序列化 Quest 为 MessagePack,写入磁盘(异步)
     ///
-    /// 内部通过 `spawn_blocking` 将磁盘 I/O + MessagePack 序列化 + SHA-256 校验
-    /// 放到阻塞线程池执行,避免阻塞 tokio worker 线程。
+    /// 内部通过 `spawn_blocking` 将 Quest 编码 + SHA-256 校验 + 磁盘 I/O +
+    /// prune_old 全部放到阻塞线程池执行,避免阻塞 tokio worker 线程。
     ///
-    /// 流程:
+    /// WHY 参数为 `Arc<Quest>`(WP-05):Quest 编码是 O(payload) 的同步 CPU,
+    /// 与磁盘 I/O 一并收编进阻塞闭包,async worker 上不再有任何序列化 CPU 点;
+    /// `Arc` 传参使闭包捕获只付引用计数克隆(rmp 序列化走 `&T`,无需解引用拷贝),
+    /// 调用方持 Quest 所有权时 `Arc::new(quest)` 即零拷贝移交。
+    ///
+    /// 流程(步骤 2-5 在阻塞线程池内执行):
     /// 1. 生成 checkpoint_id(UUIDv7,时间有序,便于排序与因果追踪)
     /// 2. 序列化 Quest 为 MessagePack
     /// 3. 计算 SHA-256 哈希(用于恢复时完整性校验)
     /// 4. 创建 Checkpoint 实例并整体序列化为 MessagePack 写入磁盘
     /// 5. 调用 prune_old 清理超出 max_keep 的旧检查点
-    pub async fn save(&self, quest: &Quest) -> Result<Checkpoint, QuestError> {
-        // UUIDv7 生成是 CPU-only 操作,在 async 上下文中完成
+    pub async fn save(&self, quest: Arc<Quest>) -> Result<Checkpoint, QuestError> {
+        // UUIDv7 生成是 CPU-only 微开销操作,在 async 上下文中完成
         let checkpoint_id = format!("cp-{}", Uuid::now_v7());
-        // Quest 序列化也是纯 CPU,提前完成(避免 clone Quest 到 spawn_blocking)
+
+        // 阻塞操作:Quest 编码 + SHA + 创建目录 + 写文件 + prune_old,全部收编进闭包
+        let dir = self.checkpoint_dir.clone();
+        let max_keep = self.max_keep;
+
+        tokio::task::spawn_blocking(move || {
+            Self::encode_and_save(&quest, checkpoint_id, &dir, max_keep)
+        })
+        .await
+        .map_err(|e| QuestError::CheckpointSaveFailed(format!("spawn_blocking join: {e}")))?
+    }
+
+    /// Quest 编码 + Checkpoint 构造 + 落盘 — save 的 spawn_blocking 闭包体
+    ///
+    /// WHY 独立静态函数:与 save_blocking 同理由 — spawn_blocking 要求闭包
+    /// Send + 'static,显式传参避免捕获 `&self`;编码与落盘合入同一闭包,
+    /// 序列化 CPU 与磁盘 I/O 同批离开 async worker。
+    fn encode_and_save(
+        quest: &Quest,
+        checkpoint_id: String,
+        checkpoint_dir: &Path,
+        max_keep: usize,
+    ) -> Result<Checkpoint, QuestError> {
         // 具名 map 编码(ADR-213 R7):数组形态把字段顺序钉成 wire 契约,同类型字段换序会
         // 静默改值;map 按 key 取值不受声明顺序影响。旧的位置式 blob 仍可被 from_slice
         // 读回(实测,见 nexus-contracts/tests/wire_format_compat.rs),故无需读侧垫片。
@@ -93,13 +121,7 @@ impl CheckpointManager {
             serialized_state,
         );
 
-        // 阻塞操作:创建目录 + 写文件 + prune_old 移到 spawn_blocking
-        let dir = self.checkpoint_dir.clone();
-        let max_keep = self.max_keep;
-
-        tokio::task::spawn_blocking(move || Self::save_blocking(checkpoint, &dir, max_keep))
-            .await
-            .map_err(|e| QuestError::CheckpointSaveFailed(format!("spawn_blocking join: {e}")))?
+        Self::save_blocking(checkpoint, checkpoint_dir, max_keep)
     }
 
     /// 检查点保存的阻塞部分 — 磁盘写入 + 旧检查点清理
@@ -195,6 +217,42 @@ impl CheckpointManager {
             return Err(QuestError::CheckpointCorrupted);
         }
         Ok(checkpoint)
+    }
+
+    /// 加载最新检查点并解码 Quest — 磁盘读取 + 完整性校验 + MessagePack 解码
+    /// 合入单个 spawn_blocking 闭包(WP-05 恢复侧收编)
+    ///
+    /// WHY 单闭包合并:磁盘 IO(load_latest_blocking)与 Quest 解码(from_slice)
+    /// 同属阻塞面操作,合入同一闭包少一次阻塞池往返。
+    /// WHY 返回双 Quest 副本:恢复路径有两个所有权消费方(注册表 insert 与公共
+    /// API 返回值),二者所需的 O(payload) 克隆是同步 CPU — 与解码同在阻塞池内
+    /// 执行,async worker 上零 payload 拷贝;`restore_from_checkpoint` 的公共
+    /// 签名(返回 Quest)保持不变。
+    /// 返回:(检查点(供 checkpoint_id 等元数据使用), 注册表副本, 返回值副本)
+    pub(crate) async fn load_latest_quest(
+        &self,
+        quest_id: &str,
+    ) -> Result<Option<(Checkpoint, Quest, Quest)>, QuestError> {
+        let dir = self.checkpoint_dir.join(quest_id);
+        let quest_id = quest_id.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            let checkpoint = Self::load_latest_blocking(&dir, &quest_id)?;
+            match checkpoint {
+                Some(cp) => {
+                    let quest: Quest =
+                        rmp_serde::from_slice(&cp.serialized_state).map_err(|e| {
+                            QuestError::SerializationError(format!("msgpack decode quest: {e}"))
+                        })?;
+                    // 双副本均在阻塞池内克隆(见方法 WHY),async 线程只做所有权移动
+                    let registry_copy = quest.clone();
+                    Ok(Some((cp, registry_copy, quest)))
+                }
+                None => Ok(None),
+            }
+        })
+        .await
+        .map_err(|e| QuestError::CheckpointSaveFailed(format!("spawn_blocking join: {e}")))?
     }
 
     /// 加载最新检查点(按 created_at 排序)— 无检查点返回 None(异步)
@@ -499,7 +557,7 @@ mod tests {
         let cm = CheckpointManager::new(tmp.path().to_path_buf());
         let quest = make_quest("q-1", 3);
 
-        let checkpoint = cm.save(&quest).await.unwrap();
+        let checkpoint = cm.save(Arc::new(quest.clone())).await.unwrap();
         assert_eq!(checkpoint.quest_id, "q-1");
         assert!(!checkpoint.serialized_state.is_empty());
         assert!(!checkpoint.memory_snapshot_hash.is_empty());
@@ -523,7 +581,7 @@ mod tests {
         let cm = CheckpointManager::new(tmp.path().to_path_buf());
         let quest = make_quest("q-1", 2);
 
-        let mut checkpoint = cm.save(&quest).await.unwrap();
+        let mut checkpoint = cm.save(Arc::new(quest)).await.unwrap();
         // 篡改 serialized_state,哈希应不匹配
         checkpoint.serialized_state[0] ^= 0xff;
         let result = cm.verify_integrity(&checkpoint);
@@ -536,7 +594,7 @@ mod tests {
         let cm = CheckpointManager::new(tmp.path().to_path_buf());
         let quest = make_quest("q-1", 2);
 
-        let checkpoint = cm.save(&quest).await.unwrap();
+        let checkpoint = cm.save(Arc::new(quest)).await.unwrap();
         // 直接篡改磁盘文件
         let path = cm.checkpoint_path("q-1", &checkpoint.checkpoint_id);
         let mut bytes = std::fs::read(&path).unwrap();
@@ -561,7 +619,7 @@ mod tests {
         for _ in 0..5 {
             // 微小延迟确保 created_at 不同(chrono::Utc::now 精度可能不足)
             std::thread::sleep(std::time::Duration::from_millis(5));
-            let cp = cm.save(&quest).await.unwrap();
+            let cp = cm.save(Arc::new(quest.clone())).await.unwrap();
             ids.push(cp.checkpoint_id);
         }
 
@@ -589,7 +647,7 @@ mod tests {
         let mut newest_time = chrono::DateTime::<chrono::Utc>::MIN_UTC;
         for _ in 0..3 {
             std::thread::sleep(std::time::Duration::from_millis(5));
-            let cp = cm.save(&quest).await.unwrap();
+            let cp = cm.save(Arc::new(quest.clone())).await.unwrap();
             newest_time = cp.created_at;
         }
 
@@ -646,7 +704,7 @@ mod tests {
         let nested = tmp.path().join("a").join("b").join("c");
         let cm = CheckpointManager::new(nested.clone());
         let quest = make_quest("q-1", 1);
-        let result = cm.save(&quest).await;
+        let result = cm.save(Arc::new(quest)).await;
         assert!(result.is_ok(), "应自动创建嵌套目录");
         assert!(nested.exists());
     }
@@ -658,8 +716,8 @@ mod tests {
         let q1 = make_quest("q-1", 2);
         let q2 = make_quest("q-2", 3);
 
-        cm.save(&q1).await.unwrap();
-        cm.save(&q2).await.unwrap();
+        cm.save(Arc::new(q1)).await.unwrap();
+        cm.save(Arc::new(q2)).await.unwrap();
 
         // 各 Quest 的检查点互不影响
         let ids1 = cm.list_checkpoints("q-1").unwrap();
@@ -680,9 +738,9 @@ mod tests {
         let quest = make_quest("q-1", 1);
 
         // 仅创建 2 个检查点(未超限),prune 不应删除任何
-        cm.save(&quest).await.unwrap();
+        cm.save(Arc::new(quest.clone())).await.unwrap();
         std::thread::sleep(std::time::Duration::from_millis(5));
-        cm.save(&quest).await.unwrap();
+        cm.save(Arc::new(quest.clone())).await.unwrap();
 
         let ids = cm.list_checkpoints("q-1").unwrap();
         assert_eq!(ids.len(), 2);
@@ -697,8 +755,8 @@ mod tests {
         let quest = make_quest("q-tie", 1);
 
         // 连续保存两个检查点(极短时间内 created_at 可能相同)
-        let cp1 = cm.save(&quest).await.unwrap();
-        let cp2 = cm.save(&quest).await.unwrap();
+        let cp1 = cm.save(Arc::new(quest.clone())).await.unwrap();
+        let cp2 = cm.save(Arc::new(quest.clone())).await.unwrap();
 
         let latest = cm.load_latest("q-tie").await.unwrap();
         assert!(latest.is_some(), "应返回某个检查点");
@@ -749,7 +807,7 @@ mod tests {
             checkpoint_id: None,
             priority: 128,
         };
-        let cp = cm.save(&quest).await.unwrap();
+        let cp = cm.save(Arc::new(quest.clone())).await.unwrap();
         let loaded = cm.load("q-mm", &cp.checkpoint_id).await.unwrap();
         let restored: Quest = rmp_serde::from_slice(&loaded.serialized_state).unwrap();
         assert_eq!(restored, quest);
@@ -770,7 +828,7 @@ mod tests {
         for _ in 0..3 {
             // 微小延迟确保 UUIDv7 毫秒时间戳不同,文件名字典序严格对应保存顺序
             std::thread::sleep(std::time::Duration::from_millis(5));
-            let cp = cm.save(&quest).await.unwrap();
+            let cp = cm.save(Arc::new(quest.clone())).await.unwrap();
             ids.push(cp.checkpoint_id);
         }
 
@@ -808,7 +866,7 @@ mod tests {
         let mut ids = Vec::new();
         for _ in 0..5 {
             std::thread::sleep(std::time::Duration::from_millis(5));
-            let cp = cm.save(&quest).await.unwrap();
+            let cp = cm.save(Arc::new(quest.clone())).await.unwrap();
             ids.push(cp.checkpoint_id);
         }
 
