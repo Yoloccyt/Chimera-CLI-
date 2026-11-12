@@ -97,6 +97,8 @@ dist/
 !docs/reports/agent-runtime-workorders-2026-11-11.md
 # 例外：R8 上下文/记忆层执行报告（ADR-288/289 决策链的波次结算与量化收益证据）
 !docs/reports/toolchain-r8-context-memory-execution-2026-11-12.md
+# 例外：R9 HCW v3 蓝图执行报告（ADR-291 决策链 + 双会话同树事件裁决与无冲突子集证据）
+!docs/reports/toolchain-r9-hcw-v3-execution-2026-11-12.md
 .claude/
 .trae/
 
