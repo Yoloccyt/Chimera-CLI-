@@ -266,6 +266,21 @@ impl HotTier {
         self.entries.iter().map(|r| r.clone()).collect()
     }
 
+    /// 就地筛选并克隆满足谓词的条目快照(仅候选条目被物化)
+    ///
+    /// WHY:衰减降级需要对 Hot 层全部条目做判定,但只有候选条目需要 content
+    /// (迁移落 Warm 落盘);`list_all()` 会克隆全部条目的 content,而
+    /// Warm/Cold 层早已是 metadata-only 采集,Hot 层全量克隆与之不对称。
+    /// 谓词在 DashMap 分片读锁内对借用值判定(纯同步计算,无 await,
+    /// 不引入持锁跨 await),仅通过筛选的条目被克隆,非候选条目零拷贝。
+    pub fn list_matching(&self, predicate: impl Fn(&CapabilityEntry) -> bool) -> Vec<CapabilityEntry> {
+        self.entries
+            .iter()
+            .filter(|r| predicate(r.value()))
+            .map(|r| r.value().clone())
+            .collect()
+    }
+
     /// 清空所有条目(不重置驱逐计数)
     pub fn clear(&self) {
         self.access_order.clear();

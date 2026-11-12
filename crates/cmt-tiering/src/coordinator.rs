@@ -18,6 +18,7 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use event_bus::{EventBus, EventMetadata, ExperienceCardBus, NexusEvent};
@@ -41,6 +42,14 @@ use crate::warm::WarmTier;
 /// 单批 content 内存约 1-4MB(取决于 content 大小),
 /// 批间释放避免 65536 条目全量加载的内存峰值(80%+ 降低)。
 const DECAY_BATCH_SIZE: usize = 1024;
+
+/// 统计快照重算节流窗口(WP-03b 统计风暴治理)
+///
+/// WHY 2s:`report_tier_stats` 在每次 insert/delete/decay 迁移/LSCT 迁移后触发,
+/// 高频写入路径下每次都执行 Warm/Cold 两次 SQLite COUNT + Ice 全目录 readdir,
+/// 形成统计风暴。事件载荷仅用于 TUI MemoryPanel 等显示场景,窗口内复用上次
+/// 快照不影响消费方感知;事件本身仍逐次发布,仅重算被节流。
+const STATS_RECOMPUTE_TTL: Duration = Duration::from_secs(2);
 
 /// CMT 协调器 — 四级能力内存的统一接口
 ///
@@ -73,6 +82,12 @@ pub struct CmtCoordinator {
     config: CmtConfig,
     /// 衰减计算器
     decay: Arc<DecayCalculator>,
+    /// 四层统计快照 TTL 缓存(WP-03b 风暴治理)
+    ///
+    /// None = 尚无快照(首调必重算);Some = (采集时刻, 快照)。
+    /// WHY tokio Mutex 而非原子:缓存值是多字段结构体,无法单原子承载;
+    /// 锁的临界区仅覆盖快照查/写,绝不跨 await 持有(见 tier_stats 三段式)。
+    stats_cache: tokio::sync::Mutex<Option<(Instant, crate::TierDistribution)>>,
 }
 
 impl CmtCoordinator {
@@ -135,6 +150,7 @@ impl CmtCoordinator {
             event_bus,
             config,
             decay,
+            stats_cache: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -186,6 +202,7 @@ impl CmtCoordinator {
             event_bus,
             config,
             decay,
+            stats_cache: tokio::sync::Mutex::new(None),
         })
     }
 
@@ -457,6 +474,12 @@ impl CmtCoordinator {
     /// 3. 降级时通过 `peek` 按需读取完整条目(含 content)
     /// 4. 分批处理(每批 1024),批间释放 content 内存
     ///
+    /// Hot 层同款优化(WP-03a):候选筛选就地完成(`HotTier::list_matching`,
+    /// 谓词在分片读锁内对借用值判定),仅衰减候选条目克隆完整数据(迁移落
+    /// Warm 需 content),非候选条目零拷贝——原 `list_all()` 全量克隆 content
+    /// 的内存峰值随之消除。判定等价性:同一时间基准 `now`、同一
+    /// `should_demote` 计算,仅"哪些条目被物化"改变。
+    ///
     /// 内存峰值降低 80%+(原:65536 × content_size,现:1024 × content_size)
     ///
     /// # 避免级联降级(WHY)
@@ -470,18 +493,12 @@ impl CmtCoordinator {
     pub async fn run_decay_cycle(&self) -> Result<u64, CmtError> {
         let now = Utc::now();
 
-        // 1. Hot 层快照(内存操作,廉价,保留完整条目用于迁移)
-        let hot_snapshot = self.hot.list_all();
-
-        // 2. Warm/Cold 层仅查 metadata(不含 content,降低内存峰值 80%+)
-        let warm_metadata = self.warm.list_idle_metadata().await?;
-        let cold_metadata = self.cold.list_idle_metadata().await?;
-
-        // 3. 基于 metadata 筛选降级候选(无需加载 content)
-        // Hot → Warm:从完整快照筛选(Hot 是内存层,快照廉价)
-        let hot_to_warm: Vec<CapabilityEntry> = hot_snapshot
+        // 1. Hot 层就地筛选衰减候选:谓词在内存数据上判定(同一 now 基准),
+        //    仅候选条目克隆含 content(迁移落 Warm 需要),非候选条目不物化
+        let hot_to_warm: Vec<CapabilityEntry> = self
+            .hot
+            .list_matching(|e| self.decay.should_demote(e, now))
             .into_iter()
-            .filter(|e| self.decay.should_demote(e, now))
             .map(|mut e| {
                 e.tier = Tier::Warm;
                 e
@@ -490,6 +507,11 @@ impl CmtCoordinator {
         let hot_demote_ids: HashSet<CapabilityId> =
             hot_to_warm.iter().map(|e| e.id.clone()).collect();
 
+        // 2. Warm/Cold 层仅查 metadata(不含 content,降低内存峰值 80%+)
+        let warm_metadata = self.warm.list_idle_metadata().await?;
+        let cold_metadata = self.cold.list_idle_metadata().await?;
+
+        // 3. 基于 metadata 筛选降级候选(无需加载 content)
         // Warm → Cold:从 metadata 筛选,排除刚从 Hot 降级的条目(避免级联降级)
         let warm_to_cold_ids: Vec<CapabilityId> = warm_metadata
             .into_iter()
@@ -681,26 +703,50 @@ impl CmtCoordinator {
         &self.decay
     }
 
-    /// 采集四层存储统计快照(L3 深度优化 P1-1)
+    /// 采集四层存储统计快照(L3 深度优化 P1-1 + WP-03b 重算节流)
     ///
     /// 统计口径为**条目数**(非字节):
     /// - Hot:内存 DashMap len(O(1))
     /// - Warm/Cold:SQLite COUNT(*)(spawn_blocking 包装,纯只读可并发)
     /// - Ice:归档目录 .bin 文件数(spawn_blocking 包装目录遍历)
     ///
+    /// # 重算节流(WP-03b 统计风暴治理)
+    /// 距上次采集不足 [`STATS_RECOMPUTE_TTL`] 时直接复用上次快照(含 Hot
+    /// 计数一并复用,保证四层口径内部一致),首调/过期才真实重算。
+    /// 调用方(`report_tier_stats`)事件仍逐次发布,消费方不感知重算被节流。
+    ///
+    /// # 锁纪律
+    /// 缓存锁的临界区仅覆盖"查缓存"与"回写"两个同步段,重算阶段(含
+    /// await)绝不持锁;并发重算后写覆盖即可,统计为显示用途无串行需求。
+    ///
     /// # 返回
     /// 四层条目计数快照
     pub async fn tier_stats(&self) -> Result<crate::TierDistribution, CmtError> {
+        // 1. 锁内查缓存(同步段:新鲜快照即刻返回)
+        {
+            let cached = self.stats_cache.lock().await;
+            if let Some((at, stats)) = *cached {
+                if at.elapsed() < STATS_RECOMPUTE_TTL {
+                    return Ok(stats);
+                }
+            }
+        } // 缓存锁在此释放,严禁持锁跨 await(项目红线)
+
+        // 2. 首调/过期:真实重算(Warm/Cold SQLite COUNT 与 Ice 目录遍历均 spawn_blocking)
         let hot = self.hot.len() as u64;
         let warm = self.warm.count().await?;
         let cold = self.cold.count().await?;
         let ice = self.ice.list().await?.len() as u64;
-        Ok(crate::TierDistribution {
+        let stats = crate::TierDistribution {
             hot,
             warm,
             cold,
             frozen: ice,
-        })
+        };
+
+        // 3. 锁内回写快照(同步段)
+        *self.stats_cache.lock().await = Some((Instant::now(), stats));
+        Ok(stats)
     }
 
     /// 发布四层存储统计事件(L3 深度优化 P1-1,事件驱动化)
@@ -708,6 +754,10 @@ impl CmtCoordinator {
     /// 变更驱动(insert/delete/迁移后调用)而非周期轮询,零定时器开销。
     /// 发布 `CapabilityTierStatsReported` 事件,供 TUI MemoryPanel 等
     /// 订阅方从事件流派生存储分布显示(替代原全局函数占位)。
+    ///
+    /// WP-03b:每次调用仍发布一个事件(事件数量与消费方感知不变),
+    /// 但底层重算由 [`tier_stats`] 按 [`STATS_RECOMPUTE_TTL`] 节流,
+    /// 高频写入路径不再每次触发 SQLite COUNT + Ice 目录遍历。
     pub async fn report_tier_stats(&self) -> Result<(), CmtError> {
         let stats = self.tier_stats().await?;
         let event = NexusEvent::CapabilityTierStatsReported {
