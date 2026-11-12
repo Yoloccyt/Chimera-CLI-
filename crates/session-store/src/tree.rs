@@ -202,12 +202,26 @@ impl TreeIndex {
         Self::init(conn)
     }
 
-    /// 公共初始化:WAL pragma（红线）+ 建表 + 建索引
+    /// 公共初始化:WAL pragma（红线）+ 性能 pragma + 建表 + 建索引
     fn init(conn: rusqlite::Connection) -> Result<Self, StoreError> {
         // 红线:journal_mode=WAL 必须 pragma_update(而非 execute 拼 SQL)
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| StoreError::Sqlite {
                 reason: format!("设置 journal_mode=WAL 失败: {e}"),
+            })?;
+        // WHY synchronous=NORMAL:WAL 模式标准安全档——事务提交只写 WAL 文件,不等
+        // 主库 fsync;断电最多丢最后未 checkpoint 的事务,库文件不会损坏(SQLite 官方
+        // 文档 WAL 模式 NORMAL 语义)。本 crate 崩溃恢复语义以段文件为权威源(lib.rs),
+        // SQLite 仅索引面且可 rebuild,索引丢最后一笔可接受。FULL 档每次 COMMIT 的
+        // fsync 在 Windows FlushFileBuffers 上成本显著(R7 实测固有成本 ~2.9ms/次)。
+        conn.pragma_update(None, "synchronous", "NORMAL")
+            .map_err(|e| StoreError::Sqlite {
+                reason: format!("设置 synchronous=NORMAL 失败: {e}"),
+            })?;
+        // WHY busy_timeout:写锁被并发读者短暂持有时等待而非立即返回 SQLITE_BUSY
+        conn.pragma_update(None, "busy_timeout", 5000)
+            .map_err(|e| StoreError::Sqlite {
+                reason: format!("设置 busy_timeout 失败: {e}"),
             })?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS segments (
@@ -248,6 +262,96 @@ impl TreeIndex {
         let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
             reason: format!("segments 表锁中毒: {p}"),
         })?;
+        Self::upsert_segment_row(&conn, meta)
+    }
+
+    /// 批量插入事件行（单事务,写操作计数 +1）——微批写索引面入口
+    ///
+    /// # 计数语义（bench 门禁）
+    /// 每次调用 = 一次 SQLite 写事务:单条直写 N 次调用 = N 次写;
+    /// 微批写 N 条 = ceil(N/batch_size) 次调用。`transaction_count()` 供
+    /// bench 计算 `syscall_reduction_pct`。
+    pub fn insert_events(&self, rows: &[EventRow]) -> Result<(), StoreError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
+            reason: format!("events 表锁中毒: {p}"),
+        })?;
+        // 单事务批量:微批的 SQLite 面收益(一次 BEGIN/COMMIT = 一次写事务)
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| StoreError::Sqlite {
+                reason: format!("开启写事务失败: {e}"),
+            })?;
+        let result: Result<(), StoreError> = Self::insert_events_rows(&conn, rows);
+        // 无论成败都提交/回滚,释放事务(不回滚会滞留写锁)
+        match result {
+            Ok(()) => conn
+                .execute_batch("COMMIT")
+                .map_err(|e| StoreError::Sqlite {
+                    reason: format!("提交写事务失败: {e}"),
+                })?,
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(e);
+            }
+        }
+        self.transaction_count.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// 单事务完成一次 flush 的全部 SQLite 写(段元数据 upsert + 事件批量)——flush 专用入口
+    ///
+    /// WHY 合并:原 flush 路径逐段调 insert_segment(每段一次 autocommit 写事务),
+    /// N 段 = N+1 次写事务(段元数据 N 次 + 事件批量 1 次)。段元数据与事件同属
+    /// 一次 flush 的原子单元,合并为单 BEGIN IMMEDIATE 后每次 flush 恒 1 次写事务
+    /// (配合 synchronous=NORMAL,WAL 下 COMMIT 仅写 WAL 不 fsync 主库),写放大直接下降。
+    /// 既有 insert_segment/insert_events 保留(fork/rebuild 等其他调用方兼容)。
+    ///
+    /// # 计数语义(bench 门禁)
+    /// 与 insert_events 同口径:每次调用 = 一次 SQLite 写事务,transaction_count +1。
+    pub fn insert_flush_batch(
+        &self,
+        segments: &[SegmentMeta],
+        rows: &[EventRow],
+    ) -> Result<(), StoreError> {
+        if segments.is_empty() && rows.is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
+            reason: format!("flush 批量写表锁中毒: {p}"),
+        })?;
+        conn.execute_batch("BEGIN IMMEDIATE")
+            .map_err(|e| StoreError::Sqlite {
+                reason: format!("开启 flush 写事务失败: {e}"),
+            })?;
+        let result = (|| -> Result<(), StoreError> {
+            for meta in segments {
+                Self::upsert_segment_row(&conn, meta)?;
+            }
+            Self::insert_events_rows(&conn, rows)
+        })();
+        // 无论成败都提交/回滚,释放事务(不回滚会滞留写锁)
+        match result {
+            Ok(()) => conn
+                .execute_batch("COMMIT")
+                .map_err(|e| StoreError::Sqlite {
+                    reason: format!("提交 flush 写事务失败: {e}"),
+                })?,
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(e);
+            }
+        }
+        self.transaction_count.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// 段元数据 upsert(私有:insert_segment 与 insert_flush_batch 共用)
+    fn upsert_segment_row(
+        conn: &rusqlite::Connection,
+        meta: &SegmentMeta,
+    ) -> Result<(), StoreError> {
         conn.execute(
             "INSERT INTO segments
                 (segment_id, session_id, segment_index, parent_segment_id, start_offset, end_offset)
@@ -269,71 +373,37 @@ impl TreeIndex {
         Ok(())
     }
 
-    /// 批量插入事件行（单事务,写操作计数 +1）——微批写索引面入口
-    ///
-    /// # 计数语义（bench 门禁）
-    /// 每次调用 = 一次 SQLite 写事务:单条直写 N 次调用 = N 次写;
-    /// 微批写 N 条 = ceil(N/batch_size) 次调用。`transaction_count()` 供
-    /// bench 计算 `syscall_reduction_pct`。
-    pub fn insert_events(&self, rows: &[EventRow]) -> Result<(), StoreError> {
-        if rows.is_empty() {
-            return Ok(());
-        }
-        let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
-            reason: format!("events 表锁中毒: {p}"),
-        })?;
-        // 单事务批量:微批的 SQLite 面收益(一次 BEGIN/COMMIT = 一次写事务)
-        conn.execute_batch("BEGIN IMMEDIATE")
+    /// 在已开启的事务中批量插入事件行(私有:insert_events 与 insert_flush_batch 共用)
+    fn insert_events_rows(conn: &rusqlite::Connection, rows: &[EventRow]) -> Result<(), StoreError> {
+        let mut stmt = conn
+            .prepare(
+                "INSERT INTO events (offset, session_id, segment_id, payload)
+                 VALUES (?1, ?2, ?3, ?4)",
+            )
             .map_err(|e| StoreError::Sqlite {
-                reason: format!("开启写事务失败: {e}"),
+                reason: format!("预编译事件插入语句失败: {e}"),
             })?;
-        let result = (|| -> Result<(), StoreError> {
-            {
-                let mut stmt = conn
-                    .prepare(
-                        "INSERT INTO events (offset, session_id, segment_id, payload)
-                         VALUES (?1, ?2, ?3, ?4)",
-                    )
-                    .map_err(|e| StoreError::Sqlite {
-                        reason: format!("预编译事件插入语句失败: {e}"),
-                    })?;
-                for row in rows {
-                    // WHY to_vec_named(map 编码)而非 to_vec(array 位置编码):
-                    // L0 EventMetadata.correlation_id 带 skip_serializing_if,array
-                    // 编码下字段错位(形态裁决 ADR-213 R8.1——非 ADR-004,它只裁「MessagePack
-                    // 而非 JSON」,不裁形态;event-bus 先例 shard.rs/bus.rs 均用 to_vec_named);
-                    // named 按字段名匹配,skip 不影响反序列化
-                    let payload = rmp_serde::to_vec_named(&row.event).map_err(|e| {
-                        StoreError::Serialization {
-                            reason: format!("SessionEvent rmp 序列化失败: {e}"),
-                        }
-                    })?;
-                    stmt.execute(params![
-                        row.offset,
-                        row.session_id.as_str(),
-                        row.segment_id.as_str(),
-                        payload,
-                    ])
-                    .map_err(|e| StoreError::Sqlite {
-                        reason: format!("插入事件 offset={} 失败: {e}", row.offset),
-                    })?;
+        for row in rows {
+            // WHY to_vec_named(map 编码)而非 to_vec(array 位置编码):
+            // L0 EventMetadata.correlation_id 带 skip_serializing_if,array
+            // 编码下字段错位(形态裁决 ADR-213 R8.1——非 ADR-004,它只裁「MessagePack
+            // 而非 JSON」,不裁形态;event-bus 先例 shard.rs/bus.rs 均用 to_vec_named);
+            // named 按字段名匹配,skip 不影响反序列化
+            let payload = rmp_serde::to_vec_named(&row.event).map_err(|e| {
+                StoreError::Serialization {
+                    reason: format!("SessionEvent rmp 序列化失败: {e}"),
                 }
-            }
-            Ok(())
-        })();
-        // 无论成败都提交/回滚,释放事务(不回滚会滞留写锁)
-        match result {
-            Ok(()) => conn
-                .execute_batch("COMMIT")
-                .map_err(|e| StoreError::Sqlite {
-                    reason: format!("提交写事务失败: {e}"),
-                })?,
-            Err(e) => {
-                let _ = conn.execute_batch("ROLLBACK");
-                return Err(e);
-            }
+            })?;
+            stmt.execute(params![
+                row.offset,
+                row.session_id.as_str(),
+                row.segment_id.as_str(),
+                payload,
+            ])
+            .map_err(|e| StoreError::Sqlite {
+                reason: format!("插入事件 offset={} 失败: {e}", row.offset),
+            })?;
         }
-        self.transaction_count.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 

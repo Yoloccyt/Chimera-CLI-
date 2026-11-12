@@ -376,10 +376,9 @@ impl CbmrWriter {
         } // sessions 锁释放
 
         // 4. SQLite 写(段元数据 + 事件,均为同步调用;调用方保证经 spawn_blocking)
-        for meta in &segments {
-            self.inner.tree.insert_segment(meta)?;
-        }
-        self.inner.tree.insert_events(&rows)?;
+        // WP-04:单事务合并(原逐段 autocommit = N+1 次写事务/flush → 现 1 次,
+        // 配合 synchronous=NORMAL 写放大直接下降)
+        self.inner.tree.insert_flush_batch(&segments, &rows)?;
 
         // 4.5 flush 成功后更新 last_offset 追踪（失败不推进——未落盘不算已确认）
         if !last_offsets.is_empty() {
