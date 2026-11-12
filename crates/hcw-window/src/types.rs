@@ -333,6 +333,18 @@ pub struct HcwState {
     /// 随后由 `apply_pending_mask` 消费(取走并设为 None)。
     /// 取走而非读取:确保同一掩码仅应用一次,避免重复稀疏化
     pub pending_context_mask: Option<Vec<String>>,
+    /// 结构性变更计数(单调递增) — 版本化锁外压缩的并发校验依据(ADR-288)
+    ///
+    /// WHY:SubTask 12.7 曾用"读锁快照→锁外 compress→写锁盲目覆盖"模式,压缩期间
+    /// 并发 insert 的新条目被覆盖丢失(P0 竞态),遂回退为全程持写锁——代价是压缩
+    /// (全量评分+Top-K+rayon 批调度)期间所有读者阻塞。版本计数使压缩路径可以
+    /// "读锁快照→锁外压缩→写锁合并":合并时比较计数,快照后发生过结构性变更
+    /// (push/remove/retain/替换)即走差集合并(retained 过滤已删条目 + 并入新增
+    /// 条目),丢数据路径被封死,全程持锁不再必要。
+    /// `#[serde(skip)]`:纯运行时计数器,反序列化从 0 起算——版本校验只依赖
+    /// 单调性,起点无关,旧 checkpoint 数据无需迁移。
+    #[serde(skip)]
+    pub mutations: u64,
     // === PROBE P1.5: repr_clv 写时预计算缓存 ===
     /// Block ID → 块代表向量(CLV)缓存 — 写入即缓存,查询期零嵌入计算
     ///
@@ -373,6 +385,8 @@ impl HcwState {
             last_mask_hash: None,
             last_sparsity: None,
             pending_context_mask: None,
+            // ADR-288:版本计数从 0 起算(单调性语义与起点无关)
+            mutations: 0,
             // PROBE P1.5: 空缓存初始化
             repr_clv_cache: HashMap::new(),
         }
@@ -445,6 +459,8 @@ impl HcwState {
         self.entries_index.insert(id.clone(), idx);
         self.entries.push(Arc::new(entry));
         self.update_repr_clv_cache(&id, entry_clv.as_ref());
+        // ADR-288:结构性变更 bump 版本(锁外压缩合并的校验依据)
+        self.mutations += 1;
     }
 
     /// 按 ID 查找条目(只读)— O(1) HashMap 索引查找
@@ -517,6 +533,8 @@ impl HcwState {
         }
         // PROBE P1.5: 删除条目后失效其缓存（保守移除单条）
         self.repr_clv_cache.remove(id);
+        // ADR-288:结构性变更 bump 版本(锁外压缩合并的校验依据)
+        self.mutations += 1;
         Some(removed)
     }
 
@@ -542,7 +560,25 @@ impl HcwState {
         self.rebuild_index();
         // PROBE P1.5: 结构性变更后保守全清缓存（R9 一致性红线）
         self.invalidate_repr_clv_cache();
+        // ADR-288:无删减(removed==0)时结构未变,不 bump——假阴性(该 bump 不 bump)
+        // 会丢数据,假阳性(不该 bump 却 bump)只会走等价的合并分支,故仅在确有删减时 bump
+        if removed > 0 {
+            self.mutations += 1;
+        }
         removed
+    }
+
+    /// 全量替换 entries 并同步维护派生索引/缓存/版本(ADR-288)
+    ///
+    /// WHY:压缩路径的 entries 替换原先散落「赋值 + rebuild_index +
+    /// invalidate_repr_clv_cache」三步裸调用;版本化合并引入后,替换还必须
+    /// 同步 bump mutations(否则并发压缩的版本校验会漏检这次结构性变更,
+    /// 造成假阴性丢数据),封装为单一入口防调用方漂移。
+    pub fn replace_entries(&mut self, new_entries: Vec<Arc<ContextEntry>>) {
+        self.entries = new_entries;
+        self.rebuild_index();
+        self.invalidate_repr_clv_cache();
+        self.mutations += 1;
     }
 }
 

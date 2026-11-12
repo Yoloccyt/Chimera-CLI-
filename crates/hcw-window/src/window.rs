@@ -65,6 +65,61 @@ enum SelectOutcome {
     Rejected { current: WindowTier },
 }
 
+/// select_window 阶段 ①(读锁)产出的执行计划(ADR-288)
+///
+/// WHY 单独建模:读锁阶段只读不改,把「决定做什么」与「执行」解耦,
+/// 压缩分支携带快照与版本号离开读锁,使锁外压缩成为可能。
+/// WHY 不携带 from tier:写锁执行时重读 state.current_tier 才是真实前值
+/// (读锁与写锁之间 tier 可能被并发 select_window 改变)。
+enum SelectPlan {
+    /// 升级或容量足够:短写锁内直接切 tier(临界区无 CPU 大头)
+    Switch { reason: String },
+    /// 降级且需压缩:锁外计算,写锁合并
+    Compress {
+        target_capacity: usize,
+        target_size: usize,
+        /// 压缩输入快照(Arc 引用计数拷贝,非 content 深拷贝)
+        snapshot: Vec<Arc<ContextEntry>>,
+        /// 快照时的 [`HcwState::mutations`] 版本号
+        version: u64,
+    },
+}
+
+/// 压缩保留集与快照后并发变更的合并(ADR-288,SubTask 12.7 P0 竞态的版本化解法)
+///
+/// WHY:压缩基于快照计算,快照之后 state 可能发生了 push/remove/retain
+/// (mutations 已 bump)。盲目覆盖 entries 会丢失这些变更(P0 竞态),合并规则:
+/// - retained 中已被并发删除的条目:丢弃(以 state 现状为准);
+/// - state 中快照没有的条目(并发新增):并入保留集。
+///
+/// 由此保证任何并发结构性变更都不被压缩覆盖,合并后由调用方重验容量,
+/// 超容走既有「拒绝降级」分支。
+///
+/// 纯函数(仅读 state,无副作用),独立可单测。
+fn merge_compress_with_snapshot(
+    retained: Vec<Arc<ContextEntry>>,
+    state: &HcwState,
+    snapshot: &[Arc<ContextEntry>],
+    had_changes: bool,
+) -> Vec<Arc<ContextEntry>> {
+    if !had_changes {
+        // 快照后无结构性变更:retained 即完整结果,零额外开销
+        return retained;
+    }
+    let snapshot_ids: std::collections::HashSet<&str> =
+        snapshot.iter().map(|e| e.id.as_str()).collect();
+    let mut merged: Vec<Arc<ContextEntry>> = retained
+        .into_iter()
+        .filter(|e| state.entries_index.contains_key(&e.id))
+        .collect();
+    for arc in &state.entries {
+        if !snapshot_ids.contains(arc.id.as_str()) {
+            merged.push(Arc::clone(arc));
+        }
+    }
+    merged
+}
+
 /// HcwWindow — 分层上下文窗口主结构
 ///
 /// 管理 4K/32K/128K/1M 四级窗口,自动选择层级、压缩与稀疏化。
@@ -312,55 +367,74 @@ impl HcwWindow {
     ///
     /// 返回最终层级(可能与目标 tier 不同,若降级失败保持当前 tier)
     ///
-    /// # 并发安全(SubTask 12.7 修复)
-    /// WHY:原实现采用"读锁→释放→锁外 compress→写锁覆盖 entries"模式,
-    /// compress 期间其他线程的 insert 会被写锁覆盖,导致数据丢失(P0 竞态)。
-    /// 修复方案 A:全程持有写锁,在锁内调用 compress(纯同步函数,不 await,
-    /// 不会死锁),事件发布在锁外(避免持锁 await)。compress 期间阻塞所有
-    /// 读写,但 compress 是纯 CPU 计算(无 I/O),耗时短,可接受。
+    /// # 并发安全(ADR-288 版本化锁外压缩,取代 SubTask 12.7 的全程持写锁)
+    /// WHY(历史):12.7 之前的"读锁→释放→锁外 compress→写锁覆盖 entries"模式
+    /// 会丢失压缩期间并发 insert 的新条目(P0 竞态),遂回退为全程持写锁——代价是
+    /// 压缩(全量评分+Top-K+rayon 批调度)期间所有读者阻塞。
+    /// 现方案保留 12.7 的安全性,以 [`HcwState::mutations`] 版本计数检测快照后的
+    /// 结构性变更,三阶段执行:
+    ///   ① 读锁快照(Arc 引用计数拷贝,非 content 深拷贝)→ ② 锁外 compress
+    ///   → ③ 写锁合并(无变更=直接替换;有变更=retained 过滤已删条目+并入新增
+    ///   条目,见 [`merge_compress_with_snapshot`]),合并后重验容量,超容走既有
+    ///   "拒绝降级"分支。丢数据路径被差集合并封死,全程持锁不再必要。
     pub async fn select_window(&self, complexity: f32) -> Result<WindowTier, HcwError> {
         // SubTask 17.1:惰性兜底 — 若 listener 尚未消费 pending_context_mask,在此消费
         self.apply_pending_mask_if_any().await?;
 
         let target_tier = WindowSelector::select(complexity);
 
-        // 全程持有写锁:读取→压缩→更新 原子化,消除竞态窗口
-        let outcome = {
-            let mut state = self.state.write().await;
+        // 阶段 ①:读锁快照 + 决策(只读,不做任何变更)
+        let plan = {
+            let state = self.state.read().await;
             let current_tier = state.current_tier;
-
             if target_tier == current_tier {
                 return Ok(target_tier);
             }
-
-            let total_size = state.total_size();
             // Task 4:传入 OSA 动态稀疏度,使 L3 实际容量随稀疏度自适应
-            // WHY:state 是写锁,可直接读 last_sparsity 字段(无需额外锁操作)
             let target_capacity = self
                 .config
                 .effective_capacity_for(target_tier, state.last_sparsity);
+            if target_tier > current_tier || state.total_size() <= target_capacity {
+                // 升级或容量足够:短写锁内直接切换(不压缩,临界区无 CPU 大头)
+                SelectPlan::Switch { reason: format!("complexity={complexity}") }
+            } else {
+                // 降级且需压缩:锁外计算
+                SelectPlan::Compress {
+                    target_capacity,
+                    target_size: (((target_capacity as f32)
+                        * self.config.compression_threshold) as usize)
+                        .max(1),
+                    snapshot: state.entries.clone(),
+                    version: state.mutations,
+                }
+            }
+        }; // 读锁已释放
 
-            if target_tier > current_tier || total_size <= target_capacity {
-                // 升级或容量足够:直接切换(不压缩)
+        let outcome = match plan {
+            SelectPlan::Switch { reason } => {
+                // 短写锁:仅改 tier。WHY 重读 current_tier 而非沿用快照值:
+                // 读锁与写锁之间 tier 可能被并发 select_window 改变,事件载荷
+                // from 字段须反映真实前值
+                let mut state = self.state.write().await;
+                let from = state.current_tier;
                 state.current_tier = target_tier;
                 SelectOutcome::Switched {
-                    from: current_tier,
+                    from,
                     to: target_tier,
-                    reason: format!("complexity={complexity}"),
+                    reason,
                 }
-            } else {
-                // 降级且需压缩:在写锁内调用 compress(纯同步函数,不 await)
-                let target_size =
-                    ((target_capacity as f32) * self.config.compression_threshold) as usize;
-                let target_size = target_size.max(1);
-                // SubTask 19.4:传 &state.entries 借用,消除 state.entries.clone() 全量 clone
-                // compress 内部仅 clone 保留的 Top-N 条目(通常 ≤ 100)
-                // N-2(CPU 异构面审计):compress 经 spawn_compute_batch 同步阻塞 rayon
-                // pool.scope,多线程 runtime 下会占死当前 worker(同 runtime 其它 task 饿死)。
-                // 照 osa(coordinator.rs)同形做 flavor 双分支:仅 MultiThread 让路
-                // (block_in_place),current_thread 直调(与改前逐位一致 —— block_in_place 在
-                // current_thread 上 panic,而 #[tokio::test] 默认即 current_thread)。用
-                // try_current 而非 current:非 tokio 执行器(block_on 等)下 current() 会 panic。
+            }
+            SelectPlan::Compress {
+                target_capacity,
+                target_size,
+                snapshot,
+                version,
+            } => {
+                // 阶段 ②:锁外压缩。N-2(CPU 异构面审计)双分支保留:压缩内部同步
+                // 阻塞 rayon pool.scope,MultiThread 下 block_in_place 让路 worker
+                // (现无锁竞争面,让路仅为不独占 worker);current_thread 直调
+                // (block_in_place 在 current_thread 上 panic,#[tokio::test] 默认
+                // 即 current_thread)。try_current:非 tokio 执行器下 current() 会 panic。
                 let on_multi_thread = matches!(
                     tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()),
                     Ok(tokio::runtime::RuntimeFlavor::MultiThread)
@@ -369,7 +443,7 @@ impl HcwWindow {
                     tokio::task::block_in_place(|| {
                         ContextCompressor::compress(
                             &self.config,
-                            &state.entries,
+                            &snapshot,
                             target_size,
                             None,
                             Utc::now(),
@@ -378,7 +452,7 @@ impl HcwWindow {
                 } else {
                     ContextCompressor::compress(
                         &self.config,
-                        &state.entries,
+                        &snapshot,
                         target_size,
                         None,
                         Utc::now(),
@@ -388,48 +462,54 @@ impl HcwWindow {
                 if report.algorithm == "none" {
                     // 无需压缩(原始大小 ≤ target_size):直接切换,不替换 entries
                     // WHY:compress 在无需压缩时返回空 retained_entries + algorithm == "none",
-                    // 调用方据此跳过 state.entries 替换,避免无谓的全量 clone 与赋值
+                    // 跳过替换,避免无谓的全量 clone 与赋值
+                    let mut state = self.state.write().await;
+                    let from = state.current_tier;
                     state.current_tier = target_tier;
                     SelectOutcome::Switched {
-                        from: current_tier,
+                        from,
                         to: target_tier,
                         reason: format!("complexity={complexity} (no compression needed)"),
                     }
-                } else if report.compressed_size <= target_capacity
-                    && !report.retained_entries.is_empty()
-                {
-                    // 压缩成功,切换到目标 tier
-                    let original_size = report.original_size;
-                    let compressed_size = report.compressed_size;
-                    state.entries = report.retained_entries;
-                    // SubTask 19.5:entries 全量替换后索引失效,重建索引
-                    state.rebuild_index();
-                    // PROBE P1.5: 压缩替换后缓存失效（R9 一致性，保守全清）
-                    state.invalidate_repr_clv_cache();
-                    state.current_tier = target_tier;
-                    SelectOutcome::Compressed {
-                        from: current_tier,
-                        to: target_tier,
-                        reason: format!("complexity={complexity} (compressed)"),
-                        original_size,
-                        compressed_size,
-                    }
                 } else {
-                    // 压缩后仍超过目标容量,拒绝降级,保持当前 tier
-                    warn!(
-                        from = current_tier.as_str(),
-                        target = target_tier.as_str(),
-                        compressed_size = report.compressed_size,
-                        target_capacity,
-                        "降级失败:压缩后仍超过目标容量,保持当前层级"
+                    // 阶段 ③:写锁合并(SubTask 12.7 P0 竞态的版本化解法)
+                    let mut state = self.state.write().await;
+                    let had_changes = state.mutations != version;
+                    let merged = merge_compress_with_snapshot(
+                        report.retained_entries,
+                        &state,
+                        &snapshot,
+                        had_changes,
                     );
-                    SelectOutcome::Rejected {
-                        current: current_tier,
+                    // 合并后重验容量:新增条目可能使总量超过目标容量
+                    let merged_size: usize = merged.iter().map(|e| e.token_size).sum();
+                    if merged_size <= target_capacity && !merged.is_empty() {
+                        let original_size = report.original_size;
+                        state.replace_entries(merged);
+                        let from = state.current_tier;
+                        state.current_tier = target_tier;
+                        SelectOutcome::Compressed {
+                            from,
+                            to: target_tier,
+                            reason: format!("complexity={complexity} (compressed)"),
+                            original_size,
+                            compressed_size: merged_size,
+                        }
+                    } else {
+                        // 合并后仍超过目标容量(或无保留条目),拒绝降级,保持当前 tier
+                        let current = state.current_tier;
+                        warn!(
+                            from = current.as_str(),
+                            target = target_tier.as_str(),
+                            merged_size,
+                            target_capacity,
+                            "降级失败:压缩合并后仍超过目标容量,保持当前层级"
+                        );
+                        SelectOutcome::Rejected { current }
                     }
                 }
             }
-        };
-        // 写锁已释放(state guard 离开作用域)
+        }; // 写锁已释放
 
         // 锁外发布事件(避免持锁 await 导致死锁)
         match outcome {
@@ -645,64 +725,59 @@ impl HcwWindow {
     /// 用于 L3 溢出场景:压缩到 L3 实际加载容量(128K)。
     /// 压缩后若仍超过容量,返回 WindowOverflow 错误。
     ///
-    /// # 并发安全(SubTask 12.7 修复)
-    /// WHY:原实现采用"读锁→释放→锁外 compress→写锁覆盖 entries"模式,
-    /// 与 select_window 同类竞态:compress 期间其他线程的 insert 会被覆盖。
-    /// 修复:全程持有写锁,锁内完成 compress + entries 更新,锁外发布事件。
+    /// # 并发安全(ADR-288 版本化锁外压缩,同 select_window)
+    /// WHY:原实现(SubTask 12.7)为封堵「锁外压缩覆盖并发 insert」P0 竞态
+    /// 而全程持写锁;现以 [`HcwState::mutations`] 版本计数 + 差集合并
+    /// ([`merge_compress_with_snapshot`])保留其安全性,同时摘除锁内 CPU:
+    /// ① 读锁快照 → ② 锁外 compress → ③ 写锁合并并重验容量。
     async fn compress_to_capacity(&self, capacity: usize) -> Result<(), HcwError> {
         let target_size = ((capacity as f32) * self.config.compression_threshold) as usize;
         let target_size = target_size.max(1);
 
-        // 全程持有写锁:compress + entries 更新原子化,消除竞态
+        // 阶段 ①:读锁快照(只读)
+        let (snapshot, version) = {
+            let state = self.state.read().await;
+            (state.entries.clone(), state.mutations)
+        }; // 读锁已释放
+
+        // 阶段 ②:锁外压缩(N-2 双分支同 select_window:MultiThread 让路 worker,
+        // current_thread 直调——block_in_place 在 current_thread 上 panic)
+        let on_multi_thread = matches!(
+            tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()),
+            Ok(tokio::runtime::RuntimeFlavor::MultiThread)
+        );
+        let report = if on_multi_thread {
+            tokio::task::block_in_place(|| {
+                ContextCompressor::compress(&self.config, &snapshot, target_size, None, Utc::now())
+            })
+        } else {
+            ContextCompressor::compress(&self.config, &snapshot, target_size, None, Utc::now())
+        };
+
+        if report.algorithm == "none" {
+            // 无需压缩:entries 不变,直接返回当前大小
+            // WHY:compress 在无需压缩时返回空 retained_entries + algorithm == "none",
+            // 跳过替换,避免无谓的全量 clone 与赋值
+            let size = report.original_size;
+            return self.publish_compressed(size, size).await;
+        }
+
+        // 阶段 ③:写锁合并(版本校验 + 差集,同 select_window)
         let (original_size, compressed_size) = {
             let mut state = self.state.write().await;
-            // SubTask 19.4:传 &state.entries 借用,消除 state.entries.clone() 全量 clone
-            // N-2(CPU 异构面审计):同 select_window —— compress 内部同步阻塞 rayon pool.scope,
-            // MultiThread 下用 block_in_place 让路,current_thread 直调(零行为漂移)。
-            let on_multi_thread = matches!(
-                tokio::runtime::Handle::try_current().map(|h| h.runtime_flavor()),
-                Ok(tokio::runtime::RuntimeFlavor::MultiThread)
-            );
-            let report = if on_multi_thread {
-                tokio::task::block_in_place(|| {
-                    ContextCompressor::compress(
-                        &self.config,
-                        &state.entries,
-                        target_size,
-                        None,
-                        Utc::now(),
-                    )
-                })
-            } else {
-                ContextCompressor::compress(
-                    &self.config,
-                    &state.entries,
-                    target_size,
-                    None,
-                    Utc::now(),
-                )
-            };
-
-            if report.algorithm == "none" {
-                // 无需压缩:entries 不变,直接返回当前大小
-                // WHY:compress 在无需压缩时返回空 retained_entries + algorithm == "none",
-                // 跳过 state.entries 替换,避免无谓的全量 clone 与赋值
-                let size = report.original_size;
-                (size, size)
-            } else if report.compressed_size > capacity {
-                // 压缩后仍超过容量(单条目超过容量),返回错误
+            let had_changes = state.mutations != version;
+            let merged =
+                merge_compress_with_snapshot(report.retained_entries, &state, &snapshot, had_changes);
+            let merged_size: usize = merged.iter().map(|e| e.token_size).sum();
+            if merged_size > capacity {
+                // 合并后仍超过容量(单条目超过容量),返回错误,不替换 entries
                 return Err(HcwError::WindowOverflow(format!(
-                    "L3 压缩后 {} 仍超过容量 {}",
-                    report.compressed_size, capacity
+                    "L3 压缩后 {merged_size} 仍超过容量 {capacity}"
                 )));
-            } else {
-                state.entries = report.retained_entries;
-                // SubTask 19.5:entries 全量替换后索引失效,重建索引
-                state.rebuild_index();
-                (report.original_size, report.compressed_size)
             }
-        };
-        // 写锁已释放
+            state.replace_entries(merged);
+            (report.original_size, merged_size)
+        }; // 写锁已释放
 
         // 锁外发布 ContextCompressed 事件
         self.publish_compressed(original_size, compressed_size)
@@ -945,6 +1020,110 @@ mod tests {
             format!("content-{id}"),
             token_size,
         )
+    }
+
+    // ============================================================
+    // ADR-288: 版本化锁外压缩测试
+    // ============================================================
+
+    fn make_state_with(entries: Vec<ContextEntry>) -> HcwState {
+        let mut state = HcwState::new(WindowTier::L2);
+        for e in entries {
+            state.push_entry(e);
+        }
+        state
+    }
+
+    #[test]
+    fn test_merge_no_changes_returns_retained_as_is() {
+        // 快照后无结构性变更:retained 原样返回(零额外开销路径)
+        let state = make_state_with(vec![make_entry("a", 100), make_entry("b", 200)]);
+        let snapshot: Vec<Arc<ContextEntry>> = state.entries.clone();
+        let retained: Vec<Arc<ContextEntry>> = vec![Arc::clone(&snapshot[0])];
+        let merged = merge_compress_with_snapshot(retained, &state, &snapshot, false);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].id, "a");
+    }
+
+    #[test]
+    fn test_merge_with_concurrent_insert_keeps_new_entries() {
+        // 快照后并发 push_entry:新条目必须并入(SubTask 12.7 P0 竞态的回归面)
+        let state = make_state_with(vec![make_entry("a", 100)]);
+        let snapshot: Vec<Arc<ContextEntry>> = state.entries.clone();
+        let version = state.mutations;
+        // 模拟压缩期间的并发 insert(bump 版本)
+        let mut state = state;
+        state.push_entry(make_entry("new", 50));
+        assert_eq!(state.mutations, version + 1);
+
+        let retained: Vec<Arc<ContextEntry>> = vec![Arc::clone(&snapshot[0])];
+        let merged = merge_compress_with_snapshot(
+            retained,
+            &state,
+            &snapshot,
+            state.mutations != version,
+        );
+        let ids: Vec<&str> = merged.iter().map(|e| e.id.as_str()).collect();
+        assert!(ids.contains(&"a"), "快照既有条目应保留");
+        assert!(
+            ids.contains(&"new"),
+            "压缩期间并发 insert 的条目不得丢失(SubTask 12.7)"
+        );
+    }
+
+    #[test]
+    fn test_merge_with_concurrent_remove_drops_deleted() {
+        // 快照后被并发 remove 的条目不得在合并结果中复活
+        let state = make_state_with(vec![make_entry("a", 100), make_entry("b", 200)]);
+        let snapshot: Vec<Arc<ContextEntry>> = state.entries.clone();
+        let version = state.mutations;
+        let mut state = state;
+        state.remove("a");
+        let retained: Vec<Arc<ContextEntry>> = snapshot.clone();
+        let merged = merge_compress_with_snapshot(
+            retained,
+            &state,
+            &snapshot,
+            state.mutations != version,
+        );
+        let ids: Vec<&str> = merged.iter().map(|e| e.id.as_str()).collect();
+        assert!(!ids.contains(&"a"), "已删除条目不应复活");
+        assert!(ids.contains(&"b"));
+    }
+
+    #[test]
+    fn test_mutations_bump_on_structural_changes() {
+        // push/remove/replace 各 bump 一次;retain 无删减不 bump;读操作不 bump
+        let mut state = HcwState::new(WindowTier::L0);
+        assert_eq!(state.mutations, 0);
+        state.push_entry(make_entry("a", 10));
+        assert_eq!(state.mutations, 1, "push_entry 应 bump");
+        let _ = state.get("a");
+        assert_eq!(state.mutations, 1, "读操作不 bump");
+        state.remove("a");
+        assert_eq!(state.mutations, 2, "remove 应 bump");
+        // retain 无删减不 bump(假阳性可容忍但精确计数便于诊断)
+        state.push_entry(make_entry("b", 10));
+        let before = state.mutations;
+        let removed = state.retain_by_file_ids(&["file-b".to_string()]);
+        assert_eq!(removed, 0);
+        assert_eq!(state.mutations, before, "retain 无删减不 bump");
+        state.replace_entries(Vec::new());
+        assert_eq!(state.mutations, before + 1, "replace_entries 应 bump");
+    }
+
+    #[test]
+    fn test_hcw_state_serde_roundtrip_mutations_skipped() {
+        // serde(skip) 兼容:mutations 不参与序列化,反序列化从 0 起算
+        // (旧 checkpoint 数据无该字段必须可反序列化——版本校验只依赖单调性)
+        let mut state = HcwState::new(WindowTier::L1);
+        state.push_entry(make_entry("a", 10));
+        assert!(state.mutations > 0);
+        let json = serde_json::to_string(&state).unwrap();
+        assert!(!json.contains("mutations"), "skip 字段不得出现在序列化输出");
+        let back: HcwState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.mutations, 0, "反序列化从 0 起算(单调性起点无关)");
+        assert_eq!(back.entries.len(), 1);
     }
 
     #[tokio::test]
