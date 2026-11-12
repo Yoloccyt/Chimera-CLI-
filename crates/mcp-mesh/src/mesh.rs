@@ -22,7 +22,7 @@
 //! WHY:`tokio::broadcast` 仅投递给发布时已存在的 receiver;若在 spawn 的 async
 //! block 内 subscribe,后台任务调度时机不确定,可能晚于 publish 导致事件静默丢失。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -945,6 +945,17 @@ impl McpMesh {
     /// 周期性调用(如每 30s),从 `pending_compensations` 队列取出 Commit 阶段
     /// 失败的事务,对失败参与者重试 Commit。
     ///
+    /// 性能重构并行化(P1-2)：旧实现两级串行 `for tx` × `for sid`(内嵌
+    /// `await commit`),重试墙钟 ≈ Σ(tx × sid × RTT)。现全部 (tx, sid) 臂
+    /// `FuturesUnordered` 扁平扇出,墙钟降为 ≈ max(各臂 RTT)。语义裁决:同一 tx
+    /// 的多参与者 commit **无原子性要求**——2PC 的全有或全无决议已在 prepare
+    /// 阶段确立,commit/重补偿是各参与者独立收敛的幂等重试(同文件 `commit_phase`
+    /// 亦按 tx 内并行扇出),部分成功本就是被台账跟踪的合法中间态;唯一保留的
+    /// 聚合是 per-tx 台账决策(移除 / 递增 retries / 放弃),那是协调者侧纯记账
+    /// join 点,统一推迟到全部臂回收后执行(Phase 3)。保留:
+    /// - **失败聚合语义逐条不变**(warn / 标记 / 台账更新与旧串行一致);
+    /// - 回退开关:`CHIMERA_MCP_SERIAL_RECONCILE=1` 走串行分支(与旧行为逐位等价)。
+    ///
     /// # 流程
     /// 1. 遍历 `pending_compensations` 中的每条记录
     /// 2. 对每条记录的 `failed_participants` 重新发送 commit 请求
@@ -959,6 +970,18 @@ impl McpMesh {
     /// # 返回
     /// 已达 `max_retries` 仍失败的事务列表(需人工介入)。空 Vec 表示全部重试成功或无待补偿事务。
     pub async fn reconcile_pending_transactions(&self) -> Vec<PendingCompensation> {
+        let serial = std::env::var("CHIMERA_MCP_SERIAL_RECONCILE").as_deref() == Ok("1");
+        self.reconcile_pending_transactions_with_mode(serial).await
+    }
+
+    /// `reconcile_pending_transactions` 的模式显式版本(`serial` 由环境开关或测试注入)。
+    ///
+    /// WHY 拆出参数而非常直接在测试里设 env:`CHIMERA_MCP_SERIAL_RECONCILE` 是
+    /// 进程级变量,同二进制内的其它 reconcile 测试会被并行改成串行模式。
+    async fn reconcile_pending_transactions_with_mode(
+        &self,
+        serial: bool,
+    ) -> Vec<PendingCompensation> {
         let max_retries = self.config.max_retries;
         let mut still_failing = Vec::new();
 
@@ -969,65 +992,144 @@ impl McpMesh {
             .map(|r| r.key().clone())
             .collect();
 
-        for tx_id in tx_ids {
-            // 取出条目快照(避免持锁跨 await,§4.4 反模式 #1)
-            // WHY 用 block scope:DashMap 读锁(get 返回的 Ref)必须在 await 前 drop,
-            // 否则持锁跨 await 会阻塞其他写操作(如同 endpoint 的连接池操作)
-            let (failed_participants, retries) = {
-                let e = match self.pending_compensations.get(&tx_id) {
-                    Some(e) => e,
-                    None => continue,
-                };
-                (e.failed_participants.clone(), e.retries)
-                // e(DashMap Ref guard)在 block 结束时自动 drop
-            };
-
-            // 对每个失败参与者重试 commit
-            let mut still_failed: Vec<String> = Vec::new();
-            for sid in &failed_participants {
-                let server = match self.registry.get(sid) {
-                    Some(s) => s,
-                    None => {
-                        warn!(
-                            transaction_id = %tx_id,
-                            server_id = %sid,
-                            "Reconcile:服务器已注销,从失败列表移除"
-                        );
-                        continue;
-                    }
+        if serial {
+            // 串行回退分支:与旧实现逐位等价(两级 for + 内嵌 await commit)
+            for tx_id in tx_ids {
+                // 取出条目快照(避免持锁跨 await,§4.4 反模式 #1)
+                // WHY 用 block scope:DashMap 读锁(get 返回的 Ref)必须在 await 前 drop,
+                // 否则持锁跨 await 会阻塞其他写操作(如同 endpoint 的连接池操作)
+                let (failed_participants, retries) = {
+                    let e = match self.pending_compensations.get(&tx_id) {
+                        Some(e) => e,
+                        None => continue,
+                    };
+                    (e.failed_participants.clone(), e.retries)
+                    // e(DashMap Ref guard)在 block 结束时自动 drop
                 };
 
-                match self.participant_client.commit(&server, &tx_id).await {
-                    Ok(()) => {
-                        info!(
-                            transaction_id = %tx_id,
-                            server_id = %sid,
-                            "Reconcile:Commit 重试成功"
-                        );
+                // 对每个失败参与者重试 commit
+                let mut still_failed: Vec<String> = Vec::new();
+                for sid in &failed_participants {
+                    let server = match self.registry.get(sid) {
+                        Some(s) => s,
+                        None => {
+                            warn!(
+                                transaction_id = %tx_id,
+                                server_id = %sid,
+                                "Reconcile:服务器已注销,从失败列表移除"
+                            );
+                            continue;
+                        }
+                    };
+
+                    match self.participant_client.commit(&server, &tx_id).await {
+                        Ok(()) => {
+                            info!(
+                                transaction_id = %tx_id,
+                                server_id = %sid,
+                                "Reconcile:Commit 重试成功"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                transaction_id = %tx_id,
+                                server_id = %sid,
+                                error = %e,
+                                "Reconcile:Commit 重试失败"
+                            );
+                            still_failed.push(sid.clone());
+                        }
                     }
-                    Err(e) => {
-                        warn!(
-                            transaction_id = %tx_id,
-                            server_id = %sid,
-                            error = %e,
-                            "Reconcile:Commit 重试失败"
-                        );
-                        still_failed.push(sid.clone());
+                }
+
+                // 更新或移除待补偿记录
+                if still_failed.is_empty() {
+                    // 全部成功:移除记录
+                    self.pending_compensations.remove(&tx_id);
+                    info!(transaction_id = %tx_id, "Reconcile:全部参与者 Commit 成功,移除待补偿记录");
+                } else {
+                    // 仍有失败:更新记录
+                    let new_retries = retries + 1;
+                    if new_retries >= max_retries {
+                        // 达 max_retries:移除并加入 still_failing 列表
+                        if let Some((_, mut pc)) = self.pending_compensations.remove(&tx_id) {
+                            pc.retries = new_retries;
+                            pc.failed_participants = still_failed.clone();
+                            warn!(
+                                transaction_id = %tx_id,
+                                retries = new_retries,
+                                failed = ?still_failed,
+                                "Reconcile:达 max_retries,放弃重试(需人工介入)"
+                            );
+                            still_failing.push(pc);
+                        }
+                    } else if let Some(mut entry) = self.pending_compensations.get_mut(&tx_id) {
+                        entry.retries = new_retries;
+                        entry.failed_participants = still_failed;
                     }
                 }
             }
+            return still_failing;
+        }
 
-            // 更新或移除待补偿记录
+        // === 并行路径:全 (tx, sid) 臂扁平扇出,三段式(快照 → 扇出 → 聚合) ===
+
+        // Phase 1:取每条记录的快照(短读锁,await 前即 drop,§4.4 反模式 #1)。
+        // 决策用的 retries 一并快照,与旧串行版一致(递增基于处理前快照)。
+        let snapshots: Vec<(String, Vec<String>, u32)> = tx_ids
+            .iter()
+            .filter_map(|tx_id| {
+                let e = self.pending_compensations.get(tx_id)?;
+                Some((tx_id.clone(), e.failed_participants.clone(), e.retries))
+            })
+            .collect();
+
+        // Phase 2:全部 (tx, sid) 臂扁平扇出。跨 tx 混流并行不改变收敛语义
+        // (裁决见方法文档);臂内只做网络调用与日志,不做任何台账写。
+        // 臂返回 still_failed 标志:commit 失败 = true;成功 / 服务器已注销 = false。
+        let mut arms: FuturesUnordered<_> = snapshots
+            .iter()
+            .flat_map(|(tx_id, failed, _)| {
+                failed.iter().map(move |sid| (tx_id.clone(), sid.clone()))
+            })
+            .map(|(tx_id, sid)| self.reconcile_one(tx_id, sid))
+            .collect();
+
+        // 单循环回收全部臂(FuturesUnordered 无 spawn,未完成臂随其 drop 即取消)
+        let mut outcomes: HashMap<String, Vec<(String, bool)>> = HashMap::new();
+        while let Some((tx_id, sid, still_failed)) = arms.next().await {
+            outcomes.entry(tx_id).or_default().push((sid, still_failed));
+        }
+
+        // Phase 3:per-tx 台账聚合(join 点)。按 snapshots 原序遍历,台账决策顺序
+        // 与旧串行版一致;零臂 tx(failed_participants 为空)按全成功处理移除,
+        // 与旧串行版空循环路径等价。
+        for (tx_id, failed_snapshot, retries) in &snapshots {
+            let arms_of_tx = outcomes.remove(tx_id).unwrap_or_default();
+            let failed_set: HashSet<&str> = arms_of_tx
+                .iter()
+                .filter(|(_, failed)| *failed)
+                .map(|(sid, _)| sid.as_str())
+                .collect();
+            // 并行臂完成序 ≠ 快照输入序:按快照序重排 still_failed,保持与旧
+            // 串行版相同的可观测顺序(commit_phase P1-1 输入序守恒同款)
+            let still_failed: Vec<String> = failed_snapshot
+                .iter()
+                .filter(|sid| failed_set.contains(sid.as_str()))
+                .cloned()
+                .collect();
+
+            // 更新或移除待补偿记录(决策语义与旧串行版逐条一致)
             if still_failed.is_empty() {
                 // 全部成功:移除记录
-                self.pending_compensations.remove(&tx_id);
+                self.pending_compensations.remove(tx_id);
                 info!(transaction_id = %tx_id, "Reconcile:全部参与者 Commit 成功,移除待补偿记录");
             } else {
                 // 仍有失败:更新记录
-                let new_retries = retries + 1;
+                let new_retries = *retries + 1;
                 if new_retries >= max_retries {
                     // 达 max_retries:移除并加入 still_failing 列表
-                    if let Some((_, mut pc)) = self.pending_compensations.remove(&tx_id) {
+                    if let Some((_, mut pc)) = self.pending_compensations.remove(tx_id) {
                         pc.retries = new_retries;
                         pc.failed_participants = still_failed.clone();
                         warn!(
@@ -1038,7 +1140,7 @@ impl McpMesh {
                         );
                         still_failing.push(pc);
                     }
-                } else if let Some(mut entry) = self.pending_compensations.get_mut(&tx_id) {
+                } else if let Some(mut entry) = self.pending_compensations.get_mut(tx_id) {
                     entry.retries = new_retries;
                     entry.failed_participants = still_failed;
                 }
@@ -1046,6 +1148,46 @@ impl McpMesh {
         }
 
         still_failing
+    }
+
+    /// 并行扇出的单个重试臂:对 (tx, sid) 重发一次 commit 并记录日志。
+    ///
+    /// 返回 `(tx_id, sid, still_failed)` — 输入 String 原样带回(臂 future 需要
+    /// 携带身份回收集循环,避免额外 clone);`still_failed` = commit 是否失败。
+    /// 服务器已注销视为该臂解析完成(false,与旧串行 continue 语义一致)。
+    /// WHY 不在此写台账:per-tx 决策(移除/递增/放弃)必须等该 tx 全部臂出结果,
+    /// 见 `reconcile_pending_transactions_with_mode` Phase 3。
+    async fn reconcile_one(&self, tx_id: String, sid: String) -> (String, String, bool) {
+        let server = match self.registry.get(&sid) {
+            Some(s) => s,
+            None => {
+                warn!(
+                    transaction_id = %tx_id,
+                    server_id = %sid,
+                    "Reconcile:服务器已注销,从失败列表移除"
+                );
+                return (tx_id, sid, false);
+            }
+        };
+        match self.participant_client.commit(&server, &tx_id).await {
+            Ok(()) => {
+                info!(
+                    transaction_id = %tx_id,
+                    server_id = %sid,
+                    "Reconcile:Commit 重试成功"
+                );
+                (tx_id, sid, false)
+            }
+            Err(e) => {
+                warn!(
+                    transaction_id = %tx_id,
+                    server_id = %sid,
+                    error = %e,
+                    "Reconcile:Commit 重试失败"
+                );
+                (tx_id, sid, true)
+            }
+        }
     }
 
     /// 待补偿事务数量(用于测试与监控)
@@ -1061,7 +1203,9 @@ mod tests {
     use std::collections::HashSet;
     use std::future::Future;
     use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
+    use tokio::sync::{mpsc, Semaphore};
 
     /// 首次 commit 失败、后续成功的客户端（P2-1 预算验证用）。
     #[derive(Default)]
@@ -1487,6 +1631,362 @@ mod tests {
             mesh.pending_compensations.len(),
             1,
             "并发分支须登记待补偿台账（可 reconcile）"
+        );
+    }
+
+    // === WP-R: reconcile 两级串行 → 全 (tx, sid) 臂并行扇出 ===
+
+    /// reconcile 测试专用 Mock:按 (tx_id, sid) 注入 commit 结果并记录全部调用。
+    struct ScriptedReconcileClient {
+        /// 命中的 (tx, sid) 臂返回 NetworkError,其余返回 Ok
+        fail_set: HashSet<(String, String)>,
+        /// 全部 commit 调用记录(验证"全部臂都被执行")
+        calls: Mutex<Vec<(String, String)>>,
+    }
+
+    impl ScriptedReconcileClient {
+        fn new(fail_set: Vec<(&str, &str)>) -> Self {
+            Self {
+                fail_set: fail_set
+                    .into_iter()
+                    .map(|(t, s)| (t.to_string(), s.to_string()))
+                    .collect(),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<(String, String)> {
+            self.calls.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        }
+    }
+
+    impl ParticipantClient for ScriptedReconcileClient {
+        fn prepare<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _t: &'a str,
+            _op: &'a str,
+            _args: &'a [String],
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn commit<'a>(
+            &'a self,
+            s: &'a MeshServer,
+            t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            // 锁内记录并判定,锁外 await(§4.4 反模式 #1:禁止持锁跨 .await)
+            let key = (t.to_string(), s.server_id.clone());
+            let should_fail = {
+                let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
+                calls.push(key.clone());
+                self.fail_set.contains(&key)
+            };
+            Box::pin(async move {
+                if should_fail {
+                    Err(McpError::NetworkError {
+                        server_id: key.1,
+                        endpoint: String::new(),
+                        reason: "reconcile 注入: commit 失败".into(),
+                    })
+                } else {
+                    Ok(())
+                }
+            })
+        }
+
+        fn rollback<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn query<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _q: &'a str,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+            Box::pin(async { Ok("ok".to_string()) })
+        }
+    }
+
+    /// 构造注入自定义 ParticipantClient 的 reconcile 测试 Mesh。
+    ///
+    /// WHY `durable: false` / 大事务超时:与 `make_scripted_mesh` 同理,
+    /// 避免测试写 WAL 文件与 16 线程并行下 200ms 默认预算的 flaky。
+    fn make_reconcile_mesh(client: Arc<dyn ParticipantClient>, max_retries: u32) -> McpMesh {
+        let config = MeshConfig {
+            transaction_timeout_ms: 30_000,
+            max_retries,
+            durable: false,
+            ..Default::default()
+        };
+        McpMesh::with_participant_client(config, None, client)
+    }
+
+    /// 注册 `sids` 到测试 Mesh(RFC 5737 TEST-NET-3 地址,端口取索引防重复)。
+    fn register_reconcile_servers(mesh: &McpMesh, sids: &[&str]) {
+        for (i, sid) in sids.iter().enumerate() {
+            mesh.register_server(MeshServer::new(*sid, format!("203.0.113.1:9{i}"), vec![]))
+                .expect("注册失败");
+        }
+    }
+
+    /// 直接向待补偿台账注入一条记录(reconcile 不经 execute_transaction 的直接测法)。
+    fn inject_pending(mesh: &McpMesh, tx_id: &str, failed: &[&str]) {
+        mesh.pending_compensations.insert(
+            tx_id.to_string(),
+            PendingCompensation {
+                transaction_id: tx_id.to_string(),
+                failed_participants: failed.iter().map(|s| (*s).to_string()).collect(),
+                retries: 0,
+                created_at: chrono::Utc::now(),
+            },
+        );
+    }
+
+    /// 3 tx × 2 sid 场景的双模式共用断言:全部臂恰被执行一次 + 台账记账正确。
+    fn assert_reconcile_3tx2sid_outcome(mesh: &McpMesh, client: &ScriptedReconcileClient) {
+        // 全部 6 条 (tx, sid) 臂都被执行(且恰一次)
+        let mut calls = client.calls();
+        calls.sort();
+        let mut expected: Vec<(String, String)> = [
+            ("tx-ok", "s-0"),
+            ("tx-ok", "s-1"),
+            ("tx-partial", "s-0"),
+            ("tx-partial", "s-2"),
+            ("tx-fail", "s-2"),
+            ("tx-fail", "s-3"),
+        ]
+        .iter()
+        .map(|(t, s)| (t.to_string(), s.to_string()))
+        .collect();
+        expected.sort();
+        assert_eq!(calls, expected, "全部 (tx, sid) 臂都应恰被执行一次");
+
+        assert_eq!(
+            mesh.pending_compensation_count(),
+            2,
+            "tx-ok 应全成功移除;tx-partial/tx-fail 仍在台账"
+        );
+
+        // tx-partial:仅失败臂 s-2 保留在 failed 列表,retries 递增
+        let pc = mesh
+            .pending_compensations
+            .get("tx-partial")
+            .expect("tx-partial 应仍在台账");
+        assert_eq!(pc.failed_participants, vec!["s-2".to_string()]);
+        assert_eq!(pc.retries, 1);
+        // tx-fail:两臂失败,failed 列表保持快照输入序
+        let pc = mesh
+            .pending_compensations
+            .get("tx-fail")
+            .expect("tx-fail 应仍在台账");
+        assert_eq!(
+            pc.failed_participants,
+            vec!["s-2".to_string(), "s-3".to_string()]
+        );
+        assert_eq!(pc.retries, 1);
+    }
+
+    /// 并行分支:全部臂都被执行且失败臂逐条正确标记(确定性,无时序依赖)。
+    #[tokio::test]
+    async fn reconcile_parallel_fans_out_all_arms_and_marks_failures() {
+        let client = Arc::new(ScriptedReconcileClient::new(vec![
+            ("tx-partial", "s-2"),
+            ("tx-fail", "s-2"),
+            ("tx-fail", "s-3"),
+        ]));
+        let mesh = make_reconcile_mesh(Arc::clone(&client) as Arc<dyn ParticipantClient>, 2);
+        register_reconcile_servers(&mesh, &["s-0", "s-1", "s-2", "s-3"]);
+        inject_pending(&mesh, "tx-ok", &["s-0", "s-1"]);
+        inject_pending(&mesh, "tx-partial", &["s-0", "s-2"]);
+        inject_pending(&mesh, "tx-fail", &["s-2", "s-3"]);
+
+        let still_failing = mesh.reconcile_pending_transactions_with_mode(false).await;
+
+        assert!(still_failing.is_empty(), "max_retries=2 下不应有放弃事务");
+        assert_reconcile_3tx2sid_outcome(&mesh, &client);
+    }
+
+    /// 串行回退分支(`CHIMERA_MCP_SERIAL_RECONCILE=1` 注入的同一路径)必须与旧
+    /// 实现行为等价:同一注入场景下,臂执行集与台账记账和并行分支一致。
+    #[tokio::test]
+    async fn reconcile_serial_mode_matches_parallel_outcome() {
+        let client = Arc::new(ScriptedReconcileClient::new(vec![
+            ("tx-partial", "s-2"),
+            ("tx-fail", "s-2"),
+            ("tx-fail", "s-3"),
+        ]));
+        let mesh = make_reconcile_mesh(Arc::clone(&client) as Arc<dyn ParticipantClient>, 2);
+        register_reconcile_servers(&mesh, &["s-0", "s-1", "s-2", "s-3"]);
+        inject_pending(&mesh, "tx-ok", &["s-0", "s-1"]);
+        inject_pending(&mesh, "tx-partial", &["s-0", "s-2"]);
+        inject_pending(&mesh, "tx-fail", &["s-2", "s-3"]);
+
+        let still_failing = mesh.reconcile_pending_transactions_with_mode(true).await;
+
+        assert!(still_failing.is_empty(), "max_retries=2 下不应有放弃事务");
+        assert_reconcile_3tx2sid_outcome(&mesh, &client);
+    }
+
+    /// 放弃路径与服务器注销路径:max_retries=1 时双臂失败的事务进入 still_failing
+    /// (retries=1、failed 列表保持快照序);含未注册参与者的臂按"服务器已注销"
+    /// 解析,其记录被移除(与旧串行 continue 语义一致)。
+    #[tokio::test]
+    async fn reconcile_gives_up_at_max_retries_and_resolves_gone_servers() {
+        let client = Arc::new(ScriptedReconcileClient::new(vec![
+            ("tx-giveup", "s-0"),
+            ("tx-giveup", "s-1"),
+        ]));
+        let mesh = make_reconcile_mesh(Arc::clone(&client) as Arc<dyn ParticipantClient>, 1);
+        register_reconcile_servers(&mesh, &["s-0", "s-1"]); // s-missing 刻意不注册
+        inject_pending(&mesh, "tx-giveup", &["s-0", "s-1"]);
+        inject_pending(&mesh, "tx-gone", &["s-0", "s-missing"]);
+
+        let still_failing = mesh.reconcile_pending_transactions_with_mode(false).await;
+
+        assert_eq!(still_failing.len(), 1, "tx-giveup 应达 max_retries 被放弃");
+        let pc = &still_failing[0];
+        assert_eq!(pc.transaction_id, "tx-giveup");
+        assert_eq!(pc.retries, 1);
+        assert_eq!(
+            pc.failed_participants,
+            vec!["s-0".to_string(), "s-1".to_string()]
+        );
+        assert_eq!(
+            mesh.pending_compensation_count(),
+            0,
+            "giveup 记录移入返回列表,gone 记录因服务器注销解析完成,均应移除"
+        );
+    }
+
+    /// 跟踪 reconcile 峰值在飞 commit 臂数的屏障客户端(与 tests/commit_concurrency.rs
+    /// 的 InflightClient 同法):每个 commit future 首帧报告到达并阻塞在信号量上。
+    struct ReconcileBarrierClient {
+        inflight: Arc<AtomicUsize>,
+        peak: Arc<AtomicUsize>,
+        arrived: mpsc::UnboundedSender<()>,
+        release: Arc<Semaphore>,
+    }
+
+    impl ReconcileBarrierClient {
+        fn new() -> (Self, mpsc::UnboundedReceiver<()>, Arc<Semaphore>) {
+            let (arrived_tx, arrived_rx) = mpsc::unbounded_channel();
+            let release = Arc::new(Semaphore::new(0));
+            (
+                Self {
+                    inflight: Arc::new(AtomicUsize::new(0)),
+                    peak: Arc::new(AtomicUsize::new(0)),
+                    arrived: arrived_tx,
+                    release: Arc::clone(&release),
+                },
+                arrived_rx,
+                release,
+            )
+        }
+    }
+
+    impl ParticipantClient for ReconcileBarrierClient {
+        fn prepare<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _t: &'a str,
+            _op: &'a str,
+            _args: &'a [String],
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn commit<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            let inflight = Arc::clone(&self.inflight);
+            let peak = Arc::clone(&self.peak);
+            let arrived = self.arrived.clone();
+            let release = Arc::clone(&self.release);
+            Box::pin(async move {
+                let cur = inflight.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(cur, Ordering::SeqCst);
+                // 报告已到达(测试收齐全部臂后才放行)
+                let _ = arrived.send(());
+                let permit = release.acquire().await.expect("release semaphore closed");
+                permit.forget();
+                inflight.fetch_sub(1, Ordering::SeqCst);
+                Ok(())
+            })
+        }
+
+        fn rollback<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<(), McpError>> + Send + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn query<'a>(
+            &'a self,
+            _s: &'a MeshServer,
+            _q: &'a str,
+            _t: &'a str,
+        ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+            Box::pin(async { Ok("ok".to_string()) })
+        }
+    }
+
+    /// 并发扇出证明:reconcile 峰值在飞 commit 臂数 == 总臂数(串行实现恒为 1)。
+    ///
+    /// 判定与调度时序无关(到达计数 + 信号量放行),确定性可断言;串行实现
+    /// 只会到达 1 条臂,在 2s 超时处直接失败而非挂死。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn reconcile_fanout_is_concurrent() {
+        const ARMS: usize = 6; // 3 tx × 2 sid
+
+        let (client, mut arrived, release) = ReconcileBarrierClient::new();
+        let client = Arc::new(client);
+        let mesh = Arc::new(make_reconcile_mesh(
+            Arc::clone(&client) as Arc<dyn ParticipantClient>,
+            2,
+        ));
+        register_reconcile_servers(&mesh, &["s-0", "s-1"]);
+        for t in 0..3 {
+            inject_pending(&mesh, &format!("tx-{t}"), &["s-0", "s-1"]);
+        }
+
+        let mesh_for_task = Arc::clone(&mesh);
+        let task = tokio::spawn(async move {
+            mesh_for_task
+                .reconcile_pending_transactions_with_mode(false)
+                .await
+        });
+
+        // 收齐全部臂的到达(串行实现只会有 1 条 → 2s 超时直接失败)
+        for i in 0..ARMS {
+            tokio::time::timeout(Duration::from_secs(2), arrived.recv())
+                .await
+                .unwrap_or_else(|_| panic!("第 {i} 条 commit 臂未在 2s 内到达(疑似串行执行)"))
+                .expect("到达通道不应关闭");
+        }
+        let peak = client.peak.load(Ordering::SeqCst);
+        release.add_permits(ARMS);
+
+        let still_failing = task.await.expect("reconcile 任务不应 panic");
+        assert!(still_failing.is_empty(), "放行后全部臂应 commit 成功");
+        assert_eq!(
+            mesh.pending_compensation_count(),
+            0,
+            "全部臂成功后台账应清空"
+        );
+        assert_eq!(
+            peak, ARMS,
+            "reconcile 并发峰值应等于总臂数 {ARMS}(串行实现恒为 1)——实测 {peak}"
         );
     }
 
