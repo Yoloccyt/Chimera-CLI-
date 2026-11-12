@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use nmc_encoder::{PerceptionInput, Perceptor};
+use nmc_encoder::PerceptionInput;
 use osa_coordinator::RiskLevel;
 use repo_wiki::{WikiEntry, WikiError, WikiStore};
 
@@ -109,7 +109,9 @@ impl WikiRetriever {
         let query_embedding: Option<Vec<f32>> = match &self.encoder {
             Some(encoder) => {
                 let input = PerceptionInput::Text(query.to_string());
-                match encoder.perceive(&input) {
+                // G-88 红线(WP-08/R8):perceive 为同步阻塞入口(10~30ms 级推理),
+                // async 上下文禁止裸调,经 perceive_async 卸载到 spawn_blocking 阻塞池
+                match Arc::clone(encoder).perceive_async(input).await {
                     Ok(element) => Some(element.embedding),
                     Err(err) => {
                         tracing::warn!(error = %err, "NMC 查询编码失败,降级 sparse-only");

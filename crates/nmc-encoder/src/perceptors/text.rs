@@ -15,6 +15,8 @@
 //! 4. mean-pooling (忽略 padding tokens)
 //! 5. L2 归一化 → 384 维语义嵌入
 
+use std::sync::Arc;
+
 use crate::config::NmcConfig;
 use crate::error::NmcError;
 use crate::perceptors::onnx_backend::TractPlan;
@@ -114,6 +116,40 @@ impl TextPerceptor {
     /// 返回配置引用
     pub fn config(&self) -> &NmcConfig {
         &self.config
+    }
+
+    /// 感知输入的 async facade — G-88 红线修复(WP-08/R8)
+    ///
+    /// WHY G-88:`perceive` 是纯同步阻塞入口(ONNX 推理/SHA256 嵌入,单次 10~30ms 级),
+    /// async 上下文(如 chimera-mas `WikiRetriever::search`)裸调会堵死 runtime worker,
+    /// 必须经本方法把计算卸载到 `spawn_blocking` 阻塞池;同步上下文(无 tokio runtime,
+    /// 如同步测试)按 `Handle::try_current()` 判定后降级同步执行
+    /// (先例:session-store `writer.rs::run_blocking` 双态形态)。
+    ///
+    /// 返回类型/错误类型与 [`Perceptor::perceive`] 严格一致,结果逐位一致
+    /// (同一纯计算函数,仅执行线程不同);`spawn_blocking` 的 join 错误
+    /// (阻塞池任务 panic,理论不可达)映射为 `EncodingFailed`,不新增 NmcError 变体。
+    ///
+    /// # Receiver 形态(WHY `self: Arc<Self>`)
+    /// `spawn_blocking` 闭包要求 `'static`,`&self` 无法 move 进闭包;调用方
+    /// (WikiRetriever 持 `Option<Arc<TextPerceptor>>`)零成本 `Arc::clone` 即可。
+    /// `Arc<Self>` receiver 要求 `Self: Send + Sync + 'static`(编译期断言见 tests,
+    /// 与 `test_nmc_encoder_send_sync` 同源——`NmcEncoder` 持有本类型字段)。
+    pub async fn perceive_async(
+        self: Arc<Self>,
+        input: PerceptionInput,
+    ) -> Result<CognitiveElement, NmcError> {
+        match tokio::runtime::Handle::try_current() {
+            // 有 runtime:卸载到阻塞池,不堵 async worker(G-88)
+            Ok(_) => tokio::task::spawn_blocking(move || self.perceive(&input))
+                .await
+                .map_err(|e| NmcError::EncodingFailed {
+                    modality: Modality::Text.as_str().to_string(),
+                    reason: format!("spawn_blocking join 失败(阻塞池任务 panic): {e}"),
+                })?,
+            // 无 runtime(同步测试/非异步环境):降级同步,行为与 perceive 逐位一致
+            Err(_) => self.perceive(&input),
+        }
     }
 
     /// ONNX 推理路径: 文本 → tokenizer → tract-onnx → mean-pooling → L2 归一化
@@ -553,5 +589,61 @@ mod tests {
             "L2 归一化后平方和应为 1.0, 实际 {}",
             norm_sq
         );
+    }
+
+    // ========================================================================
+    // perceive_async(G-88 红线 facade)冒烟测试
+    // ========================================================================
+
+    /// 编译期断言 — perceive_async 经 `Arc<Self>` receiver 进 spawn_blocking,
+    /// 要求 `TextPerceptor: Send + Sync + 'static`(与 `test_nmc_encoder_send_sync`
+    /// 同源:`NmcEncoder` 持有本类型字段,此处对宿主类型直接锁定)
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    #[test]
+    fn test_text_perceptor_send_sync() {
+        assert_send_sync::<TextPerceptor>();
+    }
+
+    /// 有 runtime:走 spawn_blocking 阻塞池路径,结果与同步 perceive 逐位一致
+    /// (无 ONNX 模型环境,同上方降级路径测试构造形态:NmcConfig::default())
+    #[tokio::test]
+    async fn test_perceive_async_with_runtime_matches_sync() {
+        let encoder = Arc::new(TextPerceptor::new(NmcConfig::default()));
+        let input = PerceptionInput::Text("runtime smoke".into());
+        let async_elem = encoder.clone().perceive_async(input).await.unwrap();
+        let sync_elem = encoder
+            .perceive(&PerceptionInput::Text("runtime smoke".into()))
+            .unwrap();
+        assert_eq!(async_elem.content_hash, sync_elem.content_hash);
+        assert_eq!(async_elem.embedding, sync_elem.embedding);
+        assert_eq!(async_elem.embedding_dim(), 256);
+    }
+
+    /// 无 runtime:降级同步分支,单次 poll 即 Ready(同步完成,无 Pending 挂起)
+    ///
+    /// WHY 手写 poll:`#[tokio::test]`/`block_on` 会进入 runtime 上下文使
+    /// `Handle::try_current()` 成功,测不到 `Err(_)` 降级分支;最小 executor
+    /// 手动轮询一次即验证「无 runtime 时行为与 perceive 一致」
+    /// (Waker 用 `Waker::noop()`,降级分支同步完成不会触发唤醒)
+    #[test]
+    fn test_perceive_async_fallback_without_runtime() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+
+        let encoder = Arc::new(TextPerceptor::new(NmcConfig::default()));
+        let fut = encoder.perceive_async(PerceptionInput::Text("no-runtime".into()));
+        let mut fut = Box::pin(fut);
+
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        match fut.as_mut().poll(&mut cx) {
+            Poll::Ready(Ok(elem)) => {
+                assert_eq!(elem.embedding_dim(), 256);
+                assert!(!elem.content_hash.is_empty());
+            }
+            Poll::Ready(Err(e)) => panic!("无 runtime 降级路径不应报错: {e}"),
+            Poll::Pending => panic!("无 runtime 降级路径应为同步完成,单次 poll 即 Ready"),
+        }
     }
 }

@@ -9,7 +9,9 @@ license.workspace = true
 nexus-core = { workspace = true }
 # L1 Core:EventBus 跨层通信,发布 NmcEncoded 事件
 event-bus = { workspace = true }
-# 异步运行时(事件总线 publish_blocking 同步调用,但保留 tokio 供未来扩展)
+# 异步运行时:perceive_async(G-88 红线 facade)经 spawn_blocking 把同步阻塞推理
+# 卸载出 async worker;无 runtime 上下文时经 Handle::try_current 降级同步
+tokio = { workspace = true }
 # 序列化:配置与类型派生
 serde = { workspace = true, features = ["derive"] }
 # 应用层错误(集成测试场景)

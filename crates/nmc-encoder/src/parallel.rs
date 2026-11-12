@@ -5,6 +5,9 @@
 //! 对应创新点:NMC(Native Multimodal Context,原生多模态上下文编码)
 //!
 //! ## 接线三要件（第三轮 T2.4 · 本入口 `perceive_parallel`/`perceive_batch` 当前零调用点、G-87 判 DEAD）
+//! **接线状态（R8/WP-08）**：`perceive_async`（G-88 卸载 facade，定义于 `perceptors/text.rs`）
+//! 已接线 wiki_retrieval（chimera-mas `WikiRetriever::search`）；本文件 `perceive_batch`
+//! 仍 DEAD（零生产调用点），三要件继续适用。
 //! 若未来接线进生产,接线前须逐条满足（负收益红线:不预投不可达点位;G-87 权威判定见
 //! `scripts/compute_offload_reachability_freeze.txt` 行 `nmc-encoder/src/parallel.rs::perceive_parallel|DEAD`;
 //! 台账行见 `scripts/check_dead_contract_apis.py` `NmcEncoder::perceive_batch`）:
