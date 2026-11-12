@@ -2484,6 +2484,51 @@ pub enum NexusEvent {
         breakpoint_count: u32,
     },
 
+    /// 模型上下文能力档案更新 — HCW v3 蓝图 P0(ADR-290)
+    ///
+    /// mca-gateway(L10) 的有效窗口探针(observe 档)完成一次标定后广播:
+    /// effective_window 为探针拟合结果(80% 检索准确率截点)或公开基准先验,
+    /// hcw-window(L2) 经 L0 `ContextCapabilityProfile` 只读消费本事件刷新
+    /// WindowGovernor 定容输入。WHY 经事件而非直调:依赖铁律 L2 不得感知 L10,
+    /// 能力数据一律经 L0 中转 + 事件广播(蓝图 §5.2)。
+    ///
+    /// # 跨层通信(C6)
+    /// L10(mca-gateway) → L2(hcw-window),经 event-bus 解耦。
+    /// 本事件为 Normal 级别(观测面),不触发 mpsc 旁路;丢失可由下次探针周期补偿。
+    ContextCapabilityUpdated {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 路由键 `provider/model`(与 ModelAffinitySelected 一致)
+        route_key: String,
+        /// 标称窗口(官方,token)
+        advertised_window: u32,
+        /// 有效窗口(探针标定或先验,token)——常驻层定容的真实依据
+        effective_window: u32,
+        /// 标定置信度: "external_prior" / "own_probe" / "inferred"
+        confidence: String,
+    },
+
+    /// 窗口计划应用留痕 — HCW v3 蓝图 P1 WindowGovernor(ADR-290)
+    ///
+    /// hcw-window(L2) 的 WindowGovernor 每次生成 WindowPlan 后发布本事件,
+    /// 作为「双跑对照回滚」与「同任务 WindowPlan 快照可回放」的证据锚点
+    /// (蓝图 §七 P1 验收线 + §八 回滚设计)。纯观测,不影响窗口执行路径。
+    ///
+    /// # 跨层通信(C6)
+    /// L2(hcw-window) 广播,观测面;Normal 级别,不触发 mpsc 旁路。
+    WindowPlanApplied {
+        /// 事件元数据
+        metadata: EventMetadata,
+        /// 本请求常驻上限(token,= min(有效窗口×安全系数,预算上限,延迟 SLO))
+        resident_cap: u32,
+        /// 页预算(沿用 4000 码元页预算传统)
+        page_budget: u32,
+        /// R/S/E/M 四层配额比例快照(JSON 序列化的 TierAlloc,供回放)
+        tier_allocation_json: String,
+        /// 计划来源: "static_fallback" / "governor"(双跑对照的分流标记)
+        plan_source: String,
+    },
+
     // ============================================================
     // ADR-069 Token 效率优化事件
     // ============================================================

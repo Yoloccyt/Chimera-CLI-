@@ -324,6 +324,9 @@ define_event_registry! {
     WindowAffinityApplied => Normal, System;
     // MCA A3:缓存亲和策略应用结果(观测面事件)
     CacheAffinityApplied => Normal, System;
+    // HCW v3 蓝图 P0/P1(ADR-290):能力档案更新与窗口计划留痕(观测面)
+    ContextCapabilityUpdated => Normal, System;
+    WindowPlanApplied => Normal, System;
     // ADR-069:Token 效率优化事件(观测面)
     ContextBudgetAllocated => Normal, System;
     SemanticCacheHit => Normal, System;

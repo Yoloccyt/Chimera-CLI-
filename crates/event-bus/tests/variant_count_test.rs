@@ -45,14 +45,16 @@ use nexus_contracts::reward::RewardSignal;
 /// ADR-197:+ComputePoolSaturated(Normal/System)= 152,分布 20/11/121;
 /// ADR-223 D2:+TelemetryCalibrationApplied / TelemetryReporterDegraded = 154,分布 20/11/123;
 /// C-13/M09:ShadowBreakerTripped Normal→Critical(定级升级,变体零新增)= 154,分布 21/11/122;
-/// C-64b: SandboxViolation Normal→Critical(同为定级升级、变体零新增)= 154,分布 22/11/121
-const VARIANT_COUNT_LOCK: usize = 154;
+/// C-64b: SandboxViolation Normal→Critical(同为定级升级、变体零新增)= 154,分布 22/11/121;
+/// ADR-290 R9:HCW v3 蓝图 +ContextCapabilityUpdated / WindowPlanApplied
+/// (均 Normal/System 观测面)= 156,分布 22/11/123
+const VARIANT_COUNT_LOCK: usize = 156;
 /// severity 分布锁定值(Critical,与 bus.rs CRITICAL_TOTAL = 21 一致)
 const CRITICAL_LOCK: usize = 22;
 /// severity 分布锁定值(Info)
 const INFO_LOCK: usize = 11;
 /// severity 分布锁定值(Normal)
-const NORMAL_LOCK: usize = 121;
+const NORMAL_LOCK: usize = 123;
 
 /// 变体清单第 1 段（`NexusEvent::UserIntentEncoded` … `NexusEvent::ContextWindowSwitched`，声明序连续切片）
 ///
@@ -920,6 +922,20 @@ fn variant_samples_chunk_5() -> Vec<NexusEvent> {
             cache_control_injected: true,
             breakpoint_count: 1,
         },
+        NexusEvent::ContextCapabilityUpdated {
+            metadata: EventMetadata::new("test"),
+            route_key: "s".into(),
+            advertised_window: 1_000_000,
+            effective_window: 500_000,
+            confidence: "external_prior".into(),
+        },
+        NexusEvent::WindowPlanApplied {
+            metadata: EventMetadata::new("test"),
+            resident_cap: 400_000,
+            page_budget: 4_000,
+            tier_allocation_json: "{}".into(),
+            plan_source: "static_fallback".into(),
+        },
         NexusEvent::ContextBudgetAllocated {
             metadata: EventMetadata::new("test"),
             budget_tokens: 1,
@@ -1292,6 +1308,9 @@ fn variant_ordinals(event: &NexusEvent) -> u32 {
         // ADR-223 D2:遥测双事件(尾号续增)
         NexusEvent::TelemetryCalibrationApplied { .. } => 153,
         NexusEvent::TelemetryReporterDegraded { .. } => 154,
+        // ADR-290 R9:HCW v3 蓝图双事件(尾号续增)
+        NexusEvent::ContextCapabilityUpdated { .. } => 155,
+        NexusEvent::WindowPlanApplied { .. } => 156,
     }
 }
 

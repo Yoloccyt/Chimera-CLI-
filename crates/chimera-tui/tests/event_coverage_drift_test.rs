@@ -186,6 +186,8 @@ pub fn classify(event: &NexusEvent) -> TuiEventClass {
         ComputePoolSaturated { .. } => TuiEventClass::NotForTui,
         ConsensusReached { .. } => TuiEventClass::Consumed,
         ContextBudgetAllocated { .. } => TuiEventClass::NotForTui,
+        // ADR-290 R9:HCW v3 能力档案更新(观测面,面板不消费)
+        ContextCapabilityUpdated { .. } => TuiEventClass::NotForTui,
         ContextCompressed { .. } => TuiEventClass::Consumed,
         ContextWindowSwitched { .. } => TuiEventClass::Consumed,
         // PS-2 批次1:CoordinationRatioReported 已由 ParliamentSync 消费
@@ -303,6 +305,8 @@ pub fn classify(event: &NexusEvent) -> TuiEventClass {
         VoteCastRequested { .. } => TuiEventClass::NotForTui,
         WikiUpdated { .. } => TuiEventClass::NotForTui,
         WindowAffinityApplied { .. } => TuiEventClass::NotForTui,
+        // ADR-290 R9:HCW v3 窗口计划留痕(观测面,面板不消费)
+        WindowPlanApplied { .. } => TuiEventClass::NotForTui,
     }
 }
 
