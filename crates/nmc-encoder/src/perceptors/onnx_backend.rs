@@ -13,6 +13,10 @@
 //! - **channel-first (CHW) 格式**: 图像预处理输出 CHW 而非 HWC，因为 ONNX 模型
 //!   (CLIP ViT-B/32, VideoMAE) 的输入规范为 NCHW，直接构造 CHW 避免后续转置开销
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
+
 use crate::config::NmcConfig;
 use crate::error::NmcError;
 use tract_onnx::prelude::*;
@@ -104,7 +108,10 @@ pub struct OnnxBackend {
     ///
     /// WHY 存储完整类型而非 type-erased: SimplePlan 的 run() 方法需要具体类型
     /// 参数；使用完整泛型签名避免 `Box<dyn Runnable>` 的虚函数调用开销
-    plan: TractPlan,
+    /// WHY Arc: R8/ADR-289 进程级缓存 — plan 来自全局 [`plan_cache`]，
+    /// 同一模型文件在进程内只编译一次，多个 backend/encoder 共享同一份
+    /// 编译产物（TractPlan 为 immutable 共享结构，`run(&self)` 线程安全）
+    plan: Arc<TractPlan>,
     /// 模型配置 — 用于获取 model_dir 拼接完整路径
     /// WHY 存储 config: load 完成后 config 仍被需要 (如日志输出模型路径)，
     /// 克隆一份避免外部所有权问题。当前主要用于 load() 阶段，后续 run()
@@ -118,7 +125,7 @@ pub struct OnnxBackend {
 // ============================================================================
 
 impl OnnxBackend {
-    /// 加载 ONNX 模型并编译为 tract 执行计划
+    /// 加载 ONNX 模型并编译为 tract 执行计划（进程级缓存命中时跳过编译）
     ///
     /// # 参数
     /// - `config`: NmcConfig，用于获取 model_dir 与对应模型文件名
@@ -130,31 +137,13 @@ impl OnnxBackend {
     /// # 实现细节
     /// 1. 从 config 获取模型文件名 (image_model / video_model / audio_model)
     /// 2. 通过 `config.model_path()` 拼接完整路径
-    /// 3. 使用 `tract_onnx::onnx()` 加载 ONNX 模型
-    /// 4. 调用 `.into_runnable()` 编译为执行计划
+    /// 3. 经 [`load_plan_cached`] 取/编译执行计划（R8/ADR-289 进程级缓存）
     pub fn load(config: &NmcConfig, model_type: ModelType) -> Result<Self, NmcError> {
         let model_name = model_type.get_model_filename(config);
         let path = config.model_path(model_name);
         let modality = model_type.modality_name();
 
-        let plan = tract_onnx::onnx()
-            .model_for_path(&path)
-            .map_err(|e| NmcError::ModelLoadError {
-                model_name: format!("{}({})", modality, model_name),
-                reason: format!("模型加载失败: {}", e),
-            })?
-            // into_typed(): InferenceModel → TypedModel (类型化模型),
-            // 之后 into_runnable() 返回 SimplePlan<TypedFact, ...> 而非 InferenceFact
-            .into_typed()
-            .map_err(|e| NmcError::ModelLoadError {
-                model_name: format!("{}({})", modality, model_name),
-                reason: format!("模型类型化失败: {}", e),
-            })?
-            .into_runnable()
-            .map_err(|e| NmcError::ModelLoadError {
-                model_name: format!("{}({})", modality, model_name),
-                reason: format!("模型编译失败: {}", e),
-            })?;
+        let plan = load_plan_cached(&path, modality, model_name)?;
 
         Ok(Self {
             model_type,
@@ -659,19 +648,113 @@ impl OnnxBackend {
 }
 
 // ============================================================================
+// 进程级 TractPlan 缓存 (R8/ADR-289)
+// ============================================================================
+
+/// 进程级 TractPlan 缓存 — 键为解析后的模型文件完整路径 (含 model_dir 与文件名)
+///
+/// WHY 缓存: 每次 `OnnxBackend::load` / `TextPerceptor::new` 都会执行
+/// model_for_path + into_typed + into_runnable 的完整 ONNX 解析编译
+/// (单模型数十至数百 ms 级), 而模型文件是部署期静态资产, 进程生命周期内
+/// 不变; `TractPlan` (SimplePlan) 为 immutable 共享结构 (`run(&self)` 每次
+/// 调用创建独立执行状态, `Op: Send + Sync + 'static`), 进程内共享同一份
+/// 编译产物与逐实例编译逐位等价 (Send+Sync 由
+/// `fusion::tests::test_nmc_encoder_send_sync` 编译期断言锁定)。
+///
+/// WHY Mutex<HashMap> 而非 OnceLock 单条目: `NmcEncoder::new` 顺序加载
+/// text/image/video/audio 4 个不同模型文件, 全局单条目按路径替换会在
+/// 同一构造序列内互相挤占, 第二次构造起几乎全 miss; HashMap 条目数 =
+/// 进程内出现过的模型路径数 (现实 1~5 个), 内存上界可忽略。
+///
+/// WHY 键取完整解析路径而非 model_dir: 同一目录下可经 `with_image_model`
+/// 等构建器更换模型文件名, 按 model_dir 键会串台; 路径同时含 dir 与
+/// 文件名, 任一变更即不同键, 天然满足「model_dir 变更时必须重建」的
+/// 失效语义。(同路径文件被原地替换的场景不刷新缓存: 模型为部署期静态
+/// 资产, 与 ffmpeg 探测 memoize 同一「进程生命周期不变」假设。)
+///
+/// 并发语义: 锁内只做查/插 (无编译); 未命中时锁外编译, 竞争下可能重复
+/// 编译一次 (仅浪费、无正确性影响); Mutex 毒化 (持锁 panic, 理论不可达)
+/// 降级为当次 miss 重新编译, 功能不受影响。
+fn plan_cache() -> &'static Mutex<HashMap<PathBuf, Arc<TractPlan>>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<TractPlan>>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 带进程级缓存的 TractPlan 加载 — `OnnxBackend::load` 与 `TextPerceptor` 共用
+///
+/// 错误映射与原 `OnnxBackend::load` 内联实现一致 (`ModelLoadError`,
+/// `model_name` 携带 `模态(文件名)` 标识), text.rs 复用同一错误形态。
+pub(crate) fn load_plan_cached(
+    model_path: &str,
+    modality: &str,
+    model_name: &str,
+) -> Result<Arc<TractPlan>, NmcError> {
+    let cache = plan_cache();
+
+    // 快路径: 命中直接克隆 Arc (锁内零编译)
+    if let Ok(guard) = cache.lock() {
+        if let Some(plan) = guard.get(Path::new(model_path)) {
+            return Ok(Arc::clone(plan));
+        }
+    }
+
+    // 未命中: 锁外编译 (避免持锁数百 ms 阻塞其他模态的加载)
+    let plan = Arc::new(compile_plan(model_path, modality, model_name)?);
+
+    // 写入缓存; 锁不可用 (毒化) 时放弃缓存, 本次仍返回编译产物
+    if let Ok(mut guard) = cache.lock() {
+        guard.insert(PathBuf::from(model_path), Arc::clone(&plan));
+    }
+    Ok(plan)
+}
+
+/// 编译 ONNX 模型为 tract 执行计划 (无缓存, 原 `load` 编译核心段提取)
+fn compile_plan(model_path: &str, modality: &str, model_name: &str) -> Result<TractPlan, NmcError> {
+    tract_onnx::onnx()
+        .model_for_path(model_path)
+        .map_err(|e| NmcError::ModelLoadError {
+            model_name: format!("{}({})", modality, model_name),
+            reason: format!("模型加载失败: {}", e),
+        })?
+        // into_typed(): InferenceModel → TypedModel (类型化模型),
+        // 之后 into_runnable() 返回 SimplePlan<TypedFact, ...> 而非 InferenceFact
+        .into_typed()
+        .map_err(|e| NmcError::ModelLoadError {
+            model_name: format!("{}({})", modality, model_name),
+            reason: format!("模型类型化失败: {}", e),
+        })?
+        .into_runnable()
+        .map_err(|e| NmcError::ModelLoadError {
+            model_name: format!("{}({})", modality, model_name),
+            reason: format!("模型编译失败: {}", e),
+        })
+}
+
+// ============================================================================
 // 辅助函数
 // ============================================================================
 
-/// 检查 FFmpeg 系统命令是否可用
+/// ffmpeg 可用性探测结果 — 进程级 memoize (R8/ADR-289)
+///
+/// WHY memoize: ffmpeg 的安装状态是系统级运维事实, 进程生命周期内视为
+/// 不变 (不会"探测之后中途安装/卸载"); 而探测本身要 spawn `ffmpeg -version`
+/// 子进程 (数十 ms 级), video 预处理 (`preprocess_video`) 每次调用都会探测,
+/// memoize 后整个进程至多 spawn 一次。权衡: 测试中途安装 ffmpeg 的探测
+/// 结果不再刷新——该场景不构成真实需求。
+static FFMPEG_AVAILABLE: OnceLock<bool> = OnceLock::new();
+
+/// 检查 FFmpeg 系统命令是否可用（进程级 memoize, 见 [`FFMPEG_AVAILABLE`]）
 ///
 /// 执行 `ffmpeg -version` 检测 FFmpeg 是否已安装。
 /// 不阻塞，使用 `std::process::Command` 快速检查。
 fn is_ffmpeg_available() -> bool {
-    std::process::Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    *FFMPEG_AVAILABLE.get_or_init(|| {
+        std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
 }
 
 /// 音频重采样 — 线性插值重采样到目标采样率

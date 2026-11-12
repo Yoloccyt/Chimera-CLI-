@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use crate::config::NmcConfig;
 use crate::error::NmcError;
-use crate::perceptors::onnx_backend::TractPlan;
+use crate::perceptors::onnx_backend::{load_plan_cached, TractPlan};
 use crate::perceptors::{byte_frequency_embedding, sha256_hex, Perceptor};
 use crate::types::{CognitiveElement, Modality, PerceptionInput};
 use ndarray;
@@ -41,7 +41,10 @@ pub struct TextPerceptor {
     /// 可选的 tokenizers 分词器(None 表示降级)
     tokenizer: Option<tokenizers::Tokenizer>,
     /// 可选的 tract ONNX 推理计划(None 表示降级)
-    plan: Option<TractPlan>,
+    ///
+    /// WHY Arc: R8/ADR-289 进程级缓存 — 经 [`load_plan_cached`] 共享进程级
+    /// 编译产物, 同一文本模型在进程内只编译一次(TractPlan immutable 共享)
+    plan: Option<Arc<TractPlan>>,
 }
 
 impl TextPerceptor {
@@ -63,7 +66,9 @@ impl TextPerceptor {
     ///
     /// 返回 (tokenizer, plan) 元组,两者都为 Some 时表示 ONNX 路径可用。
     /// 任一加载失败时记录 warning 并返回 (None, None) 以降级。
-    fn try_load_onnx(config: &NmcConfig) -> (Option<tokenizers::Tokenizer>, Option<TractPlan>) {
+    fn try_load_onnx(
+        config: &NmcConfig,
+    ) -> (Option<tokenizers::Tokenizer>, Option<Arc<TractPlan>>) {
         // 只有在 model_dir 非空且 text_model 已指定时才尝试加载
         if config.model_dir.is_empty() || config.text_model.is_none() {
             return (None, None);
@@ -83,17 +88,13 @@ impl TextPerceptor {
             }
         };
 
-        // 加载 ONNX 模型
+        // 加载 ONNX 模型(进程级缓存命中时跳过解析编译, 见 load_plan_cached)
         let model_name = config
             .text_model
             .as_deref()
             .unwrap_or("all-MiniLM-L6-v2.onnx");
         let model_path = config.model_path(model_name);
-        let plan = match tract_onnx::onnx()
-            .model_for_path(&model_path)
-            .and_then(|m| m.into_typed())
-            .and_then(|m| m.into_runnable())
-        {
+        let plan = match load_plan_cached(&model_path, "Text", model_name) {
             Ok(p) => Some(p),
             Err(e) => {
                 tracing::warn!(
