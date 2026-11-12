@@ -1181,20 +1181,33 @@ mod tests {
     // WHY flaky 历史记录:本测试在 v3.0.0 发布前全量回归(debug + 16 线程并行)中
     // 偶现 1 次失败(2026-08-03 nextest-full),单独复现 3 连跑均绿,Phase9 回归报告
     // (_blueprints/three-ring-reorg/Phase9_回归验证报告_v2.20.md)判定为 flaky。
-    // 疑似根因:hnsw_rs 图遍历在等距向量上的 tie-break 顺序受并行负载影响。
-    // 若 CI 再现,应优先检查 upsert 后 HNSW 图内残留旧链接的去重路径,而非改断言。
+    // R8 根因订正(2026-11-12 深审):旧数据集 [i,0,0,0] 是共线向量(i=0 还是零向量,
+    // 余弦未定义),归一化后查询对所有非零向量等距 → 贪心搜索无梯度,活节点可达性
+    // 完全由 Hnsw::new 的 OS 熵随机种子决定(本文件 Hnsw::new 处自证无 seed 注入口)。
+    // 16 线程并行只是提高每轮回归的种子抽样次数(暴露频率),不是机制成因——
+    // 旧注释"tie-break 受并行负载影响"系误读。修复=测试数据去退化(两两非共线,
+    // 查询精确等于末次 upsert 向量 → 最近邻唯一且有梯度),断言保持不变。
     #[test]
     fn test_repeated_upsert_no_duplicate_in_search() {
         let store = make_store();
+        // 两两非共线的确定性向量(去退化:替代旧 [i,0,0,0] 共线集)
+        // 经 unit_vec 归一化保证余弦距离有意义
+        let versions: [[f32; 4]; 5] = [
+            [1.0, 0.1, 0.0, 0.0],
+            [0.0, 1.0, 0.1, 0.0],
+            [0.1, 0.0, 1.0, 0.0],
+            [0.0, 0.1, 0.0, 1.0],
+            [0.2, 0.3, 0.4, 0.5],
+        ];
+        let last = unit_vec(&versions[4]);
         // 多次 UPSERT 同一 ID
-        for i in 0..5 {
-            let v = [i as f32, 0.0, 0.0, 0.0];
-            store.upsert("a", &v, ()).unwrap();
+        for v in &versions {
+            store.upsert("a", &unit_vec(v), ()).unwrap();
         }
         assert_eq!(store.stats().unwrap().entry_count, 1);
 
-        // 搜索应只返回一个 "a"
-        let results = store.top_k(&[4.0, 0.0, 0.0, 0.0], 10, "").unwrap();
+        // 搜索应只返回一个 "a"(查询=末次向量,最近邻距离 0 且唯一)
+        let results = store.top_k(&last, 10, "").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id, "a");
     }
