@@ -34,5 +34,6 @@ pub mod mca;
 
 // 根 re-export：保持拆分前 `crate::<leaf>` 路径（组内源码的交叉引用）。
 pub use mca::affinity;
+pub use mca::context_capability;
 pub use mca::omni_message;
 pub use mca::price_vector;
