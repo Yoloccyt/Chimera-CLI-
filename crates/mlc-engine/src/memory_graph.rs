@@ -161,18 +161,28 @@ impl MemoryGraph {
     /// 精确路径:全对打分 + `select_nth_unstable_by` Top-K(≤1K 节点)
     ///
     /// 打分 O(n²·512),Top-K 选择 O(n)(§4.1 红线:禁止 sort_by 做 Top-K)。
+    ///
+    /// WHY 索引替代 String id(仿 l2_semantic.rs `recall_exact` 同款 idiom):
+    /// 打分阶段建 `Vec<(usize, f32)>` 而非 `Vec<(String, f32)>`,原 n² 次
+    /// `other.clone()` 的 String 堆分配在 1K 节点时是主要分配开销;Top-K 选定
+    /// 后才对入选者物化边端点 id。打分与选序逐位等价:sim 计算式不变、
+    /// 比较器只比 sim,`select_nth_unstable_by` 的划分结果由比较器结果序列
+    /// 唯一决定,与元素载荷无关。
     fn build_semantic_edges_exact(&mut self, ids: &[String], threshold: f32) {
-        for id in ids {
+        for (i, id) in ids.iter().enumerate() {
             let source = &self.nodes[id];
-            // 打分:与所有其他节点的相似度
-            let mut scored: Vec<(String, f32)> = ids
+            // 打分:与所有其他节点的相似度(存 ids 下标而非 String)
+            // WHY j != i 判自而非字符串比较:ids 取自 HashMap keys 天然无重复,
+            // 下标过滤与原 `*other != id` 语义等价
+            let mut scored: Vec<(usize, f32)> = ids
                 .iter()
-                .filter(|other| *other != id)
-                .map(|other| {
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(j, other)| {
                     let sim = source
                         .embedding
                         .cosine_similarity(&self.nodes[other].embedding);
-                    (other.clone(), sim)
+                    (j, sim)
                 })
                 .collect();
 
@@ -188,9 +198,10 @@ impl MemoryGraph {
                 scored.truncate(k);
             }
 
-            for (other, sim) in scored {
+            // Top-K 选定后才物化 String id(仅对超阈值的入选者 clone)
+            for (j, sim) in scored {
                 if sim > threshold {
-                    self.push_semantic_edge(id, other, sim);
+                    self.push_semantic_edge(id, ids[j].clone(), sim);
                 }
             }
         }

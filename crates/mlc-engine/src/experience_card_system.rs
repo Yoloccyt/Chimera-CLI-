@@ -11,7 +11,7 @@
 //! 卡片流（Phase 1 落地），提供：
 //! - **案例级卡片存储**: `case_cards` + `node_index`（node_id → 下标 O(1) 检索）
 //! - **全局经验板**: [`GlobalExperienceBoard`]（总数/已评估/最佳分/均分/方法分布/错误聚类）
-//! - **方法家族统计**: [`MethodStatistics`]（count/avg/best/success_rate）
+//! - **方法家族统计**: [`MethodStatistics`]（count/success_count/avg/best/success_rate）
 //! - **三因子父本选择**: [`ExperienceCardSystem::select_parent`]（归一化 + UCB + 冷却）
 //!
 //! # 设计约束（铁律）
@@ -62,6 +62,8 @@ pub struct GlobalExperienceBoard {
 pub struct MethodStatistics {
     /// 该家族卡片数
     pub count: u32,
+    /// Success 卡片数（成功率分子，随 add_card 增量维护）
+    pub success_count: u32,
     /// 累计分
     pub total_score: f32,
     /// 平均分
@@ -166,21 +168,15 @@ impl ExperienceCardSystem {
         if card.score > stats.best_score {
             stats.best_score = card.score;
         }
-        // 成功率: 该家族 Success 卡片占比（增量计算需遍历，规模可控）
-        let success_count = self
-            .case_cards
-            .iter()
-            .filter(|c| {
-                c.method_family == card.method_family
-                    && c.execution_status == ExecutionStatus::Success
-            })
-            .count() as u32
-            + if card.execution_status == ExecutionStatus::Success {
-                1
-            } else {
-                0
-            };
-        stats.success_rate = success_count as f32 / stats.count as f32;
+        // 成功率: 该家族 Success 卡片占比
+        // WHY 增量计数而非全表扫描:原实现每次 add_card 扫描 case_cards 中同家族
+        // Success 卡片 O(n)(本卡片尚未 push,扫描不含自身,再 +1 补偿当前卡片),
+        // 第 k 张卡片累计 O(k²) 比较;success_count 逐张累加与扫描式逐张等价,
+        // 除式同式,success_rate 的 f32 位模式逐位一致
+        if card.execution_status == ExecutionStatus::Success {
+            stats.success_count += 1;
+        }
+        stats.success_rate = stats.success_count as f32 / stats.count as f32;
 
         // 方法分布 + 错误聚类
         *self
@@ -353,20 +349,27 @@ mod tests {
         system.add_card(card("n2", "fam_a", 0.6, ExecutionStatus::Success));
         system.add_card(card("n3", "fam_b", 0.4, ExecutionStatus::Error));
 
-        let stats = system.method_stats();
-        let fam_a = stats.get("fam_a").expect("fam_a 存在");
+        let fam_a = system.method_stats().get("fam_a").expect("fam_a 存在");
         assert_eq!(fam_a.count, 2);
+        assert_eq!(fam_a.success_count, 2);
         assert!((fam_a.avg_score - 0.7).abs() < 1e-6);
         assert!((fam_a.best_score - 0.8).abs() < 1e-6);
         assert!((fam_a.success_rate - 1.0).abs() < 1e-6);
-        let fam_b = stats.get("fam_b").expect("fam_b 存在");
+        let fam_b = system.method_stats().get("fam_b").expect("fam_b 存在");
         assert_eq!(fam_b.count, 1);
+        assert_eq!(fam_b.success_count, 0);
         assert!((fam_b.success_rate - 0.0).abs() < 1e-6);
         // 方法分布
         assert_eq!(
             system.global_board().method_distribution.get("fam_a"),
             Some(&2)
         );
+        // 混入 Error 卡:success_rate = 计数比值 2/3(增量维护与全表扫描同值)
+        system.add_card(card("n4", "fam_a", 0.5, ExecutionStatus::Error));
+        let fam_a = system.method_stats().get("fam_a").expect("fam_a 存在");
+        assert_eq!(fam_a.count, 3);
+        assert_eq!(fam_a.success_count, 2);
+        assert!((fam_a.success_rate - 2.0 / 3.0).abs() < 1e-6);
     }
 
     #[test]

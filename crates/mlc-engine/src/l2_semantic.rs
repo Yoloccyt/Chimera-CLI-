@@ -418,7 +418,11 @@ impl SemanticMemory {
     ///
     /// 返回被驱逐的条目(若有)
     pub fn insert(&self, mut entry: MemoryEntry) -> Result<Option<MemoryEntry>, MlcError> {
-        let clv = entry.clv.clone().ok_or_else(|| {
+        // WHY 只借用不 clone:entry 随后整体消费进主表且必须保留自带 CLV
+        // (get()/list_all() 的取回契约依赖条目携带 CLV,见 test_insert_and_get
+        // 对 clv.is_some() 的断言),故不能 take() 掏空;原 `entry.clv.clone()`
+        // 仅为喂给 intern 的 2KB 深拷贝,借用即可(intern 内部自行拷入 Arc 池)
+        let clv = entry.clv.as_ref().ok_or_else(|| {
             MlcError::InvalidConfig(format!("L2 语义记忆条目必须携带 CLV: {}", entry.id))
         })?;
         entry.tier = MemoryTier::L2Semantic;
@@ -452,7 +456,7 @@ impl SemanticMemory {
             };
 
         // 通过池去重共享 CLV(SubTask 13.1):相同内容 CLV 复用同一个 Arc
-        let shared_clv = SharedCLV::intern(&clv, &mut inner.clv_pool);
+        let shared_clv = SharedCLV::intern(clv, &mut inner.clv_pool);
 
         // 添加新向量
         inner.vectors.push_back((shared_clv, entry.id.clone()));
@@ -704,6 +708,18 @@ impl SemanticMemory {
             .get(id)
             .map(|v| (**v).clone())
             .ok_or_else(|| MlcError::EntryNotFound(format!("L2 语义记忆条目: {id}")))
+    }
+
+    /// 按 ID 获取条目的 `Arc` 共享引用(零拷贝,读锁内仅 `Arc::clone`)
+    ///
+    /// WHY get_arc:调用方只需读条目字段时(如预算装包的 `token_estimate`、
+    /// 认识路的 `epistemic_type`),`get()` 的整条深拷贝(content + 2KB CLV)是
+    /// 纯浪费;仿 `list_all_arc` 先例 idiom,读锁内 `Arc::clone`(原子 +1)后
+    /// 立即释放锁,锁外解引用读取。
+    /// 锁毒化与条目缺失统一折叠为 `None`(与调用方既有 `.ok()` 折叠口径一致)。
+    pub fn get_arc(&self, id: &str) -> Option<Arc<MemoryEntry>> {
+        let inner = self.inner.read().ok()?;
+        inner.entries.get(id).cloned()
     }
 
     /// 驱逐最旧插入的条目(按 vectors 顺序,FIFO)

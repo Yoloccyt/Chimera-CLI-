@@ -170,10 +170,26 @@ impl MlcEngine {
     pub fn partition_by_epistemic(
         entries: &[MemoryEntry],
     ) -> (Vec<&MemoryEntry>, Vec<&MemoryEntry>) {
+        Self::partition_epistemic(entries)
+    }
+
+    /// 认识类型分区的通用核心 — 元素只需能借出 `&MemoryEntry`
+    ///
+    /// WHY 泛型核心:recall_hybrid 认识路经 [`SemanticMemory::get_arc`] 只持有
+    /// `Arc<MemoryEntry>`(零拷贝),为读一个 `epistemic_type` 字段付出整条
+    /// 深拷贝不值;分区规则单点维护于此,`partition_by_epistemic`(owned 切片面)
+    /// 与认识路(Arc 共享面)两个入口共享,避免「什么算派生结论」逻辑漂移。
+    fn partition_epistemic<'a, T>(
+        entries: impl IntoIterator<Item = &'a T>,
+    ) -> (Vec<&'a MemoryEntry>, Vec<&'a MemoryEntry>)
+    where
+        T: std::borrow::Borrow<MemoryEntry> + 'a,
+    {
         use nexus_contracts::EpistemicType;
         let mut observations = Vec::new();
         let mut facts = Vec::new();
         for e in entries {
+            let e = e.borrow();
             if e.epistemic_type == EpistemicType::Observation {
                 observations.push(e);
             } else {
@@ -624,8 +640,10 @@ impl MlcEngine {
     ) -> Result<Vec<(MemoryId, f32)>, MlcError> {
         let results = self.l2.recall_by_clv(query, top_k)?;
         // WI-C1′:超预算裁剪（None = 现行为;裁剪保持分数序）
+        // WHY get_arc 而非 get:成本口径只需读 content 字段,get_arc 零拷贝,
+        // token 值逐位不变(同一 token_estimate 计算式)
         let results = pack_within_budget(results, budget, |(id, _)| {
-            self.l2.get(id.as_str()).ok().map(|e| e.token_estimate())
+            self.l2.get_arc(id.as_str()).map(|e| e.token_estimate())
         });
         // 召回视为命中(每个结果计一次命中)
         self.hit_count
@@ -725,9 +743,9 @@ impl MlcEngine {
         } else {
             raw_results
         };
-        // WI-C1′:策略过滤后应用预算装包（None = 现行为）
+        // WI-C1′:策略过滤后应用预算装包（None = 现行为;同上,get_arc 零拷贝,token 逐位不变）
         let filtered = pack_within_budget(filtered, budget, |(id, _)| {
-            self.l2.get(id.as_str()).ok().map(|e| e.token_estimate())
+            self.l2.get_arc(id.as_str()).map(|e| e.token_estimate())
         });
 
         self.hit_count
@@ -973,12 +991,15 @@ impl MlcEngine {
 
         // 认识路：仅 Observation 派生结论计份（§(b.3) 主线③「归纳结论与原始事实分离」
         // 的序表达；原始 Fact 已由语义路代表，重复计份会虚增 hits）
+        // WHY get_arc + Arc 分区:此处只读 epistemic_type 一个字段,
+        // get() 的整条深拷贝(content + 2KB CLV)是纯浪费;分区走
+        // partition_epistemic 泛型核心,与 partition_by_epistemic 同一规则
         let epistemic_ids: Vec<MemoryId> = {
-            let entries: Vec<MemoryEntry> = semantic_ids
+            let entries: Vec<Arc<MemoryEntry>> = semantic_ids
                 .iter()
-                .filter_map(|id| self.l2.get(id.as_str()).ok())
+                .filter_map(|id| self.l2.get_arc(id.as_str()))
                 .collect();
-            let (observations, _facts) = Self::partition_by_epistemic(&entries);
+            let (observations, _facts) = Self::partition_epistemic(&entries);
             observations.into_iter().map(|e| e.id.clone()).collect()
         };
 
