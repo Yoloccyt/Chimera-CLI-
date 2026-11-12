@@ -16,10 +16,22 @@
 //! 熔断器(transport.rs `CircuitBreaker`)是**硬开关**(连续失败即拒绝放行);
 //! 健康探针是**软权重**(EWMA 平滑,喂路由决策)。两者互补:熔断快速止血,
 //! 健康分平滑降权。健康分低于阈值时网关发布 `ProviderDegraded`(Normal 级)。
+//!
+//! # ProviderDegraded 生产点([`DegradedPublisher`])
+//!
+//! `ProviderDegraded` 事件的唯一生产方:网关周期调用
+//! [`DegradedPublisher::publish_degraded_if_any`],对**新恶化**的通道发布事件。
+//! 去重 = 状态沿触发(rising edge):持续恶化不重发,恢复后清沿、再恶化再发布。
+//! WHY 独立 wrapper 而非挂进 `record()`:`record` 是高频同步路径而
+//! `EventBus::publish` 是 async——同步方法内无法 await,硬塞要么持锁跨 await
+//! (C7 红线)要么 fire-and-forget spawn(反模式 §4.4-7);周期拉取让降级风暴
+//! 天然节流,EWMA 基建([`ChannelHealth`]/[`HealthRegistry`])零改动复用。
 
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
+use event_bus::{EventBus, EventMetadata, NexusEvent};
 
 /// EWMA 平滑系数(α=0.1 承袭 ADR-037 原 acb-governor 设计;
 /// 该 crate 已按 ADR-182 退役删除 2026-09-16)
@@ -164,6 +176,75 @@ impl HealthRegistry {
     }
 }
 
+/// 事件源标识(EventMetadata.source,对齐 adapters/hcw_integration 惯例)
+const EVENT_SOURCE: &str = "mca-gateway";
+
+/// ProviderDegraded 事件发布器 — 健康面唯一生产方(状态沿去重)
+///
+/// 持 [`HealthRegistry`] 引用周期扫描恶化通道,对**新恶化**的通道发布
+/// `ProviderDegraded`(Normal 级,types.rs 事件契约:
+/// route_key / reason / health_score)。
+///
+/// # 去重机制(状态沿,任务红线)
+/// `announced` 集合记录"已发布过降级事件"的通道:
+/// - 通道**首次**跨过 [`DEGRADED_THRESHOLD`] → `insert` 返回 true(上升沿)→ 发布;
+/// - 通道**持续**恶化 → `insert` 返回 false → 不重发(每次 record 都发的风暴被节流);
+/// - 通道**恢复**健康(分数回到阈值上,或记录消失)→ `retain` 清沿 →
+///   下次再恶化可再次发布。
+#[derive(Debug)]
+pub struct DegradedPublisher {
+    /// 健康注册表(与网关共享同一 EWMA 面,Arc 供周期任务 spawn 'static)
+    registry: Arc<HealthRegistry>,
+    /// 已发布降级事件的通道集合(状态沿状态)
+    announced: DashSet<String>,
+}
+
+impl DegradedPublisher {
+    /// 创建发布器(与网关共享同一 [`HealthRegistry`])
+    pub fn new(registry: Arc<HealthRegistry>) -> Self {
+        Self {
+            registry,
+            announced: DashSet::new(),
+        }
+    }
+
+    /// 扫描恶化通道并对新恶化者发布 ProviderDegraded(由网关周期调用)
+    ///
+    /// 返回本次新发布的通道清单(观测面,调用方可留档/断言)。
+    /// 发布失败不中断扫描(观测面事件,对齐 VendorAdapter::publish 先例);
+    /// WHY 先 collect 再进 async 发布循环:DashMap 迭代/guard 不跨 await(C7)。
+    pub async fn publish_degraded_if_any(&self, bus: &EventBus) -> Vec<String> {
+        let degraded = self.registry.degraded_channels();
+        let mut published = Vec::new();
+        for route_key in degraded {
+            // 状态沿:insert 返回 true = 集合里没有 = 上升沿(新恶化)才发布
+            if !self.announced.insert(route_key.clone()) {
+                continue;
+            }
+            // 恶化名单刚从 registry 查出,正常必有分数;并发清理时放弃本轮该通道
+            let Some(score) = self.registry.health_score(&route_key) else {
+                continue;
+            };
+            let event = NexusEvent::ProviderDegraded {
+                metadata: EventMetadata::new(EVENT_SOURCE),
+                route_key: route_key.clone(),
+                reason: format!("health_score {score} < DEGRADED_THRESHOLD {DEGRADED_THRESHOLD}"),
+                health_score: score,
+            };
+            let _ = bus.publish(event).await;
+            published.push(route_key);
+        }
+        // 清沿:已宣布但分数已回到阈值上(或记录消失)的通道移出集合,
+        // 保证"恢复 → 再恶化"能再次触发发布
+        self.announced.retain(|key| {
+            self.registry
+                .health_score(key)
+                .is_some_and(|score| score < DEGRADED_THRESHOLD)
+        });
+        published
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -236,5 +317,119 @@ mod tests {
         assert!(!degraded.contains(&"zhipu/glm-5.2".to_string()));
         assert_eq!(reg.health_score("zhipu/glm-5.2"), Some(100));
         assert!(reg.health_score("unknown/model").is_none());
+    }
+
+    /// 从事件流收取一条 ProviderDegraded(跳过流内其他事件,对齐 hcw_integration 先例)
+    async fn recv_degraded(rx: &mut event_bus::EventReceiver) -> (String, String, u8) {
+        loop {
+            let event = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+                .await
+                .expect("timeout waiting for ProviderDegraded")
+                .expect("recv error");
+            if let NexusEvent::ProviderDegraded {
+                route_key,
+                reason,
+                health_score,
+                ..
+            } = event
+            {
+                return (route_key, reason, health_score);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn degraded_publisher_fires_on_rising_edge_only() {
+        // 状态沿:新恶化发布一次,持续恶化不重发(每次 record 都发的风暴被节流)
+        let bus = EventBus::new();
+        // WHY 先订阅再触发:broadcast 不缓存历史(§4.4 反模式 3)
+        let mut rx = bus.subscribe();
+        let reg = Arc::new(HealthRegistry::new());
+        let publisher = DegradedPublisher::new(reg.clone());
+
+        for _ in 0..40 {
+            reg.record("deep_seek/deepseek-v4-flash", false, None);
+        }
+
+        // 第一轮:上升沿 → 发布 1 条,字段符合事件契约
+        let published = publisher.publish_degraded_if_any(&bus).await;
+        assert_eq!(published, vec!["deep_seek/deepseek-v4-flash".to_string()]);
+        let (route_key, reason, score) = recv_degraded(&mut rx).await;
+        assert_eq!(route_key, "deep_seek/deepseek-v4-flash");
+        assert!(score < DEGRADED_THRESHOLD);
+        assert!(
+            reason.contains(&score.to_string()),
+            "reason 应含当前分数,实际 {reason}"
+        );
+
+        // 继续恶化:状态沿不变 → 不重发
+        reg.record("deep_seek/deepseek-v4-flash", false, None);
+        let published = publisher.publish_degraded_if_any(&bus).await;
+        assert!(published.is_empty(), "持续恶化不得重发,实际 {published:?}");
+    }
+
+    #[tokio::test]
+    async fn degraded_publisher_rearms_after_recovery() {
+        // 恢复清沿 → 再恶化再发布(清沿缺失 = 一次降级后永远静默)
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let reg = Arc::new(HealthRegistry::new());
+        let publisher = DegradedPublisher::new(reg.clone());
+
+        for _ in 0..40 {
+            reg.record("zhipu/glm-5.2", false, None);
+        }
+        assert_eq!(publisher.publish_degraded_if_any(&bus).await.len(), 1);
+        recv_degraded(&mut rx).await;
+
+        // 恢复:连续成功拉回健康分 → 无发布且清沿
+        for _ in 0..60 {
+            reg.record("zhipu/glm-5.2", true, Some(100));
+        }
+        let published = publisher.publish_degraded_if_any(&bus).await;
+        assert!(published.is_empty(), "恢复后不得发布,实际 {published:?}");
+
+        // 再次恶化:清沿已生效 → 再次发布
+        for _ in 0..40 {
+            reg.record("zhipu/glm-5.2", false, None);
+        }
+        let published = publisher.publish_degraded_if_any(&bus).await;
+        assert_eq!(
+            published,
+            vec!["zhipu/glm-5.2".to_string()],
+            "恢复后再恶化应重新发布"
+        );
+        recv_degraded(&mut rx).await;
+    }
+
+    #[tokio::test]
+    async fn degraded_publisher_per_channel_independence() {
+        // 多通道:各自独立沿;只恶化一个时只发一个
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let reg = Arc::new(HealthRegistry::new());
+        let publisher = DegradedPublisher::new(reg.clone());
+
+        for _ in 0..40 {
+            reg.record("zhipu/glm-5.2", false, None);
+        }
+        for _ in 0..40 {
+            reg.record("moonshot/kimi-k3", false, None);
+        }
+        let mut published = publisher.publish_degraded_if_any(&bus).await;
+        published.sort();
+        assert_eq!(
+            published,
+            vec!["moonshot/kimi-k3".to_string(), "zhipu/glm-5.2".to_string()]
+        );
+        recv_degraded(&mut rx).await;
+        recv_degraded(&mut rx).await;
+
+        // 其中一个恢复:另一个仍恶化者不重发,恢复者清沿
+        for _ in 0..60 {
+            reg.record("moonshot/kimi-k3", true, Some(100));
+        }
+        let published = publisher.publish_degraded_if_any(&bus).await;
+        assert!(published.is_empty(), "沿状态互不干扰,实际 {published:?}");
     }
 }
