@@ -45,6 +45,16 @@ impl HcwConfig {
         self
     }
 
+    /// 设置 w4 来源维度权重(链式 builder,WP-D ADR-293)
+    ///
+    /// 合法域 `[0.0, 0.5)`:0.0 = 关闭(逐位回三维旧公式);上限 0.5 防 w4
+    /// 侵吞主评分(recency/frequency/relevance 合计不得低于 0.5)。
+    /// 运行期 env `CHIMERA_W4_DISABLED=1` 可整体禁用(见 compressor)。
+    pub fn with_source_weight(mut self, weight: f32) -> Self {
+        self.source_weight = weight;
+        self
+    }
+
     /// 设置压缩触发阈值(链式 builder)
     pub fn with_compression_threshold(mut self, threshold: f32) -> Self {
         self.compression_threshold = threshold;
@@ -132,6 +142,14 @@ impl HcwConfig {
                 self.compression_threshold
             )));
         }
+        // WP-D/ADR-293:w4 权重合法域 [0.0, 0.5)——负值无意义;≥0.5 会侵吞
+        // 主评分(recency/frequency/relevance 合计跌破 0.5),评分失真
+        if !(0.0..0.5).contains(&self.source_weight) {
+            return Err(HcwError::InvalidConfig(format!(
+                "source_weight = {} 超出 [0.0, 0.5)",
+                self.source_weight
+            )));
+        }
         // 校验 selector_policy 权重为非负且和接近 1.0(P3-W10.3 D1 修复)
         // 委托给 SelectorPolicy::is_valid()(内部校验 SelectorWeights 非负 + 和 ≈ 1.0)
         if !self.selector_policy.is_valid() {
@@ -181,6 +199,7 @@ impl Default for HcwConfig {
             compression_threshold: 0.9,                 // 容量利用率达 90% 触发压缩
             selector_policy: SelectorPolicy::default(), // P3-W10.3: Static(0.4, 0.3, 0.3) fallback
             parallel_compress: true,                    // P1-T14: 压缩评分段间并行默认开启
+            source_weight: 0.10,                        // WP-D/ADR-293: w4 来源维度默认开启(用户裁决)
         }
     }
 }

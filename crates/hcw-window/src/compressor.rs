@@ -87,6 +87,7 @@ pub(crate) fn compute_importance_score(
     now: DateTime<Utc>,
     max_access_count: f32,
     time_span_ms: f32,
+    source_weight: f32,
 ) -> f32 {
     let (recency_weight, frequency_weight, relevance_weight) = weights.as_tuple();
 
@@ -104,7 +105,51 @@ pub(crate) fn compute_importance_score(
         _ => DEFAULT_RELEVANCE,
     };
 
-    recency_weight * recency + frequency_weight * frequency + relevance_weight * relevance
+    // WP-D/ADR-293:w4 来源维度——三项按 (1-sw) 归一保证总权重恒 1.0,
+    // 第四项 = sw × 来源价值系数(经 assemble::source_value_factor 单点表;
+    // None 条目取中性 0.5,对齐 DEFAULT_RELEVANCE 的无 CLV 先例)。
+    // source_weight=0(env 禁用/显式关)时 scale=1.0 且第四项为 0
+    // → 逐位回到三维旧公式(回退开关的位模式保证)。
+    let scale = 1.0 - source_weight;
+    let src_factor = match entry.source {
+        Some(source) => crate::assemble::source_value_factor(source),
+        None => NEUTRAL_SOURCE_FACTOR,
+    };
+
+    recency_weight * scale * recency
+        + frequency_weight * scale * frequency
+        + relevance_weight * scale * relevance
+        + source_weight * src_factor
+}
+
+/// WP-D:w4 禁用时的中性来源系数(None 条目/禁用回退共同取值)
+///
+/// WHY 0.5:对齐 `DEFAULT_RELEVANCE` 的无 CLV 中性先例——来源未知不奖不罚,
+/// 保证存量条目(20+ 构造点无来源标注)在默认开启下的评分偏移为均匀常数
+/// (+sw×0.5),None 集合内部相对排序不变。
+pub(crate) const NEUTRAL_SOURCE_FACTOR: f32 = 0.5;
+
+/// CHIMERA_W4_DISABLED 的启动期缓存(WP-D 回退开关)
+///
+/// WHY OnceLock:env 读取一次,热路径(compress 评分)零 env 开销;
+/// 设 "1"/"true"/"on" 时 effective_source_weight 恒 0(逐位回三维旧公式)。
+static W4_DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// 解析 w4 有效权重 — config 值经 env 回退门归一(单点生效)
+///
+/// WHY 经此函数而非直接读 config:env 开关必须在**所有** source_weight
+/// 消费点统一生效(压缩评分路径),单点封装防调用方漏读 env 造成口径分叉。
+pub(crate) fn effective_source_weight(configured: f32) -> f32 {
+    let disabled = *W4_DISABLED.get_or_init(|| {
+        std::env::var("CHIMERA_W4_DISABLED")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on"))
+            .unwrap_or(false)
+    });
+    if disabled {
+        0.0
+    } else {
+        configured
+    }
 }
 
 impl ContextCompressor {
@@ -199,6 +244,8 @@ impl ContextCompressor {
         // 两者逐元素一致(确定性断言锁定),Top-K 选择与贪心保留仍串行执行,
         // 与注入前行为逐位一致。
         let weights = config.selector_policy.weights();
+        // WP-D/ADR-293:w4 有效权重经 env 回退门(单点归一)传入评分链
+        let source_weight = effective_source_weight(config.source_weight);
         let scores = crate::parallel::score_entries(
             entries,
             weights,
@@ -207,6 +254,7 @@ impl ContextCompressor {
             max_access_count,
             time_span_ms,
             config.parallel_compress,
+            source_weight,
         );
         let mut scored: Vec<(f32, &Arc<ContextEntry>)> = entries
             .iter()
@@ -621,5 +669,87 @@ mod tests {
         // 验证 fallback 确实切换到 Static 权重(非 Learned)
         assert!(config_fallback.selector_policy.is_static());
         assert!(!config_fallback.selector_policy.is_learned());
+    }
+
+    // ============================================================
+    // WP-D/ADR-293:w4 来源维度行为锁
+    // ============================================================
+
+    /// w4 行为锁 1:sw=0 时逐位回到三维旧公式(回退开关的位模式保证)
+    #[test]
+    fn test_w4_zero_source_weight_is_bitwise_legacy() {
+        let mut legacy = make_entry("e-1", 100, 5, 1_000);
+        legacy.source = Some(crate::assemble::ContextSource::Tool);
+        let now = Utc::now();
+        let weights = SelectorWeights::DEFAULT;
+
+        let with_w4_off = compute_importance_score(&legacy, weights, None, now, 5.0, 2_000.0, 0.0);
+        // 手算三维旧公式(实现改造前的形态)
+        let delta_ms = (now - legacy.last_accessed_at).num_milliseconds().max(0) as f32;
+        let recency = 1.0 - (delta_ms / 2_000.0).min(1.0);
+        let frequency = legacy.access_count as f32 / 5.0;
+        let legacy_score = 0.4 * recency + 0.3 * frequency + 0.3 * 0.5;
+
+        assert_eq!(with_w4_off, legacy_score, "sw=0 必须逐位等于三维旧公式");
+    }
+
+    /// w4 行为锁 2:None 条目取中性 0.5——评分偏移为均匀常数(+sw×0.5),
+    /// None 集合内部相对排序不变
+    #[test]
+    fn test_w4_unlabeled_entries_keep_relative_order() {
+        let now = Utc::now();
+        let weights = SelectorWeights::DEFAULT;
+        let mk = |id: &str, freq: u32, age: i64| {
+            let mut e = make_entry(id, 100, freq, age);
+            e.source = None;
+            e
+        };
+        let a = mk("a", 5, 100);
+        let b = mk("b", 2, 3_000);
+
+        let (score_a_new, score_b_new) = (
+            compute_importance_score(&a, weights, None, now, 5.0, 4_000.0, 0.10),
+            compute_importance_score(&b, weights, None, now, 5.0, 4_000.0, 0.10),
+        );
+        let (score_a_old, score_b_old) = (
+            compute_importance_score(&a, weights, None, now, 5.0, 4_000.0, 0.0),
+            compute_importance_score(&b, weights, None, now, 5.0, 4_000.0, 0.0),
+        );
+
+        // None 条目 = 旧三项 × (1-sw) + sw×0.5 —— 相对序保持
+        assert_eq!(
+            (score_a_new > score_b_new),
+            (score_a_old > score_b_old),
+            "None 条目集合内部相对排序在默认开启下不变"
+        );
+        // 均匀偏移:score_new = score_old×(1-sw) + sw×0.5(数学恒等式抽查)
+        let expected_a = score_a_old * 0.9 + 0.10 * 0.5;
+        assert!(
+            (score_a_new - expected_a).abs() < 1e-5,
+            "None 条目公式: 新 {score_a_new} vs 期望 {expected_a}"
+        );
+    }
+
+    /// w4 行为锁 3:Tool 来源降权(蓝图 §5.4「tool-response 类条目降权」)
+    #[test]
+    fn test_w4_tool_source_downweighted() {
+        use crate::assemble::ContextSource;
+        let now = Utc::now();
+        let weights = SelectorWeights::DEFAULT;
+        let mk = |id: &str, src: ContextSource| {
+            let mut e = make_entry(id, 100, 3, 500);
+            e.source = Some(src);
+            e
+        };
+        let tool = mk("tool", ContextSource::Tool);
+        let system = mk("sys", ContextSource::System);
+
+        let tool_score = compute_importance_score(&tool, weights, None, now, 3.0, 2_000.0, 0.10);
+        let sys_score = compute_importance_score(&system, weights, None, now, 3.0, 2_000.0, 0.10);
+        // 其余维度相同:分差 = sw × (1.0 - 0.3) = 0.07
+        assert!(
+            (sys_score - tool_score - 0.10 * 0.7).abs() < 1e-5,
+            "Tool 相对 System 的降权差 = sw×(factor 差): {sys_score} vs {tool_score}"
+        );
     }
 }

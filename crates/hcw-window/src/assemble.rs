@@ -247,6 +247,23 @@ fn protection_group(item: &ContextItem, index: usize, recent_start: usize) -> u8
     }
 }
 
+/// 来源价值系数 — 单一真值源（R9b WP-D 归一：compressor w4 与本模块 density 共用）
+///
+/// WHY 提取:原为 `density` 私有 match 表;w4（ADR-293）的压缩评分需要同一套
+/// 来源价值语义（Tool 降权 = 蓝图 §5.4「tool-response 类条目降权」的
+/// AKV Rolling Drop 内容层转译），两处各写一份 match 会产生真值源分叉漂移。
+/// 数值沿用吸收成果（另一会话 R9 W2 波次）的既有标定。
+pub fn source_value_factor(source: ContextSource) -> f32 {
+    match source {
+        ContextSource::System => 1.0_f32,
+        ContextSource::User => 1.0_f32,
+        ContextSource::Assistant => 0.5_f32,
+        ContextSource::Memory => 0.8_f32,
+        ContextSource::Tool => 0.3_f32,
+        ContextSource::Retrieval => 0.7_f32,
+    }
+}
+
 /// 价值密度（全部 f32，禁止中途转 f64 —— 项目红线 §4.4 #6）
 fn density(item: &ContextItem, index: usize, total: usize) -> f32 {
     let role_weight = match item.role {
@@ -255,14 +272,8 @@ fn density(item: &ContextItem, index: usize, total: usize) -> f32 {
         ContextRole::Assistant => 1.0_f32,
         ContextRole::Tool => 0.5_f32,
     };
-    let source_weight = match item.source {
-        ContextSource::System => 1.0_f32,
-        ContextSource::User => 1.0_f32,
-        ContextSource::Assistant => 0.5_f32,
-        ContextSource::Memory => 0.8_f32,
-        ContextSource::Tool => 0.3_f32,
-        ContextSource::Retrieval => 0.7_f32,
-    };
+    // WP-D:经 source_value_factor 单点（语义与数值逐位一致，纯提取重构）
+    let source_weight = source_value_factor(item.source);
     let recency = if total == 0 {
         0.0_f32
     } else {

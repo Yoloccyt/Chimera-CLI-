@@ -321,6 +321,9 @@ impl SelectorLearnerHolder {
         time_span_ms: f32,
     ) -> f32 {
         let weights = self.current_policy().weights();
+        // WP-D/ADR-293:策略感知评分路径传 source_weight=0.0(维持三维公式)——
+        // w4 只挂 compress 主路径;此路径服务 S4 接缝(omega-learner 冻结面),
+        // 学习器 arm 空间是三维 SelectorWeights,不引入第四维
         compute_importance_score(
             entry,
             weights,
@@ -328,6 +331,7 @@ impl SelectorLearnerHolder {
             now,
             max_access_count,
             time_span_ms,
+            0.0,
         )
     }
 
