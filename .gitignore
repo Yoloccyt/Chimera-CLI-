@@ -99,6 +99,8 @@ dist/
 !docs/reports/toolchain-r8-context-memory-execution-2026-11-12.md
 # 例外：R9 HCW v3 蓝图执行报告（ADR-291 决策链 + 双会话同树事件裁决与无冲突子集证据）
 !docs/reports/toolchain-r9-hcw-v3-execution-2026-11-12.md
+# 例外：仓库治理章程（分支生命周期/CI 门禁矩阵/依赖安全 SLA——长期有效运维规则）
+!docs/governance/REPO-GOVERNANCE.md
 .claude/
 .trae/
 
