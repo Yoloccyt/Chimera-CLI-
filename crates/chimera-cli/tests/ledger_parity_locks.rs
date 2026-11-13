@@ -171,21 +171,28 @@ fn decorator_order_provenance_points_at_real_commit() {
     );
 }
 
-/// 锁 5（R9 / W3-T2）：`replay_since` 读面必须维持 ADR-259 D3 预留。
+/// 锁 5（ADR-292 D5，修订 ADR-290 D4 / 原 ADR-259 D3 预留）：`replay_since`
+/// 读面必须维持**已接生产**——threads 404 回放桥（蓝图 P3）。
 ///
-/// 事实：写面已接线；读面在仓内无生产调用方。若后续有人把读面接进组合根
-/// 或生产恢复路径，本锁必须判红并强制同批更新 ADR-259 D3（不得静默改口径）。
+/// 方向翻转（ADR-292 D5）：本锁原为「预留反向锁」（出现调用即判红）；
+/// ADR-292 裁决消费场景已出现（Anthropic Message threads `continue` 404 时
+/// 按 Thread 段回放重建对话），读面从「无场景预留」变为「有场景待接线」，
+/// 锁翻转为「接生产行为锁」——生产段**必须**存在回放桥调用，静默回退到
+/// 预留态（删除/绕过桥调用）即判红。
 #[test]
-fn replay_since_read_face_stays_reserved() {
-    let composition = read_rel("crates/chimera-cli/src/composition.rs");
-    assert!(
-        !composition.contains("replay_since"),
-        "组合根出现 replay_since 调用：读面已越出 ADR-259 D3 预留态，须同批更新 ADR"
-    );
+fn replay_since_read_face_is_production_wired() {
     let server = read_rel("crates/nexus-app-server/src/server.rs");
     let production = server.split("#[cfg(test)]").next().unwrap_or("");
+    // (a) 生产段存在回放桥**真实调用点**（带点前缀 `.replay_thread_from_store(`
+    //     匹配调用而非 pub fn 定义行——定义存在但零调用 = 装饰性接线,同样判红）
     assert!(
-        !production.contains(".replay_since("),
-        "AppServer 生产段出现 replay_since 内部调用：读面装配态已改变"
+        production.contains(".replay_thread_from_store("),
+        "AppServer 生产段缺失回放桥调用：读面被静默回退到预留态（ADR-292 D4 的 \
+         replay_since store 兜底分支不得移除；如确需改接缝须同批更新 ADR-292 与本锁）"
+    );
+    // (b) 文件头 ADR-292 引用锁：读面接生产的裁决来源必须在桥宿主文件可溯
+    assert!(
+        server.contains("ADR-292"),
+        "server.rs 须引用 ADR-292（读面从预留转生产的裁决来源；缺失即口径失溯）"
     );
 }

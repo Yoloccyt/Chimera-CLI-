@@ -156,6 +156,7 @@ async fn mock_client_completes_full_turn_over_protocol() {
     let last_id = &snap.items[0].item_id;
     let replay = server
         .replay_since(&ThreadId::new("goal-1::run-1"), last_id)
+        .await
         .expect("回放成功");
     assert_eq!(replay.len(), 1, "重连后应回放 1 条增量 Item");
     assert_eq!(replay[0].item_id.as_str(), snap.items[1].item_id.as_str());
@@ -277,6 +278,7 @@ async fn reconnect_restores_event_stream_over_protocol() {
     let mut c2 = MockClient::new();
     let replay = server
         .replay_since(&tid, &seen_c1[0].item_id)
+        .await
         .expect("回放成功");
     assert_eq!(replay.len(), 1, "断开后应回放 1 条增量 Item");
     for item in &replay {

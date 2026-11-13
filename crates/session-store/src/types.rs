@@ -29,6 +29,7 @@
 
 use std::path::PathBuf;
 
+use nexus_contracts::app::ItemStatus;
 use nexus_contracts::EventMetadata;
 use serde::{Deserialize, Serialize};
 
@@ -208,6 +209,56 @@ impl SessionEvent {
             payload: None,
         }
     }
+}
+
+// ============================================================
+// 持久化事件 schema 扩展（ADR-292 D1:thread.started / item.append）
+// ============================================================
+
+/// `thread.started` — 线程元数据事件类型（ADR-292 D1）
+///
+/// WHY 常量而非裸字符串：写入侧（nexus-app-server 落盘路径）与重构侧
+/// （`thread_replay`）共用单一命名源，防两处字面量漂移。
+pub const EVENT_TYPE_THREAD_STARTED: &str = "thread.started";
+
+/// `item.append` — Item 级内容追加事件类型（ADR-292 D1）
+pub const EVENT_TYPE_ITEM_APPEND: &str = "item.append";
+
+/// `thread.started` 事件载荷 — 线程元数据（ADR-292 D1）
+///
+/// append-only：不改既有 `turn.submit` 写入路径与 serde 形态；
+/// 本类型只被新增写入路径产出，旧数据流中不存在（重构端按缺省容忍）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ThreadStartedPayload {
+    /// 线程 ID（协议面 ThreadId 字符串形态）
+    pub thread_id: String,
+    /// 创建时刻（Unix 毫秒;协议面 Thread.created_at_ms 同源）
+    pub created_at: u64,
+}
+
+/// `item.append` 事件载荷 — Item 级内容追加（ADR-292 D1）
+///
+/// # WHY 字段是任务清单三字段（item_id / item_kind / payload）的超集
+/// ADR-292 验收线要求「回放重建的 `Vec<Item>` 与原始逐条一致（零丢失）」，
+/// 而 Item 的协议面字段除上述三项外还有 turn_id / status / extras——缺任一
+/// 重构即丢字段。本载荷是 Item 协议字段的**完整镜像**；thread_id 不入载荷：
+/// 流内 `thread.started` 已携带线程身份，重构器从流上下文解析（写入侧契约
+/// 保证其为会话流首事件）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemAppendPayload {
+    /// Item ID（协议面断点恢复游标）
+    pub item_id: String,
+    /// Item 类型标签（"message" / "tool_call" 等）
+    pub item_kind: String,
+    /// Item 载荷（JSON 形态字符串,协议面原样存储不解析）
+    pub payload: String,
+    /// 所属回合（Item.turn_id）
+    pub turn_id: String,
+    /// Item 状态（复用协议枚举;serde snake_case 形态稳定："in_progress" 等）
+    pub status: ItemStatus,
+    /// 实验字段逃逸舱（Item.extras 原样;缺省 = 未附加）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extras: Option<String>,
 }
 
 // ============================================================

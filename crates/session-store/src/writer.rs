@@ -462,6 +462,36 @@ impl CbmrWriter {
         run_blocking(move || this.inner.tree.read_events(&sid, from)).await
     }
 
+    /// 线程级回放 — 纯段文件权威源 k-way 归并回放（ADR-292 D4 桥的存储面入口）
+    ///
+    /// # WHY 不走 [`CbmrWriter::read_events`]（SQLite 索引读）
+    /// 回放桥的消费场景是**线程丢失恢复**（threads 404 / 进程重启后重建）——
+    /// 恰是「段文件已 fsync、索引缺行」非原子窗口的受害者面（flush_sync 双写
+    /// 非原子,lib.rs 崩溃恢复语义）。`replay`（ADR-109）纯段文件扫描、索引缺失
+    /// 不影响正确性,段文件为权威源——恢复路径必须走权威源而非可能陈旧的索引。
+    ///
+    /// # 参数
+    /// - `session_id`:目标会话（含 fork 会话,前缀引用链自动合并）
+    /// - `from`:回放下界 Offset（seq 主过滤键;全量重建传 `Offset::new(0, 0)`）
+    ///
+    /// # 返回
+    /// 全局单调回放条目（seq 主序 + row 次序,顺序与写入一致）。
+    pub async fn replay_session(
+        &self,
+        session_id: &SessionId,
+        from: Offset,
+    ) -> Result<Vec<crate::replay::ReplayItem>, StoreError> {
+        let this = self.clone();
+        let sid = session_id.clone();
+        // WHY 整段进 run_blocking:replay 内含 segment_sources 的 SQLite 读与
+        // 段文件 IO,均为阻塞调用——红线 3（阻塞只进 spawn_blocking 阻塞池）
+        run_blocking(move || {
+            let stream = crate::replay::replay(&this.inner.tree, &this.inner.config.data_dir, &sid, from)?;
+            stream.collect()
+        })
+        .await
+    }
+
     /// 当前自适应窗口（ms 整数化,供文档/基准观测）
     ///
     /// 映射:近期批大小 EMA 占比 `ratio`（0=空批,1=满批）→
