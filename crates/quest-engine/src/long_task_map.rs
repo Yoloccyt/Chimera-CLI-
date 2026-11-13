@@ -310,21 +310,50 @@ impl LongTaskMap {
             .map_err(|e| crate::error::QuestError::SerializationError(e.to_string()))
     }
 
-    /// 从 MessagePack bytes 反序列化重建地图（LHQP 检查点恢复）
+    /// 从 MessagePack bytes 反序列化重建地图（LHQP 检查点恢复）— **降级形态**
     ///
-    /// external_storage 用 InMemoryExternalStorage 默认重建；
-    /// detail_ref 引用的详情需调用方重新注入（文档注明）。
+    /// ⚠ 降级语义：external_storage 硬编码重置为 InMemoryExternalStorage、
+    /// hook 硬编码重置为 Noop —— 历史节点 `detail_ref` 引用的详情在新建的
+    /// 内存存储中不存在（retrieve 返回 None，需调用方重新注入详情内容），
+    /// L2 记忆同步链路也随 Noop 中断。检查点恢复等需要保持注入组件身份的
+    /// 场景，请改用 [`Self::from_bytes_with`] 由调用方显式传入 storage/hook。
     ///
     /// # 错误
     /// - `QuestError::SerializationError`: MessagePack 解码失败（数据损坏/版本不兼容）
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, crate::error::QuestError> {
+        // 委托注入版 + 默认值：保持旧签名向后兼容，降级语义集中在此文档注明
+        Self::from_bytes_with(
+            bytes,
+            Box::new(InMemoryExternalStorage::default()),
+            Box::new(NoopMemorySyncHook),
+        )
+    }
+
+    /// 从 MessagePack bytes 反序列化重建地图 — 参数注入形态（LHQP 检查点恢复）
+    ///
+    /// WHY 参数注入而非硬编码重置（卫星态接线工作包，from_bytes 降级缺陷修复）：
+    /// `external_storage`/`memory_sync_hook` 均为 trait 对象不可序列化，旧
+    /// `from_bytes` 反序列化时只能硬编码 InMemory/Noop —— 调用方持有的真实
+    /// 存储与 hook 身份被静默丢弃。本方法把二者提升为参数：调用方传入
+    /// 恢复会话应使用的实例（例如把此前外置的详情内容预灌入 storage），
+    /// 恢复后 `record_step`/`retrieve_detail`/hook 链路与崩溃前同源不断。
+    /// 历史节点 `detail_ref` 指向的详情内容是否已在注入的 storage 中，
+    /// 由调用方负责（trait 对象内容不可序列化，属注入方契约）。
+    ///
+    /// # 错误
+    /// - `QuestError::SerializationError`: MessagePack 解码失败（数据损坏/版本不兼容）
+    pub fn from_bytes_with(
+        bytes: &[u8],
+        external_storage: Box<dyn ExternalStorage>,
+        memory_sync_hook: Box<dyn MemorySyncHook>,
+    ) -> Result<Self, crate::error::QuestError> {
         let snapshot: LongTaskMapSnapshot = rmp_serde::from_slice(bytes)
             .map_err(|e| crate::error::QuestError::SerializationError(e.to_string()))?;
         Ok(Self {
             task_nodes: snapshot.task_nodes,
             task_edges: snapshot.task_edges,
-            external_storage: Box::new(InMemoryExternalStorage::default()),
-            memory_sync_hook: Box::new(NoopMemorySyncHook),
+            external_storage,
+            memory_sync_hook,
         })
     }
 }
@@ -469,5 +498,107 @@ mod tests {
         let map_ref = map.create_map(&quest());
         map.record_step(&map_ref, &step("s", true));
         assert_eq!(map.node_count(), 2);
+    }
+
+    /// from_bytes_with 注入验证（卫星态接线工作包）：storage/hook 由调用方
+    /// 传入而非硬编码重置 —— 恢复后 record_step 写入注入的 storage、
+    /// hook 被调用，注入身份不被降级为 InMemory/Noop。
+    #[test]
+    fn from_bytes_with_injects_storage_and_hook() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        // 计数 storage/hook：可观测注入是否生效
+        struct CountingStorage {
+            stores: AtomicU32,
+        }
+        impl ExternalStorage for CountingStorage {
+            fn store(&self, _detail: &str) -> String {
+                self.stores.fetch_add(1, Ordering::SeqCst);
+                format!("ext_injected_{}", self.stores.load(Ordering::SeqCst))
+            }
+            fn retrieve(&self, _ref_id: &str) -> Option<String> {
+                None
+            }
+        }
+        // Arc 代理：让测试断言与注入的 Box<dyn _> 共享同一计数实例
+        struct CountingStorageProxy {
+            inner: std::sync::Arc<CountingStorage>,
+        }
+        impl ExternalStorage for CountingStorageProxy {
+            fn store(&self, detail: &str) -> String {
+                self.inner.store(detail)
+            }
+            fn retrieve(&self, ref_id: &str) -> Option<String> {
+                self.inner.retrieve(ref_id)
+            }
+        }
+        #[derive(Debug, Default)]
+        struct CountingHook {
+            step_calls: AtomicU32,
+        }
+        impl crate::memory_sync_hook::MemorySyncHook for CountingHook {
+            fn on_search_tree_best_path(&self, _quest_id: &str, _summary: &str) {}
+            fn on_task_map_step(&self, _quest_id: &str, _summary: &str) {
+                self.step_calls.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        #[derive(Debug)]
+        struct CountingHookProxy {
+            inner: std::sync::Arc<CountingHook>,
+        }
+        impl crate::memory_sync_hook::MemorySyncHook for CountingHookProxy {
+            fn on_search_tree_best_path(&self, quest_id: &str, summary: &str) {
+                self.inner.on_search_tree_best_path(quest_id, summary);
+            }
+            fn on_task_map_step(&self, quest_id: &str, summary: &str) {
+                self.inner.on_task_map_step(quest_id, summary);
+            }
+        }
+
+        let storage = std::sync::Arc::new(CountingStorage {
+            stores: AtomicU32::new(0),
+        });
+        let hook = std::sync::Arc::new(CountingHook::default());
+
+        // 源地图：产生可序列化的节点/边
+        let mut source = LongTaskMap::default();
+        let source_ref = source.create_map(&quest());
+        source.record_step(&source_ref, &step("步骤一", true));
+        let bytes = source.to_bytes().expect("序列化成功");
+
+        // 注入重建（storage/hook 为测试自造实例，非 InMemory/Noop 默认）
+        let mut restored = LongTaskMap::from_bytes_with(
+            &bytes,
+            Box::new(CountingStorageProxy {
+                inner: std::sync::Arc::clone(&storage),
+            }),
+            Box::new(CountingHookProxy {
+                inner: std::sync::Arc::clone(&hook),
+            }),
+        )
+        .expect("反序列化成功");
+
+        // 结构逐字段还原
+        assert_eq!(restored.node_count(), 2);
+        assert_eq!(restored.edge_count(), 1);
+
+        // 注入 storage 生效：恢复后 record_step 的详情写入注入实例（计数 +1）
+        let restored_ref = TaskMapRef {
+            map_id: "restored-map".to_string(),
+            root_id: "root".to_string(),
+        };
+        restored.record_step(&restored_ref, &step("恢复后步骤", true));
+        assert_eq!(
+            storage.stores.load(Ordering::SeqCst),
+            1,
+            "恢复后 record_step 必须使用注入的 storage（不降级 InMemory）"
+        );
+
+        // 注入 hook 生效：record_step 触发 on_task_map_step（计数 +1）
+        assert_eq!(
+            hook.step_calls.load(Ordering::SeqCst),
+            1,
+            "恢复后 record_step 必须触发注入的 hook（不降级 Noop）"
+        );
     }
 }

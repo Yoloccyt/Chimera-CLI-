@@ -79,7 +79,8 @@ pub use ambient_mode::{
     spawn_ambient_subscriber, spawn_ambient_subscriber_with_receivers, AmbientModeConfig,
     MemoryTidyHook, NoopTidyHook,
 };
-pub use checkpoint::CheckpointManager;
+// 卫星态接线工作包:检查点关联组件态快照(tree/map bytes)公开 API
+pub use checkpoint::{CheckpointManager, SatelliteState};
 pub use config::QuestConfig;
 // WP-E(R7 批次): 依赖推断策略公开 API(方案 C,chimera-cli run --execute 波次开关消费 DependencyMode)
 pub use decompose::{

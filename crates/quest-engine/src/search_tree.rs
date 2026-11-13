@@ -348,13 +348,38 @@ impl SearchTreeManager {
             .map_err(|e| crate::error::QuestError::SerializationError(e.to_string()))
     }
 
-    /// 从 MessagePack bytes 反序列化重建搜索树（LHQP 检查点恢复）
+    /// 从 MessagePack bytes 反序列化重建搜索树（LHQP 检查点恢复）— **降级形态**
+    ///
+    /// ⚠ 降级语义：`memory_sync_hook` 为 trait 对象不可序列化（`#[serde(skip)]`），
+    /// 反序列化后硬编码重置为 Noop —— L2 记忆同步链路随之中断。检查点恢复等
+    /// 需要保持注入组件身份的场景，请改用 [`Self::from_bytes_with`] 显式传入 hook。
     ///
     /// # 错误
     /// - `QuestError::SerializationError`: MessagePack 解码失败（数据损坏/版本不兼容）
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, crate::error::QuestError> {
-        rmp_serde::from_slice(bytes)
-            .map_err(|e| crate::error::QuestError::SerializationError(e.to_string()))
+        // 委托注入版 + Noop 默认：保持旧签名向后兼容，降级语义集中在此文档注明
+        Self::from_bytes_with(bytes, Box::new(NoopMemorySyncHook))
+    }
+
+    /// 从 MessagePack bytes 反序列化重建搜索树 — 参数注入形态（LHQP 检查点恢复）
+    ///
+    /// WHY 参数注入而非硬编码 Noop（卫星态接线工作包，from_bytes 降级缺陷修复）：
+    /// hook 字段 `#[serde(skip, default = "default_memory_sync_hook")]`，旧
+    /// `from_bytes` 反序列化后 L2 记忆同步身份被静默丢弃。本方法在反序列化后
+    /// 重注调用方传入的 hook，恢复后 `expand_node` → best_node 更新 →
+    /// `on_search_tree_best_path` 链路与崩溃前同源不断。
+    ///
+    /// # 错误
+    /// - `QuestError::SerializationError`: MessagePack 解码失败（数据损坏/版本不兼容）
+    pub fn from_bytes_with(
+        bytes: &[u8],
+        memory_sync_hook: Box<dyn MemorySyncHook>,
+    ) -> Result<Self, crate::error::QuestError> {
+        let mut tree: Self = rmp_serde::from_slice(bytes)
+            .map_err(|e| crate::error::QuestError::SerializationError(e.to_string()))?;
+        // 覆盖 serde-skip 的 Noop 默认：注入调用方持有的 hook 实例
+        tree.memory_sync_hook = memory_sync_hook;
+        Ok(tree)
     }
 }
 
@@ -514,5 +539,68 @@ mod tests {
         let root_id = tree.create_root("task-1");
         let card_ref: &ExperienceCard = tree.get_node(&root_id).expect("存在");
         assert_eq!(card_ref.task_id.as_ref(), "task-1");
+    }
+
+    /// from_bytes_with 注入验证（卫星态接线工作包）：hook 由调用方传入而非
+    /// 硬编码重置 Noop —— 恢复后 expand_node 触发 best 更新时 hook 被调用，
+    /// L2 记忆同步链路不被降级。
+    #[test]
+    fn from_bytes_with_reinjects_hook() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        #[derive(Debug, Default)]
+        struct CountingHook {
+            best_path_calls: AtomicU32,
+        }
+        impl crate::memory_sync_hook::MemorySyncHook for CountingHook {
+            fn on_search_tree_best_path(&self, _quest_id: &str, _summary: &str) {
+                self.best_path_calls.fetch_add(1, Ordering::SeqCst);
+            }
+            fn on_task_map_step(&self, _quest_id: &str, _summary: &str) {}
+        }
+        // Arc 代理：断言与注入的 Box<dyn MemorySyncHook> 共享同一计数实例
+        #[derive(Debug)]
+        struct CountingHookProxy {
+            inner: Arc<CountingHook>,
+        }
+        impl crate::memory_sync_hook::MemorySyncHook for CountingHookProxy {
+            fn on_search_tree_best_path(&self, quest_id: &str, summary: &str) {
+                self.inner.on_search_tree_best_path(quest_id, summary);
+            }
+            fn on_task_map_step(&self, quest_id: &str, summary: &str) {
+                self.inner.on_task_map_step(quest_id, summary);
+            }
+        }
+
+        let hook = Arc::new(CountingHook::default());
+
+        // 源树：root + 1 子节点（可序列化状态）
+        let mut source = SearchTreeManager::new(10);
+        let root_id = source.create_root("task-1");
+        let bytes = source.to_bytes().expect("序列化成功");
+
+        // 注入重建（hook 为测试自造实例，非 Noop 默认）
+        let mut restored = SearchTreeManager::from_bytes_with(
+            &bytes,
+            Box::new(CountingHookProxy {
+                inner: Arc::clone(&hook),
+            }),
+        )
+        .expect("反序列化成功");
+
+        // 结构还原
+        assert_eq!(restored.get_stats().total_nodes, 1);
+
+        // 注入 hook 生效：expand_node 使子节点成为新 best（0.5 > 根 0.0）
+        // → on_search_tree_best_path 被调用（不降级 Noop）
+        restored
+            .expand_node(&root_id, card("n1", Some(root_id.as_str()), 0.5))
+            .expect("扩展成功");
+        assert_eq!(
+            hook.best_path_calls.load(Ordering::SeqCst),
+            1,
+            "恢复后 expand_node 必须触发注入的 hook（不降级 Noop）"
+        );
     }
 }

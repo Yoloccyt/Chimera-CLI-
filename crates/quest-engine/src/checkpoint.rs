@@ -32,6 +32,27 @@ use uuid::Uuid;
 
 use crate::error::QuestError;
 
+/// 检查点卫星态 — 与 Quest 本体检查点关联持久化的组件状态快照（卫星态接线工作包）
+///
+/// WHY 独立类型 + 旁路文件（sidecar）而非 L0 `Checkpoint` 加字段：
+/// ① `Checkpoint` 是 L0 领域契约（`nexus-contracts-core`），加字段属跨层契约
+///    变更（涉 ADR-213 F3 schema_version 演进语义）；卫星态是 L9 检查点管理器
+///    的**关联存储**，既有文档契约明文"序列化后由调用方与 Checkpoint 关联存储，
+///    **不修改 L0 Checkpoint**"（search_tree.rs / long_task_map.rs to_bytes 文档）。
+/// ② sidecar 与主检查点同 `checkpoint_id` 配对、同生命周期（prune 一并清理），
+///    语义等价于"独立序列化段"但零 L0 侵入；旧 checkpoint（无 sidecar）天然兼容。
+///
+/// 双层序列化设计：外层 `SatelliteState` 以具名 map 编码（ADR-213 R7 惯例），
+/// 内层 `tree`/`map` 各为组件自持的 MessagePack bytes（`SearchTreeManager::to_bytes`
+/// / `LongTaskMap::to_bytes` 输出）——组件内部格式演进不破坏外层壳格式。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SatelliteState {
+    /// 搜索树组件态 bytes（`SearchTreeManager::to_bytes` 输出）
+    pub tree: Vec<u8>,
+    /// 长任务地图组件态 bytes（`LongTaskMap::to_bytes` 输出）
+    pub map: Vec<u8>,
+}
+
 /// 检查点管理器 — 负责 Quest 状态的持久化与恢复
 ///
 /// 文件结构:`~/.aether/checkpoints/<quest_id>/<checkpoint_id>.bin`
@@ -67,6 +88,20 @@ impl CheckpointManager {
 
     /// 保存检查点 — 序列化 Quest 为 MessagePack,写入磁盘(异步)
     ///
+    /// 无卫星态形态:与历史行为逐字节等价(不写 sidecar),委托
+    /// [`Self::save_with_satellite`] 传 `None`。引擎自动检查点等无需卫星态的
+    /// 调用方签名不变。
+    pub async fn save(&self, quest: Arc<Quest>) -> Result<Checkpoint, QuestError> {
+        self.save_with_satellite(quest, None).await
+    }
+
+    /// 保存检查点 + 卫星态旁路文件(异步)
+    ///
+    /// Quest 本体 `.bin` 之外,`satellite` 以 MessagePack 写入旁路文件
+    /// `<checkpoint_id>.sat` — 与主检查点**同刻捕获、同 checkpoint_id 配对**,
+    /// 保证恢复时 Quest 快照与组件态(任务地图/搜索树)时间对齐,不出现
+    /// "卫星态新于 Quest 快照"的配对错位。
+    ///
     /// 内部通过 `spawn_blocking` 将 Quest 编码 + SHA-256 校验 + 磁盘 I/O +
     /// prune_old 全部放到阻塞线程池执行,避免阻塞 tokio worker 线程。
     ///
@@ -75,22 +110,30 @@ impl CheckpointManager {
     /// `Arc` 传参使闭包捕获只付引用计数克隆(rmp 序列化走 `&T`,无需解引用拷贝),
     /// 调用方持 Quest 所有权时 `Arc::new(quest)` 即零拷贝移交。
     ///
-    /// 流程(步骤 2-5 在阻塞线程池内执行):
+    /// 流程(步骤 2-6 在阻塞线程池内执行):
     /// 1. 生成 checkpoint_id(UUIDv7,时间有序,便于排序与因果追踪)
     /// 2. 序列化 Quest 为 MessagePack
     /// 3. 计算 SHA-256 哈希(用于恢复时完整性校验)
-    /// 4. 创建 Checkpoint 实例并整体序列化为 MessagePack 写入磁盘
-    /// 5. 调用 prune_old 清理超出 max_keep 的旧检查点
-    pub async fn save(&self, quest: Arc<Quest>) -> Result<Checkpoint, QuestError> {
+    /// 4. 创建 Checkpoint 实例并整体序列化为 MessagePack 写入磁盘(.bin)
+    /// 5. 若带卫星态,序列化写入旁路文件(.sat)
+    /// 6. 调用 prune_old 清理超出 max_keep 的旧检查点(连带清理其 sidecar)
+    pub async fn save_with_satellite(
+        &self,
+        quest: Arc<Quest>,
+        satellite: Option<&SatelliteState>,
+    ) -> Result<Checkpoint, QuestError> {
         // UUIDv7 生成是 CPU-only 微开销操作,在 async 上下文中完成
         let checkpoint_id = format!("cp-{}", Uuid::now_v7());
 
         // 阻塞操作:Quest 编码 + SHA + 创建目录 + 写文件 + prune_old,全部收编进闭包
         let dir = self.checkpoint_dir.clone();
         let max_keep = self.max_keep;
+        // WHY clone 为 owned:spawn_blocking 闭包 'static,借用无法跨越;
+        // 卫星态 bytes 为 KB 量级组件快照,克隆开销可忽略
+        let satellite_owned = satellite.cloned();
 
         tokio::task::spawn_blocking(move || {
-            Self::encode_and_save(&quest, checkpoint_id, &dir, max_keep)
+            Self::encode_and_save(&quest, checkpoint_id, &dir, max_keep, satellite_owned.as_ref())
         })
         .await
         .map_err(|e| QuestError::CheckpointSaveFailed(format!("spawn_blocking join: {e}")))?
@@ -106,6 +149,7 @@ impl CheckpointManager {
         checkpoint_id: String,
         checkpoint_dir: &Path,
         max_keep: usize,
+        satellite: Option<&SatelliteState>,
     ) -> Result<Checkpoint, QuestError> {
         // 具名 map 编码(ADR-213 R7):数组形态把字段顺序钉成 wire 契约,同类型字段换序会
         // 静默改值;map 按 key 取值不受声明顺序影响。旧的位置式 blob 仍可被 from_slice
@@ -121,10 +165,10 @@ impl CheckpointManager {
             serialized_state,
         );
 
-        Self::save_blocking(checkpoint, checkpoint_dir, max_keep)
+        Self::save_blocking(checkpoint, checkpoint_dir, max_keep, satellite)
     }
 
-    /// 检查点保存的阻塞部分 — 磁盘写入 + 旧检查点清理
+    /// 检查点保存的阻塞部分 — 磁盘写入 + 卫星态旁路写入 + 旧检查点清理
     ///
     /// WHY 独立静态函数:spawn_blocking 要求闭包 Send + 'static,
     /// 将所需参数显式传入,避免捕获 `&self` 引发借用冲突。
@@ -132,6 +176,7 @@ impl CheckpointManager {
         checkpoint: Checkpoint,
         checkpoint_dir: &Path,
         max_keep: usize,
+        satellite: Option<&SatelliteState>,
     ) -> Result<Checkpoint, QuestError> {
         let quest_id = checkpoint.quest_id.clone();
         let checkpoint_id_str = checkpoint.checkpoint_id.clone();
@@ -169,6 +214,36 @@ impl CheckpointManager {
         fs::write(&file_path, bytes).map_err(|e| {
             QuestError::CheckpointSaveFailed(format!("write {}: {e}", file_path.display()))
         })?;
+
+        // 卫星态旁路文件(sidecar):`<checkpoint_id>.sat`,与主 .bin 同刻捕获同 id 配对。
+        // WHY 扩展名 .sat 而非 .sat.bin:list_checkpoints / load_latest_blocking /
+        // prune_old_blocking 均按 extension=="bin" 过滤枚举,`.sat` 保证旁路文件
+        // 不被误当作检查点主文件加载与排序(细节见 SatelliteState 文档)。
+        if let Some(sat) = satellite {
+            let sat_bytes = rmp_serde::to_vec_named(sat).map_err(|e| {
+                QuestError::CheckpointSaveFailed(format!("msgpack encode satellite: {e}"))
+            })?;
+            // R3-1 同边界扩展:sidecar 是检查点写边界的新产物,与主 .bin 同受
+            // 敏感硬载荷拦截(scan_policy 复用)—— 否则地图详情等自由文本字段
+            // 会成为绕过主检查点扫描的旁路
+            if nexus_contracts::sensitive::scan(&String::from_utf8_lossy(&sat_bytes), &scan_policy)
+                .is_blocked()
+            {
+                return Err(QuestError::CheckpointSaveFailed(format!(
+                    "checkpoint {checkpoint_id_str} 卫星态含敏感硬载荷(私钥/凭证/令牌),拒绝落盘"
+                )));
+            }
+            let sat_path = file_path.with_extension("sat");
+            fs::write(&sat_path, sat_bytes).map_err(|e| {
+                // WHY 显式报错而非降级为 warn:主检查点已落盘仍可恢复(降级
+                // quest-only),但卫星态持久化失败若静默吞掉,恢复链路会在
+                // 无人察觉处无声断链——违背本工作包"跨会话记忆一致性"目标
+                QuestError::CheckpointSaveFailed(format!(
+                    "write satellite {}: {e}",
+                    sat_path.display()
+                ))
+            })?;
+        }
 
         // 清理超出 max_keep 的旧检查点(失败不阻断保存,仅记录)
         if let Err(e) = Self::prune_old_blocking(&quest_id, checkpoint_dir, max_keep) {
@@ -219,20 +294,25 @@ impl CheckpointManager {
         Ok(checkpoint)
     }
 
-    /// 加载最新检查点并解码 Quest — 磁盘读取 + 完整性校验 + MessagePack 解码
+    /// 加载最新检查点 + 卫星态并解码 Quest — 磁盘读取 + 完整性校验 + MessagePack 解码
     /// 合入单个 spawn_blocking 闭包(WP-05 恢复侧收编)
     ///
-    /// WHY 单闭包合并:磁盘 IO(load_latest_blocking)与 Quest 解码(from_slice)
-    /// 同属阻塞面操作,合入同一闭包少一次阻塞池往返。
+    /// WHY 单闭包合并:磁盘 IO(load_latest_blocking)、Quest 解码(from_slice)
+    /// 与卫星态旁路读取同属阻塞面操作,合入同一闭包少两次阻塞池往返。
     /// WHY 返回双 Quest 副本:恢复路径有两个所有权消费方(注册表 insert 与公共
     /// API 返回值),二者所需的 O(payload) 克隆是同步 CPU — 与解码同在阻塞池内
     /// 执行,async worker 上零 payload 拷贝;`restore_from_checkpoint` 的公共
     /// 签名(返回 Quest)保持不变。
-    /// 返回:(检查点(供 checkpoint_id 等元数据使用), 注册表副本, 返回值副本)
-    pub(crate) async fn load_latest_quest(
+    /// 返回:(检查点(供 checkpoint_id 等元数据使用), 注册表副本, 返回值副本,
+    /// 卫星态(旧 checkpoint 无 sidecar / sidecar 损坏时为 None))
+    ///
+    /// WHY 卫星态缺失降级为 None 而非报错(需求语义):旧 checkpoint(本工作包
+    /// 之前保存)没有 sidecar 文件,恢复必须降级为"仅 Quest 本体"的现行为;
+    /// sidecar 损坏同理 —— 主检查点已过 SHA-256 校验,卫星态丢失只损失组件态。
+    pub(crate) async fn load_latest_full(
         &self,
         quest_id: &str,
-    ) -> Result<Option<(Checkpoint, Quest, Quest)>, QuestError> {
+    ) -> Result<Option<(Checkpoint, Quest, Quest, Option<SatelliteState>)>, QuestError> {
         let dir = self.checkpoint_dir.join(quest_id);
         let quest_id = quest_id.to_string();
 
@@ -246,13 +326,48 @@ impl CheckpointManager {
                         })?;
                     // 双副本均在阻塞池内克隆(见方法 WHY),async 线程只做所有权移动
                     let registry_copy = quest.clone();
-                    Ok(Some((cp, registry_copy, quest)))
+                    // 卫星态旁路读取:缺失/损坏 → None(降级语义,read_satellite_blocking 内部已记日志)
+                    let satellite = Self::read_satellite_blocking(&dir, &cp.checkpoint_id);
+                    Ok(Some((cp, registry_copy, quest, satellite)))
                 }
                 None => Ok(None),
             }
         })
         .await
         .map_err(|e| QuestError::CheckpointSaveFailed(format!("spawn_blocking join: {e}")))?
+    }
+
+    /// 读取检查点的卫星态旁路文件 — 缺失/损坏返回 None(降级语义,不报错)
+    ///
+    /// WHY None 而非 Err:卫星态缺失(旧 checkpoint 无 `.sat` 文件)时恢复必须
+    /// 降级为"仅 Quest 本体"的现行为;损坏同理。主检查点本体已通过 SHA-256
+    /// 完整性校验,卫星态丢失只损失任务地图/搜索树组件态,不阻断 Quest 恢复。
+    /// NotFound(常态路径)静默 None,其余 IO 错误记 warn 后同样降级。
+    fn read_satellite_blocking(quest_dir: &Path, checkpoint_id: &str) -> Option<SatelliteState> {
+        let sat_path = quest_dir.join(format!("{checkpoint_id}.sat"));
+        let bytes = match fs::read(&sat_path) {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(e) => {
+                tracing::warn!(
+                    checkpoint_id = %checkpoint_id,
+                    error = %e,
+                    "卫星态旁路文件读取失败,降级为无卫星态恢复"
+                );
+                return None;
+            }
+        };
+        match rmp_serde::from_slice::<SatelliteState>(&bytes) {
+            Ok(sat) => Some(sat),
+            Err(e) => {
+                tracing::warn!(
+                    checkpoint_id = %checkpoint_id,
+                    error = %e,
+                    "卫星态旁路文件解码失败(可能损坏),降级为无卫星态恢复"
+                );
+                None
+            }
+        }
     }
 
     /// 加载最新检查点(按 created_at 排序)— 无检查点返回 None(异步)
@@ -399,6 +514,20 @@ impl CheckpointManager {
                     "删除旧检查点失败(继续清理其余)"
                 );
             }
+            // 卫星态旁路文件随主检查点一并删除(防孤儿 .sat 磁盘泄漏)。
+            // WHY 容忍 NotFound:主文件删除失败而 sidecar 存在、或历史无卫星态
+            // 检查点本无 sidecar,均为正常状态,与主文件删除容错语义一致。
+            let sat_path = quest_dir.join(format!("{id}.sat"));
+            if let Err(e) = fs::remove_file(&sat_path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(
+                        quest_id = quest_id,
+                        checkpoint_id = id,
+                        error = %e,
+                        "删除卫星态旁路文件失败(继续清理其余)"
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -524,8 +653,52 @@ struct CheckpointMetaInternal {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::long_task_map::{LongTaskMap, NodeStatus, StepResult};
+    use crate::memory_sync_hook::NoopMemorySyncHook;
+    use crate::search_tree::SearchTreeManager;
+    use chrono::Utc;
+    use nexus_contracts::experience_card::{
+        AtomicOperator, CardMetadata, ExecutionStatus, ThreeFactorScore,
+    };
+    use nexus_contracts::ExperienceCard;
     use nexus_core::{MultimodalInput, Task, TaskStatus, ThinkingMode, UserIntent};
     use tempfile::tempdir;
+
+    /// 构造卫星态测试用经验卡片(搜索树扩展节点)
+    fn sat_card(node_id: &str, parent_id: Option<&str>, score: f32) -> ExperienceCard {
+        ExperienceCard {
+            card_id: Box::from(format!("card_{node_id}")),
+            task_id: Box::from("q-sat"),
+            node_id: Box::from(node_id),
+            parent_id: parent_id.map(Box::from),
+            created_at: Utc::now(),
+            operator: AtomicOperator::Improve,
+            score,
+            delta_vs_parent: 0.1,
+            method_family: Box::from("test"),
+            error_signature: None,
+            three_factor: ThreeFactorScore {
+                quality: score,
+                progress: 0.1,
+                novelty: 0.5,
+            },
+            execution_status: ExecutionStatus::Success,
+            token_evidence_ids: Vec::new(),
+            segment_id: None,
+            metadata: CardMetadata::default(),
+        }
+    }
+
+    /// 构造卫星态测试用步骤(任务地图 record_step 输入)
+    fn sat_step(state: &str, success: bool) -> StepResult {
+        StepResult {
+            state: state.to_string(),
+            detail: format!("{state} 的详细内容"),
+            next_action: "continue".to_string(),
+            action: "analyze".to_string(),
+            success,
+        }
+    }
 
     /// 构造测试用 Quest
     fn make_quest(id: &str, task_count: usize) -> Quest {
@@ -883,5 +1056,190 @@ mod tests {
             latest.checkpoint_id, ids[4],
             "load_latest 应返回最新保存的检查点"
         );
+    }
+
+    // ============================================================
+    // 卫星态接线工作包:save→restore 往返 / 旧 checkpoint 兼容 / 降级语义
+    // ============================================================
+
+    /// 卫星态 save→restore 往返(需求 5):Quest + 卫星态逐字段还原。
+    /// sidecar 与主检查点同 id 配对落盘;from_bytes_with 注入重建后
+    /// 树(节点/深度/best/路径)与地图(节点/边/摘要/状态)逐字段一致。
+    #[tokio::test]
+    async fn test_save_with_satellite_roundtrip() {
+        let tmp = tempdir().unwrap();
+        let cm = CheckpointManager::new(tmp.path().to_path_buf());
+        let quest = make_quest("q-sat", 3);
+
+        // 源组件态:树(root + 2 层扩展)+ 地图(create_map + 2 步)
+        let mut tree = SearchTreeManager::new(10);
+        let root_id = tree.create_root("q-sat");
+        let n1 = tree
+            .expand_node(&root_id, sat_card("n1", Some(root_id.as_str()), 0.6))
+            .unwrap();
+        tree.expand_node(&n1, sat_card("n2", Some(n1.as_str()), 0.9))
+            .unwrap();
+        let mut map = LongTaskMap::default();
+        let map_ref = map.create_map(&quest);
+        map.record_step(&map_ref, &sat_step("步骤一", true));
+        map.record_step(&map_ref, &sat_step("步骤二", false));
+
+        let satellite = SatelliteState {
+            tree: tree.to_bytes().unwrap(),
+            map: map.to_bytes().unwrap(),
+        };
+        let checkpoint = cm
+            .save_with_satellite(Arc::new(quest.clone()), Some(&satellite))
+            .await
+            .unwrap();
+
+        // sidecar 与主检查点同 id 配对落盘(.sat 扩展名,不被 list 枚举)
+        let sat_path = tmp
+            .path()
+            .join("q-sat")
+            .join(format!("{}.sat", checkpoint.checkpoint_id));
+        assert!(sat_path.exists(), "sidecar .sat 必须与主检查点同 id 落盘");
+        assert!(
+            !cm.list_checkpoints("q-sat").unwrap().iter().any(|id| id.contains(".sat")),
+            "list_checkpoints 不得把 sidecar 当作检查点主文件枚举"
+        );
+
+        let (cp, _registry_copy, restored_quest, restored_satellite) =
+            cm.load_latest_full("q-sat").await.unwrap().unwrap();
+        assert_eq!(cp.checkpoint_id, checkpoint.checkpoint_id);
+        // Quest 本体逐字段
+        assert_eq!(restored_quest.quest_id, "q-sat");
+        assert_eq!(restored_quest.tasks.len(), 3);
+        assert_eq!(restored_quest.title, quest.title);
+        assert_eq!(restored_quest.thinking_mode, quest.thinking_mode);
+
+        // 卫星态逐字段还原(from_bytes_with 注入重建)
+        let satellite = restored_satellite.expect("卫星态必须存在");
+        let restored_tree = SearchTreeManager::from_bytes_with(
+            &satellite.tree,
+            Box::new(NoopMemorySyncHook),
+        )
+        .unwrap();
+        let restored_map = LongTaskMap::from_bytes_with(
+            &satellite.map,
+            Box::new(crate::long_task_map::InMemoryExternalStorage::default()),
+            Box::new(NoopMemorySyncHook),
+        )
+        .unwrap();
+        // 树:节点数/深度/best/路径链
+        assert_eq!(restored_tree.get_stats().total_nodes, 3);
+        assert_eq!(restored_tree.get_stats().best_score, 0.9);
+        assert_eq!(restored_tree.node_depth("n2"), Some(2));
+        assert_eq!(restored_tree.get_best_path().len(), 3);
+        // 地图:节点/边/摘要/状态
+        assert_eq!(restored_map.node_count(), 3);
+        assert_eq!(restored_map.edge_count(), 2);
+        assert_eq!(
+            restored_map.get_node("node_1").unwrap().state_summary,
+            "步骤一"
+        );
+        assert_eq!(
+            restored_map.get_node("node_2").unwrap().status,
+            NodeStatus::Failed
+        );
+    }
+
+    /// 旧 checkpoint(无卫星态)兼容(需求 5):load_latest_full 降级为
+    /// satellite=None 不报错,Quest 本体照常解码(需求 3 语义)。
+    #[tokio::test]
+    async fn test_legacy_checkpoint_without_satellite_degrades() {
+        let tmp = tempdir().unwrap();
+        let cm = CheckpointManager::new(tmp.path().to_path_buf());
+        let quest = make_quest("q-legacy", 2);
+
+        // 旧路径 save(无卫星态):历史行为,不写 sidecar
+        cm.save(Arc::new(quest)).await.unwrap();
+
+        let (_cp, _registry_copy, restored_quest, satellite) =
+            cm.load_latest_full("q-legacy").await.unwrap().unwrap();
+        assert!(
+            satellite.is_none(),
+            "旧 checkpoint 无 sidecar,卫星态必须降级为 None"
+        );
+        assert_eq!(restored_quest.quest_id, "q-legacy");
+        assert_eq!(restored_quest.tasks.len(), 2);
+    }
+
+    /// sidecar 损坏降级(需求 3 语义):主检查点完好(过 SHA-256 校验),
+    /// 卫星态解码失败 → None,不阻断恢复。
+    #[tokio::test]
+    async fn test_satellite_corrupt_degrades_to_none() {
+        let tmp = tempdir().unwrap();
+        let cm = CheckpointManager::new(tmp.path().to_path_buf());
+        let quest = make_quest("q-corrupt-sat", 2);
+
+        let mut tree = SearchTreeManager::new(4);
+        tree.create_root("q-corrupt-sat");
+        let satellite = SatelliteState {
+            tree: tree.to_bytes().unwrap(),
+            map: LongTaskMap::default().to_bytes().unwrap(),
+        };
+        let checkpoint = cm
+            .save_with_satellite(Arc::new(quest), Some(&satellite))
+            .await
+            .unwrap();
+
+        // 手工写坏 sidecar(非法 msgpack)
+        let sat_path = tmp
+            .path()
+            .join("q-corrupt-sat")
+            .join(format!("{}.sat", checkpoint.checkpoint_id));
+        std::fs::write(&sat_path, b"\x00garbage-not-msgpack\xff").unwrap();
+
+        let (_cp, _registry_copy, restored_quest, satellite) =
+            cm.load_latest_full("q-corrupt-sat")
+                .await
+                .unwrap()
+                .unwrap();
+        assert!(satellite.is_none(), "损坏 sidecar 必须降级为 None");
+        assert_eq!(restored_quest.quest_id, "q-corrupt-sat");
+    }
+
+    /// prune 连带清理 sidecar(防孤儿 .sat 磁盘泄漏):被删检查点的
+    /// sidecar 一并删除,保留检查点的 sidecar 完好。
+    #[tokio::test]
+    async fn test_prune_removes_sidecar_with_checkpoint() {
+        let tmp = tempdir().unwrap();
+        let cm = CheckpointManager::with_max_keep(tmp.path().to_path_buf(), 2);
+        let quest = make_quest("q-prune", 1);
+
+        let mut tree = SearchTreeManager::new(4);
+        tree.create_root("q-prune");
+        let satellite = SatelliteState {
+            tree: tree.to_bytes().unwrap(),
+            map: LongTaskMap::default().to_bytes().unwrap(),
+        };
+
+        let mut oldest_id = String::new();
+        for i in 0..3 {
+            // 微小延迟确保 UUIDv7 毫秒时间戳不同(文件名字典序对应保存顺序)
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            let cp = cm
+                .save_with_satellite(Arc::new(quest.clone()), Some(&satellite))
+                .await
+                .unwrap();
+            if i == 0 {
+                oldest_id = cp.checkpoint_id;
+            }
+        }
+
+        let quest_dir = tmp.path().join("q-prune");
+        // 最旧检查点及其 sidecar 一并删除
+        assert!(!quest_dir.join(format!("{oldest_id}.bin")).exists());
+        assert!(
+            !quest_dir.join(format!("{oldest_id}.sat")).exists(),
+            "被删检查点的 sidecar 必须连带清理(防孤儿文件)"
+        );
+        // 保留的 2 个检查点 sidecar 完好
+        let remaining = cm.list_checkpoints("q-prune").unwrap();
+        assert_eq!(remaining.len(), 2);
+        for id in &remaining {
+            assert!(quest_dir.join(format!("{id}.sat")).exists());
+        }
     }
 }

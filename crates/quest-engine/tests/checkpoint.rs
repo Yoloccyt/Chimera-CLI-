@@ -17,8 +17,14 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use event_bus::{EventBus, NexusEvent};
+use nexus_contracts::experience_card::{
+    AtomicOperator, CardMetadata, ExecutionStatus, ThreeFactorScore,
+};
 use nexus_core::{MultimodalInput, Quest, TaskStatus, UserIntent};
-use quest_engine::{CheckpointManager, QuestConfig, QuestEngine, QuestError};
+use quest_engine::{
+    CheckpointManager, InMemoryExternalStorage, LongTaskMap, NoopMemorySyncHook, QuestConfig,
+    QuestEngine, QuestError, SatelliteState, SearchTreeManager, StepResult,
+};
 use tempfile::tempdir;
 
 /// 构造测试用 UserIntent
@@ -691,4 +697,166 @@ async fn test_concurrent_save_load_correctness() {
     let latest_quest: Quest =
         rmp_serde::from_slice(&latest.serialized_state).expect("反序列化最新 Quest 应成功");
     assert_eq!(latest_quest.quest_id, quest.quest_id);
+}
+
+// ============================================================
+// 卫星态接线工作包:引擎级 save→restore 往返 / 旧 checkpoint 兼容 / 写侧配对
+// ============================================================
+
+/// 构造卫星态测试用经验卡片(搜索树扩展节点)
+fn sat_card(
+    node_id: &str,
+    parent_id: Option<&str>,
+    score: f32,
+) -> nexus_contracts::ExperienceCard {
+    nexus_contracts::ExperienceCard {
+        card_id: Box::from(format!("card_{node_id}")),
+        task_id: Box::from("q-sat-e2e"),
+        node_id: Box::from(node_id),
+        parent_id: parent_id.map(Box::from),
+        created_at: chrono::Utc::now(),
+        operator: AtomicOperator::Improve,
+        score,
+        delta_vs_parent: 0.1,
+        method_family: Box::from("test"),
+        error_signature: None,
+        three_factor: ThreeFactorScore {
+            quality: score,
+            progress: 0.1,
+            novelty: 0.5,
+        },
+        execution_status: ExecutionStatus::Success,
+        token_evidence_ids: Vec::new(),
+        segment_id: None,
+        metadata: CardMetadata::default(),
+    }
+}
+
+/// 构造卫星态测试用步骤(任务地图 record_step 输入)
+fn sat_step(state: &str, success: bool) -> StepResult {
+    StepResult {
+        state: state.to_string(),
+        detail: format!("{state} 的详细内容"),
+        next_action: "continue".to_string(),
+        action: "analyze".to_string(),
+        success,
+    }
+}
+
+/// 测试 15(卫星态接线):save_with_satellite → 新引擎 restore_from_checkpoint
+/// → 卫星态注册表回填 → 组件态逐字段还原 + 恢复后再 save_checkpoint 携带
+/// 卫星态落盘(写侧配对,kill -9 跨会话一致性主链路)。
+#[tokio::test]
+async fn test_satellite_roundtrip_via_engine_restore() {
+    let tmp = tempdir().unwrap();
+    let checkpoint_dir: PathBuf = tmp.path().to_path_buf();
+    let quest_id;
+
+    // 阶段 1:创建 Quest + 组件态,save_with_satellite 落盘
+    {
+        let bus = EventBus::new();
+        let config = QuestConfig::new(16, 100); // interval=100 避免自动触发
+        let engine = QuestEngine::with_checkpoints(bus, config, checkpoint_dir.clone());
+        let intent = make_intent("i-1", "第一步。第二步。第三步。");
+        let quest = engine.create_quest(intent).await.unwrap();
+        quest_id = quest.quest_id.clone();
+
+        // 组件态:树(root + 1 扩展)+ 地图(create_map + 1 步)
+        let mut tree = SearchTreeManager::new(10);
+        let root_id = tree.create_root(&quest_id);
+        tree.expand_node(&root_id, sat_card("n1", Some(root_id.as_str()), 0.8))
+            .unwrap();
+        let mut map = LongTaskMap::default();
+        let map_ref = map.create_map(&quest);
+        map.record_step(&map_ref, &sat_step("进行中", true));
+
+        let satellite = SatelliteState {
+            tree: tree.to_bytes().unwrap(),
+            map: map.to_bytes().unwrap(),
+        };
+        engine
+            .checkpoint_manager()
+            .unwrap()
+            .save_with_satellite(std::sync::Arc::new(quest), Some(&satellite))
+            .await
+            .unwrap();
+    } // engine drop,模拟进程崩溃
+
+    // 阶段 2:新引擎恢复 → 卫星态注册表回填 → 组件态逐字段还原
+    let bus2 = EventBus::new();
+    let engine2 = QuestEngine::with_checkpoints(bus2, QuestConfig::default(), checkpoint_dir);
+    let restored = engine2.restore_from_checkpoint(&quest_id).await.unwrap();
+    assert_eq!(restored.tasks.len(), 3, "Quest 本体照常恢复");
+
+    // 读侧:restore 回填注册表,经 satellite_state 读回
+    let satellite = engine2
+        .satellite_state(&quest_id)
+        .expect("恢复后卫星态注册表必须回填");
+    let restored_tree = SearchTreeManager::from_bytes_with(
+        &satellite.tree,
+        Box::new(NoopMemorySyncHook),
+    )
+    .unwrap();
+    let restored_map = LongTaskMap::from_bytes_with(
+        &satellite.map,
+        Box::new(InMemoryExternalStorage::default()),
+        Box::new(NoopMemorySyncHook),
+    )
+    .unwrap();
+    // 树逐字段:节点数 / best 分 / 路径链
+    assert_eq!(restored_tree.get_stats().total_nodes, 2);
+    assert_eq!(restored_tree.get_stats().best_score, 0.8);
+    assert_eq!(restored_tree.get_best_path().len(), 2);
+    // 地图逐字段:节点数 / 步骤摘要
+    assert_eq!(restored_map.node_count(), 2);
+    assert_eq!(
+        restored_map.get_node("node_1").unwrap().state_summary,
+        "进行中"
+    );
+
+    // 阶段 3(写侧配对):恢复后再 save_checkpoint,注册表卫星态随主检查点
+    // 同刻落盘 sidecar —— 引擎统一携带避免桥自行落盘的配对竞态
+    let cp = engine2.save_checkpoint(&quest_id).await.unwrap();
+    let sat_path = engine2
+        .checkpoint_manager()
+        .unwrap()
+        .checkpoint_dir()
+        .join(&quest_id)
+        .join(format!("{}.sat", cp.checkpoint_id));
+    assert!(
+        sat_path.exists(),
+        "save_checkpoint 必须携带注册表卫星态落盘 sidecar"
+    );
+}
+
+/// 测试 16(卫星态接线):旧 checkpoint(无 sidecar)恢复降级 —— 卫星态
+/// 注册表无条目,Quest 本体照常恢复,不报错(需求 3 语义)。
+#[tokio::test]
+async fn test_restore_legacy_checkpoint_without_satellite() {
+    let tmp = tempdir().unwrap();
+    let checkpoint_dir: PathBuf = tmp.path().to_path_buf();
+    let quest_id;
+
+    // 阶段 1:旧路径 save_checkpoint(无卫星态,历史行为)
+    {
+        let bus = EventBus::new();
+        let engine =
+            QuestEngine::with_checkpoints(bus, QuestConfig::new(16, 100), checkpoint_dir.clone());
+        let quest = engine
+            .create_quest(make_intent("i-1", "第一步。第二步。"))
+            .await
+            .unwrap();
+        quest_id = quest.quest_id.clone();
+        engine.save_checkpoint(&quest_id).await.unwrap();
+    }
+
+    // 阶段 2:恢复 → Quest 本体完好,卫星态 None
+    let engine2 =
+        QuestEngine::with_checkpoints(EventBus::new(), QuestConfig::default(), checkpoint_dir);
+    let restored = engine2.restore_from_checkpoint(&quest_id).await.unwrap();
+    assert_eq!(restored.tasks.len(), 2);
+    assert!(
+        engine2.satellite_state(&quest_id).is_none(),
+        "旧 checkpoint 恢复后卫星态必须为 None(降级不残留)"
+    );
 }
