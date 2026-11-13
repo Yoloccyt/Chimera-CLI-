@@ -2,9 +2,8 @@
 //! LAYER:    L9
 //! ROLE:     nexus-hook — 生命周期 Hook 系统（P3-T3，v4.0 WI-24）
 //! BACKEND:  memory
-//! PRODUCERS: 0 -（诚实保留:P3 第一波仅闭合注册面,触发事件生产待真实
-//!   hook 执行批次——区分「注册面闭合」与「触发事件生产」两个状态）
-//! CONSUMERS: 1 chimera-cli
+//! PRODUCERS: 0 -
+//! CONSUMERS: 0 -
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! nexus-hook — 生命周期 Hook 系统（P3-T3，v4.0 WI-24）

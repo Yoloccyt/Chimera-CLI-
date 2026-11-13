@@ -791,7 +791,10 @@ impl RerankFill {
                 (i, density)
             })
             .collect();
-        density_scores.sort_by(|a, b| {
+        // R9: 全序选择用 sort_unstable_by（比较器含 block_id 全序 tiebreaker，
+        // 稳定性不必要；常数因子优于 sort_by）。密度序消费者会遍历到预算填满，
+        // 无法预知前缀长度，故不做 select_nth_unstable 的投机截断。
+        density_scores.sort_unstable_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| {

@@ -54,6 +54,8 @@
 // === 模块声明 ===
 /// MCA P5 窗口亲和折减 — HCW 分层窗口按模型实际上限折减(ADR-065/066)
 pub mod affinity;
+/// R9: 统一上下文装配内核（去重 + 单一预算账本 + 确定性驱逐）
+pub mod assemble;
 pub mod compressor;
 pub mod config;
 /// P4-W13.2.2: 密度学习器持有器 — S1 接缝策略异步下发 + 本地 fallback（C4 合规）
@@ -78,6 +80,10 @@ pub mod window;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use affinity::{FoldResult, WindowAffinity};
+pub use assemble::{
+    assemble_context, estimate_tokens as estimate_context_tokens, AssembledContext,
+    AssemblyDiagnostics, ContextItem, ContextRole, ContextSource, RECENT_WINDOW_ITEMS,
+};
 pub use compressor::ContextCompressor;
 pub use density_learner::DensityLearnerHolder;
 pub use error::HcwError;

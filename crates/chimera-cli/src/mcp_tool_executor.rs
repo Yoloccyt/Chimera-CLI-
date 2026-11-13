@@ -85,6 +85,8 @@ pub(crate) fn in_process_mesh() -> McpMesh {
 pub struct McpToolExecutor {
     /// 进程内 ephemeral mesh（同 mcp.rs 范式；executor 与宿主同生命周期）
     mesh: McpMesh,
+    /// R9：配置驱动的副作用声明（默认空集 = 未知，计划层保守串行）
+    declared_side_effects: Vec<(String, SideEffectDecl)>,
 }
 
 impl McpToolExecutor {
@@ -129,7 +131,20 @@ impl McpToolExecutor {
                 }
             }
         }
-        Self { mesh }
+        Self {
+            mesh,
+            declared_side_effects: Vec::new(),
+        }
+    }
+
+    /// R9：注入配置驱动的副作用声明（默认空集；组合根可选调用）
+    ///
+    /// `decls` 的键为完整工具名（`mcp.<server>.<tool>`），值为副作用类别。
+    /// 未声明的工具仍按「未知 ⇒ 可能写」保守处理（fail-closed 不扩散）。
+    #[must_use]
+    pub fn with_declared_side_effects(mut self, decls: Vec<(String, SideEffectDecl)>) -> Self {
+        self.declared_side_effects = decls;
+        self
     }
 
     /// 命名解析（纯函数，供 proptest 穷举）：`mcp.<server>.<tool>` → (server, tool)。
@@ -225,6 +240,9 @@ impl ToolExecutor for McpToolExecutor {
     fn declared_tools(&self) -> Vec<String> {
         Vec::new()
     }
+    fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+        self.declared_side_effects.clone()
+    }
 }
 
 /// 复合执行器 — Builtin 与 Mcp 两个 delegate 的前缀分派组合（ADR-256 D2）
@@ -261,6 +279,11 @@ impl ToolExecutor for CompositeToolExecutor {
     }
     fn declared_tools(&self) -> Vec<String> {
         self.builtin.declared_tools()
+    }
+    fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+        let mut all = self.builtin.declared_side_effects();
+        all.extend(self.mcp.declared_side_effects());
+        all
     }
 }
 

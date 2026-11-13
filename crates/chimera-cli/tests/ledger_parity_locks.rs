@@ -170,3 +170,22 @@ fn decorator_order_provenance_points_at_real_commit() {
         "反向对照（旧顺序必重现不计数）不得缺失，否则该测试失去判别力"
     );
 }
+
+/// 锁 5（R9 / W3-T2）：`replay_since` 读面必须维持 ADR-259 D3 预留。
+///
+/// 事实：写面已接线；读面在仓内无生产调用方。若后续有人把读面接进组合根
+/// 或生产恢复路径，本锁必须判红并强制同批更新 ADR-259 D3（不得静默改口径）。
+#[test]
+fn replay_since_read_face_stays_reserved() {
+    let composition = read_rel("crates/chimera-cli/src/composition.rs");
+    assert!(
+        !composition.contains("replay_since"),
+        "组合根出现 replay_since 调用：读面已越出 ADR-259 D3 预留态，须同批更新 ADR"
+    );
+    let server = read_rel("crates/nexus-app-server/src/server.rs");
+    let production = server.split("#[cfg(test)]").next().unwrap_or("");
+    assert!(
+        !production.contains(".replay_since("),
+        "AppServer 生产段出现 replay_since 内部调用：读面装配态已改变"
+    );
+}

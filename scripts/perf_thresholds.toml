@@ -10,7 +10,7 @@
 # 严格相等）与 I10（PATH_KEYWORDS 同构对拍）已实现并于 CI --static-only 跑
 # （check_perf_redlines.py:359-376；R2 M44 由 I9 根修、N-3 幽灵门残留由 I10 根修）。
 # ⇒ 本表现在是受机器对拍保护的双写面：改一处必须同批改另一处，否则 I9/I10 判红。
-# 键数以门自报为准（当前 85 keys，不用 awk 逐节计数）。残余缺口 M3：键集相等有门，
+# 键数以门自报为准（不用 awk 逐节计数，也不在本行登记易漂计数）。残余缺口 M3：键集相等有门，
 # 但「值」一致性由 compare 模式承担而该模式未接任何 workflow ⇒ 值漂移仍无门（待裁决）。
 #
 # 不变式（由 py 核 --selftest 与常规模式共同断言）：
@@ -291,8 +291,8 @@ tplan_declared_parallel = ["toolplan_layers/readonly8_ms2/8"]
 tplan_undeclared_serial = ["toolplan_layers/undeclared8_ms2/1"]
 tplan_undeclared_parallel = ["toolplan_layers/undeclared8_ms2/8"]
 # T1：混层 c8 叶子路径。WHY 用 "7r1w_ms2/8" 而非含组名的全路径：command_validator
-# 的词条是 ["mixed"]，全路径 "mixed7r1w_ms2/8" 含子串 "mixed" 会触 I2 串台（工单
-# 首轮 I2 声明只核 tplan_* 同族漏了该短词条，重测纠正）。"7r1w_ms2/8"（7读1写签名）
+# 词条已收窄为 "_mixed"（只命中 seccore 三个 *_mixed 函数），避免与 mixed7r1w 串台。
+# 历史：首轮 I2 只核 tplan_* 同族，漏了该短词条，重测后纠正。"7r1w_ms2/8"
 # 唯一匹配混层 c8 且不含 "mixed"，与全部既有词条双向互不为子串。
 tplan_mixed_parallel = ["7r1w_ms2/8"]
 # ADR-260：spol_* 取「opt 臂 + 场景」叶子路径（词条跨 R∈{4,32,256} 三档以
@@ -321,7 +321,7 @@ cache_hit = ["cache_hit"]
 tiering = ["apply_decision", "handle_quest_created"]
 gather = ["gather", "entangle_alone"]
 produce_verify = ["produce_verify", "produce_only", "verify_only"]
-command_validator = ["mixed"]
+command_validator = ["_mixed"]
 xts_top_k = ["xts_top_k"]
 sigmoid_scalar = ["sigmoid scalar"]
 sigmoid_map = ["sigmoid map"]

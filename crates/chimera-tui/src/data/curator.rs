@@ -300,10 +300,13 @@ pub struct CompactReport {
     pub retained_value_ratio: f32,
     /// 本次策略档
     pub policy: CompactPolicy,
-    /// 被驱逐消息数(不含进入摘要流者)
+    /// 被驱逐消息数(不含进入摘要流者;R9 起含被去重的候选段重复)
     pub evicted_count: usize,
     /// 进入摘要流的消息数
     pub summarized_count: usize,
+    /// R9: 被精确去重的消息数（role + content 逐字相同，保留最先出现者）
+    #[serde(default)]
+    pub deduped_count: usize,
     /// 报告序号(管道侧递增,app 检测新报告)
     pub seq: u64,
 }
@@ -342,6 +345,25 @@ impl CurationPolicy for RuleCurationPolicy {
         cfg: &CurationConfig,
         policy: CompactPolicy,
     ) -> CurationPlan {
+        // R9: 精确重复去重（role + content 逐字相同），保留最先出现者。
+        // WHY 在原始下标空间去重、不重排分类：Recent 边界依赖原始位置，
+        // 先删重复再分类会前移边界，把原 Recent 消息变成候选，破坏既有契约。
+        // 零差异保证：无重复输入时 is_duplicate 全 false，后续路径与接入前逐字节一致。
+        let mut seen: std::collections::HashSet<(u8, &str)> = std::collections::HashSet::new();
+        let mut is_duplicate = vec![false; messages.len()];
+        // 重复消息按原始分类计入驱逐统计（见下方 deduped_evictable 计算）。
+        for (index, msg) in messages.iter().enumerate() {
+            let role_code = match msg.role {
+                ChatRole::User => 0u8,
+                ChatRole::Assistant => 1u8,
+            };
+            if !seen.insert((role_code, msg.content.as_str())) {
+                is_duplicate[index] = true;
+            }
+        }
+        // （R9 原始下标空间实现：无需重建去重后的消息数组）
+        let deduped_count = is_duplicate.iter().filter(|&&d| d).count();
+
         let scored = classify(messages, cfg);
         let budget = ((cfg.budget_tokens as f32) * policy.multiplier()) as usize;
 
@@ -353,10 +375,10 @@ impl CurationPolicy for RuleCurationPolicy {
             .sum();
         let capacity = budget.saturating_sub(forced_tokens);
 
-        // 候选段参与背包
+        // 候选段参与背包（重复消息不参与：已由去重处理）
         let candidates: Vec<&ScoredMessage> = scored
             .iter()
-            .filter(|s| s.segment == Segment::Evictable)
+            .filter(|s| s.segment == Segment::Evictable && !is_duplicate[s.index])
             .collect();
         let weights: Vec<usize> = candidates.iter().map(|s| s.tokens).collect();
         // 价值 ×1000 整数化(负值 clamp 0:无保留价值者天然不入包)
@@ -366,12 +388,11 @@ impl CurationPolicy for RuleCurationPolicy {
             .collect();
         let selected = knapsack_01(&weights, &values, capacity);
 
-        // 保留下标 = 强制段 + 入包候选,按原序重建
+        // 保留下标 = 强制段非重复 + 入包候选，原始下标空间
         let mut kept_flags = vec![false; messages.len()];
-        for s in scored
-            .iter()
-            .filter(|s| matches!(s.segment, Segment::Pinned | Segment::Recent))
-        {
+        for s in scored.iter().filter(|s| {
+            matches!(s.segment, Segment::Pinned | Segment::Recent) && !is_duplicate[s.index]
+        }) {
             kept_flags[s.index] = true;
         }
         let mut summary_input: Vec<usize> = Vec::new();
@@ -408,6 +429,14 @@ impl CurationPolicy for RuleCurationPolicy {
             new_messages.insert(insert_at.min(new_messages.len()), summary);
         }
 
+        // 去重的候选段重复也计入驱逐数：保持
+        // 「候选守恒 = 保留候选 + 摘要输入 + 驱逐」对任意输入成立。
+        let deduped_evictable = scored
+            .iter()
+            .filter(|s| s.segment == Segment::Evictable && is_duplicate[s.index])
+            .count();
+        let evicted_count = evicted_count.saturating_add(deduped_evictable);
+
         let report = build_report(
             messages,
             &scored,
@@ -415,6 +444,7 @@ impl CurationPolicy for RuleCurationPolicy {
             &kept_flags,
             &summary_input,
             evicted_count,
+            deduped_count,
             policy,
         );
         let kept_indices: Vec<usize> = kept_flags
@@ -432,13 +462,18 @@ impl CurationPolicy for RuleCurationPolicy {
 }
 
 /// 构建策展报告(保留价值比 = 保留+摘要输入价值 / 全量价值)
+///
+/// WHY `allow(too_many_arguments)`：该私有函数是策展报告的纯聚合点，参数一一
+/// 对应上游已算好的快照；拆结构体只会增加搬运样板，不影响公开 API 与可读性。
+#[allow(clippy::too_many_arguments)]
 fn build_report(
-    messages: &[ChatMessage],
+    original_messages: &[ChatMessage],
     scored: &[ScoredMessage],
     new_messages: &[ChatMessage],
     kept_flags: &[bool],
     summary_input: &[usize],
     evicted_count: usize,
+    deduped_count: usize,
     policy: CompactPolicy,
 ) -> CompactReport {
     // 全量与保留价值均 clamp ≥0(负价值不拉低比值,只影响入包决策)
@@ -459,13 +494,18 @@ fn build_report(
     } else {
         1.0
     };
-    let before_tokens: usize = messages.iter().map(|m| estimate_tokens(&m.content)).sum();
+    // before_tokens 按**原始输入**计（含重复），与"策展前"语义一致；
+    // 重复条目的价值/成本在 scored 侧已只计一次（去重后），差值由 deduped_count 表达。
+    let before_tokens: usize = original_messages
+        .iter()
+        .map(|m| estimate_tokens(&m.content))
+        .sum();
     let after_tokens: usize = new_messages
         .iter()
         .map(|m| estimate_tokens(&m.content))
         .sum();
     CompactReport {
-        before_messages: messages.len(),
+        before_messages: original_messages.len(),
         after_messages: new_messages.len(),
         before_tokens,
         after_tokens,
@@ -473,6 +513,7 @@ fn build_report(
         policy,
         evicted_count,
         summarized_count: summary_input.len(),
+        deduped_count,
         seq: 0, // 管道侧赋值
     }
 }
@@ -728,6 +769,47 @@ mod tests {
             "多余 token 非法"
         );
         assert_eq!(parse_compact_args("--policy"), None, "缺值非法");
+    }
+
+    // ── R9: 精确重复去重 ────────────────────────────────
+
+    #[test]
+    fn exact_duplicate_messages_are_deduplicated_and_mapped_back() {
+        let cfg = CurationConfig::default();
+        let msgs = vec![user("same question"), user("same question"), asst("answer")];
+        let plan = RuleCurationPolicy.curate(&msgs, &cfg, CompactPolicy::Balanced);
+        assert_eq!(plan.report.deduped_count, 1, "重复用户消息应去重 1 条");
+        assert_eq!(plan.report.before_messages, 3, "策展前消息数按原始输入计");
+        // 保留的重复消息映射回**首次出现**的原始下标 0（不是 1）
+        assert!(plan.kept_indices.contains(&0));
+        assert!(!plan.kept_indices.contains(&1));
+        assert!(
+            plan.new_messages
+                .iter()
+                .filter(|m| m.content == "same question")
+                .count()
+                == 1,
+            "去重后新历史只保留一条重复消息"
+        );
+    }
+
+    #[test]
+    fn same_content_different_role_is_not_deduplicated_in_curator() {
+        let cfg = CurationConfig::default();
+        let msgs = vec![user("same text"), asst("same text")];
+        let plan = RuleCurationPolicy.curate(&msgs, &cfg, CompactPolicy::Balanced);
+        assert_eq!(plan.report.deduped_count, 0);
+        assert_eq!(plan.report.before_messages, 2);
+    }
+
+    #[test]
+    fn no_duplicates_yields_zero_dedup_count() {
+        let cfg = CurationConfig::default();
+        let msgs = history(3);
+        let plan = RuleCurationPolicy.curate(&msgs, &cfg, CompactPolicy::Balanced);
+        assert_eq!(plan.report.deduped_count, 0);
+        assert_eq!(plan.report.before_messages, msgs.len());
+        assert!(plan.kept_indices.iter().all(|&i| i < msgs.len()));
     }
 
     // ── 验收验证集:保留价值 ≥0.85(默认权重)──────────────

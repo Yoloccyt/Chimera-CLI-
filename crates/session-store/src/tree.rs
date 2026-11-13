@@ -374,7 +374,10 @@ impl TreeIndex {
     }
 
     /// 在已开启的事务中批量插入事件行(私有:insert_events 与 insert_flush_batch 共用)
-    fn insert_events_rows(conn: &rusqlite::Connection, rows: &[EventRow]) -> Result<(), StoreError> {
+    fn insert_events_rows(
+        conn: &rusqlite::Connection,
+        rows: &[EventRow],
+    ) -> Result<(), StoreError> {
         let mut stmt = conn
             .prepare(
                 "INSERT INTO events (offset, session_id, segment_id, payload)
@@ -389,11 +392,10 @@ impl TreeIndex {
             // 编码下字段错位(形态裁决 ADR-213 R8.1——非 ADR-004,它只裁「MessagePack
             // 而非 JSON」,不裁形态;event-bus 先例 shard.rs/bus.rs 均用 to_vec_named);
             // named 按字段名匹配,skip 不影响反序列化
-            let payload = rmp_serde::to_vec_named(&row.event).map_err(|e| {
-                StoreError::Serialization {
+            let payload =
+                rmp_serde::to_vec_named(&row.event).map_err(|e| StoreError::Serialization {
                     reason: format!("SessionEvent rmp 序列化失败: {e}"),
-                }
-            })?;
+                })?;
             stmt.execute(params![
                 row.offset,
                 row.session_id.as_str(),

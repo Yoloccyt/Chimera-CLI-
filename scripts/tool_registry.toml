@@ -405,3 +405,21 @@ script = "scripts/toolchain-env.ps1"
 status = "active"
 owner = "ops"
 evidence = "shared repo-root-derived toolchain env, dot-sourced by measure_startup.ps1 / run_shadow_sojourn.ps1 / check_repo_wiki_benchmark.ps1 / check_release_size.ps1 / generate_changelog.ps1 (replacing five copies of a pinned D:\\Chimera CLI); parses under check_ps1_syntax.py's 27-file domain (measured 2026-10-29)"
+
+[[tool]]
+script = "scripts/audit_memory_consistency.py"
+status = "diagnostic"
+owner = "memory"
+evidence = "R9/W3-T1 跨会话记忆一致性只读审计（ADR-290）：段文件/树索引/经验卡三类检查 + --self-test 牙口；手动诊断面，未接 CI 阻塞门（measured 2026-11-12）"
+
+[[tool]]
+script = "scripts/idle_wakeup_audit.py"
+status = "diagnostic"
+owner = "perf"
+evidence = "R5-1/ADR-264 空闲唤醒静态审计（advisory，恒 exit 0；G-44 要求 __main__ 崩溃守卫 → exit 2）(measured 2026-11-12)"
+
+[[tool]]
+script = "scripts/energy_profile.ps1"
+status = "diagnostic"
+owner = "perf"
+evidence = "ADR-265 RSS 双口径采样（窗口峰值+均值 / PeakWorkingSet64 生存期峰值）；dev-only 手动诊断面 (measured 2026-11-12)"

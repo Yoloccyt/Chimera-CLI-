@@ -26,6 +26,7 @@ use anyhow::Result;
 use gqep_executor::tool_runtime::{
     BatchLimits, BatchOutcome, DispatchError, DispatchOutcome, DispatchRequest,
 };
+use gqep_executor::MAX_GATHER_FANOUT;
 use nexus_core::{MultimodalInput, Quest, UserIntent};
 use quest_engine::decompose::DependencyMode;
 use std::collections::HashMap;
@@ -39,6 +40,46 @@ use crate::error::ChimeraCliError;
 use crate::orchestrator::{build_error_reply, build_quest_reply, plan_chunks};
 use crate::output;
 use crate::permission::{confirm_with, PermissionCtx, PermissionDecision, PermissionGate};
+
+/// 批量派发并发度配置开关（R9 / W4-T1）
+///
+/// 未设置 ⇒ `BatchLimits::default()`（8/30s/120s，与改造前逐字一致）；
+/// 合法 `c ∈ [1, MAX_GATHER_FANOUT]` ⇒ 仅覆盖 `concurrency`；
+/// `0` ⇒ 串行（与 `BatchLimits` 既有口径一致）；非法 ⇒ 回退默认 8 + 一次 warn。
+const ENV_TOOL_BATCH_CONCURRENCY: &str = "CHIMERA_TOOL_BATCH_CONCURRENCY";
+
+/// 纯函数解析：便于单测覆盖全部边界（不触碰进程环境）
+fn resolve_batch_limits_from(raw: Option<&str>) -> BatchLimits {
+    let mut limits = BatchLimits::default();
+    let Some(raw) = raw else {
+        return limits;
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return limits;
+    }
+    match trimmed.parse::<usize>() {
+        Ok(0) => limits.concurrency = 0,
+        Ok(value) if value <= MAX_GATHER_FANOUT => limits.concurrency = value,
+        Ok(value) => {
+            tracing::warn!(
+                value,
+                max = MAX_GATHER_FANOUT,
+                "CHIMERA_TOOL_BATCH_CONCURRENCY 超上限，回退默认并发"
+            );
+        }
+        Err(_) => {
+            tracing::warn!(raw, "CHIMERA_TOOL_BATCH_CONCURRENCY 非数字，回退默认并发");
+        }
+    }
+    limits
+}
+
+/// 读取环境变量并解析批量派发限额（每次调用读一次 env，非热路径）
+fn resolve_batch_limits() -> BatchLimits {
+    let raw = std::env::var(ENV_TOOL_BATCH_CONCURRENCY).ok();
+    resolve_batch_limits_from(raw.as_deref())
+}
 
 /// CallBudgetError → ChimeraCliError 映射(M2 接入点共用)
 ///
@@ -135,7 +176,8 @@ pub fn build_batch_requests(quest: &Quest) -> Vec<DispatchRequest> {
 ///
 /// # 语义契约
 /// - 有界并发 + 输入序结果（`results[i]` ↔ 任务列表第 i 项,gqep 契约）;
-/// - `BatchLimits::default()`（8/30s/120s 双层超时）——并发度配置化留待 W5;
+/// - `BatchLimits`（默认 8/30s/120s 双层超时）——并发度经
+///   `CHIMERA_TOOL_BATCH_CONCURRENCY` 配置（未设 = 默认 8，逐字不变）;
 /// - `call_with_budget` 包裹整批（120s 进程级预算 + 取消令牌,超时发既有
 ///   `OperationTimedOut` 事件）——与 `create_quest` 同一防护口径;
 /// - 空分解（0 任务）为合法成功:零派发、退出码 0。
@@ -159,7 +201,7 @@ pub async fn execute_quest_tool_batch(ctx: &AppContext, quest: &Quest) -> Result
             let requests = build_batch_requests(quest);
             call_with_budget(
                 ctx.tool_runtime
-                    .execute_batch(&requests, BatchLimits::default()),
+                    .execute_batch(&requests, resolve_batch_limits()),
                 DEFAULT_CALL_BUDGET,
                 &token,
                 "run.execute_batch",
@@ -208,7 +250,7 @@ async fn dispatch_in_waves(
         let requests = build_batch_requests(quest);
         return Ok(call_with_budget(
             ctx.tool_runtime
-                .execute_batch(&requests, BatchLimits::default()),
+                .execute_batch(&requests, resolve_batch_limits()),
             DEFAULT_CALL_BUDGET,
             token,
             "run.execute_batch",
@@ -264,7 +306,7 @@ async fn dispatch_in_waves(
                 .collect();
             let wave_outcome = ctx
                 .tool_runtime
-                .execute_batch(&wave_requests, BatchLimits::default())
+                .execute_batch(&wave_requests, resolve_batch_limits())
                 .await;
             for (&idx, result) in indices.iter().zip(wave_outcome.results) {
                 slots[idx] = Some(result);
@@ -775,5 +817,45 @@ mod tests {
             matches!(cli_err, ChimeraCliError::EngineError(_)),
             "分层失败应归因 EngineError,实际: {cli_err:?}"
         );
+    }
+
+    // ============================================================
+    // R9 / W4-T1:批量并发度配置
+    // ============================================================
+
+    #[test]
+    fn batch_limits_default_when_env_absent_or_empty() {
+        let absent = resolve_batch_limits_from(None);
+        assert_eq!(absent, BatchLimits::default(), "未设置必须与默认逐字段一致");
+        let empty = resolve_batch_limits_from(Some("   "));
+        assert_eq!(empty, BatchLimits::default(), "空白视为未设置");
+    }
+
+    #[test]
+    fn batch_limits_accepts_valid_range_and_zero_is_serial() {
+        let one = resolve_batch_limits_from(Some("1"));
+        assert_eq!(one.concurrency, 1);
+        let max = resolve_batch_limits_from(Some(&MAX_GATHER_FANOUT.to_string()));
+        assert_eq!(max.concurrency, MAX_GATHER_FANOUT);
+        let zero = resolve_batch_limits_from(Some("0"));
+        assert_eq!(zero.concurrency, 0, "0 等价串行（既有口径）");
+        // 两个超时不随并发度改变
+        assert_eq!(
+            one.per_op_timeout_ms,
+            BatchLimits::default().per_op_timeout_ms
+        );
+        assert_eq!(one.deadline_ms, BatchLimits::default().deadline_ms);
+    }
+
+    #[test]
+    fn batch_limits_falls_back_to_default_on_invalid_values() {
+        let default = BatchLimits::default();
+        for raw in ["-1", "abc", "1.5", "999999"] {
+            let limits = resolve_batch_limits_from(Some(raw));
+            assert_eq!(
+                limits, default,
+                "非法值 {raw} 必须回退默认 8/30s/120s（不 panic）"
+            );
+        }
     }
 }

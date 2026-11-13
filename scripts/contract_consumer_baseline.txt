@@ -31,7 +31,7 @@ CommandValidationError
 Compressibility
 CompressionStrategy
 ContentBlock
-ContextAssemblyContract
+ContextAssemblyContract  # R9/ADR-290: hcw-window 装配内核已消费（1 个生产消费者）；第二消费者待接线，故仍登记
 ContractCheckOutcome
 ContractContext
 ContractExample
@@ -40,7 +40,6 @@ CostEstimate
 Currency
 DeclaimPayload
 DispatchFuture  # ADR-238 D1: 对象安全派发 future 的类型别名；随 DispatchError 同族，第二个生产消费者待接线
-DispatchOutcome  # ADR-238 D3: 一次工具派发的结果载体；与 DispatchError 成对定义，第二生产消费者待接线
 DispatchRequestRef  # ADR-241 D2: 借用化派发请求视图（热路径零分配载体）；拥有型 DispatchRequest 的加性姊妹类型，第二生产消费者待接线
 EmptyFormalProvider
 EndpointSpec

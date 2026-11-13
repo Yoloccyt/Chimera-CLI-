@@ -396,13 +396,15 @@ impl HcwWindow {
                 .effective_capacity_for(target_tier, state.last_sparsity);
             if target_tier > current_tier || state.total_size() <= target_capacity {
                 // 升级或容量足够:短写锁内直接切换(不压缩,临界区无 CPU 大头)
-                SelectPlan::Switch { reason: format!("complexity={complexity}") }
+                SelectPlan::Switch {
+                    reason: format!("complexity={complexity}"),
+                }
             } else {
                 // 降级且需压缩:锁外计算
                 SelectPlan::Compress {
                     target_capacity,
-                    target_size: (((target_capacity as f32)
-                        * self.config.compression_threshold) as usize)
+                    target_size: (((target_capacity as f32) * self.config.compression_threshold)
+                        as usize)
                         .max(1),
                     snapshot: state.entries.clone(),
                     version: state.mutations,
@@ -766,8 +768,12 @@ impl HcwWindow {
         let (original_size, compressed_size) = {
             let mut state = self.state.write().await;
             let had_changes = state.mutations != version;
-            let merged =
-                merge_compress_with_snapshot(report.retained_entries, &state, &snapshot, had_changes);
+            let merged = merge_compress_with_snapshot(
+                report.retained_entries,
+                &state,
+                &snapshot,
+                had_changes,
+            );
             let merged_size: usize = merged.iter().map(|e| e.token_size).sum();
             if merged_size > capacity {
                 // 合并后仍超过容量(单条目超过容量),返回错误,不替换 entries
@@ -1057,12 +1063,8 @@ mod tests {
         assert_eq!(state.mutations, version + 1);
 
         let retained: Vec<Arc<ContextEntry>> = vec![Arc::clone(&snapshot[0])];
-        let merged = merge_compress_with_snapshot(
-            retained,
-            &state,
-            &snapshot,
-            state.mutations != version,
-        );
+        let merged =
+            merge_compress_with_snapshot(retained, &state, &snapshot, state.mutations != version);
         let ids: Vec<&str> = merged.iter().map(|e| e.id.as_str()).collect();
         assert!(ids.contains(&"a"), "快照既有条目应保留");
         assert!(
@@ -1080,12 +1082,8 @@ mod tests {
         let mut state = state;
         state.remove("a");
         let retained: Vec<Arc<ContextEntry>> = snapshot.clone();
-        let merged = merge_compress_with_snapshot(
-            retained,
-            &state,
-            &snapshot,
-            state.mutations != version,
-        );
+        let merged =
+            merge_compress_with_snapshot(retained, &state, &snapshot, state.mutations != version);
         let ids: Vec<&str> = merged.iter().map(|e| e.id.as_str()).collect();
         assert!(!ids.contains(&"a"), "已删除条目不应复活");
         assert!(ids.contains(&"b"));

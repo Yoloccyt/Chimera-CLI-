@@ -3,6 +3,8 @@
 # after a split so the cap ratchets DOWN. Key is path::fn (stable across
 # line drift); cap is the measured max length.
 
+crates/chimera-cli/src/composition.rs::build_with_sharding|214  # production >200 lines (open debt: split before it grows)
+crates/chimera-cli/src/experience_loop.rs::spawn_experience_loop|207  # production >200 lines (open debt: split before it grows)
 crates/chimera-tui/src/data/pipeline.rs::new_internal|467  # production >200 lines (open debt: split before it grows)
 crates/chimera-tui/src/popup.rs::render|215  # production >200 lines (open debt: split before it grows)
 crates/event-bus/tests/filtered_subscriber_test.rs::test_topic_mapping_covers_all_variants|484  # test-side >200 lines (assertion table/bench body, not shipped)

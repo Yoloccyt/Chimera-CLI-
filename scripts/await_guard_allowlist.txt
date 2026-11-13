@@ -53,8 +53,6 @@ crates/nexus-app-server/src/sse.rs:121         # DESIGN SSE writer: single-conne
 # Tooth check: revert shutdown() to the multi-line chain -> G-27/G-35 must redden.
 crates/decb-governor/src/governor.rs:564            # SCANNER `current_total` is `*total` copy; state guard already block-scoped
 # Re-keyed 2026-11-07: c6eb9b6 (ADR-253 D1 args 透传) 在本文件上方加行,把
-# .lock() 链从 :556 位移到 :566;SCANNER 语义逐行复核不变(pooled 仍是
-# pool-removed TcpStream 值,guard 死于 and_then 语句尾,await 位点 :577/:599/:608)。
-crates/mcp-mesh/src/quantum/participant_client.rs:566 # SCANNER `pooled` is a TcpStream removed from the pool; guard dies in and_then
+crates/mcp-mesh/src/quantum/participant_client.rs:604 # SCANNER `pooled` is a TcpStream removed from the pool; guard dies at and_then stmt end (acquisition line; await sites 615/637/646)
 crates/pvl-layer/src/producer.rs:123                # SCANNER `strategy` is `*read()` Copy value; read guard dies at stmt end
-crates/session-store/src/writer.rs:577              # SCANNER `has_pending` is a bool; flush deliberately runs outside the lock (line moved 495->577 by R2 C-61; same site, scanner is lexical)
+crates/session-store/src/writer.rs:576              # SCANNER `has_pending` is a bool; flush deliberately runs outside the lock (acquisition line; await at 580)

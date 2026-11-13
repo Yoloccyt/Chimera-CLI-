@@ -66,6 +66,15 @@ pub trait ToolExecutor: Send + Sync {
         None
     }
 
+    /// 执行器的批量副作用声明（可选，默认空集 = 未知）
+    ///
+    /// WHY 与 `capability_of` 并存：本方法面向「配置驱动、一次返回全表」的执行器
+    /// （如 MCP 服务器声明的只读工具清单）；默认空集保证既有实现零改动。
+    /// 优先级：计划节点显式声明 > `capability_of` > 本方法 > 未知（按可能写）。
+    fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+        Vec::new()
+    }
+
     /// 本执行器可服务的工具名全集 —— 路由环（`RouteLayer`）的注册表来源
     ///
     /// WHY 与 `capability_of` 并列而非另立注册表:同一个实现方既是「谁能执行」
@@ -530,8 +539,18 @@ fn effective_side_effect(
     executor: &dyn ToolExecutor,
     declared: &str,
 ) -> Option<SideEffectDecl> {
-    node.side_effect
+    if let Some(effect) = node
+        .side_effect
         .or_else(|| executor.capability_of(declared))
+    {
+        return Some(effect);
+    }
+    // R9：配置驱动的批量声明（默认空集 ⇒ 既有行为逐字不变）
+    executor
+        .declared_side_effects()
+        .into_iter()
+        .find(|(name, _)| name == declared)
+        .map(|(_, effect)| effect)
 }
 
 /// 单节点是否「读安全」——纯数据算子恒安全；ToolCall 需有效副作用 == ReadOnly。
@@ -759,6 +778,61 @@ mod tests {
 
     fn runner() -> PlanRunner {
         PlanRunner::new(Box::new(MemExecutor), PlanGuards::default())
+    }
+
+    /// R9：声明式执行器 —— 仅 `declared_side_effects` 提供只读声明
+    struct DeclaringExecutor;
+
+    #[async_trait]
+    impl ToolExecutor for DeclaringExecutor {
+        async fn execute(&self, _tool_name: &str, args_json: &str) -> Result<String, String> {
+            Ok(args_json.to_string())
+        }
+        fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+            vec![("mcp.srv.audit".to_string(), SideEffectDecl::ReadOnly)]
+        }
+    }
+
+    fn tool_call_node(tool: &str, side_effect: Option<SideEffectDecl>) -> ToolNode {
+        ToolNode {
+            id: format!("call-{tool}"),
+            op: ToolOp::ToolCall,
+            tool_name: Some(tool.into()),
+            args_json: Some("{}".into()),
+            field: None,
+            predicate: None,
+            side_effect,
+        }
+    }
+
+    #[test]
+    fn declared_side_effects_make_tool_read_safe_without_node_declaration() {
+        let executor = DeclaringExecutor;
+        let declared = tool_call_node("mcp.srv.audit", None);
+        assert!(
+            node_is_read_safe(&declared, &executor),
+            "执行器批量声明为 ReadOnly ⇒ 计划未声明也应进入并发段"
+        );
+        let unknown = tool_call_node("mcp.srv.write", None);
+        assert!(
+            !node_is_read_safe(&unknown, &executor),
+            "未声明工具必须按可能写保守串行（fail-closed 不扩散）"
+        );
+        let explicit_write = tool_call_node("mcp.srv.audit", Some(SideEffectDecl::Write));
+        assert!(
+            !node_is_read_safe(&explicit_write, &executor),
+            "计划显式声明优先于执行器声明"
+        );
+    }
+
+    #[test]
+    fn default_executor_declares_no_side_effects() {
+        assert!(MemExecutor.declared_side_effects().is_empty());
+        let unknown = tool_call_node("mcp.srv.audit", None);
+        assert!(
+            !node_is_read_safe(&unknown, &MemExecutor),
+            "默认空集 ⇒ 行为与改造前逐字一致（保守串行）"
+        );
     }
 
     fn node(id: &str, op: ToolOp) -> ToolNode {
