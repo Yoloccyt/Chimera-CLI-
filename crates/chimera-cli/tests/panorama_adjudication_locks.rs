@@ -21,8 +21,7 @@ fn ws_root() -> std::path::PathBuf {
 /// 读 workspace 内 crate 源文件（路径拼接 + 存在性显式失败）
 fn src_of(rel: &str) -> String {
     let p = ws_root().join(rel);
-    std::fs::read_to_string(&p)
-        .unwrap_or_else(|e| panic!("读取 {rel} 应成功: {e}"))
+    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("读取 {rel} 应成功: {e}"))
 }
 
 /// 锁 1（U-20 已接线行为锁）：设 `CHIMERA_METRICS_DUMP_PATH`（tempdir）→
@@ -32,9 +31,9 @@ fn src_of(rel: &str) -> String {
 /// 裸 EventBus::new() 的 logger() 恒 None,dump 周期空转。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn u20_metrics_dump_env_path() {
-    use chimera_cli::ChimeraConfig;
     use chimera_cli::composition::build;
     use chimera_cli::experience_loop::spawn_experience_loop;
+    use chimera_cli::ChimeraConfig;
 
     let dir = tempfile::tempdir().expect("tempdir 应成功");
     let dump = dir.path().join("metrics.txt");
@@ -49,8 +48,8 @@ async fn u20_metrics_dump_env_path() {
     // dump 周期 5s(首个 tick 跳过,第二个 tick 落盘)——等 6.5s 覆盖一个写点
     tokio::time::sleep(std::time::Duration::from_millis(6_500)).await;
 
-    let text = std::fs::read_to_string(&dump)
-        .unwrap_or_else(|e| panic!("指标 dump 文件应存在: {e}"));
+    let text =
+        std::fs::read_to_string(&dump).unwrap_or_else(|e| panic!("指标 dump 文件应存在: {e}"));
     // 指标族名 = nexus_event（prometheus-client 渲染 HELP/Sample 以族名为锚,
     // 实测无 _total 后缀——deepdive §9.4 原引 nexus_event_total 为预写形态）
     assert!(
@@ -66,10 +65,7 @@ async fn u20_metrics_dump_env_path() {
 #[test]
 fn u08_session_store_note_parity() {
     let lib = src_of("crates/session-store/src/lib.rs");
-    assert!(
-        lib.contains("装配态三订正"),
-        "三订正段应在场（P4 落档）"
-    );
+    assert!(lib.contains("装配态三订正"), "三订正段应在场（P4 落档）");
     assert!(
         lib.contains("with_session_store") && lib.contains("composition.rs"),
         "三订正段应指向 composition.rs with_session_store 生产装配"
@@ -100,10 +96,7 @@ fn f09_no_producer_is_deliberate() {
 #[test]
 fn u05_vote_remains_unpublished() {
     let src = src_of("crates/chimera-tui/src/app/event_loop.rs");
-    assert!(
-        src.contains("诚实降级(FC-A"),
-        "U-05 诚实降级注释块应在场"
-    );
+    assert!(src.contains("诚实降级(FC-A"), "U-05 诚实降级注释块应在场");
     // 提取 publish_vote 函数体（fn 起点至下一个 fn），断言无发布调用
     let start = src.find("fn publish_vote").expect("publish_vote 应在场");
     let rest = &src[start..];
@@ -127,8 +120,11 @@ fn u05_vote_remains_unpublished() {
 #[test]
 fn variant_count_lock_unchanged() {
     let test = src_of("crates/event-bus/tests/variant_count_test.rs");
+    // ADR-291（R9 WP-0）:+2 Normal 观测变体后 154→156；本锁继续锚定
+    // 「变体新增必须同批同步全部锁面」的六锁纪律（本锁自身即当时的漏同步点，
+    // 吸收验收 R9b 补齐——引以为戒：锁面清单以 grep VARIANT_COUNT_LOCK 全仓为准）
     assert!(
-        test.contains("VARIANT_COUNT_LOCK: usize = 154"),
-        "事件变体计数锁必须保持 154（零新增变体）"
+        test.contains("VARIANT_COUNT_LOCK: usize = 156"),
+        "事件变体计数锁必须与 event-bus variant_count_test 同值（当前 156）"
     );
 }
