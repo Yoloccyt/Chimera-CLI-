@@ -269,6 +269,20 @@ impl SessionStore {
         provider: &str,
         provider_thread_id: &str,
     ) -> Result<(), AffinityError> {
+        // 治理补齐（G-写敏感门 GAP-W）:厂商线程句柄虽为服务端返回值,仍按 tier-2
+        // 写入口纪律过敏感扫描(同 record_turn 的 Pass 降误报形态——句柄常含
+        // base64 片段);命中即拒绝入库,防外部可控文本携带凭证类载荷进入持久化面。
+        let scan_view = format!("{session_id}\n{provider}\n{provider_thread_id}");
+        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            ..Default::default()
+        };
+        if nexus_contracts::sensitive::scan(&scan_view, &scan_policy).is_blocked() {
+            return Err(AffinityError::Unknown {
+                raw: "thread handle blocked: sensitive credential detected".into(),
+            });
+        }
         let sid = session_id.to_string();
         let provider = provider.to_string();
         let handle = provider_thread_id.to_string();

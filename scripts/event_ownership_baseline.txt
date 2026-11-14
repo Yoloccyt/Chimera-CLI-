@@ -15,7 +15,6 @@ AgentHeartbeat  #  prod_ctor=0 test_ctor=17 consumers=crates/chimera-mas/src/orc
 BenchmarkMetricsCollected  #  RESERVED-BY-ADR-159 决策4/ADR-160:70 正式预留(禁删)，无自然发布流；prod_ctor=0 test_ctor=2 consumers=crates/event-bus/src/membrane.rs
 DpoPairGenerated  #  prod_ctor=0 test_ctor=2 consumers=-
 ModelRouteSelected  #  prod_ctor=0 test_ctor=6 consumers=crates/chimera-tui/src/panels/event_stream.rs,crates/chimera-tui/src/panels/log.rs
-ProviderDegraded  #  prod_ctor=0 test_ctor=3 consumers=crates/efficiency-monitor/src/affinity_metrics.rs,crates/event-bus/src/membrane.rs AffinityCapabilityNegotiated：发布点在 mca-gateway doc 规划未接线；2026-09-25 恢复误删行
 QuestCompleted  #  prod_ctor=0 test_ctor=11 consumers=crates/chimera-cli/src/quest_loop.rs,crates/chimera-tui/src/chat_cards.rs,crates/chimera-tui/src/data/sync.rs,crates/chimera-tui/src/panels/event_stream.rs,crates/chimera-tui/src/panels/log.rs 内构造均为测试夹具；2026-09-25 恢复误删行
 QuestListUpdated  #  prod_ctor=0 test_ctor=7 consumers=crates/chimera-tui/src/data/pipeline.rs,crates/chimera-tui/src/data/sync.rs,crates/chimera-tui/src/panels/event_stream.rs,crates/chimera-tui/src/panels/log.rs
 RouterStatsReported  #  prod_ctor=0 test_ctor=5 consumers=crates/chimera-tui/src/data/sync.rs,crates/event-bus/src/membrane.rs,crates/osa-coordinator/src/six_dimension.rs
