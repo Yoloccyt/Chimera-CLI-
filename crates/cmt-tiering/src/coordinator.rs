@@ -918,6 +918,49 @@ impl CmtCoordinator {
         })
     }
 
+    /// 降级衰减周期循环 — 生产接线腿(ADR-295 D5,R11 W3c,UD-4 分级启用)
+    ///
+    /// WHY 存在:`run_decay_cycle` 是幂等周期操作,但 crate 内原本无调用循环——
+    /// lib.rs 装配态订正链明载「分层决策闭环未接线」(`CmtCoordinator::new*`
+    /// 生产构造点为零)。本循环是 decay 腿的接线:interval 周期驱动
+    /// `run_decay_cycle`(Hot 就地筛选 / Warm·Cold 元数据轻量判定 / stats TTL
+    /// 节流均为 crate 内已有机证实现),组合根按 `CHIMERA_CMT_DECAY_DISABLED`
+    /// 决定是否装配。
+    ///
+    /// # 生命周期纪律(对齐 spawn_lsct_subscriber)
+    /// - 单周期失败仅 warn 不中断(幂等操作,下一周期重试——§4.4 #7:
+    ///   幂等操作失败仅记日志可接受)
+    /// - 无独立取消通道,随 runtime 关闭而止;与 M50 刷写循环的差异已登记:
+    ///   衰减是幂等无状态操作,跳过/中断一轮无害,不存在「pending 永不落盘」
+    ///   类数据丢失面
+    /// - `MissedTickBehavior::Skip`:周期落后时不补偿性连跑(降级不是 urgent 面)
+    ///
+    /// # 参数
+    /// - `interval`:衰减周期;组合根默认 60s,`CHIMERA_CMT_DECAY_INTERVAL_MS`
+    ///   可调(影子期标定旋钮)
+    pub fn spawn_decay_cycle_loop(
+        self: &Arc<Self>,
+        interval: std::time::Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        let coordinator = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                ticker.tick().await;
+                match coordinator.run_decay_cycle().await {
+                    Ok(n) if n > 0 => {
+                        debug!(demoted = n, "cmt 降级衰减周期完成");
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!(error = %e, "cmt 降级衰减周期失败(下一周期重试)");
+                    }
+                }
+            }
+        })
+    }
+
     /// 接入 L1 经验卡片总线 — 后台任务持久化卡片到 L3 存储（Phase 3 D-4）
     ///
     /// 订阅 `ExperienceCardBus` 的中分卡片广播流，后台任务将卡片
@@ -1250,6 +1293,32 @@ mod tests {
             }
             other => panic!("expected CapabilityTierStatsReported, got {other:?}"),
         }
+    }
+
+    /// R11 W3c(ADR-295 D5):衰减循环接线腿端到端——短 τ 配置下,Hot 条目
+    /// 在循环周期内被降级到 Warm(spawn → interval tick → run_decay_cycle → 迁移)。
+    /// τ=1s:3s 后 decay_factor = e^-3 ≈ 0.05 < 0.1 阈值,条目必越降级线。
+    #[tokio::test]
+    async fn decay_cycle_loop_demotes_stale_entry() {
+        let mut cfg = CmtConfig::default();
+        cfg.decay_tau_seconds = 1;
+        let cmt =
+            std::sync::Arc::new(CmtCoordinator::new_in_memory(cfg, EventBus::new()).expect("构造"));
+        cmt.insert(make_entry("cap-loop")).await.expect("insert");
+        let _handle = cmt.spawn_decay_cycle_loop(std::time::Duration::from_millis(20));
+        // 轮询 Warm 层(条目需 sleep ≈3s 后 priority 才越阈值;4s 轮询窗覆盖)
+        for _ in 0..400 {
+            if cmt.warm().count().await.expect("count") > 0 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            cmt.warm().count().await.expect("count"),
+            1,
+            "短 τ 下条目必须在循环周期内被降级到 Warm"
+        );
+        assert_eq!(cmt.hot().len(), 0, "Hot 层清空");
     }
 
     /// LSCT 订阅闭环端到端:发布 LsctTierSwitched → CMT 执行实际迁移

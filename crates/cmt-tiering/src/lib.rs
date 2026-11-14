@@ -35,6 +35,15 @@
 //!   `ExperienceCardStorage`（`chimera-cli/src/experience_loop.rs:29`），**不是** coordinator。
 //!   ⇒ 本行应读作“落盘/迁移/经验卡片持久化已交付，**分层决策闭环未接线**”，
 //!   而不是“决策腿已在线上跑”。接线属行为变更，需先定 N-4 型降级姿态并同批改台账。
+//!   **接线状态更新（R11 W3c / ADR-295 D5，2026-11-14）**：上述订正已被
+//!   `chimera-cli/src/composition.rs build()` 接线收口——decay 降级闭环默认启用
+//!   （`CHIMERA_CMT_DECAY_DISABLED=1` 退出），LSCT 两腿 `CHIMERA_CMT_LSCT=1`
+//!   显式启用（UD-4 分级：影子先行）；N-4 姿态已定（构造失败 warn 降级不阻断
+//!   启动 / 无 runtime 只构造不 spawn）；持久化显式化（`CHIMERA_CMT_DIR` 设值
+//!   ⇒ SQLite 持久，未设 ⇒ 内存态，C-63 教训：不静默写用户主目录）。
+//!   ⚠ 条目**生产者**面仍开放：当前无 crate 向 CMT 四层插入 CapabilityEntry
+//!   （LSCT 腿是 reconcile 既有条目，不自产），空层下 decay 循环为 no-op——
+//!   生产者接线（如经验回写）登记为后续工作项，属行为变更需独立裁决。
 //! - Phase 3 §8.1:金字塔存储映射(pyramid_storage,MemoryPyramidLevel→热温冷冰
 //!   + 分层采样 25/25/50/0 + INV-8 迁移单调性)
 //! - Phase 3 §8.2:经验卡片持久化(experience_card_storage,SQLite 五复合索引

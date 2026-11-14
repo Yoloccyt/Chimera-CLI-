@@ -354,6 +354,70 @@ pub fn build_with_sharding(
     let scc_ms = phase_t.elapsed().as_secs_f64() * 1000.0;
 
     let phase_t = std::time::Instant::now();
+    // R11 W3c(ADR-295 D5,UD-4 分级启用):cmt-tiering 分层决策闭环生产接线——
+    // 此前 `CmtCoordinator::new*` 生产构造点为零(lib.rs 装配态订正链明载
+    // 「分层决策闭环未接线」)。decay 降级闭环默认启用(机证充分);LSCT 自动
+    // 升降级独立开关默认关(影子先行,观察一轮后翻)。
+    //
+    // # 环境变量(对齐仓库惯例:CHIMERA_W4_DISABLED/CHIMERA_SCHED_CLAIM 同款)
+    // - `CHIMERA_CMT_DECAY_DISABLED=1` → 跳过接线(回旧行为)
+    // - `CHIMERA_CMT_LSCT=1` → 追加启用 LSCT 两腿(决策腿+执行腿,须同时装配
+    //   闭环才成立,见 lsct_policy.rs 文档)
+    // - `CHIMERA_CMT_DECAY_INTERVAL_MS` → 衰减周期(默认 60000,影子期标定旋钮)
+    // - `CHIMERA_CMT_DIR` → 持久化根目录(设值 ⇒ SQLite 持久化形态;未设 ⇒
+    //   **内存态**)。WHY 持久化显式启用:路径决策属配置面(ChimeraConfig 冻结
+    //   15 字段面不动),且 C-63 教训——默认静默落盘会让测试与生产共用目录,
+    //   把垃圾写进用户主目录。生产部署设 `CHIMERA_CMT_DIR`(如 ~/.chimera)。
+    //
+    // # N-4 降级姿态(lib.rs 订正链要求的接线前置)
+    // 构造失败仅 warn 不阻断启动;无 tokio runtime(同步测试)只构造不 spawn
+    // 循环;幂等周期腿随 runtime 生命周期(M50 差异已在 spawn_decay_cycle_loop
+    // 文档登记:衰减无状态,跳过/中断一轮无害)。
+    if std::env::var("CHIMERA_CMT_DECAY_DISABLED").is_err() {
+        let cmt_built = match std::env::var_os("CHIMERA_CMT_DIR").filter(|d| !d.is_empty()) {
+            Some(dir) => cmt_tiering::CmtCoordinator::new(
+                cmt_config_at(std::path::Path::new(&dir)),
+                bus.clone(),
+            ),
+            None => cmt_tiering::CmtCoordinator::new_in_memory(
+                cmt_tiering::CmtConfig::default(),
+                bus.clone(),
+            ),
+        };
+        match cmt_built {
+            Ok(cmt) => {
+                let cmt = std::sync::Arc::new(cmt);
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    let interval_ms = std::env::var("CHIMERA_CMT_DECAY_INTERVAL_MS")
+                        .ok()
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .filter(|v| *v > 0)
+                        .unwrap_or(60_000);
+                    // 幂等周期腿:句柄 detach(随 runtime 生命周期,见上 N-4 注)
+                    let _decay =
+                        cmt.spawn_decay_cycle_loop(std::time::Duration::from_millis(interval_ms));
+                    // LSCT 两腿默认关(UD-4):决策腿+执行腿成对装配
+                    if std::env::var("CHIMERA_CMT_LSCT").is_ok() {
+                        let _policy =
+                            cmt.spawn_lsct_policy(cmt_tiering::lsct::LsctConfig::default());
+                        let _sub = cmt.spawn_lsct_subscriber();
+                    }
+                    tracing::debug!(
+                        decay_interval_ms = interval_ms,
+                        "cmt-tiering decay 闭环已接线(ADR-295 D5)"
+                    );
+                } else {
+                    tracing::debug!("无 tokio runtime,cmt 衰减循环不启动(仅显式驱动)");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "cmt-tiering 接线失败,降级为未接线(不阻断启动)");
+            }
+        }
+    }
+    let cmt_ms = phase_t.elapsed().as_secs_f64() * 1000.0;
+
+    let phase_t = std::time::Instant::now();
     // ADR-240 W2-T1 + ADR-244 D1：装配工具运行时四环链（policy → sandbox → route → transport）。
     //
     // WHY 在组合根：沙箱层是全局安全前置，命令层装配必然漏路径。
@@ -384,6 +448,7 @@ pub fn build_with_sharding(
         gqep_ms,
         sched_ms,
         scc_ms,
+        cmt_ms,
         tool_runtime_ms,
         "composition phase timings"
     );
@@ -497,6 +562,22 @@ fn session_dir_from(override_dir: Option<std::ffi::OsString>) -> std::path::Path
     std::path::PathBuf::from(home)
         .join(".chimera")
         .join("sessions")
+}
+
+/// 纯函数：给定持久化根目录构造 CMT 配置（路径面统一到 `<root>/memory/` 下）。
+///
+/// 与 [`session_dir_from`] 同族（同 override 家族、同路径规划纪律）：三个
+/// 存储面（warm db / cold / ice）集中一处，备份/清理脚本记一套路径。
+/// 调用方 = `build()` 的 CMT 接线（`CHIMERA_CMT_DIR` 在场时）。
+#[must_use]
+fn cmt_config_at(root: &std::path::Path) -> cmt_tiering::CmtConfig {
+    let mem = root.join("memory");
+    cmt_tiering::CmtConfig {
+        warm_db_path: mem.join("cmt_warm.db"),
+        cold_dir: mem.join("cold"),
+        ice_dir: mem.join("ice"),
+        ..cmt_tiering::CmtConfig::default()
+    }
 }
 
 /// 装配协议宿主 AppServer（真实核心后端，C1）
@@ -724,6 +805,25 @@ mod tests {
 
     fn make_ctx() -> AppContext {
         build(&ChimeraConfig::default()).expect("装配应成功")
+    }
+
+    /// R11 W3c(ADR-295 D5):cmt 持久化配置路径面——三存储面统一到
+    /// `<root>/memory/` 下(与 session_dir_from 同族的路径规划纪律)
+    #[test]
+    fn cmt_config_at_routes_all_faces_under_root() {
+        let cfg = cmt_config_at(std::path::Path::new("/tmp/cmt-root"));
+        assert_eq!(
+            cfg.warm_db_path,
+            std::path::PathBuf::from("/tmp/cmt-root/memory/cmt_warm.db")
+        );
+        assert_eq!(
+            cfg.cold_dir,
+            std::path::PathBuf::from("/tmp/cmt-root/memory/cold")
+        );
+        assert_eq!(
+            cfg.ice_dir,
+            std::path::PathBuf::from("/tmp/cmt-root/memory/ice")
+        );
     }
 
     /// WI-D1 验收：默认（cross_vendor_debate off）→ cross_vendor_providers 为 None，
