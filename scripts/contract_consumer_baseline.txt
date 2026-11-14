@@ -23,7 +23,9 @@ BlockedPattern
 BlueprintSource
 BlueprintStep
 CalibrationSample
+CalibrationTier  # R9/ADR-291: L0 能力档案三档置信度——mca-gateway 探针写入侧已规划，第二消费者随 WP-B/C 接线增长
 CapabilityTokenStatus
+CertifyPayload
 CertifyPayload
 CertifyVerdict
 ClaimPayload
@@ -32,6 +34,7 @@ Compressibility
 CompressionStrategy
 ContentBlock
 ContextAssemblyContract  # R9/ADR-290: hcw-window 装配内核已消费（1 个生产消费者）；第二消费者待接线，故仍登记
+ContextCapabilityProfile  # R9/ADR-291: L0 能力档案契约（蓝图 P0 核心交付）——gateway 写/hcw 读两消费方接线中
 ContractCheckOutcome
 ContractContext
 ContractExample
@@ -77,9 +80,6 @@ ImmutableSurface
 ImportanceScore
 InvariantSpec
 InvariantViolation
-Item
-ItemId
-ItemStatus
 JudgeTier
 Lease
 MemPiAction
@@ -109,6 +109,7 @@ PlatformGroundingSpec
 PolicyFormat
 PriceVector
 PricingSpec
+PricingTier  # R9/ADR-291: 条件计费面（上下文长度门槛→倍率，GPT-6 >272K 2× 等）——先验表与探针消费面接线中
 ProceduralBlueprint
 ProjectedMatrix
 PropertyCategory
@@ -150,6 +151,7 @@ StopStrategyConfig
 TaskOrchestrationContract
 ThinkingPreference
 Thread
+ThreadSupport  # R9/ADR-291: 服务端线程支持三态（None/Beta{expiry}/Stable，蓝图 §5.5 P3 threads gating）——消费方随 P3 传输面接线增长
 ToolCallRecord
 ToolDecl
 ToolFailure
@@ -157,7 +159,6 @@ ToolInteractionContract
 ToolDispatcher  # ADR-238 D1: 装饰器链每环实现的对象安全派发 trait；生产消费者为 gqep-executor，L8+ 消费方待接线后达 2
 ToolNode
 ToolOp
-TurnId
 UsageReport
 ValidationRule
 VariantContract
