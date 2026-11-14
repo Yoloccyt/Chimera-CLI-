@@ -291,6 +291,22 @@ impl ToolExecutor for ToolRuntime {
             .map(|view| view.declared_tools())
             .unwrap_or_default()
     }
+
+    /// 批量副作用声明 —— 与能力视图同源转发（R11 W1 / ADR-295 D1）
+    ///
+    /// WHY 必须透传：`effective_side_effect` 的第三优先级查表（计划显式声明 >
+    /// `capability_of` > 本表 > 未知按写）依赖本方法。R9 引入本方法时只接到了
+    /// `McpToolExecutor`/`CompositeToolExecutor` 自身，本层漏转发 ⇒ 生产链
+    /// （PlanRunner → 装饰器 → ToolRuntime）上配置表被静默丢弃，MCP 工具恒判
+    /// 「可能写」整层串行（并行封顶 = 0，ADR-295 背景③）。
+    /// 与 `capability_of`/`declared_tools` 同读 `self.capabilities`（包装前就地
+    /// 保留的原始 delegate），不穿透 ExecPolicy 包装件——同一处可能漏，逐层零转发。
+    fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+        self.capabilities
+            .as_deref()
+            .map(|view| view.declared_side_effects())
+            .unwrap_or_default()
+    }
 }
 
 /// 未接线执行器 — 本进程尚未接入真实工具执行器时的**恒拒绝**传输环

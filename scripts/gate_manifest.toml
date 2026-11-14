@@ -1586,3 +1586,21 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "10 条夹具：正例用真实事故行（既按内联文本测，也按文件形态喂进去并断言 rc=1）；负例含加引号、块标量、行尾注释里的冒号、URL、纯 key；另有「目录缺失 ⇒ 退 2」的致盲守卫。任一断言不成立 ⇒ 退 1。"
+
+[[gate]]
+id = "G-143"
+spec_ref = "ADR-295 D1（R11 W1——ToolExecutor 声明表穿透）"
+cmd = "{python} scripts/check_executor_side_effect_forwarding.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "crates/*/src 生产码中，同时覆写 capability_of + declared_tools 的 impl ToolExecutor 块必须同时覆写 declared_side_effects——防装饰器/包装器只转发一半能力视图面（R9 后加的方法在 ToolRuntime/三装饰器/ExecPolicy/Builtin 四处静默断链，MCP 并行封顶保持 0，R11 W1 修复）。#[cfg(test)] mod 内夹具豁免；显式 SIDE_EFFECT_FORWARDING_EXEMPT: <理由> 行豁免。缺目录/0 文件退 2 致盲守卫。"
+
+[[gate]]
+id = "G-144"
+spec_ref = "G-143 配套（门自身有牙）"
+cmd = "{python} scripts/check_executor_side_effect_forwarding.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "7 夹具：全转发绿 / 漏转发红 / 显式豁免绿 / cfg(test) mod 豁免 / 仅 execute 最小实现绿 / 泛型参数红 / 限定 trait 路径红。任一断言不成立 ⇒ 退 2。"

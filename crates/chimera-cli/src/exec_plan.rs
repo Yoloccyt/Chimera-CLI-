@@ -79,6 +79,14 @@ impl ToolExecutor for BuiltinToolExecutor {
             .map(|s| (*s).to_string())
             .collect()
     }
+
+    // 批量副作用声明显式空集（R11 W1 / ADR-295 D1）：内置工具的副作用真值源
+    // 是 `capability_of`（BUILTIN_READONLY_TOOLS），批量表若再登记一份即双真值源。
+    // 显式覆写（而非走 trait 默认）是为了让 G-143 门看到「本实现知道该方法的
+    // 存在并做出选择」，防止未来有人在此 impl 上加装饰器时误以为默认实现即转发。
+    fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+        Vec::new()
+    }
 }
 
 /// `fs.read` — `{"path":"relative/file"}` → `{"content": "...", "bytes": n}`
@@ -182,6 +190,13 @@ impl ToolExecutor for RuntimeToolExecutor {
     fn declared_tools(&self) -> Vec<String> {
         ToolExecutor::declared_tools(self.inner.as_ref())
     }
+
+    // 批量副作用声明逐层转发（R11 W1 / ADR-295 D1）——与 capability_of 同纪律：
+    // PlanRunner 的 effective_side_effect 拿到的是装饰器链最外层，任何一跳省略
+    // 本方法，MCP 配置驱动的只读声明就到不了查表点（并行封顶保持 0）。
+    fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+        ToolExecutor::declared_side_effects(self.inner.as_ref())
+    }
 }
 
 /// 单操作超时执行器 — 每个工具调用独立 `tokio::time::timeout`
@@ -217,6 +232,11 @@ impl ToolExecutor for OpTimeoutExecutor {
     fn declared_tools(&self) -> Vec<String> {
         self.inner.declared_tools()
     }
+
+    // 批量副作用声明逐层转发（R11 W1 / ADR-295 D1，同 capability_of 纪律）
+    fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+        self.inner.declared_side_effects()
+    }
 }
 
 /// 失败计数装饰器 — `PlanSummary` 无逐节点状态，本层统计工具失败节点数
@@ -246,6 +266,11 @@ impl ToolExecutor for CountingExecutor {
 
     fn declared_tools(&self) -> Vec<String> {
         self.inner.declared_tools()
+    }
+
+    // 批量副作用声明逐层转发（R11 W1 / ADR-295 D1，同 capability_of 纪律）
+    fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+        self.inner.declared_side_effects()
     }
 }
 
@@ -526,6 +551,41 @@ mod tests {
             0,
             "反向对照未能重现「超时不计数」⇒ 本测试没有真正锁住顺序契约"
         );
+    }
+
+    /// R11 W1（ADR-295 D1）：CountingExecutor 的批量声明表逐层转发——
+    /// 计数层是生产计划链最外层（Counting → OpTimeout → Runtime → ToolRuntime），
+    /// 任何一层漏转发，MCP 配置驱动的只读声明就到不了 `effective_side_effect`
+    /// 查表点（并行封顶保持 0）。修复前本测试必红（trait 默认空集）。
+    #[tokio::test]
+    async fn counting_executor_forwards_declared_side_effects() {
+        struct DeclaringExecutor;
+
+        #[async_trait]
+        impl ToolExecutor for DeclaringExecutor {
+            async fn execute(&self, tool_name: &str, _args: &str) -> Result<String, String> {
+                Ok(format!("{tool_name}:done"))
+            }
+            fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+                vec![("mcp.acme.search".to_string(), SideEffectDecl::ReadOnly)]
+            }
+        }
+
+        let counting: Arc<dyn ToolExecutor> = Arc::new(CountingExecutor {
+            inner: Arc::new(OpTimeoutExecutor {
+                inner: Arc::new(DeclaringExecutor) as Arc<dyn ToolExecutor>,
+                per_op_timeout: Duration::from_secs(1),
+            }),
+            failed: Arc::new(AtomicUsize::new(0)),
+        });
+        let table = counting.declared_side_effects();
+        assert_eq!(
+            table.len(),
+            1,
+            "声明表必须穿透计数层+超时层到达最外层，实得 {table:?}"
+        );
+        assert_eq!(table[0].0, "mcp.acme.search");
+        assert_eq!(table[0].1, SideEffectDecl::ReadOnly);
     }
 
     /// 单操作超时三层收敛：CLI/配置默认 → 计划级 → 全局 gather（>0 才参与）

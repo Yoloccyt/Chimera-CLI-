@@ -308,6 +308,17 @@ jobs:
           python3 scripts/check_workflow_yaml_lexical.py --selftest
           python3 scripts/check_workflow_yaml_lexical.py
 
+      # WHY (R11 W1 / ADR-295 D1): ToolExecutor 能力视图有三个转发方法,declared_side_effects
+      # 是 R9 后加的——四处包装器(ToolRuntime/exec_plan 三装饰器/ExecPolicy)当时只转发
+      # 前两个,配置驱动的批量声明表在装饰器链被静默丢弃,MCP 并行封顶保持 0(实测 R11 前
+      # MCP 工具恒整层串行)。本门锁「覆写了 capability_of + declared_tools 的 impl 必须
+      # 同时覆写 declared_side_effects」,防止未来新增包装件再次只转发一半。先 --selftest
+      # 证明门有牙再跑真实裁决(缺目录/0 文件退 2 致盲守卫)。
+      - name: ToolExecutor side-effect forwarding guard (G-143, G-144)
+        run: |
+          python3 scripts/check_executor_side_effect_forwarding.py --selftest
+          python3 scripts/check_executor_side_effect_forwarding.py
+
       # WHY: 源文件级可达性门(ADR-213 D-18)。ADR-160 的可达性棘轮数的是 crate,而 cargo
       # 对「某个 .rs 没有任何 mod 指向它」一个警告都不给:该文件从不被解析,其 #[cfg(test)]
       # 测试永不运行,其 pub 项不在 API 里,只会随时间腐坏。2026-10-13 实测发现 9 个此类
