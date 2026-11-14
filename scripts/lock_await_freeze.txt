@@ -60,4 +60,4 @@ crates/nexus-app-server/src/sse.rs:121        # DESIGN SSE writer: single-connec
 crates/decb-governor/src/governor.rs:564      # SCANNER-DEBT `current_total` is `*total` copy; state guard already block-scoped
 crates/mcp-mesh/src/quantum/participant_client.rs:604 # SCANNER-DEBT `pooled` is a TcpStream removed from the pool; guard dies at and_then stmt end (acquisition line; await sites 615/637/646)
 crates/pvl-layer/src/producer.rs:123          # SCANNER-DEBT `strategy` is `*read()` Copy value; read guard dies at stmt end
-crates/session-store/src/writer.rs:606        # SCANNER-DEBT `has_pending` is a bool; flush deliberately runs outside the lock (acquisition line; await at 610) [re-key 576->606 2026-11-14]
+crates/session-store/src/writer.rs:638        # SCANNER-DEBT `has_pending` is a bool; flush deliberately runs outside the lock (acquisition line; await at 642) [re-key 576->638 2026-11-14, CI acquisition-line 口径]

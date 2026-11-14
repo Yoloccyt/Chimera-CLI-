@@ -55,7 +55,9 @@ crates/decb-governor/src/governor.rs:564            # SCANNER `current_total` is
 # Re-keyed 2026-11-07: c6eb9b6 (ADR-253 D1 args 透传) 在本文件上方加行,把
 crates/mcp-mesh/src/quantum/participant_client.rs:604 # SCANNER `pooled` is a TcpStream removed from the pool; guard dies at and_then stmt end (acquisition line; await sites 615/637/646)
 crates/pvl-layer/src/producer.rs:123                # SCANNER `strategy` is `*read()` Copy value; read guard dies at stmt end
-# Re-keyed 2026-11-14: R9b/R10 的 writer.rs EMA/关闭标志重构把 has_pending
-# 值提取点从 576 移到 606（同款 SCANNER 场景 B：guard 在 map 闭包内消费、
-# 语句末 drop，await 发生在锁释放后的 flush 调用）
-crates/session-store/src/writer.rs:606              # SCANNER `has_pending` is a bool; flush deliberately runs outside the lock (acquisition line; await at 610)
+# Re-keyed 2026-11-14: R9b/R10 的 writer.rs EMA/关闭标志重构移动了 has_pending
+# 值提取点（同款 SCANNER 场景 B：guard 在 map 闭包内消费、语句末 drop，await
+# 发生在锁释放后的 flush 调用）。口径注记：CI scanner 的 acquisition line 定位
+# 在 .lock() 调用行（:638），本地 windows 工作树口径曾报 :606——**以 CI 口径为准**
+# （门是 CI 硬门）；scanner 的平台依赖定位缺陷已登记治理章程待修。
+crates/session-store/src/writer.rs:638              # SCANNER `has_pending` is a bool; flush deliberately runs outside the lock (acquisition line; await at 642)
