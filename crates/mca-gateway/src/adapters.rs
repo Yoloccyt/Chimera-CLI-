@@ -564,6 +564,41 @@ impl VendorAdapter {
             return Err(AffinityError::Quota { route_key, reason });
         }
         if resp.status >= 400 {
+            // ADR-294:threads 404 安全网——服务端线程 best-effort(蓝图 §二:
+            // 空闲 5 分钟过期),`continue` 404 的官方动作=重新 create(SDK helper
+            // 自动重发全量)。本实现每轮全量重发(body.input 已含完整对话),
+            // 404 时同 body 重发一次等价于「重新 create」。单次重发防风暴;
+            // 重发仍失败 → fail-closed 归 Protocol(与既有 4xx 语义一致)。
+            // previous_response_id 增量续传(TTFT 优化)与厂商句柄映射 GATED
+            // 留灰度批(需真实公测端点)。
+            if resp.status == 404 {
+                let retry = self
+                    .transport
+                    .post_json(
+                        &route_key,
+                        &url,
+                        &headers,
+                        body,
+                        &self.breaker,
+                        &self.limiter,
+                    )
+                    .await?;
+                if retry.status < 400 {
+                    tracing::warn!(
+                        route_key = %route_key,
+                        "threads 404 安全网:服务端线程过期,重发全量 create 成功"
+                    );
+                    return Ok(retry);
+                }
+                return Err(AffinityError::Protocol {
+                    dialect: self.dialect(),
+                    reason: format!(
+                        "HTTP 404 后重发 create 仍失败: HTTP {}: {}",
+                        retry.status,
+                        excerpt(&retry.body)
+                    ),
+                });
+            }
             return Err(AffinityError::Protocol {
                 dialect: self.dialect(),
                 reason: format!("HTTP {}: {}", resp.status, excerpt(&resp.body)),
@@ -1824,6 +1859,95 @@ mod tests {
             calls.load(AtomicOrdering::SeqCst),
             2,
             "不同请求必须独立调用(不牺牲正确性)"
+        );
+    }
+
+    // ============================================================
+    // ADR-294: threads 404 安全网(同 body 重发一次=重新 create)
+    // ============================================================
+
+    /// 本地 HTTP mock:零新依赖(TcpListener),按脚本逐请求回状态码。
+    /// 返回 (端口, 请求计数句柄)。WHY 可行:check_allowlist 只校验
+    /// 「target host == spec host」,spec.base_url 指向 mock 即可
+    /// (SSRF 拒 loopback 是 mcp-mesh 注册面,非 VendorAdapter 传输面)。
+    fn spawn_status_mock(script: Vec<u16>) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("mock bind");
+        let port = listener.local_addr().expect("mock addr").port();
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls_thread = std::sync::Arc::clone(&calls);
+        let script = std::sync::Arc::new(std::sync::Mutex::new(script));
+        std::thread::spawn(move || {
+            for script_status in script.lock().expect("script lock").iter() {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    break;
+                };
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf);
+                let n = calls_thread.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                let body = if *script_status < 400 {
+                    format!(r#"{{"output":[],"id":"resp-{n}"}}"#)
+                } else {
+                    r#"{"error":"thread expired"}"#.to_string()
+                };
+                let resp = format!(
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len(),
+                    status = script_status
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (port, calls)
+    }
+
+    fn spec_on(port: u16) -> Arc<ModelAffinitySpec> {
+        let mut spec = ModelAffinitySpec::minimal(
+            ProviderId::Custom("mock".into()),
+            "mock-model",
+            ProtocolDialect::OpenAiResponses,
+        );
+        spec.endpoint.base_url = format!("http://127.0.0.1:{port}").into();
+        Arc::new(spec)
+    }
+
+    /// 404 安全网:首请求 404 → 同 body 重发一次 → mock 第二请求回 200 ⇒ 成功。
+    /// 断言 mock 恰收到 2 次请求(重发=重新 create,蓝图 §二 SDK helper 语义)。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn threads_404_retries_full_resend_once() {
+        let (port, calls) = spawn_status_mock(vec![404, 200]);
+        let adapter =
+            VendorAdapter::assemble(spec_on(port), None).expect("assemble should succeed");
+        let req = mock_request();
+        let resp = adapter.invoke(&req).await.expect("404 重发后应成功");
+        assert!(
+            !format!("{resp:?}").is_empty(),
+            "mock 200 响应应透传解码面"
+        );
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            2,
+            "恰 2 次请求:首 404 + 重发 create(ADR-294)"
+        );
+    }
+
+    /// 404 fail-closed:mock 恒 404 → 重发仍 404 → Protocol 错误(不无限重试)。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn threads_404_twice_fails_closed() {
+        let (port, calls) = spawn_status_mock(vec![404, 404]);
+        let adapter =
+            VendorAdapter::assemble(spec_on(port), None).expect("assemble should succeed");
+        let req = mock_request();
+        let err = adapter.invoke(&req).await.expect_err("双 404 必须失败");
+        assert!(
+            err.to_string().contains("404"),
+            "错误文案应保留 404 语义: {err}"
+        );
+        assert_eq!(
+            calls.load(AtomicOrdering::SeqCst),
+            2,
+            "恰 2 次请求(单次重发,不无限风暴)"
         );
     }
 }
