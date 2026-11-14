@@ -46,7 +46,7 @@ use crate::error::StoreError;
 use crate::segment::{
     list_segment_files, segment_path, SegmentFileReader, SegmentMeta, SegmentWriter,
 };
-use crate::tree::{EventRow, IndexRepairEntry, StoredEvent, TreeIndex};
+use crate::tree::{ContentProbeReport, EventRow, IndexRepairEntry, StoredEvent, TreeIndex};
 use crate::types::{Offset, SegmentId, SessionEvent, SessionId, StoreConfig};
 
 /// CBMR 微批写器 — 会话事件的攒批写入口（Clone 廉价,跨任务共享）
@@ -181,6 +181,30 @@ impl CbmrWriter {
             }
         } else {
             Vec::new()
+        };
+        // R12 W3-1(ADR-298 D4):**内容**一致性探针 —— 尾部探针只看"末尾缺口"，
+        // 其自身文档明载「中段随机缺行/索引整库丢失不在本探针判据内」。本探针比对
+        // "索引侧指纹 vs 段文件实况重算"，不一致即按权威源重建（段文件是权威源、
+        // 索引是加速面，ADR-290 D2）。
+        //
+        // 门控与尾部探针**同一开关**（`repair_index_on_open`）：关闭即一次也不跑，
+        // 保住既有"禁用 ⇒ 缺口保留、不干预"的语义；探针内部另有
+        // `CHIMERA_INDEX_PROBE=off` 的独立逃生（面向只想关它、仍要尾部自愈的场景）。
+        //
+        // 失败同样不阻断打开：索引是加速面，打开可用性优先于自愈完整性。
+        let _startup_content_probe: ContentProbeReport = if config.repair_index_on_open {
+            match tree.probe_content_consistency(&config.data_dir) {
+                Ok(report) => {
+                    log_content_probe(&report);
+                    report
+                }
+                Err(e) => {
+                    warn!(error = %e, "索引内容一致性探针失败,降级为不重建(打开不受阻)");
+                    ContentProbeReport::default()
+                }
+            }
+        } else {
+            ContentProbeReport::default()
         };
         let inner = Arc::new(CbmrInner {
             config,
@@ -686,6 +710,32 @@ impl Drop for CbmrInner {
 #[must_use]
 pub fn index_path(data_dir: &std::path::Path) -> std::path::PathBuf {
     data_dir.join("sessions.sqlite3")
+}
+
+/// 记录一次"内容一致性探针"的结果 —— 打开路径上唯一的可观测面（R12 W3-1）
+///
+/// # 为什么只记日志、不把报告存起来
+/// 本 crate 不依赖 `tracing-subscriber`（不新增 crate 的硬约束），进程内无法断言日志
+/// 内容；需要结构化结果的调用方应直接调 [`TreeIndex::probe_content_consistency`]。
+/// 打开路径只需要"该告警时告警"：
+/// - 有会话被重建 ⇒ `warn`（这是一次真实的修复动作，运维应当看得见）；
+/// - 全部健康 ⇒ `debug`（避免每次启动都刷 warn，把噪声变成习惯性忽略）。
+///
+/// # 参数
+/// - `report`:探针汇总报告（只读）
+fn log_content_probe(report: &ContentProbeReport) {
+    let rebuilt = report.rebuilt_count();
+    if rebuilt > 0 {
+        warn!(
+            sessions = report.entries.len(),
+            rebuilt, "索引内容一致性探针:已按段文件（权威源）重建不一致会话"
+        );
+    } else {
+        debug!(
+            sessions = report.entries.len(),
+            "索引内容一致性探针:未发现需重建的会话"
+        );
+    }
 }
 
 #[cfg(test)]

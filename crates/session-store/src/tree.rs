@@ -51,7 +51,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rusqlite::{params, OptionalExtension};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::error::StoreError;
 use crate::segment::{list_segment_files, segment_path, SegmentFileReader, SegmentMeta};
@@ -63,6 +63,15 @@ pub struct TreeIndex {
     conn: Arc<Mutex<rusqlite::Connection>>,
     /// SQLite 写事务次数（基准指标:单条直写 = N 次,微批 = ceil(N/64) 次）
     transaction_count: Arc<AtomicU64>,
+    /// 段文件所在数据目录（`None` = 内存库/无父目录）
+    ///
+    /// WHY 记它:内容指纹（R12 W3-1）的「段文件字节数」分量只能从段文件面取,
+    /// 而树库固定落在 `data_dir/sessions.sqlite3`（writer.rs 组合根约定）⇒
+    /// [`TreeIndex::open`] 的父目录即数据目录,写路径（`insert_flush_batch`/
+    /// `rebuild_index`）据此在**同一写事务内**补记指纹,零额外写事务。
+    data_dir: Option<PathBuf>,
+    /// 内容一致性探针触发重建的会话次数（R12 W3-1 计数面/测试断言）
+    content_probe_rebuilds: Arc<AtomicU64>,
 }
 
 /// 待写入索引的事件行（payload 由 TreeIndex 内部 rmp-serde 序列化）
@@ -201,13 +210,258 @@ pub struct IndexRepairEntry {
     pub detail: String,
 }
 
+/// `index_meta` 中内容指纹的键前缀 — 每会话一条 `content_hash:<session_id>`
+///
+/// WHY 按会话分域而不是单条全局指纹:段文件本身就是按会话分域的,一致性判定必须
+/// **逐会话**做——一条全局指纹会让「某会话段文件坏了」牵连全库重建,噪音与代价
+/// 同时放大;逐会话还能让报告指出到底哪个会话需要重建。
+const META_KEY_CONTENT_HASH_PREFIX: &str = "content_hash:";
+
+/// 关闭启动期内容一致性探针的环境变量名（R12 W3-1 逃生开关）
+///
+/// 取值口径见 [`content_probe_enabled`]:`off` / `0` / `false` / `no`（大小写
+/// 不敏感）关闭;未设置或其它值 ⇒ 默认开启。
+pub const INDEX_PROBE_ENV: &str = "CHIMERA_INDEX_PROBE";
+
+/// FNV-1a 64 位初始值（公开常量便于测试独立复算,不引新依赖）
+const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// FNV-1a 64 位质数
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+/// 索引内容指纹（R12 W3-1）— 「段文件（权威源）与索引（加速面）是否同步」的判据
+///
+/// # 口径（三个分量,两侧可各自独立算出）
+/// - `bytes`:该会话**全部段文件的字节数之和**（`fs::metadata().len()`,含尾部半条）
+/// - `rows`:完整记录数（实况侧 = `SegmentFileReader` 读出的完整记录数;索引侧 =
+///   `events` 表该会话行数）
+/// - `hash`:稳定 64 位摘要（FNV-1a over 会话 id + 逐段 `(段索引, 字节数)` + 行数
+///   + 最大 offset）——把三个分量绑成一个不可分离的字,避免「单看行数相等就放行」
+///
+/// # WHY 不做「文件内容全量哈希」
+/// 指纹必须在**写路径的同一个 SQLite 写事务内**补记（否则每次 flush 都要多一次
+/// 写事务,CBMR 微批写的写放大收益被吃掉）。全量内容哈希需要在写路径重读全库字节
+/// （O(全库)）;而上面三个分量能用「文件元数据 + 索引聚合」O(段数) 算出,
+/// 且已覆盖登记失败模式（尾部半条/截断/整段消失/索引中段缺行/索引整会话缺行——
+/// 见 [`TreeIndex::probe_content_consistency`] 的覆盖声明）。**未覆盖**「等长原地
+/// 改字节」（bit rot / 手工等长改写）,登记为已知缺口。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct IndexContentFingerprint {
+    /// 段文件字节数之和（含未确认的尾部半条——正是它让「写入中断」可判）
+    pub bytes: u64,
+    /// 完整记录数
+    pub rows: u64,
+    /// 稳定 64 位摘要（FNV-1a;无随机种子,跨进程可复现）
+    pub hash: u64,
+}
+
+impl IndexContentFingerprint {
+    /// 编码为 `index_meta.value` 的稳定文本形态 `v1:<bytes>:<rows>:<hash:016x>`
+    #[must_use]
+    pub fn encode(&self) -> String {
+        format!("v1:{}:{}:{:016x}", self.bytes, self.rows, self.hash)
+    }
+
+    /// 解析文本形态;`None` = 不可解析/版本未知 ⇒ 调用方按「字段缺失」处理
+    ///
+    /// WHY 解析失败也走「缺失」通道（而不是报错）:老库、手工改过的库、未来
+    /// 版本写下的新形态都属于「我不知道它说什么」,未知的自愈路径是重建一次索引,
+    /// 报错只会把可自愈的问题升级成打不开。
+    #[must_use]
+    pub fn parse(raw: &str) -> Option<Self> {
+        let mut parts = raw.split(':');
+        if parts.next()? != "v1" {
+            return None;
+        }
+        let bytes = parts.next()?.parse::<u64>().ok()?;
+        let rows = parts.next()?.parse::<u64>().ok()?;
+        let hash = u64::from_str_radix(parts.next()?, 16).ok()?;
+        if parts.next().is_some() {
+            return None;
+        }
+        Some(Self { bytes, rows, hash })
+    }
+}
+
+/// 探针判定（纯函数产物）— 三个指纹的相互关系
+///
+/// WHY 三向而不是两向:内容指纹必须能同时发现「段文件侧变化」与「索引侧变化」。
+/// 只比「meta 里记的 vs 从段文件重算的」时,删掉索引中段某行既不改字节数也不改
+/// 段文件记录数 ⇒ 两侧仍然相等 ⇒ 漏判。所以探针另外从**索引面**按同一合成函数
+/// 重算一次;三向一致才算健康（详见 [`content_probe_verdict`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentProbeVerdict {
+    /// 三向一致 ⇒ 索引与权威源同步,不干预
+    Healthy,
+    /// meta 无该字段/不可解析（老库）⇒ 视为未知,按不一致处理
+    MissingField,
+    /// 指纹不符（段文件侧变化,或索引缺行/偏移）⇒ 重建
+    Mismatch,
+    /// 索引越前（索引行数多于段文件完整记录数 = 孤儿行）⇒ **只报告不重建**
+    ///
+    /// WHY 不重建:`rebuild_index` 是补入式（`INSERT OR IGNORE`）,删不掉孤儿行;
+    /// 重建既不会修好它,又会让每次启动都白扫一遍段文件。孤儿行的处置归
+    /// ADR-290 D5 审计器（与 `verify_and_repair_tails` 的「索引越前只报告」同口径）。
+    IndexAhead,
+    /// 无法判定（实况不可读/该会话无段文件）⇒ 不干预;仅 IO 包装会产生
+    Undecidable,
+}
+
+/// 单会话探针处置结果（报告/测试断言用）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContentProbeOutcome {
+    /// 指纹一致,未干预
+    Healthy,
+    /// 判不一致 ⇒ 已重建索引并按实况刷新指纹
+    Rebuilt,
+    /// 索引越前（孤儿行）⇒ 只报告不重建,处置归 ADR-290 D5 审计器
+    ReportedOnly,
+    /// 判不一致但重建/读实况失败 ⇒ fail-open（保留现有索引继续服务）
+    FailedOpen,
+    /// 无可比实况（该会话无段文件:fork 未追加 / 段已清理）⇒ 跳过
+    Skipped,
+}
+
+/// 单会话内容探针记录 — 与同文本的 `tracing::warn!` 一一对应
+#[derive(Debug, Clone)]
+pub struct ContentProbeEntry {
+    /// 会话 id
+    pub session_id: String,
+    /// 判定(Healthy/MissingField/Mismatch/Undecidable)
+    pub verdict: ContentProbeVerdict,
+    /// 实况重算的指纹（`Undecidable` 时为空）
+    pub live: Option<IndexContentFingerprint>,
+    /// 处置结果
+    pub outcome: ContentProbeOutcome,
+    /// 人类可读判定说明（诊断面）
+    pub detail: String,
+}
+
+/// 启动期内容一致性探针的汇总报告（R12 W3-1）
+#[derive(Debug, Clone, Default)]
+pub struct ContentProbeReport {
+    /// 环境开关是否关闭了探针（true ⇒ 一条检查也没做）
+    pub disabled: bool,
+    /// 逐会话记录（`disabled` 时为空）
+    pub entries: Vec<ContentProbeEntry>,
+}
+
+impl ContentProbeReport {
+    /// 已重建的会话数
+    #[must_use]
+    pub fn rebuilt_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| e.outcome == ContentProbeOutcome::Rebuilt)
+            .count()
+    }
+
+    /// fail-open 的会话数（重建失败/实况不可读,索引保持原状）
+    #[must_use]
+    pub fn failed_open_count(&self) -> usize {
+        self.entries
+            .iter()
+            .filter(|e| e.outcome == ContentProbeOutcome::FailedOpen)
+            .count()
+    }
+}
+
+/// FNV-1a 64 位累积（纯函数:稳定、无 std 哈希随机种子、无分配）
+fn fnv1a_update(mut state: u64, bytes: &[u8]) -> u64 {
+    for b in bytes {
+        state ^= u64::from(*b);
+        state = state.wrapping_mul(FNV_PRIME);
+    }
+    state
+}
+
+/// 纯函数:由「逐段 (段索引, 字节数) + 行数 + 最大 offset」合成内容指纹
+///
+/// 输入相同 ⇒ 结果恒相同（无时间戳、无 HashMap 迭代序、无随机种子）,因此同一段
+/// 集合重复计算结果相等（`hash_roundtrip_stable` 锁的不变量）。实况侧与索引侧
+/// **必须调同一个函数**,否则两侧口径漂移会让探针误判。
+#[must_use]
+pub fn compose_content_fingerprint(
+    session_id: &str,
+    segments: &[(u32, u64)],
+    rows: u64,
+    max_offset: Option<u64>,
+) -> IndexContentFingerprint {
+    let mut h = fnv1a_update(FNV_OFFSET_BASIS, session_id.as_bytes());
+    h = fnv1a_update(h, &(segments.len() as u64).to_le_bytes());
+    for (idx, len) in segments {
+        h = fnv1a_update(h, &idx.to_le_bytes());
+        h = fnv1a_update(h, &len.to_le_bytes());
+    }
+    h = fnv1a_update(h, &rows.to_le_bytes());
+    h = fnv1a_update(h, &max_offset.map_or(u64::MAX, |v| v).to_le_bytes());
+    IndexContentFingerprint {
+        bytes: segments.iter().map(|(_, len)| *len).sum(),
+        rows,
+        hash: h,
+    }
+}
+
+/// 纯函数:`stored`（meta 里记的）vs `live`（段文件实况）vs `index_side`（索引面
+/// 按同一合成函数重算）⇒ 判定
+///
+/// # 三向比较为什么缺一不可
+/// - `stored ≠ live`:段文件侧的字节数/行数/最大 seq 自上次记录以来变了
+///   ——尾部半条、截断、整段文件被删/增都落在这里;
+/// - `index_side ≠ live`:索引侧的行数/最大 offset 与段文件不符 ——
+///   **索引中段随机缺行**落在这里（字节数分量两侧都取自段文件,故它只能靠行数/
+///   最大 offset 的差异暴露）;
+/// - `stored` 缺失:老库从没记过 ⇒ 未知 ⇒ 与「不一致」同通道（幂等重建 + 补记）。
+///
+/// `index_side` 行数**多于** `live` 时是孤儿行（索引越前）:补入式重建修不掉,
+/// 按 [`ContentProbeVerdict::IndexAhead`] 只报告,避免每次启动都白重建一次。
+///
+/// WHY 缺字段算不一致:缺字段的唯一含义是「从未记录过」（老库/首写前崩溃）,而
+/// 探针的处置恰好是幂等重建 + 补记指纹 ⇒ 把「未知」并入「不一致」通道,老库第一次
+/// 打开就自动完成迁移,不需要迁移脚本、不需要读侧分支。
+#[must_use]
+pub fn content_probe_verdict(
+    stored: Option<&IndexContentFingerprint>,
+    live: &IndexContentFingerprint,
+    index_side: &IndexContentFingerprint,
+) -> ContentProbeVerdict {
+    if stored.is_none() {
+        return ContentProbeVerdict::MissingField;
+    }
+    if index_side != live {
+        // 索引行数多于段文件完整记录数 ⇒ 孤儿行(只报告);否则是索引缺行/偏移
+        return if index_side.rows > live.rows {
+            ContentProbeVerdict::IndexAhead
+        } else {
+            ContentProbeVerdict::Mismatch
+        };
+    }
+    match stored {
+        Some(s) if s == live => ContentProbeVerdict::Healthy,
+        _ => ContentProbeVerdict::Mismatch,
+    }
+}
+
+/// 纯函数:环境变量取值 ⇒ 内容探针是否启用（默认启用）
+#[must_use]
+pub fn content_probe_enabled(raw: Option<&str>) -> bool {
+    let normalized = raw.map(str::trim).map(str::to_ascii_lowercase);
+    !matches!(normalized.as_deref(), Some("off" | "0" | "false" | "no"))
+}
+
 impl TreeIndex {
     /// 打开或创建 SQLite 树索引（WAL 模式 + 建表 + 建索引）
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         let conn = rusqlite::Connection::open(path).map_err(|e| StoreError::Sqlite {
             reason: format!("打开树索引数据库 {} 失败: {e}", path.display()),
         })?;
-        Self::init(conn)
+        // 数据目录 = 树库父目录（组合根约定 `data_dir/sessions.sqlite3`）;
+        // 无父目录（裸文件名）时不猜,置 None ⇒ 写路径不补记内容指纹。
+        let data_dir = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(Path::to_path_buf);
+        Self::init(conn, data_dir)
     }
 
     /// 打开内存树索引（测试 / 基准用,不落盘）
@@ -215,11 +469,12 @@ impl TreeIndex {
         let conn = rusqlite::Connection::open_in_memory().map_err(|e| StoreError::Sqlite {
             reason: format!("打开内存树索引失败: {e}"),
         })?;
-        Self::init(conn)
+        // 内存库无数据目录 ⇒ 内容指纹写入路径全程 no-op（行为与 R11 完全一致）
+        Self::init(conn, None)
     }
 
     /// 公共初始化:WAL pragma（红线）+ 性能 pragma + 建表 + 建索引
-    fn init(conn: rusqlite::Connection) -> Result<Self, StoreError> {
+    fn init(conn: rusqlite::Connection, data_dir: Option<PathBuf>) -> Result<Self, StoreError> {
         // 红线:journal_mode=WAL 必须 pragma_update(而非 execute 拼 SQL)
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(|e| StoreError::Sqlite {
@@ -278,9 +533,16 @@ impl TreeIndex {
         .map_err(|e| StoreError::Sqlite {
             reason: format!("登记 schema 版本失败: {e}"),
         })?;
+        // 内容指纹（R12 W3-1）不建表、不加列:`index_meta` 已是 key/value 面,
+        // 每会话一条 `content_hash:<session_id>`。WHY 不改 schema:R11 W3b 的
+        // `schema_version` 是迁移分支判据,新增一张表/一列会把老库推进"需要迁移"
+        // 分支;而 key/value 面天然支持**字段可缺省**——老库没有这些 key ⇒
+        // 读回 None ⇒ 探针按未知处理（见 `content_fingerprint` 文档）。
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
             transaction_count: Arc::new(AtomicU64::new(0)),
+            data_dir,
+            content_probe_rebuilds: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -340,6 +602,15 @@ impl TreeIndex {
     ///
     /// # 计数语义(bench 门禁)
     /// 与 insert_events 同口径:每次调用 = 一次 SQLite 写事务,transaction_count +1。
+    ///
+    /// # 内容指纹（R12 W3-1）
+    /// 同一事务内为**本批涉及的会话**补记 `index_meta` 内容指纹（见
+    /// [`IndexContentFingerprint`]）。WHY 放进同一事务而不是提交后另起一次写:
+    /// 另起一次就是每次 flush 多一次 SQLite 写事务,CBMR 微批写的「一次 flush 一次
+    /// 写事务」口径（bench 门禁）会被直接破掉。段文件字节数在事务**外**采集
+    /// （调用方已 append+fsync,长度已定;避免持写锁做文件 IO）,事务内只做 SQL
+    /// 聚合 + meta upsert。指纹写入失败**不回滚 flush**（簿记面不该弄丢已确认
+    /// 事件）:只 warn,下次启动探针会重算并补记 ⇒ fail-open。
     pub fn insert_flush_batch(
         &self,
         segments: &[SegmentMeta],
@@ -348,6 +619,11 @@ impl TreeIndex {
         if segments.is_empty() && rows.is_empty() {
             return Ok(());
         }
+        // 指纹输入（无锁 IO;内存库/无数据目录 ⇒ 空 ⇒ 全程 no-op,旧行为不变）
+        let fingerprint_inputs = match self.data_dir.as_deref() {
+            Some(dir) => Self::collect_segment_file_lens(dir, segments, rows),
+            None => Vec::new(),
+        };
         let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
             reason: format!("flush 批量写表锁中毒: {p}"),
         })?;
@@ -359,7 +635,12 @@ impl TreeIndex {
             for meta in segments {
                 Self::upsert_segment_row(&conn, meta)?;
             }
-            Self::insert_events_rows(&conn, rows)
+            Self::insert_events_rows(&conn, rows)?;
+            // 指纹是索引面的簿记:失败只 warn,绝不让它回滚已写入的事件行
+            if let Err(e) = Self::upsert_content_fingerprints(&conn, &fingerprint_inputs) {
+                warn!(error = %e, "flush 后补记内容指纹失败(fail-open;下次启动探针会重建并补记)");
+            }
+            Ok(())
         })();
         // 无论成败都提交/回滚,释放事务(不回滚会滞留写锁)
         match result {
@@ -437,6 +718,131 @@ impl TreeIndex {
             })?;
         }
         Ok(())
+    }
+
+    /// 采集「会话 → 逐段 (段索引, 文件字节数)」（无锁 IO,失败降级跳过该会话）
+    ///
+    /// WHY 只在有数据目录时才做:内存索引库没有段文件面,内容指纹无从谈起——
+    /// 这条路径必须保持与 R11 行为**逐字节一致**（内存库测试/基准不受影响）。
+    fn collect_segment_file_lens(
+        data_dir: &Path,
+        segments: &[SegmentMeta],
+        rows: &[EventRow],
+    ) -> Vec<(SessionId, Vec<(u32, u64)>)> {
+        let mut ids: Vec<SessionId> = Vec::new();
+        for meta in segments {
+            if !ids.contains(&meta.session_id) {
+                ids.push(meta.session_id.clone());
+            }
+        }
+        for row in rows {
+            if !ids.contains(&row.session_id) {
+                ids.push(row.session_id.clone());
+            }
+        }
+        let mut out = Vec::with_capacity(ids.len());
+        for sid in ids {
+            let files = match Self::segment_files(data_dir, &sid) {
+                Ok(files) => files,
+                Err(e) => {
+                    // 目录不可读:跳过该会话的指纹(下次启动探针会重算)
+                    warn!(session = %sid, error = %e, "枚举段文件失败,跳过内容指纹补记");
+                    continue;
+                }
+            };
+            let mut lens: Vec<(u32, u64)> = Vec::with_capacity(files.len());
+            let mut ok = true;
+            for (idx, path) in files {
+                match std::fs::metadata(&path) {
+                    Ok(m) => lens.push((idx, m.len())),
+                    Err(e) => {
+                        warn!(session = %sid, path = %path.display(), error = %e, "stat 段文件失败,跳过内容指纹补记");
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            // 无段文件的会话不写指纹:否则会写下一个「bytes=0」的假指纹,让探针
+            // 每次启动都判不一致(fork 未追加/段已清理的会话即此形态)。
+            if ok && !lens.is_empty() {
+                out.push((sid, lens));
+            }
+        }
+        out
+    }
+
+    /// 事务内按「索引聚合 + 预采集的段字节数」补写内容指纹（无额外写事务）
+    fn upsert_content_fingerprints(
+        conn: &rusqlite::Connection,
+        inputs: &[(SessionId, Vec<(u32, u64)>)],
+    ) -> Result<(), StoreError> {
+        for (sid, lens) in inputs {
+            let (rows, max_offset) = Self::index_row_stats(conn, sid)?;
+            let fingerprint = compose_content_fingerprint(sid.as_str(), lens, rows, max_offset);
+            Self::upsert_fingerprint_row(conn, sid, &fingerprint)?;
+        }
+        Ok(())
+    }
+
+    /// 索引面聚合:该会话 `events` 行数 + 最大 offset（走 `(session_id, offset)` 索引）
+    ///
+    /// WHY 用 COUNT 而不是「上次行数 + 本批行数」的增量算术:增量算术会与
+    /// `rebuild_index`（按段文件实况补入）以及外部审计删行互相漂移,漂移后探针
+    /// 会把健康库判成不一致;COUNT 每次都是精确值,代价是每次 flush 一次索引区间
+    /// 扫描（登记为已知成本,见报告「可疑点」）。
+    fn index_row_stats(
+        conn: &rusqlite::Connection,
+        session_id: &SessionId,
+    ) -> Result<(u64, Option<u64>), StoreError> {
+        let (count, max): (i64, Option<i64>) = conn
+            .query_row(
+                "SELECT COUNT(*), MAX(offset) FROM events WHERE session_id = ?1",
+                params![session_id.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| StoreError::Sqlite {
+                reason: format!("统计会话 {} 行数/最大 offset 失败: {e}", session_id),
+            })?;
+        Ok((count as u64, max.map(|v| v.max(0) as u64)))
+    }
+
+    /// upsert 内容指纹行（幂等;`store_content_fingerprint` 与写路径共用）
+    fn upsert_fingerprint_row(
+        conn: &rusqlite::Connection,
+        session_id: &SessionId,
+        fingerprint: &IndexContentFingerprint,
+    ) -> Result<(), StoreError> {
+        let key = format!("{META_KEY_CONTENT_HASH_PREFIX}{}", session_id.as_str());
+        conn.execute(
+            "INSERT INTO index_meta (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, fingerprint.encode()],
+        )
+        .map_err(|e| StoreError::Sqlite {
+            reason: format!("写入会话 {} 内容指纹失败: {e}", session_id),
+        })?;
+        Ok(())
+    }
+
+    /// 在册会话 id 去重枚举（尾部探针与内容探针共用同一条取数口径）
+    fn registered_sessions(&self) -> Result<Vec<String>, StoreError> {
+        let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
+            reason: format!("segments 表锁中毒: {p}"),
+        })?;
+        let mut stmt = conn
+            .prepare("SELECT DISTINCT session_id FROM segments")
+            .map_err(|e| StoreError::Sqlite {
+                reason: format!("枚举在册会话失败: {e}"),
+            })?;
+        let rows =
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .map_err(|e| StoreError::Sqlite {
+                    reason: format!("读取在册会话失败: {e}"),
+                })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| StoreError::Sqlite {
+                reason: format!("遍历在册会话失败: {e}"),
+            })
     }
 
     /// fork 会话 — 复制前缀段元数据到新会话（零事件数据拷贝）
@@ -817,6 +1223,12 @@ impl TreeIndex {
     /// # 范围
     /// 只重建该会话**物理拥有**的段文件（`<stem>.<idx>.jsonl`）;fork 复制行
     /// 不重建（其 events 行本来就零拷贝,事件经父段引用可见）。
+    ///
+    /// # 内容指纹（R12 W3-1）
+    /// 重建是「索引与权威源重新对齐」的时刻,顺带在**同一事务内**把内容指纹刷成
+    /// 段文件实况（`bytes/rows/max_offset` 全部来自本次扫描,零额外 IO）。
+    /// 口径要点:补入式重建不删孤儿行（索引越前方向）⇒ 指纹按**段文件实况**记,
+    /// 而不是按索引行数记——否则孤儿行会让每次启动都判不一致,陷入重建循环。
     pub fn rebuild_index(
         &self,
         data_dir: &Path,
@@ -826,11 +1238,24 @@ impl TreeIndex {
         let files = Self::segment_files(data_dir, session_id)?;
 
         // 2. 读全部段文件记录（无锁 IO;半条停止——已确认记录才重建）
+        //    同时采集逐段字节数（内容指纹的 bytes 分量;含尾部半条,与实况侧同源）
         let mut scanned: Vec<(u32, Vec<crate::segment::SegmentRecord>)> = Vec::new();
+        let mut lens: Vec<(u32, u64)> = Vec::with_capacity(files.len());
+        let mut live_rows: u64 = 0;
+        let mut live_max: Option<u64> = None;
         for (idx, path) in &files {
+            let len = std::fs::metadata(path)
+                .map_err(|e| StoreError::Io {
+                    context: format!("stat 段文件 {} 失败(重建指纹)", path.display()),
+                    source: e,
+                })?
+                .len();
+            lens.push((*idx, len));
             let mut reader = SegmentFileReader::open(path)?;
             let mut records = Vec::new();
             while let Some(rec) = reader.next_record()? {
+                live_rows += 1;
+                live_max = Some(live_max.map_or(rec.seq, |m: u64| m.max(rec.seq)));
                 records.push(rec);
             }
             // 空段文件跳过:无记录无法推断 start_seq,后续 writer flush 会补齐
@@ -838,6 +1263,8 @@ impl TreeIndex {
                 scanned.push((*idx, records));
             }
         }
+        let live_fingerprint =
+            compose_content_fingerprint(session_id.as_str(), &lens, live_rows, live_max);
 
         // 3. 锁内批量写库（单事务;upsert segments + INSERT OR IGNORE events）
         let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
@@ -922,6 +1349,8 @@ impl TreeIndex {
                     }
                 }
             }
+            // 指纹随重建一并落库(同事务):下次启动探针读到的就是「已对齐」态
+            Self::upsert_fingerprint_row(&conn, session_id, &live_fingerprint)?;
             Ok(stats)
         })();
         match result {
@@ -1008,30 +1437,16 @@ impl TreeIndex {
     /// `scripts/audit_memory_consistency.py` 诊断面;后者 session_id 无法从
     /// 段记录反查——SessionEvent 不携带 session_id,恢复走运维面)。
     /// fork 会话只有段元数据行、无段文件时跳过(无尾部可比)。
+    ///
+    /// > R12 W3-1 补充:`中段随机缺行` 这一条现已由**内容指纹探针**
+    /// > [`TreeIndex::probe_content_consistency`] 覆盖(比对 meta 指纹与段文件
+    /// > 实况,不一致即重建);本方法仍只管尾部缺口,两者判据不重叠、可独立开关。
     pub fn verify_and_repair_tails(
         &self,
         data_dir: &Path,
     ) -> Result<Vec<IndexRepairEntry>, StoreError> {
         let mut report = Vec::new();
-        let sessions: Vec<String> = {
-            let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
-                reason: format!("segments 表锁中毒: {p}"),
-            })?;
-            let mut stmt = conn
-                .prepare("SELECT DISTINCT session_id FROM segments")
-                .map_err(|e| StoreError::Sqlite {
-                    reason: format!("枚举在册会话失败: {e}"),
-                })?;
-            let rows =
-                stmt.query_map([], |r| r.get::<_, String>(0))
-                    .map_err(|e| StoreError::Sqlite {
-                        reason: format!("读取在册会话失败: {e}"),
-                    })?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(|e| StoreError::Sqlite {
-                    reason: format!("遍历在册会话失败: {e}"),
-                })?
-        };
+        let sessions = self.registered_sessions()?;
         for sid_str in sessions {
             let session_id = SessionId::new(sid_str.as_str());
             let files = Self::segment_files(data_dir, &session_id)?;
@@ -1095,6 +1510,358 @@ impl TreeIndex {
                     });
                 }
             }
+        }
+        Ok(report)
+    }
+
+    /// 读 `index_meta` 里的内容指纹（每会话一条;`None` = 无该字段/不可解析）
+    ///
+    /// # WHY 缺字段是 `None` 而不是错误（字段可缺省的根据）
+    /// 内容指纹是 R12 新增的**纯记账面**,老库（R11 及更早）里根本不存在这些 key,
+    /// 手工删过 `index_meta` 行的库也没有。缺字段的语义只有「从未记录过」= 未知,
+    /// 不构成「库坏了」的证据;读侧把它当 `None` 返回,写路径与探针各自决定处置
+    /// （探针:按不一致通道走一次幂等重建并补记,见
+    /// [`TreeIndex::probe_content_consistency`]）。因此老库不需要迁移脚本、
+    /// 不需要 schema 版本跳变,也不需要任何读路径分支——这正是把指纹放进
+    /// key/value 的 `index_meta` 而不是新列/新表的原因。
+    pub fn content_fingerprint(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<Option<IndexContentFingerprint>, StoreError> {
+        let key = format!("{META_KEY_CONTENT_HASH_PREFIX}{}", session_id.as_str());
+        let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
+            reason: format!("index_meta 表锁中毒: {p}"),
+        })?;
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT value FROM index_meta WHERE key = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| StoreError::Sqlite {
+                reason: format!("读取会话 {} 内容指纹失败: {e}", session_id),
+            })?;
+        Ok(raw.as_deref().and_then(IndexContentFingerprint::parse))
+    }
+
+    /// 写（覆盖）`index_meta` 里的内容指纹 — upsert,幂等
+    pub fn store_content_fingerprint(
+        &self,
+        session_id: &SessionId,
+        fingerprint: &IndexContentFingerprint,
+    ) -> Result<(), StoreError> {
+        let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
+            reason: format!("index_meta 表锁中毒: {p}"),
+        })?;
+        Self::upsert_fingerprint_row(&conn, session_id, fingerprint)
+    }
+
+    /// 实况指纹（薄 IO 包装）— 扫该会话全部段文件,取字节数 + 完整记录数 + 最大 seq
+    ///
+    /// 读侧规则与 `rebuild_index`/`verify_and_repair_tails` 同源
+    /// （`SegmentFileReader`,尾部半条自然丢弃）:半条**不计行**,但**计字节**
+    /// ——「写入中断残留半条」正是靠字节数分量被判出来的。
+    pub fn live_content_fingerprint(
+        &self,
+        data_dir: &Path,
+        session_id: &SessionId,
+    ) -> Result<IndexContentFingerprint, StoreError> {
+        let files = Self::segment_files(data_dir, session_id)?;
+        Ok(Self::live_content_fingerprint_from_files(session_id, &files)?.0)
+    }
+
+    /// 由已枚举的段文件列表算实况指纹 + 逐段 (段索引, 字节数)（探针复用,免重复 readdir）
+    fn live_content_fingerprint_from_files(
+        session_id: &SessionId,
+        files: &[(u32, PathBuf)],
+    ) -> Result<(IndexContentFingerprint, Vec<(u32, u64)>), StoreError> {
+        let mut lens: Vec<(u32, u64)> = Vec::with_capacity(files.len());
+        let mut rows: u64 = 0;
+        let mut max_offset: Option<u64> = None;
+        for (idx, path) in files {
+            let len = std::fs::metadata(path)
+                .map_err(|e| StoreError::Io {
+                    context: format!("stat 段文件 {} 失败(实况指纹)", path.display()),
+                    source: e,
+                })?
+                .len();
+            lens.push((*idx, len));
+            let mut reader = SegmentFileReader::open(path)?;
+            while let Some(rec) = reader.next_record()? {
+                rows += 1;
+                max_offset = Some(max_offset.map_or(rec.seq, |m: u64| m.max(rec.seq)));
+            }
+        }
+        Ok((
+            compose_content_fingerprint(session_id.as_str(), &lens, rows, max_offset),
+            lens,
+        ))
+    }
+
+    /// 索引面指纹 — 与实况侧**同一合成函数**,只是把 `rows`/`max_offset` 换成
+    /// 索引里的聚合值（字节数分量仍取段文件:索引不存段文件长度）
+    ///
+    /// WHY 需要它:索引中段缺行不会改变段文件任何分量,只有把索引自身的聚合值
+    /// 代进同一个函数才暴露得出来（见 [`content_probe_verdict`] 的三向说明）。
+    fn index_side_fingerprint(
+        &self,
+        session_id: &SessionId,
+        lens: &[(u32, u64)],
+    ) -> Result<IndexContentFingerprint, StoreError> {
+        let (rows, max_offset) = {
+            let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
+                reason: format!("events 表锁中毒: {p}"),
+            })?;
+            Self::index_row_stats(&conn, session_id)?
+        };
+        Ok(compose_content_fingerprint(
+            session_id.as_str(),
+            lens,
+            rows,
+            max_offset,
+        ))
+    }
+
+    /// 立即按段文件实况重算并写入内容指纹（运维/测试/自愈入口,幂等）
+    pub fn refresh_content_fingerprint(
+        &self,
+        data_dir: &Path,
+        session_id: &SessionId,
+    ) -> Result<IndexContentFingerprint, StoreError> {
+        let live = self.live_content_fingerprint(data_dir, session_id)?;
+        self.store_content_fingerprint(session_id, &live)?;
+        Ok(live)
+    }
+
+    /// 内容一致性探针已触发重建的会话次数（R12 W3-1 计数面）
+    #[must_use]
+    pub fn content_probe_rebuild_count(&self) -> u64 {
+        self.content_probe_rebuilds.load(Ordering::Relaxed)
+    }
+
+    /// 启动期内容一致性探针（R12 W3-1）— 纯判定 + 薄 IO 的启动自检/自愈
+    ///
+    /// # 判据（三向比较,详见 [`content_probe_verdict`]）
+    /// 对 `segments` 表在册的每个**有段文件**的会话:
+    /// 1. 从段文件（权威源）重算实况指纹 `live`;
+    /// 2. 从**索引面**按同一合成函数重算 `index_side`（行数/最大 offset 取索引）;
+    /// 3. 读 `index_meta` 里上次写入的 `stored`（缺字段 ⇒ `None`）;
+    /// - 三者一致 ⇒ 健康;
+    /// - `index_side` 行数**多于** `live` ⇒ 孤儿行（索引越前）⇒ 只报告不重建;
+    /// - 其余不一致（含 `stored` 缺失）⇒ 调 [`TreeIndex::rebuild_index`] 重建、
+    ///   按实况刷新指纹、计数 +1、`warn!` 记一条（本 crate 不持事件总线,且仓内
+    ///   **不存在** `IndexDegraded` 事件变体 ⇒ 按既有约定用 warn 日志 + 返回报告
+    ///   作可观测面,**不新增事件类型**）。
+    ///
+    /// # WHY 不一致就重建,而不是报错退出（权威源语义,ADR-290 D2）
+    /// 段文件是权威源、树索引只是加速面。索引不一致的正确处置是「照权威源补齐
+    /// 加速面」——数据本身一条没丢,报错只会把「可自愈的索引脏读」升级成
+    /// 「进程起不来」,把可用性事故凭空造出来。`rebuild_index` 是
+    /// `INSERT OR IGNORE` 的幂等补齐（重复调用 rows_inserted=0）,所以「多重建一次」
+    /// 的代价只是 O(段文件字节) 的扫描,而「误报错退出」的代价是整机不可用。
+    ///
+    /// # WHY fail-open（重建/读实况失败不向上抛、不 panic）
+    /// 探针属于自愈优化面,不能成为打开路径的单点失败（与 N-4 降级姿态、
+    /// `verify_and_repair_tails` 的降级口径一致）:单会话失败 ⇒ 记 `FailedOpen` +
+    /// warn,继续用**现有索引**服务（它至多是陈旧,不是不可用）,下次启动再试。
+    /// 只有「枚举在册会话」这一步（= 整个 SQLite 不可用）才返回 `Err`,由调用方
+    /// 决定是否降级——本函数自身不 panic、不做 IO 重试。
+    ///
+    /// # 覆盖范围（诚实声明）
+    /// - 覆盖:尾部半条/截断、整段文件消失、索引中段随机缺行、老库缺指纹字段、
+    ///   flush 崩溃窗口（段已落盘、索引缺行）;
+    /// - **不覆盖**:索引整库丢失（`session_id` 无法从段记录反查——与尾部探针同一
+    ///   限制）、等长原地改字节（bit rot;指纹只有字节数/行数/摘要,无全量内容哈希）;
+    /// - 索引越前的孤儿行:判 `IndexAhead` 只报告不重建（补入式重建删不掉,
+    ///   处置归 ADR-290 D5 审计器）,因此不会陷入「每次启动都重建」;
+    /// - fork 复制行无物理文件 ⇒ `Skipped`（无实况可比）,与尾部探针同口径。
+    ///
+    /// # 开关
+    /// 环境变量 [`INDEX_PROBE_ENV`] = `off`/`0`/`false`/`no` ⇒ 整体跳过
+    /// （`disabled = true`,零重建、零告警）。默认开启。
+    pub fn probe_content_consistency(
+        &self,
+        data_dir: &Path,
+    ) -> Result<ContentProbeReport, StoreError> {
+        self.probe_content_consistency_with(data_dir, |_| {})
+    }
+
+    /// 同 [`TreeIndex::probe_content_consistency`],但把每条记录交给观察者
+    ///
+    /// WHY 观察者而不是全局日志断言:本 crate 无 `tracing-subscriber` 依赖
+    /// （不新增 crate 的硬约束）,进程内捕获日志不可行;把「记录了什么」作为
+    /// 数据交出去,既能让测试断言通知路径真的被调用,也给上层（健康探针/组合根）
+    /// 一个零依赖的接入点。
+    pub fn probe_content_consistency_with<F>(
+        &self,
+        data_dir: &Path,
+        mut observer: F,
+    ) -> Result<ContentProbeReport, StoreError>
+    where
+        F: FnMut(&ContentProbeEntry),
+    {
+        let raw_env = std::env::var(INDEX_PROBE_ENV).ok();
+        if !content_probe_enabled(raw_env.as_deref()) {
+            warn!(
+                env = INDEX_PROBE_ENV,
+                "内容一致性探针被环境变量关闭,本次启动跳过(不影响索引可用性)"
+            );
+            return Ok(ContentProbeReport {
+                disabled: true,
+                entries: Vec::new(),
+            });
+        }
+        let mut report = ContentProbeReport::default();
+        for sid_str in self.registered_sessions()? {
+            let session_id = SessionId::new(sid_str.as_str());
+            // 段文件枚举失败 ⇒ fail-open 跳过本会话(索引照旧服务)
+            let files = match Self::segment_files(data_dir, &session_id) {
+                Ok(files) => files,
+                Err(e) => {
+                    let entry = ContentProbeEntry {
+                        session_id: sid_str,
+                        verdict: ContentProbeVerdict::Undecidable,
+                        live: None,
+                        outcome: ContentProbeOutcome::FailedOpen,
+                        detail: format!("枚举段文件失败(fail-open,保留现有索引): {e}"),
+                    };
+                    warn!(session = %entry.session_id, error = %e, "内容探针枚举段文件失败,跳过本会话");
+                    observer(&entry);
+                    report.entries.push(entry);
+                    continue;
+                }
+            };
+            if files.is_empty() {
+                // 只有段元数据行、无段文件(fork 未追加 / 段已清理)——无实况可比
+                let entry = ContentProbeEntry {
+                    session_id: sid_str,
+                    verdict: ContentProbeVerdict::Undecidable,
+                    live: None,
+                    outcome: ContentProbeOutcome::Skipped,
+                    detail: "无段文件(fork 未追加或段已清理),跳过内容探针".to_string(),
+                };
+                observer(&entry);
+                report.entries.push(entry);
+                continue;
+            }
+            // 实况重算失败 ⇒ fail-open(段文件损坏到读不出记录时,索引仍是可用面)
+            let (live, lens) = match Self::live_content_fingerprint_from_files(&session_id, &files)
+            {
+                Ok(pair) => pair,
+                Err(e) => {
+                    let entry = ContentProbeEntry {
+                        session_id: sid_str,
+                        verdict: ContentProbeVerdict::Undecidable,
+                        live: None,
+                        outcome: ContentProbeOutcome::FailedOpen,
+                        detail: format!("实况指纹不可读(fail-open,保留现有索引): {e}"),
+                    };
+                    warn!(session = %entry.session_id, error = %e, "内容探针重算实况指纹失败,跳过本会话");
+                    observer(&entry);
+                    report.entries.push(entry);
+                    continue;
+                }
+            };
+            // 索引面按同一合成函数重算(行数/最大 offset 取索引)⇒ 才能发现「索引中段缺行」
+            let index_side = match self.index_side_fingerprint(&session_id, &lens) {
+                Ok(fp) => fp,
+                Err(e) => {
+                    let entry = ContentProbeEntry {
+                        session_id: sid_str,
+                        verdict: ContentProbeVerdict::Undecidable,
+                        live: Some(live),
+                        outcome: ContentProbeOutcome::FailedOpen,
+                        detail: format!("索引面指纹不可算(fail-open,保留现有索引): {e}"),
+                    };
+                    warn!(session = %entry.session_id, error = %e, "内容探针计算索引面指纹失败,跳过本会话");
+                    observer(&entry);
+                    report.entries.push(entry);
+                    continue;
+                }
+            };
+            // meta 读失败 ⇒ 按「缺字段」处理(仍走重建通道,不阻断)
+            let stored = match self.content_fingerprint(&session_id) {
+                Ok(stored) => stored,
+                Err(e) => {
+                    warn!(session = %sid_str, error = %e, "读取内容指纹失败,按缺失处理");
+                    None
+                }
+            };
+            let verdict = content_probe_verdict(stored.as_ref(), &live, &index_side);
+            let entry = match verdict {
+                ContentProbeVerdict::Healthy => ContentProbeEntry {
+                    session_id: sid_str,
+                    verdict,
+                    live: Some(live),
+                    outcome: ContentProbeOutcome::Healthy,
+                    detail: format!(
+                        "指纹一致(bytes={}, rows={}),索引与段文件同步",
+                        live.bytes, live.rows
+                    ),
+                },
+                // 孤儿行:补入式重建修不掉,只报告(处置归 ADR-290 D5 审计器)
+                ContentProbeVerdict::IndexAhead => {
+                    let detail = format!(
+                        "索引越前(index_rows={} > file_rows={}),只报告不重建(孤儿行归 ADR-290 D5 审计器)",
+                        index_side.rows, live.rows
+                    );
+                    warn!(session = %sid_str, "索引内容一致性探针:{}", detail);
+                    ContentProbeEntry {
+                        session_id: sid_str,
+                        verdict,
+                        live: Some(live),
+                        outcome: ContentProbeOutcome::ReportedOnly,
+                        detail,
+                    }
+                }
+                _ => {
+                    let why = match verdict {
+                        ContentProbeVerdict::MissingField => "内容指纹字段缺失",
+                        _ => "内容指纹不符",
+                    };
+                    match self.rebuild_index(data_dir, &session_id) {
+                        Ok(stats) => {
+                            self.content_probe_rebuilds.fetch_add(1, Ordering::Relaxed);
+                            // 按实况刷新指纹(重建是补入式,故以段文件实况为准)
+                            if let Err(e) = self.store_content_fingerprint(&session_id, &live) {
+                                warn!(session = %sid_str, error = %e, "内容指纹刷新失败,下次启动会再判不一致(不影响可用性)");
+                            }
+                            let detail = format!(
+                                "{why} ⇒ 已重建索引(inserted={}, skipped={};bytes={}, rows={})",
+                                stats.rows_inserted, stats.rows_skipped, live.bytes, live.rows
+                            );
+                            warn!(
+                                session = %sid_str,
+                                verdict = ?verdict,
+                                inserted = stats.rows_inserted,
+                                skipped = stats.rows_skipped,
+                                "索引内容一致性探针:{}", detail
+                            );
+                            ContentProbeEntry {
+                                session_id: sid_str,
+                                verdict,
+                                live: Some(live),
+                                outcome: ContentProbeOutcome::Rebuilt,
+                                detail,
+                            }
+                        }
+                        Err(e) => {
+                            let detail = format!("{why} 但重建失败(fail-open,保留现有索引): {e}");
+                            warn!(session = %sid_str, error = %e, "索引内容一致性探针重建失败,降级为不自愈");
+                            ContentProbeEntry {
+                                session_id: sid_str,
+                                verdict,
+                                live: Some(live),
+                                outcome: ContentProbeOutcome::FailedOpen,
+                                detail,
+                            }
+                        }
+                    }
+                }
+            };
+            observer(&entry);
+            report.entries.push(entry);
         }
         Ok(report)
     }

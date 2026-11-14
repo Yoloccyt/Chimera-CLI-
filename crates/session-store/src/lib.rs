@@ -159,8 +159,10 @@ pub use thread_replay::{
     item_append_event, rebuild_items, thread_started_event, CursorEntry, RebuildResult,
 };
 pub use tree::{
-    EventRow, IndexRepairEntry, RebuildStats, SegmentNode, SegmentSource, SessionTree, StoredEvent,
-    TreeIndex,
+    compose_content_fingerprint, content_probe_enabled, content_probe_verdict, ContentProbeEntry,
+    ContentProbeOutcome, ContentProbeReport, ContentProbeVerdict, EventRow,
+    IndexContentFingerprint, IndexRepairEntry, RebuildStats, SegmentNode, SegmentSource,
+    SessionTree, StoredEvent, TreeIndex, INDEX_PROBE_ENV,
 };
 pub use types::{
     ItemAppendPayload, Offset, SegmentId, SessionEvent, SessionId, StoreConfig,
