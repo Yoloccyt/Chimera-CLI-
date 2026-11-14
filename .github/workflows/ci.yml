@@ -45,6 +45,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
           # WHY fetch-depth: 0: 本 job 的 G-25 wiring 静态只读审计含
           # check_deleted_crate_registry.py——它用 `git log --diff-filter=D`
           # 全历史扫描已删 crate 面（CODE_WIKI §3.12 对账）；shallow clone
