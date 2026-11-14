@@ -45,15 +45,21 @@ fn graph_with_nodes(n: usize) -> MemoryGraph {
     graph
 }
 
-/// 语义建边规模曲线(1K 精确 / 2K、10K HNSW)— 实证 10K <1s 门禁
+/// 语义建边规模曲线（999 精确 / 1000 与 1001 与 2K、10K HNSW）— 实证 10K <1s 门禁
 ///
-/// Phase 8.3:1K 走精确路径(基线 464ms);2K、10K 走 HNSW 路径
-/// (O(n·log n)),验证 10K 建边跌破 <1s 门禁(此前精确平方增长不可达)。
+/// Phase 8.3：小规模走精确路径（O(n²·512)），大规模走 HNSW（O(n·log n)）。
+///
+/// R12 W2（ADR-297 D1）新增 **999 / 1000 / 1001** 三档，用途是**把残余断崖显形**而不是掩盖它：
+/// - 判据由 `>` 改为 `>=` 后，1000 从精确路径（实测 426.88ms）切到 HNSW；
+/// - 但 999 仍是精确路径 —— 这三档摆在一起，读者能直接看到"断崖只是从 1000 挪到了 999"，
+///   而不是误以为曲线已经连续。
+/// - 真正的消除（把阈值下修到 crossover 附近）会改变建边语义（精确→近似），属独立裁决；
+///   本曲线就是那份裁决的输入数据。
 fn build_semantic_edges_scale(c: &mut Criterion) {
     let mut group = c.benchmark_group("memory_graph/build_semantic_edges");
     // bench 内重复建边开销大,降低采样量保证总时长可控
     group.sample_size(10);
-    for &n in &[1_000usize, 2_000, 10_000] {
+    for &n in &[999usize, 1_000, 1_001, 2_000, 10_000] {
         group.bench_function(BenchmarkId::from_parameter(n), |b| {
             b.iter_batched(
                 || graph_with_nodes(n),

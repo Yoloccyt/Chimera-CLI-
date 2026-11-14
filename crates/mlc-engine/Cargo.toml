@@ -67,6 +67,12 @@ harness = false
 name = "hnsw_tiered"
 harness = false
 
+# R12 W2-2:量"读锁持有期间写者被阻塞"的严重性(写者 p50/p95/p99 vs 读者数 c∈{0,1,2,4,8},
+# 含阳性对照与 CPU-only 混杂对照、以及"锁外快照"方案的 COW 克隆代价探针)
+[[bench]]
+name = "l2_lock_contention"
+harness = false
+
 # E-5 lint ratchet opt-in (docs/reports/arch-quality-deep-review-2026-09-25.md)
 [lints]
 workspace = true
