@@ -27,7 +27,11 @@ tmp_podman/
 # === IDE / 编辑器 ===
 .idea/
 .vscode/
-.qoder/
+# .qoder 工具目录整体忽略——rules/ 子目录反选以便其内容豁免入库
+# （父目录被排除时内部文件的否定模式无效——gitignore 语义；
+#   内容默认排除 + 具体文件豁免见下方 *.md 后的豁免区）
+.qoder/*
+!.qoder/rules/
 *.swp
 *.swo
 *~
@@ -105,8 +109,20 @@ dist/
 !docs/reports/toolchain-r10-closure-execution-2026-11-14.md
 # 例外：仓库治理章程（分支生命周期/CI 门禁矩阵/依赖安全 SLA——长期有效运维规则）
 !docs/governance/REPO-GOVERNANCE.md
-.claude/
-.trae/
+# 注意：.claude 目录整体忽略但精确豁免权威文档——用 /* 形态（目录本体的忽略
+# 会阻止内部文件反选，gitignore 规则）；CLAUDE.md 被 AGENTS.md 引用为命令
+# 权威源且 doc_pointer_integrity 门要求指针目标入库
+.claude/*
+!.claude/CLAUDE.md
+# .trae 同款：rules/ 速查规则镜像精确豁免（doc_pointer_surface 登记）
+.trae/*
+!.trae/rules/
+.trae/rules/*
+!.trae/rules/nuxus规则.md
+# .qoder/rules 规则镜像豁免（doc_pointer_surface 的 agent 常读面；文件级豁免
+# 必须位于全局 *.md 之后——本区块即在其后）
+!.qoder/rules/chimera.md
+!.qoder/rules/chimera2.md
 
 
 
