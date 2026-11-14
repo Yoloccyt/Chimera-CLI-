@@ -80,9 +80,21 @@ ADR-289「scc SqliteWal 批量化接线」正式裁决为**不做**:SccCache 是
 - coverage floor 表填数:无真实逐 crate 产物则维持(禁止编造)。
 - 语义折叠不做跨 crate 共享原语大重构:落点以最小接线为准(Ω₆ 复用优先,防过度工程化)。
 
+## W2 执行期裁决修订(2026-11-14,证据驱动)
+
+> W2 实施前的调用链核实推翻/修正了三处方案预设,以下裁决替代 D2 原文与减法表中 scc LRU 行的预估:
+
+- **D2 修订(四路并行编排 → 不做)**:`recall_hybrid` 全仓**零生产调用方**(机证:`nexus-contracts/benches/sparse_select_top_k.rs:8` 自陈 + grep 全仓仅 bench/文档引用)。接并行编排属「预投不可达点位」(ADR-195 D2 / ADR-282 同款),U-10 不做。重开条件:recall_hybrid 获得真实生产消费者且 bench 显示 L1 路成本占比 ≥10%。
+- **rerank partial select → 已由 R9 在码内收口**:`hcw-window/src/recall/rerank.rs:794-796` 注释明载裁决——「密度序消费者会遍历到预算填满,无法预知前缀长度,故不做 select_nth_unstable 的投机截断」,且 sort_by→sort_unstable_by 常数优化已落。该流水线有真实生产消费方(chimera-mas context manager)。维持。
+- **D3 落地形态修订(后台重建采用 runtime 判别双分支)**:async 上下文(生产召回恒在 tokio 内)建图移交 spawn_blocking 后台、本轮精确回退;无 runtime(单测)保持原同步路径逐位不变——判别方式与 nmc `perceive_async`(G-88)同款。实现:`inner` 改 `Arc<RwLock<SemanticInner>>` + `build_in_flight` CAS 防重 + `ResetFlagOnDrop` panic 兜底 + `apply_built_tier` 纯函数换装校验(漂移 ⇒ 标 stale,下轮重调度;`recall_approx` 一致性自检双保险)。
+- **quest update_task_status 增量计数 → 维持**(ADR-289 自辩:任务上限 16,O(3n) 收益窄,数据支持)。
+- **hnsw insert_batch 接线 → 维持**(ADR-289 自辩:刻意串行有注释;确定性纪律需先建基准,投入产出不成比例;登记重开条件)。
+- **scc LRU 裁决(实测替代自辩)**:新增 `scc-cache/benches/lru_select_victim.rs`,criterion median **256 条目 = 13.22µs / 4096 条目 = 337.55µs**(自辩 1µs 修正为 13×,结论不变)。**维持现状**;重开条件:部署形态容量 ≥4096 且驱逐频繁。
+- **ShadowLog 环形窗口落地(替代原 W2d 无方案状态)**:裁决 = 环形窗口 `SHADOW_LOG_CAPACITY=4096`(影子期认领率 ≤60/分 ≈ 68 分钟窗口)+ `dropped_total` 挤出计数器 + `with_capacity` 构造;语义修订:「append-only 历史不可变」收窄为「**窗口内** append-only、顺序不可变」(真实审计链权威源 = session-store ADR-141,不受影响)。`ShadowScheduler` 当前零生产构造,本项是 R2 影子期接线的前置预案(与 recall_hybrid 的无计划面不同)。
+
 ## 验收与回滚
 
 - 每波:check → 组合回归(--no-fail-fast)→ criterion 红线零回退 → 门注册 → 逐文件 add + HEREDOC 提交。
-- 行为变化全带 env/config 逃生:`CHIMERA_RECALL_SEQUENTIAL`/`CHIMERA_DEDUP_SEMANTIC`/`CHIMERA_W4_DISABLED`(已在盘)/`CHIMERA_NO_HNSW_MLC`(已在盘)/cmt 配置节点/delegation 上限配置。
+- 行为变化全带 env/config 逃生:`CHIMERA_DEDUP_SEMANTIC`/`CHIMERA_W4_DISABLED`(已在盘)/`CHIMERA_NO_HNSW_MLC`(已在盘)/cmt 配置节点/delegation 上限配置;后台建图无独立 env(回滚=revert 该 WP commit,同步/异步判别自身即安全面)。
 - 波次=提交组,WP=原子 commit,单 WP revert 不影响他波;新事件变体(若有)走六锁同步,ordinal 尾号续增(ADR-197 惯例)。
 - 全量回归前置:target/debug 体积复检(R10 104GB 教训;W0 实测 13G/92G 可用,健康)。
