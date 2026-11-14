@@ -45,6 +45,10 @@ mca/affinity::preferred_dialect
 mca/affinity::route_key
 mca/affinity::sampling_bucket
 mca/affinity::supports_dialect
+mca/context_capability::as_str
+mca/context_capability::external_prior_profile
+mca/context_capability::is_supported
+mca/context_capability::new
 mca/omni_message::default_config
 mca/omni_message::new
 mca/omni_message::request_id
