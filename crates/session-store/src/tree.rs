@@ -54,7 +54,7 @@ use rusqlite::{params, OptionalExtension};
 use tracing::debug;
 
 use crate::error::StoreError;
-use crate::segment::{file_stem, SegmentFileReader, SegmentMeta};
+use crate::segment::{list_segment_files, segment_path, SegmentFileReader, SegmentMeta};
 use crate::types::{SegmentId, SessionEvent, SessionId};
 
 /// SQLite 树索引 — segments / events 两表的封装
@@ -185,6 +185,22 @@ pub struct RebuildStats {
     pub rows_skipped: u64,
 }
 
+/// 索引尾部探针的单会话报告条目(R11 W3a / ADR-295 D4)
+#[derive(Debug, Clone)]
+pub struct IndexRepairEntry {
+    /// 会话 id
+    pub session_id: String,
+    /// 探针判定:索引与段文件尾部不一致
+    pub damaged: bool,
+    /// 是否执行了 rebuild_index(仅「索引缺尾行」方向执行——登记失败模式;
+    /// 「索引越前」方向只报告不重建,孤儿行留给 ADR-290 D5 审计器)
+    pub repaired: bool,
+    /// 重建统计(repaired = true 时在场)
+    pub stats: Option<RebuildStats>,
+    /// 人类可读判定说明(诊断)
+    pub detail: String,
+}
+
 impl TreeIndex {
     /// 打开或创建 SQLite 树索引（WAL 模式 + 建表 + 建索引）
     pub fn open(path: &Path) -> Result<Self, StoreError> {
@@ -243,10 +259,24 @@ impl TreeIndex {
             );
             -- 复合索引:按会话 + offset 的顺序扫描(P2-T3 回放路径)
             CREATE INDEX IF NOT EXISTS idx_events_session_offset
-                ON events(session_id, offset);",
+                ON events(session_id, offset);
+            -- schema 版本面(R11 W3b,ADR-213 Checkpoint F3 同款模式):
+            -- 未来迁移的分支判据。legacy 库(无此表)经 CREATE IF NOT EXISTS
+            -- 补建后首次打开即补记 v1——两表现状即 v1 形态,无需数据迁移。
+            CREATE TABLE IF NOT EXISTS index_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );",
         )
         .map_err(|e| StoreError::Sqlite {
             reason: format!("初始化树索引表结构失败: {e}"),
+        })?;
+        conn.execute(
+            "INSERT OR IGNORE INTO index_meta (key, value) VALUES ('schema_version', '1')",
+            [],
+        )
+        .map_err(|e| StoreError::Sqlite {
+            reason: format!("登记 schema 版本失败: {e}"),
         })?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -792,30 +822,8 @@ impl TreeIndex {
         data_dir: &Path,
         session_id: &SessionId,
     ) -> Result<RebuildStats, StoreError> {
-        // 1. 枚举段文件（无锁 IO）:`<stem>.<idx>.jsonl`,按 idx 升序
-        let stem = file_stem(session_id);
-        let prefix = format!("{stem}.");
-        let mut files: Vec<(u32, PathBuf)> = Vec::new();
-        let entries = std::fs::read_dir(data_dir).map_err(|e| StoreError::Io {
-            context: format!("读取数据目录 {} 失败(rebuild_index)", data_dir.display()),
-            source: e,
-        })?;
-        for entry in entries {
-            let entry = entry.map_err(|e| StoreError::Io {
-                context: "读取数据目录条目失败(rebuild_index)".to_string(),
-                source: e,
-            })?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let rest = name
-                .strip_prefix(&prefix)
-                .and_then(|r| r.strip_suffix(".jsonl"));
-            if let Some(idx_str) = rest {
-                if let Ok(idx) = idx_str.parse::<u32>() {
-                    files.push((idx, entry.path()));
-                }
-            }
-        }
-        files.sort_by_key(|(idx, _)| *idx);
+        // 1. 枚举段文件（无锁 IO;与尾部探针共享同一枚举规则）
+        let files = Self::segment_files(data_dir, session_id)?;
 
         // 2. 读全部段文件记录（无锁 IO;半条停止——已确认记录才重建）
         let mut scanned: Vec<(u32, Vec<crate::segment::SegmentRecord>)> = Vec::new();
@@ -928,6 +936,167 @@ impl TreeIndex {
                 Err(e)
             }
         }
+    }
+
+    /// 枚举某会话的段文件（无锁 IO）:`<stem>.<idx>.jsonl`,按 idx 升序
+    ///
+    /// rebuild_index 与尾部探针共享同一枚举规则——直接复用 segment.rs 的
+    /// `list_segment_files`(writer 重开恢复同源),只补路径映射,三处零重复。
+    fn segment_files(
+        data_dir: &Path,
+        session_id: &SessionId,
+    ) -> Result<Vec<(u32, PathBuf)>, StoreError> {
+        let idxs = list_segment_files(data_dir, session_id)?;
+        Ok(idxs
+            .into_iter()
+            .map(|idx| (idx, segment_path(data_dir, session_id, idx)))
+            .collect())
+    }
+
+    /// 树索引 schema 版本(R11 W3b,ADR-213 Checkpoint F3 同款模式)
+    ///
+    /// 0 = index_meta 面缺失(理论上不可达——init 恒补建;保守口径防手工删表);
+    /// 1 = 当前两表 + index_meta 形态。未来 schema 变更以此为迁移分支判据。
+    pub fn schema_version(&self) -> Result<u16, StoreError> {
+        let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
+            reason: format!("index_meta 表锁中毒: {p}"),
+        })?;
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT value FROM index_meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| StoreError::Sqlite {
+                reason: format!("读取 schema 版本失败: {e}"),
+            })?;
+        Ok(raw.and_then(|v| v.parse::<u16>().ok()).unwrap_or(0))
+    }
+
+    /// 会话在索引中的最大 offset(尾部探针判据;None = 索引零行)
+    pub fn max_offset(&self, session_id: &SessionId) -> Result<Option<u64>, StoreError> {
+        let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
+            reason: format!("events 表锁中毒: {p}"),
+        })?;
+        let raw: Option<i64> = conn
+            .query_row(
+                "SELECT MAX(offset) FROM events WHERE session_id = ?1",
+                params![session_id.as_str()],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| StoreError::Sqlite {
+                reason: format!("查询 max_offset 失败: {e}"),
+            })?;
+        Ok(raw.map(|v| v.max(0) as u64))
+    }
+
+    /// 打开时索引尾部一致性探针 + 自愈(ADR-295 D4;`StoreConfig::
+    /// repair_index_on_open` 门控,调用方为 `CbmrWriter::open_blocking`)
+    ///
+    /// # 判据(覆盖登记失败模式,廉价不整扫)
+    /// 对 segments 表在册的每个会话:取其**最后一个段文件**的尾部完整记录 seq
+    /// (半条丢弃,与 recover_tail 同语义)vs 索引 `MAX(offset)`:
+    /// - 索引 < 段尾 ⇒ **索引缺尾行**(登记失败模式:段文件已 fsync、索引 insert
+    ///   前崩溃)⇒ 调 `rebuild_index` 幂等补行;
+    /// - 索引 > 段尾 ⇒ 索引越前(非登记模式,反常)⇒ 只报告不重建;
+    /// - 相等 ⇒ 健康。
+    ///
+    /// # 覆盖范围诚实声明
+    /// 中段随机缺行/索引整库丢失不在本探针判据内(前者属全量一致性 =
+    /// `scripts/audit_memory_consistency.py` 诊断面;后者 session_id 无法从
+    /// 段记录反查——SessionEvent 不携带 session_id,恢复走运维面)。
+    /// fork 会话只有段元数据行、无段文件时跳过(无尾部可比)。
+    pub fn verify_and_repair_tails(
+        &self,
+        data_dir: &Path,
+    ) -> Result<Vec<IndexRepairEntry>, StoreError> {
+        let mut report = Vec::new();
+        let sessions: Vec<String> = {
+            let conn = self.conn.lock().map_err(|p| StoreError::LockPoisoned {
+                reason: format!("segments 表锁中毒: {p}"),
+            })?;
+            let mut stmt = conn
+                .prepare("SELECT DISTINCT session_id FROM segments")
+                .map_err(|e| StoreError::Sqlite {
+                    reason: format!("枚举在册会话失败: {e}"),
+                })?;
+            let rows =
+                stmt.query_map([], |r| r.get::<_, String>(0))
+                    .map_err(|e| StoreError::Sqlite {
+                        reason: format!("读取在册会话失败: {e}"),
+                    })?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| StoreError::Sqlite {
+                    reason: format!("遍历在册会话失败: {e}"),
+                })?
+        };
+        for sid_str in sessions {
+            let session_id = SessionId::new(sid_str.as_str());
+            let files = Self::segment_files(data_dir, &session_id)?;
+            let Some((_, last_path)) = files.last().cloned() else {
+                // 只有段元数据行、无段文件(fork 未追加)——无尾部可比
+                report.push(IndexRepairEntry {
+                    session_id: sid_str,
+                    damaged: false,
+                    repaired: false,
+                    stats: None,
+                    detail: "无段文件(fork 未追加或段已清理),跳过尾部探针".to_string(),
+                });
+                continue;
+            };
+            // 读最后段文件的尾部完整记录(顺序迭代,O(单文件);半条自然丢弃)
+            let mut reader = SegmentFileReader::open(&last_path)?;
+            let mut last_seq: Option<u64> = None;
+            while let Some(rec) = reader.next_record()? {
+                last_seq = Some(rec.seq);
+            }
+            let Some(tail_seq) = last_seq else {
+                report.push(IndexRepairEntry {
+                    session_id: sid_str,
+                    damaged: false,
+                    repaired: false,
+                    stats: None,
+                    detail: "最后段文件无完整记录(空段/半条),跳过尾部探针".to_string(),
+                });
+                continue;
+            };
+            let index_max = self.max_offset(&session_id)?;
+            match index_max {
+                Some(mx) if mx >= tail_seq => {
+                    report.push(IndexRepairEntry {
+                        session_id: sid_str,
+                        damaged: mx > tail_seq,
+                        repaired: false,
+                        stats: None,
+                        detail: format!(
+                            "尾部一致(mx={mx} ≥ tail={tail_seq})或索引越前,无需/不做重建"
+                        ),
+                    });
+                }
+                _ => {
+                    // 索引缺尾行(None 或 mx < tail_seq)——登记失败模式,幂等重建
+                    let stats = self.rebuild_index(data_dir, &session_id)?;
+                    debug!(
+                        session = %sid_str,
+                        inserted = stats.rows_inserted,
+                        skipped = stats.rows_skipped,
+                        "索引尾部缺口已自愈重建(ADR-295 D4)"
+                    );
+                    report.push(IndexRepairEntry {
+                        session_id: sid_str,
+                        damaged: true,
+                        repaired: true,
+                        stats: Some(stats),
+                        detail: format!(
+                            "索引缺尾行(index_max={index_max:?} < tail={tail_seq}),已重建"
+                        ),
+                    });
+                }
+            }
+        }
+        Ok(report)
     }
 
     /// 事件行总数（`session_id` 为 None 时全库统计;测试断言零拷贝用）

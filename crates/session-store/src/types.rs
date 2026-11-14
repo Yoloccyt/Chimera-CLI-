@@ -287,6 +287,16 @@ pub struct StoreConfig {
     pub base_window_ms: u64,
     /// 是否自动启动后台定时刷写任务（默认 true）
     pub spawn_flush_loop: bool,
+    /// 打开时执行索引尾部一致性探针,缺口即自愈重建（默认 true）
+    ///
+    /// WHY(R11 W3 / ADR-295 D4):段文件 fsync 与索引 insert 之间的崩溃窗口
+    /// 会留下「段已落盘、索引缺尾行」状态(writer.rs 双写非原子登记),而
+    /// `read_events` 读面以索引为准 ⇒ 缺口直接表现为回放截断。探针只读
+    /// 每会话最后一个段文件的尾部记录 vs 索引 `MAX(offset)`(廉价,不整扫);
+    /// 缺口即调用既有 `rebuild_index`(段文件权威源,INSERT OR IGNORE 幂等)。
+    /// 权威源语义不动(ADR-290 D2):索引是加速面,探针只是把「加速面自愈」
+    /// 从人肉触发升级为打开时自动触发。置 false 回到「永不干预」旧行为。
+    pub repair_index_on_open: bool,
     /// 数据目录（JSONL 段文件 + SQLite 树索引）
     pub data_dir: PathBuf,
 }
@@ -298,6 +308,7 @@ impl Default for StoreConfig {
             batch_size: 64,
             base_window_ms: 2,
             spawn_flush_loop: true,
+            repair_index_on_open: true,
             data_dir: PathBuf::from("data/sessions"),
         }
     }
@@ -321,6 +332,7 @@ impl StoreConfig {
             batch_size: 4,
             base_window_ms: 2,
             spawn_flush_loop: false,
+            repair_index_on_open: true,
             data_dir: dir.into(),
         }
     }

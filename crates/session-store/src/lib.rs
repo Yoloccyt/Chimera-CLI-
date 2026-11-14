@@ -159,7 +159,8 @@ pub use thread_replay::{
     item_append_event, rebuild_items, thread_started_event, CursorEntry, RebuildResult,
 };
 pub use tree::{
-    EventRow, RebuildStats, SegmentNode, SegmentSource, SessionTree, StoredEvent, TreeIndex,
+    EventRow, IndexRepairEntry, RebuildStats, SegmentNode, SegmentSource, SessionTree, StoredEvent,
+    TreeIndex,
 };
 pub use types::{
     ItemAppendPayload, Offset, SegmentId, SessionEvent, SessionId, StoreConfig,

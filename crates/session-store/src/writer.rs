@@ -46,7 +46,7 @@ use crate::error::StoreError;
 use crate::segment::{
     list_segment_files, segment_path, SegmentFileReader, SegmentMeta, SegmentWriter,
 };
-use crate::tree::{EventRow, StoredEvent, TreeIndex};
+use crate::tree::{EventRow, IndexRepairEntry, StoredEvent, TreeIndex};
 use crate::types::{Offset, SegmentId, SessionEvent, SessionId, StoreConfig};
 
 /// CBMR 微批写器 — 会话事件的攒批写入口（Clone 廉价,跨任务共享）
@@ -83,6 +83,8 @@ struct CbmrInner {
     /// 任一副本析构就会误杀共享循环。挂在 `CbmrInner` 上则只有**最后一个**
     /// Arc 释放时才会跑 Drop——与所有权的真实语义一致。
     flush_loop: Mutex<Option<JoinHandle<()>>>,
+    /// 打开时索引尾部探针的自愈报告(R11 W3a / ADR-295 D4;仅构造时写入一次)
+    startup_repair: Mutex<Vec<IndexRepairEntry>>,
 }
 
 /// 单会话的段写状态
@@ -166,6 +168,20 @@ impl CbmrWriter {
             source: e,
         })?;
         let tree = TreeIndex::open(&config.data_dir.join("sessions.sqlite3"))?;
+        // R11 W3a(ADR-295 D4):打开时索引尾部一致性探针 + 自愈(config 门控)。
+        // 探针/重建失败**不阻断打开**——索引是加速面(ADR-290 D2),自愈是优化,
+        // 打开可用性优先;失败降级 warn + 空报告(诚实可观测,不静默)。
+        let startup_repair = if config.repair_index_on_open {
+            match tree.verify_and_repair_tails(&config.data_dir) {
+                Ok(report) => report,
+                Err(e) => {
+                    warn!(error = %e, "索引尾部探针失败,降级为不自愈(打开不受阻)");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
         let inner = Arc::new(CbmrInner {
             config,
             tree,
@@ -175,6 +191,7 @@ impl CbmrWriter {
             last_offset_by_session: Mutex::new(HashMap::new()),
             closing: AtomicBool::new(false),
             flush_loop: Mutex::new(None),
+            startup_repair: Mutex::new(startup_repair),
         });
         if inner.config.spawn_flush_loop {
             if tokio::runtime::Handle::try_current().is_ok() {
@@ -184,6 +201,20 @@ impl CbmrWriter {
             }
         }
         Ok(Self { inner })
+    }
+
+    /// 打开时索引尾部探针的自愈报告(R11 W3a / ADR-295 D4)
+    ///
+    /// `repair_index_on_open = false` 或探针失败降级时为空;每条含会话 id、
+    /// 是否判定缺口、是否已重建及重建统计。消费方(组合根/健康探针)可据此
+    /// 上报可观测性面——本 crate(L3 纯存储)不持事件总线,不发事件。
+    #[must_use]
+    pub fn startup_repair_report(&self) -> Vec<IndexRepairEntry> {
+        self.inner
+            .startup_repair
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
     }
 
     /// 追加会话事件到攒批队列（微批写入口,只入内存）
@@ -486,7 +517,8 @@ impl CbmrWriter {
         // WHY 整段进 run_blocking:replay 内含 segment_sources 的 SQLite 读与
         // 段文件 IO,均为阻塞调用——红线 3（阻塞只进 spawn_blocking 阻塞池）
         run_blocking(move || {
-            let stream = crate::replay::replay(&this.inner.tree, &this.inner.config.data_dir, &sid, from)?;
+            let stream =
+                crate::replay::replay(&this.inner.tree, &this.inner.config.data_dir, &sid, from)?;
             stream.collect()
         })
         .await
@@ -1050,5 +1082,94 @@ mod tests {
         // 末尾 4 条是自己的事件（seq 7..10）
         assert_eq!(stored[7].event.event_type, "ev-100");
         assert_eq!(stored[10].event.event_type, "ev-202");
+    }
+
+    /// R11 W3a(ADR-295 D4):打开时尾部探针自愈——「段已 fsync、索引缺尾行」
+    /// 状态(双写非原子崩溃窗口的登记失败模式)在新 writer 打开时被探针发现
+    /// 并 rebuild,索引读面恢复完整序列。
+    #[tokio::test]
+    async fn startup_probe_repairs_missing_index_tail() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let w = CbmrWriter::new(config(dir.path())).expect("new");
+        let sid = SessionId::new("repair-probe");
+        for i in 0..6 {
+            w.append(&sid, ev(i)).await.expect("append");
+        }
+        w.flush().await.expect("flush");
+        w.shutdown().await.expect("shutdown");
+
+        // 模拟双写崩溃窗口:手工删掉索引最后 2 行(段文件保持完整)
+        {
+            let conn = rusqlite::Connection::open(index_path(dir.path())).expect("open sqlite");
+            conn.execute(
+                "DELETE FROM events WHERE session_id = 'repair-probe'
+                 AND offset >= (SELECT MAX(offset) - 1 FROM events WHERE session_id = 'repair-probe')",
+                [],
+            )
+            .expect("delete tail rows");
+        }
+
+        // 重开(repair_index_on_open 默认 true)→ 探针发现缺口 + 幂等重建
+        let w2 = CbmrWriter::new(config(dir.path())).expect("reopen");
+        let hit = w2
+            .startup_repair_report()
+            .into_iter()
+            .find(|e| e.session_id == "repair-probe")
+            .expect("探针报告必须含本会话");
+        assert!(
+            hit.damaged && hit.repaired,
+            "缺口必须被判 damaged 且已重建: {hit:?}"
+        );
+        assert_eq!(
+            hit.stats.as_ref().expect("重建统计在场").rows_inserted,
+            2,
+            "重建恰好补回被删的 2 行"
+        );
+        // 读面恢复完整序列(read_events 以索引为读面,缺口即截断)
+        let stored = w2.read_events(&sid, None).await.expect("read");
+        assert_eq!(stored.len(), 6, "自愈后读面必须恢复完整序列");
+        w2.shutdown().await.expect("shutdown");
+    }
+
+    /// R11 W3a:repair_index_on_open = false ⇒ 不干预旧行为(缺口保留、
+    /// 报告为空)——自愈是优化面,逃生开关必须真实生效
+    #[tokio::test]
+    async fn startup_probe_skipped_when_disabled() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let w = CbmrWriter::new(config(dir.path())).expect("new");
+        let sid = SessionId::new("no-repair");
+        for i in 0..4 {
+            w.append(&sid, ev(i)).await.expect("append");
+        }
+        w.flush().await.expect("flush");
+        w.shutdown().await.expect("shutdown");
+        {
+            let conn = rusqlite::Connection::open(index_path(dir.path())).expect("open sqlite");
+            conn.execute(
+                "DELETE FROM events WHERE session_id = 'no-repair' AND offset >= 3",
+                [],
+            )
+            .expect("delete tail row");
+        }
+        let cfg = StoreConfig {
+            repair_index_on_open: false,
+            ..config(dir.path())
+        };
+        let w2 = CbmrWriter::new(cfg).expect("reopen");
+        assert!(
+            w2.startup_repair_report().is_empty(),
+            "禁用探针 ⇒ 不出报告也不重建"
+        );
+        let stored = w2.read_events(&sid, None).await.expect("read");
+        assert_eq!(stored.len(), 3, "禁用 ⇒ 缺口保留(诚实非干预旧行为)");
+        w2.shutdown().await.expect("shutdown");
+    }
+
+    /// R11 W3b:树索引 schema 版本面——新库打开后恒为 v1(ADR-213 Checkpoint
+    /// F3 同款模式:u16 版本判据,未来迁移的分支锚点)
+    #[test]
+    fn tree_index_schema_version_pinned() {
+        let t = TreeIndex::open_in_memory().expect("open_in_memory");
+        assert_eq!(t.schema_version().expect("version"), 1, "新库 = v1");
     }
 }
