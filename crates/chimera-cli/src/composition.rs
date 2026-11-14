@@ -616,6 +616,106 @@ pub fn build_mca_gateway() -> Result<mca_gateway::McaGateway> {
     Ok(gateway)
 }
 
+/// 探针接线骨架（R10 WP-T3，ADR-294 附录——observe 手动档）
+///
+/// WHY 独立于 `build_mca_gateway`:后者是 ADR-177「装配态自检」的
+/// assembly-only 语义（debug_assert spec_count==0），探针栈允许装载
+/// spec（observe 标定需要真实通道与 spec 档案）——两者语义不同构，
+/// 单独装配函数互不污染。
+///
+/// # 观察档纪律（蓝图 §5.3）
+/// `ProbeMode::Observe` 默认:探针标定只发布 `ContextCapabilityUpdated`
+/// 观测事件,**不改写 resident 定容输入**;转 apply 需独立治理裁决
+/// (RSI 三件套守门)。`calibrate` 的执行器闭包（真实 5 针检索打
+/// 「最便宜 flash 通道+缓存命中」）由调用方在真实通道可用时注入——
+/// 本骨架只保证结构就位/数据流可走/默认不烧 token。
+///
+/// # 减法（U-10 纪律）
+/// 不接定时调度、不建 L2 订阅链（ContextCapabilityUpdated→with_governor
+/// 为设计文档状态 context_capability.rs:24）——无消费场景验证不造。
+#[cfg(feature = "mca")]
+pub struct McaProbeStack {
+    /// 网关（spec 装载后 spec_count>0;装载失败维持空表）
+    pub gateway: mca_gateway::McaGateway,
+    /// 有效窗口探针（observe 档;经 with_bus 挂事件发布）
+    pub probe: mca_gateway::EffectiveWindowProbe,
+    /// 通道健康注册表（EWMA 数据面,探针复用;DegradedPublisher 消费方）
+    pub health: std::sync::Arc<mca_gateway::HealthRegistry>,
+}
+
+/// 构造探针栈（R10 WP-T3 骨架,ADR-294 附录）
+///
+/// # 参数
+/// - `bus`:事件总线(探针标定结果经 `ContextCapabilityUpdated` 发布)
+/// - `spec_dir`:spec 档案目录(None 或目录不存在 ⇒ 空注册表,行为与
+///   assembly-only 一致——探针无标定对象,calibrate 返回 Disabled)
+///
+/// # 减法
+/// 不接定时调度(observe 手动档);不接真实通道(执行器闭包由调用方注入);
+/// 默认构建(无 mca feature)零符号零边(本函数与结构体均 cfg 门控)。
+#[cfg(feature = "mca")]
+pub fn build_mca_probe_stack(
+    bus: EventBus,
+    spec_dir: Option<&std::path::Path>,
+) -> Result<McaProbeStack> {
+    use mca_gateway::{EffectiveWindowProbe, HealthRegistry, McaGateway, McaGatewayConfig, ProbeMode};
+
+    let gateway = McaGateway::new(McaGatewayConfig::default());
+    if let Some(dir) = spec_dir {
+        if dir.is_dir() {
+            match mca_gateway::load_spec_dir(dir) {
+                Ok(specs) => {
+                    for spec in specs {
+                        gateway.register_spec(spec);
+                    }
+                }
+                Err(e) => {
+                    // 装载失败降级为空表(warn,绝不 panic——优雅降级惯例);
+                    // 探针无标定对象时 calibrate 自然 Disabled,不阻断启动
+                    tracing::warn!(dir = %dir.display(), error = %e, "MCA spec 目录装载失败,探针栈降级为空表");
+                }
+            }
+        }
+    }
+    let health = std::sync::Arc::new(HealthRegistry::new());
+    let probe = EffectiveWindowProbe::with_bus(ProbeMode::Observe, bus);
+    Ok(McaProbeStack {
+        gateway,
+        probe,
+        health,
+    })
+}
+
+/// R10 WP-T3 骨架冒烟:mca feature 下探针栈构造——空目录=空表 + Observe 模式
+/// + health 可用(observe 手动档,不烧 token)
+#[cfg(all(test, feature = "mca"))]
+mod probe_stack_tests {
+    use super::*;
+
+    #[test]
+    fn build_mca_probe_stack_smoke() {
+        let bus = EventBus::new();
+        // None 目录:gateway 空表(探针无标定对象,calibrate 自然 Disabled)
+        let stack = build_mca_probe_stack(bus, None).expect("探针栈构造应成功");
+        assert_eq!(stack.gateway.spec_count(), 0, "无目录=空注册表");
+        assert_eq!(stack.probe.mode(), mca_gateway::ProbeMode::Observe);
+        // health 数据面可用(degraded_channels 空)
+        assert!(stack.health.degraded_channels().is_empty());
+    }
+
+    #[test]
+    fn build_mca_probe_stack_missing_dir_degrades_gracefully() {
+        let bus = EventBus::new();
+        // 目录不存在:降级空表(warn),绝不 panic
+        let stack = build_mca_probe_stack(
+            bus,
+            Some(std::path::Path::new("Z:/definitely/not/exist")),
+        )
+        .expect("目录不存在应优雅降级而非失败");
+        assert_eq!(stack.gateway.spec_count(), 0);
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
