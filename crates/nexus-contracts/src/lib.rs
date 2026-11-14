@@ -595,6 +595,8 @@ pub const ADR_033_EXCEPTION_MODULES: &[&str] = &[
     "formal_props", // collect_results 结果归并 + from_result_with_auto_confidence 置信度分档
     "harness_dimensions", // default_contract 六维默认契约装配
     "variant",  // VariantId::new 标识归一化构造
+    // R9/ADR-291 补齐（G-119 从源码派生现形）：context_capability 能力档案的受控纯逻辑
+    "context_capability", // external_prior_profile 七模型先验表查选 + CalibrationTier::as_str 映射 + ThreadSupport::is_supported 判定（确定性，无 IO/随机）
 ];
 
 // ============================================================
