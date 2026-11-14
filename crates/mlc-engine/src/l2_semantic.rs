@@ -241,6 +241,39 @@ impl HnswTier {
     }
 }
 
+/// 后台建图在飞标志的 Drop 复位守卫(ADR-295 D3)
+///
+/// WHY 存在:建图任务体若 panic(spawn_blocking 内不可恢复),`build_in_flight`
+/// 将永远为 true ⇒ 后续所有 RebuildThenApprox 静默失去加速面。守卫保证
+/// 「无论任务体如何退出,标志必复位」——失败模式收敛为「多调度一次」而非「永久失能」。
+struct ResetFlagOnDrop(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for ResetFlagOnDrop {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// 后台建图产物的换装校验(纯函数,可单测;ADR-295 D3)
+///
+/// 快照(建图起点)与换装(建图终点)窗口内主表发生变更 ⇒ 条目数漂移,图与
+/// 主表不一致。处置:**仍换装但标 `stale`** ——下次召回重新调度后台重建;
+/// 期间 `recall_approx` 的图-主表一致性自检(`live_points() != entries.len()`
+/// → 精确回退)兜住正确性。方向:宁多重建一次,绝不返回残缺结果集。
+fn apply_built_tier(inner: &mut SemanticInner, tier: HnswTier, snapshot_len: usize) {
+    let drifted = inner.entries.len() != snapshot_len;
+    let mut tier = tier;
+    tier.stale = drifted;
+    if drifted {
+        debug!(
+            snapshot_len,
+            entries = inner.entries.len(),
+            "L2 后台建图期间主表漂移,换装并标记 stale(下次召回重建)"
+        );
+    }
+    inner.hnsw = Some(tier);
+}
+
 /// 分层路由决策（ADR-192 D1 的显式化：精确层 / 近似层两档 + 一个重建过渡档）
 ///
 /// WHY 抽为枚举 + 纯函数而不是写在 `recall_by_clv` 的 if 塔里：
@@ -333,7 +366,13 @@ impl SemanticInner {
 /// 建图/重建发生在 `try_write()` 内(拿不到写锁的本轮召回回退精确扫描)。
 pub struct SemanticMemory {
     /// 内部状态(RwLock 保护,读多写少)
-    inner: RwLock<SemanticInner>,
+    ///
+    /// WHY `Arc<RwLock<_>>` 而非裸 `RwLock<_>`(R11 W2c / ADR-295 D3):后台建图
+    /// 任务(spawn_blocking,`'static` 约束)需要在脱离 `&self` 借用后仍能把
+    /// 建成的图换装回主状态——`Arc` 让任务只捕获锁本身,不捕获整个
+    /// `SemanticMemory`(后者持 `&self` 生命周期,不可跨 `'static`)。
+    /// 对既有代码透明:`Arc<RwLock<T>>` 经 Deref 提供 `read()`/`write()`,调用面零变化。
+    inner: Arc<RwLock<SemanticInner>>,
     /// 容量上限(超出时按最旧插入顺序驱逐)
     capacity: usize,
     /// 近似层切换阈值(0 = 关闭近似层)
@@ -345,6 +384,10 @@ pub struct SemanticMemory {
     hnsw_enabled: bool,
     /// 累计驱逐次数
     evictions: std::sync::atomic::AtomicU64,
+    /// 后台建图在飞标志(CAS 抢占,防 churn 场景重复 spawn)
+    ///
+    /// WHY `Arc` 包装:同 `inner`,后台任务的 Drop 守卫需要在脱离 `&self` 后复位它。
+    build_in_flight: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SemanticMemory {
@@ -367,11 +410,12 @@ impl SemanticMemory {
     /// 召回结果的类型与排序语义不受该参数影响,故不属于破坏性 API。
     pub fn with_hnsw_threshold(capacity: usize, hnsw_threshold: usize) -> Self {
         Self {
-            inner: RwLock::new(SemanticInner::new()),
+            inner: Arc::new(RwLock::new(SemanticInner::new())),
             capacity,
             hnsw_threshold,
             hnsw_enabled: hnsw_tier_enabled_by_env(),
             evictions: std::sync::atomic::AtomicU64::new(0),
+            build_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -569,9 +613,16 @@ impl SemanticMemory {
         Ok(out)
     }
 
-    /// 建图/重建窗口:取写锁全量重建后本次召回走近似层
+    /// 建图/重建窗口:async 上下文移交后台建图,同步上下文保持原写锁内同步建图
     ///
-    /// WHY `try_write` 而非 `write`:稳态下召回是热路,若多个读者长期持读锁,
+    /// WHY 双分支(R11 W2c / ADR-295 D3):release 实测建图成本 10k 档 3.56s、
+    /// 100k 档 32.6s(ADR-192 §4 代价 2),同步持写锁建图 = 交互会话的延迟尖刺
+    /// 且饿死全部读者(ADR-192:105-106 登记的残留风险)。async 上下文(生产
+    /// 召回路恒在 tokio runtime 内)把建图移交阻塞池后台,本轮精确回退;无
+    /// runtime(单测/纯同步消费方)走原路径,既有行为与测试确定性逐位不变
+    /// ——判别方式与 nmc `perceive_async`(G-88)同款(`Handle::try_current`)。
+    ///
+    /// 同步分支内 `try_write` 而非 `write`:稳态下召回是热路,若多个读者长期持读锁,
     /// 在此阻塞会拖慢所有读者;拿不到写锁就本轮精确回退(结果仍精确,只是本轮无加速)。
     /// 重建在写锁内完成且无 await,符合 §4.4 不持锁跨 await 纪律。
     fn rebuild_and_recall(
@@ -582,6 +633,12 @@ impl SemanticMemory {
         let poisoned = |e: std::sync::PoisonError<_>| {
             MlcError::StorageError(format!("L2 rwlock poisoned: {e}"))
         };
+        if tokio::runtime::Handle::try_current().is_ok() {
+            self.schedule_background_rebuild();
+            let inner = self.inner.read().map_err(poisoned)?;
+            trace!("L2 建图已移交后台,本轮召回回退精确扫描(ADR-295 D3)");
+            return Ok(recall_exact(&inner, query, top_k));
+        }
         match self.inner.try_write() {
             Ok(mut inner) => {
                 // 二次确认:释放读锁与取写锁的窗口内条目数可能已变(驱逐/删除)
@@ -613,6 +670,60 @@ impl SemanticMemory {
                 Ok(recall_exact(&inner, query, top_k))
             }
         }
+    }
+
+    /// 后台建图调度(ADR-295 D3):读锁内快照向量 → 阻塞池建图 → 写锁内原子换装
+    ///
+    /// 快照成本 = `SharedCLV`(`Arc<[f32]>`)克隆 + `MemoryId` 克隆,µs 级;
+    /// 建图(秒级)完全移出锁外,换装仅在写锁内做一次赋值(µs 级)。
+    /// 本轮调用方(以及调度期间的一切读者)走精确回退,语义 = 变慢而非变错。
+    ///
+    /// WHY CAS 抢占(`swap` 返回 true = 已在飞):churn 场景(建图期间持续变更
+    /// → stale 反复置位)下,每个召回都可能走到 RebuildThenApprox,不去重会
+    /// 堆积成倍的建图任务白烧 CPU。已在飞时静默返回,由在飞任务的换装统一收口。
+    ///
+    /// WHY `try_read` 而非 `read` 取快照:写锁在场(插入/清除进行中)时放弃本轮
+    /// 调度,由下一次召回再触发——调度路径绝不与写者争锁(§4.4 纪律同源)。
+    fn schedule_background_rebuild(&self) {
+        if self
+            .build_in_flight
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return; // 已在飞:本轮调用方走精确回退即可
+        }
+        let snapshot: Vec<(SharedCLV, MemoryId)> = match self.inner.try_read() {
+            Ok(inner) => inner.vectors.iter().cloned().collect(),
+            Err(_) => {
+                // 写锁被占:放弃本轮调度(调用方已按精确回退返回)
+                self.build_in_flight
+                    .store(false, std::sync::atomic::Ordering::Release);
+                return;
+            }
+        };
+        let snapshot_len = snapshot.len();
+        let inner = Arc::clone(&self.inner);
+        let in_flight = Arc::clone(&self.build_in_flight);
+        // fire-and-forget(§4.4 #7):建图/换装是幂等操作,失败仅记日志;
+        // panic 兜底交给 Drop 守卫(标志复位不依赖任务体正常返回)
+        tokio::task::spawn_blocking(move || {
+            let _reset = ResetFlagOnDrop(in_flight);
+            let built_at = std::time::Instant::now();
+            // VecDeque::from(Vec) 消费式转换(零复制),复用 build 既有签名
+            let tier = HnswTier::build(&VecDeque::from(snapshot));
+            debug!(
+                points = tier.live_points(),
+                elapsed_us = built_at.elapsed().as_micros() as u64,
+                "L2 后台建图完成,准备换装(ADR-295 D3)"
+            );
+            match inner.write() {
+                Ok(mut guard) => apply_built_tier(&mut guard, tier, snapshot_len),
+                Err(_) => {
+                    tracing::warn!(
+                        "L2 后台建图换装失败:rwlock poisoned,本轮建图弃用(下次召回重调度)"
+                    )
+                }
+            }
+        });
     }
 
     /// 近似层召回:HNSW 取候选 → 逐条**重算精确余弦** → `xts_top_k_by` 截断
@@ -1477,6 +1588,110 @@ mod tests {
         let off = exact_mem(64);
         fill_directions(&off, 8);
         assert_eq!(results, off.recall_by_clv(&query, 5).unwrap());
+    }
+
+    /// R11 W2c(ADR-295 D3):换装校验纯函数——快照与换装窗口内主表漂移 ⇒ 标 stale
+    ///
+    /// 形态:真实 mem 上先取「空快照」,再向主表填 3 条 ⇒ 模拟建图窗口内的写入漂移。
+    #[test]
+    fn apply_built_tier_marks_stale_on_drift() {
+        let mem = SemanticMemory::with_hnsw_threshold(64, 8);
+        fill_directions(&mem, 3);
+        // 空图(0 点)+ snapshot_len=0 vs entries=3 ⇒ 漂移,换装后必须标 stale
+        apply_built_tier(
+            &mut mem.inner.write().unwrap(),
+            HnswTier::build(&VecDeque::new()),
+            0,
+        );
+        let guard = mem.inner.read().unwrap();
+        let tier = guard.hnsw.as_ref().expect("换装后侧表必须在场");
+        assert!(tier.stale, "主表漂移 ⇒ 必须标 stale(下次召回重调度)");
+        assert_eq!(tier.live_points(), 0);
+    }
+
+    /// R11 W2c(ADR-295 D3):换装校验纯函数——窗口内无变更 ⇒ 图直接可用
+    #[test]
+    fn apply_built_tier_fresh_when_no_drift() {
+        let mem = SemanticMemory::with_hnsw_threshold(64, 8);
+        fill_directions(&mem, 3);
+        // 快照与主表同源(同一把读锁内取齐)⇒ 换装时零漂移
+        let snapshot: Vec<(SharedCLV, MemoryId)> =
+            mem.inner.read().unwrap().vectors.iter().cloned().collect();
+        let tier = HnswTier::build(&VecDeque::from(snapshot.clone()));
+        apply_built_tier(&mut mem.inner.write().unwrap(), tier, snapshot.len());
+        let guard = mem.inner.read().unwrap();
+        let built = guard.hnsw.as_ref().expect("换装后侧表必须在场");
+        assert!(!built.stale, "无漂移 ⇒ 图直接可用(不触发额外重建)");
+        assert_eq!(built.live_points(), 3);
+        assert_eq!(built.live_points(), guard.entries.len(), "图-主表一致性");
+    }
+
+    /// R11 W2c(ADR-295 D3):async 上下文召回 → 建图移交后台 → 就绪后近似层接管。
+    /// 判据链:本轮回退结果与精确基线逐位一致(降级不变语义)→ 轮询侧表 built
+    /// (后台任务在阻塞池完成换装)→ 二次召回结果与基线逐位一致(近似层分数契约)。
+    #[tokio::test]
+    async fn background_rebuild_swaps_and_engages_approx() {
+        let mem = SemanticMemory::with_hnsw_threshold(64, 8);
+        fill_directions(&mem, 10);
+        let query = make_direction_clv(2);
+
+        // 本轮:建图移交后台,召回回退精确——结果仍须与精确基线逐位一致
+        let first = mem.recall_by_clv(&query, 5).unwrap();
+        let off = exact_mem(64);
+        fill_directions(&off, 10);
+        assert_eq!(first, off.recall_by_clv(&query, 5).unwrap());
+
+        // 轮询后台换装完成(阻塞池任务,当前线程 runtime 下 sleep 让出调度)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let built = loop {
+            if mem.hnsw_tier_snapshot().map(|s| s.built).unwrap_or(false) {
+                break true;
+            }
+            if std::time::Instant::now() >= deadline {
+                break false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        };
+        assert!(built, "5s 内后台建图必须完成换装(阻塞性回归信号)");
+
+        // 换装后:近似层接管。契约口径(ADR-192 D1):近似性只体现在候选集选取,
+        // 分数与排序语义不近似。可断言面拆四层:
+        // ① 长度契约;② 非并列头部(基线首项分数 > 0 时)id+分数逐位一致;
+        // ③ 共同 id 分数逐位一致;④ 近似层独有 id 必须是零分并列成员
+        // (正分集合精确一致 ⇒ 差异只可能落在 0.0 并列带上——该带上任何
+        // 成员资格都语义等价,精确层内部也仅由输入序决定)。
+        let second = mem.recall_by_clv(&query, 5).unwrap();
+        let baseline = off.recall_by_clv(&query, 5).unwrap();
+        assert_eq!(second.len(), baseline.len(), "长度契约");
+        if baseline[0].1 > 0.0 {
+            assert_eq!(second[0], baseline[0], "非并列头部必须 id+分数逐位一致");
+        }
+        let base_scores: std::collections::HashMap<&MemoryId, f32> =
+            baseline.iter().map(|(id, s)| (id, *s)).collect();
+        for (id, score) in &second {
+            if let Some(base) = base_scores.get(id) {
+                assert_eq!(
+                    base, score,
+                    "同 id 分数必须逐位一致(ADR-192 D1 分数同源契约): {id}"
+                );
+            } else {
+                assert_eq!(*score, 0.0, "近似层独有 id 只允许是零分并列成员: {id}");
+            }
+        }
+        let positive: std::collections::HashSet<&MemoryId> = second
+            .iter()
+            .filter(|(_, s)| *s > 0.0)
+            .map(|(id, _)| id)
+            .collect();
+        let positive_base: std::collections::HashSet<&MemoryId> = baseline
+            .iter()
+            .filter(|(_, s)| *s > 0.0)
+            .map(|(id, _)| id)
+            .collect();
+        assert_eq!(
+            positive, positive_base,
+            "非并列命中集必须精确一致(并列成员选取属近似面)"
+        );
     }
 
     #[test]
