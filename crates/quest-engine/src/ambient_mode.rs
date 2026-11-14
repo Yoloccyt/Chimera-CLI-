@@ -83,8 +83,15 @@ struct AmbientMode {
 
 impl AmbientMode {
     /// 资源看门狗：预算超限 → 挂起全部活跃 Quest
-    async fn on_budget_exceeded(&mut self, engine: &QuestEngine, budget_type: &str) {
+    ///
+    /// R11 W5c(ADR-295 D11):JoinSet 批量——原逐个 await,看门狗事件 rare
+    /// 但单批最多 16 次引擎往返;批内并行(输入已受 `max_quests_per_batch`
+    /// 界定,天然并发上界,无需额外信号量),逐任务错误日志语义保留。
+    /// WHY 接 `&Arc<QuestEngine>`:JoinSet::spawn 要求 'static future,
+    /// 引擎句柄逐任务 Arc::clone。
+    async fn on_budget_exceeded(&mut self, engine: &Arc<QuestEngine>, budget_type: &str) {
         info!(budget_type = %budget_type, "Ambient 资源看门狗:预算超限,挂起活跃 Quest");
+        let mut batch = tokio::task::JoinSet::new();
         for quest in engine
             .list_quests()
             .into_iter()
@@ -93,27 +100,51 @@ impl AmbientMode {
             if self.watchdog_paused.contains(&quest.quest_id) {
                 continue; // 已挂起
             }
-            match engine
-                .pause_quest(&quest.quest_id, "ambient-watchdog")
-                .await
-            {
-                Ok(()) => {
-                    self.watchdog_paused.insert(quest.quest_id.clone());
-                    debug!(quest_id = %quest.quest_id, "Ambient 已挂起 Quest");
+            let engine = Arc::clone(engine);
+            let qid = quest.quest_id.clone();
+            batch.spawn(async move {
+                let result = engine.pause_quest(&qid, "ambient-watchdog").await;
+                (qid, result)
+            });
+        }
+        while let Some(joined) = batch.join_next().await {
+            match joined {
+                Ok((quest_id, Ok(()))) => {
+                    self.watchdog_paused.insert(quest_id.clone());
+                    debug!(quest_id = %quest_id, "Ambient 已挂起 Quest");
                 }
-                Err(e) => warn!(quest_id = %quest.quest_id, error = %e, "Ambient 挂起 Quest 失败"),
+                Ok((quest_id, Err(e))) => {
+                    warn!(quest_id = %quest_id, error = %e, "Ambient 挂起 Quest 失败")
+                }
+                Err(e) => warn!(error = %e, "Ambient 挂起任务 JoinHandle 异常"),
             }
         }
     }
 
     /// 资源恢复：恢复被看门狗挂起的全部 Quest（E2E 验收点）
-    async fn on_resource_recovered(&mut self, engine: &QuestEngine, resource_type: &str) {
+    ///
+    /// R11 W5c(ADR-295 D11):与 [`Self::on_budget_exceeded`] 同款 JoinSet
+    /// 批量;恢复集 = watchdog_paused 全量 drain(语义不变:只恢复自己挂起的)。
+    async fn on_resource_recovered(&mut self, engine: &Arc<QuestEngine>, resource_type: &str) {
         info!(resource_type = %resource_type, "Ambient 资源看门狗:资源恢复,恢复挂起 Quest");
         let paused: Vec<String> = self.watchdog_paused.drain().collect();
+        let mut batch = tokio::task::JoinSet::new();
         for quest_id in paused {
-            match engine.resume_quest(&quest_id, "ambient-watchdog").await {
-                Ok(()) => debug!(quest_id = %quest_id, "Ambient 已恢复 Quest"),
-                Err(e) => warn!(quest_id = %quest_id, error = %e, "Ambient 恢复 Quest 失败"),
+            let engine = Arc::clone(engine);
+            batch.spawn(async move {
+                let result = engine.resume_quest(&quest_id, "ambient-watchdog").await;
+                (quest_id, result)
+            });
+        }
+        while let Some(joined) = batch.join_next().await {
+            match joined {
+                Ok((quest_id, Ok(()))) => {
+                    debug!(quest_id = %quest_id, "Ambient 已恢复 Quest")
+                }
+                Ok((quest_id, Err(e))) => {
+                    warn!(quest_id = %quest_id, error = %e, "Ambient 恢复 Quest 失败")
+                }
+                Err(e) => warn!(error = %e, "Ambient 恢复任务 JoinHandle 异常"),
             }
         }
     }

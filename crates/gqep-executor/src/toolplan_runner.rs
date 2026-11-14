@@ -61,9 +61,18 @@ pub trait ToolExecutor: Send + Sync {
     /// WHY 真值源放在执行器而不是工具名前缀表（`streaming_dispatch::SideEffect::classify`）:
     /// 前缀表只认 `read:` / `query:` / `search:`，对 `text.echo` / `fs.read` / `fs.list`
     /// 一律判 Write ⇒ 接了等于没接；而**要执行该工具的对象**才知道它是否只读。
-    /// 计划里的显式声明优先级仍高于本方法（见 `layer_requires_serial`）。
+    /// 计划里的显式声明优先级仍高于本方法（见 `effective_side_effect`）。
     fn capability_of(&self, _tool_name: &str) -> Option<SideEffectDecl> {
         None
+    }
+
+    /// 执行器的批量副作用声明（可选，默认空集 = 未知）
+    ///
+    /// WHY 与 `capability_of` 并存：本方法面向「配置驱动、一次返回全表」的执行器
+    /// （如 MCP 服务器声明的只读工具清单）；默认空集保证既有实现零改动。
+    /// 优先级：计划节点显式声明 > `capability_of` > 本方法 > 未知（按可能写）。
+    fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+        Vec::new()
     }
 
     /// 本执行器可服务的工具名全集 —— 路由环（`RouteLayer`）的注册表来源
@@ -212,7 +221,7 @@ impl PlanRunner {
         // 判据改用有效属性（声明 > 能力表 > 未知）而非只看 `Some(Write)`:
         // 旧判据下**省略 `side_effect` 字段即可绕过只读模式** —— 一个实际写文件的
         // 工具在 Plan 模式里照样被执行，与「投影拒绝写」的既定语义相悖（F-A21）。
-        // 未知按可能写处理，与 `layer_requires_serial` 同一保守口径。
+        // 未知按可能写处理，与 `effective_side_effect` 同一保守口径。
         if self.guards.readonly_only {
             for n in &plan.nodes {
                 if n.op == ToolOp::ToolCall
@@ -524,14 +533,24 @@ fn accumulate(
 /// WHY 这个优先级次序:显式声明是计划作者的意图，实现方不得推翻它
 /// （否则接入方可把写操作自报为只读来换取并发，层内写序不再由计划决定，
 /// 可复现性与审计链同时失效）；两者都不知道时返回 `None`，
-/// 由 `layer_requires_serial` 按「可能写」保守处理。
+/// 由调用方 `node_is_read_safe` 按「可能写」保守处理。
 fn effective_side_effect(
     node: &ToolNode,
     executor: &dyn ToolExecutor,
     declared: &str,
 ) -> Option<SideEffectDecl> {
-    node.side_effect
+    if let Some(effect) = node
+        .side_effect
         .or_else(|| executor.capability_of(declared))
+    {
+        return Some(effect);
+    }
+    // R9：配置驱动的批量声明（默认空集 ⇒ 既有行为逐字不变）
+    executor
+        .declared_side_effects()
+        .into_iter()
+        .find(|(name, _)| name == declared)
+        .map(|(_, effect)| effect)
 }
 
 /// 单节点是否「读安全」——纯数据算子恒安全；ToolCall 需有效副作用 == ReadOnly。
@@ -759,6 +778,61 @@ mod tests {
 
     fn runner() -> PlanRunner {
         PlanRunner::new(Box::new(MemExecutor), PlanGuards::default())
+    }
+
+    /// R9：声明式执行器 —— 仅 `declared_side_effects` 提供只读声明
+    struct DeclaringExecutor;
+
+    #[async_trait]
+    impl ToolExecutor for DeclaringExecutor {
+        async fn execute(&self, _tool_name: &str, args_json: &str) -> Result<String, String> {
+            Ok(args_json.to_string())
+        }
+        fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+            vec![("mcp.srv.audit".to_string(), SideEffectDecl::ReadOnly)]
+        }
+    }
+
+    fn tool_call_node(tool: &str, side_effect: Option<SideEffectDecl>) -> ToolNode {
+        ToolNode {
+            id: format!("call-{tool}"),
+            op: ToolOp::ToolCall,
+            tool_name: Some(tool.into()),
+            args_json: Some("{}".into()),
+            field: None,
+            predicate: None,
+            side_effect,
+        }
+    }
+
+    #[test]
+    fn declared_side_effects_make_tool_read_safe_without_node_declaration() {
+        let executor = DeclaringExecutor;
+        let declared = tool_call_node("mcp.srv.audit", None);
+        assert!(
+            node_is_read_safe(&declared, &executor),
+            "执行器批量声明为 ReadOnly ⇒ 计划未声明也应进入并发段"
+        );
+        let unknown = tool_call_node("mcp.srv.write", None);
+        assert!(
+            !node_is_read_safe(&unknown, &executor),
+            "未声明工具必须按可能写保守串行（fail-closed 不扩散）"
+        );
+        let explicit_write = tool_call_node("mcp.srv.audit", Some(SideEffectDecl::Write));
+        assert!(
+            !node_is_read_safe(&explicit_write, &executor),
+            "计划显式声明优先于执行器声明"
+        );
+    }
+
+    #[test]
+    fn default_executor_declares_no_side_effects() {
+        assert!(MemExecutor.declared_side_effects().is_empty());
+        let unknown = tool_call_node("mcp.srv.audit", None);
+        assert!(
+            !node_is_read_safe(&unknown, &MemExecutor),
+            "默认空集 ⇒ 行为与改造前逐字一致（保守串行）"
+        );
     }
 
     fn node(id: &str, op: ToolOp) -> ToolNode {

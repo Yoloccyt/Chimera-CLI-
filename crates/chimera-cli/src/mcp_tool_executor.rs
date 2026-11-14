@@ -85,6 +85,8 @@ pub(crate) fn in_process_mesh() -> McpMesh {
 pub struct McpToolExecutor {
     /// 进程内 ephemeral mesh（同 mcp.rs 范式；executor 与宿主同生命周期）
     mesh: McpMesh,
+    /// R9：配置驱动的副作用声明（默认空集 = 未知，计划层保守串行）
+    declared_side_effects: Vec<(String, SideEffectDecl)>,
 }
 
 impl McpToolExecutor {
@@ -129,7 +131,28 @@ impl McpToolExecutor {
                 }
             }
         }
-        Self { mesh }
+        Self {
+            mesh,
+            // R10 WP-T1:配置供给面接线——McpConfig.declared_side_effects
+            // （用户在 omega.yaml 显式声明的只读工具）经此进入计划层查表，
+            // 解锁 readonly 并行；未声明工具仍按「未知 ⇒ 可能写」保守处理。
+            declared_side_effects: config
+                .mcp
+                .declared_side_effects
+                .iter()
+                .map(|e| (e.tool.clone(), e.effect))
+                .collect(),
+        }
+    }
+
+    /// R9：注入配置驱动的副作用声明（默认空集；组合根可选调用）
+    ///
+    /// `decls` 的键为完整工具名（`mcp.<server>.<tool>`），值为副作用类别。
+    /// 未声明的工具仍按「未知 ⇒ 可能写」保守处理（fail-closed 不扩散）。
+    #[must_use]
+    pub fn with_declared_side_effects(mut self, decls: Vec<(String, SideEffectDecl)>) -> Self {
+        self.declared_side_effects = decls;
+        self
     }
 
     /// 命名解析（纯函数，供 proptest 穷举）：`mcp.<server>.<tool>` → (server, tool)。
@@ -225,6 +248,9 @@ impl ToolExecutor for McpToolExecutor {
     fn declared_tools(&self) -> Vec<String> {
         Vec::new()
     }
+    fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+        self.declared_side_effects.clone()
+    }
 }
 
 /// 复合执行器 — Builtin 与 Mcp 两个 delegate 的前缀分派组合（ADR-256 D2）
@@ -262,6 +288,11 @@ impl ToolExecutor for CompositeToolExecutor {
     fn declared_tools(&self) -> Vec<String> {
         self.builtin.declared_tools()
     }
+    fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+        let mut all = self.builtin.declared_side_effects();
+        all.extend(self.mcp.declared_side_effects());
+        all
+    }
 }
 
 #[cfg(test)]
@@ -298,6 +329,35 @@ mod tests {
                 "文案前缀 route: {err}"
             );
         }
+    }
+
+    /// R10 WP-T1:配置供给面——声明集从 McpConfig.declared_side_effects
+    /// 经 from_config 进入执行器查表（capability_of 语义化的装配面闭环）
+    #[test]
+    fn from_config_loads_declared_side_effects() {
+        let mut config = ChimeraConfig::default();
+        config
+            .mcp
+            .declared_side_effects
+            .push(nexus_core::config::DeclaredSideEffectEntry {
+                tool: "mcp.acme.search".into(),
+                effect: nexus_contracts::SideEffectDecl::ReadOnly,
+            });
+        let executor = McpToolExecutor::from_config(&config);
+        let decls = executor.declared_side_effects();
+        assert_eq!(decls.len(), 1, "声明集经 from_config 装载");
+        assert_eq!(decls[0].0, "mcp.acme.search");
+        assert_eq!(decls[0].1, nexus_contracts::SideEffectDecl::ReadOnly);
+    }
+
+    /// R10 WP-T1:缺省配置声明集为空——未知工具按可能写保守口径不受影响
+    #[test]
+    fn from_config_default_has_empty_declarations() {
+        let executor = McpToolExecutor::from_config(&ChimeraConfig::default());
+        assert!(
+            executor.declared_side_effects().is_empty(),
+            "缺省配置无声明集（fail-closed 语义不变）"
+        );
     }
 
     #[test]

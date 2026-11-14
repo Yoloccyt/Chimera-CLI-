@@ -33,6 +33,18 @@
 //! > with_backend 双写关闭，不单点失败）。读面 `replay_since` 维持无生产调用方（预留,
 //! > 现无断线重连 CLI 面,为绿接线=虚构消费）。口径：**写面 PRODUCTION-WIRED / 读面预留**。
 //!
+//! > **✅ 装配态四订正（2026-11-13，ADR-292 P3 桥——读面从预留转生产）**：上段「读面
+//! > 预留」**已被 ADR-292 修订**（修订 ADR-290 D4，追溯 ADR-259 D3/U-08 的预留前提）：
+//! > HCW v3 蓝图 §二/§5.5 赋予读面真实消费场景——Anthropic Message threads `continue`
+//! > 返回 404（服务端线程 best-effort 过期）时按 Thread 段回放重建对话。落地形态：
+//! > ① 事件 schema append-only 扩展 `thread.started`/`item.append`（D1，旧 `turn.submit`
+//! > 写入路径与 serde 形态不动）；② `thread_replay` 纯函数重构器 + Offset↔ItemId
+//! > 游标映射（D2/D3）；③ `CbmrWriter::replay_session` 段文件权威源回放入口；
+//! > ④ nexus-app-server `replay_thread_from_store` 线程级回放桥 + `replay_since`
+//! > store 兜底分支（D4，生产调用点在 server.rs 生产段，ledger_parity_locks 锁 5
+//! > 已按 D5 翻转为接生产行为锁）。口径：**写面 PRODUCTION-WIRED / 读面
+//! > PRODUCTION-WIRED（threads 404 安全网）**。
+//!
 //! # 设计概览（Checkpoint 线性快照 → append-only 段 + 微批写）
 //!
 //! 会话持久化从「Checkpoint 线性快照」（L0 `nexus_contracts::Checkpoint`,
@@ -134,16 +146,28 @@ pub mod replay;
 /// model-visible 白名单投影 — 「model-visible means logged」不变量（WI-18）
 pub mod model_view;
 
+/// 线程回放重构器 — 事件流 → Item 序列 + Offset↔ItemId 游标映射（ADR-292 D2/D3）
+pub mod thread_replay;
+
 pub use error::StoreError;
 pub use model_view::{to_model_view, ModelVisibleEvent};
 pub use replay::{replay, ReplayItem, ReplayStream};
 pub use segment::{
     list_segment_files, segment_path, SegmentFileReader, SegmentMeta, SegmentRecord, SegmentWriter,
 };
-pub use tree::{
-    EventRow, RebuildStats, SegmentNode, SegmentSource, SessionTree, StoredEvent, TreeIndex,
+pub use thread_replay::{
+    item_append_event, rebuild_items, thread_started_event, CursorEntry, RebuildResult,
 };
-pub use types::{Offset, SegmentId, SessionEvent, SessionId, StoreConfig};
+pub use tree::{
+    compose_content_fingerprint, content_probe_enabled, content_probe_verdict, ContentProbeEntry,
+    ContentProbeOutcome, ContentProbeReport, ContentProbeVerdict, EventRow,
+    IndexContentFingerprint, IndexRepairEntry, RebuildStats, SegmentNode, SegmentSource,
+    SessionTree, StoredEvent, TreeIndex, INDEX_PROBE_ENV,
+};
+pub use types::{
+    ItemAppendPayload, Offset, SegmentId, SessionEvent, SessionId, StoreConfig,
+    ThreadStartedPayload, EVENT_TYPE_ITEM_APPEND, EVENT_TYPE_THREAD_STARTED,
+};
 pub use writer::CbmrWriter;
 
 #[cfg(test)]

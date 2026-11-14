@@ -25,6 +25,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
 /// 任务复杂度枚举 — 用于评估任务难度并映射到 ThinkingMode
@@ -587,6 +588,20 @@ impl DelegationExecutor {
 
         // 并行 spawn 每个子任务,用 FuturesUnordered 收集 JoinHandle
         // WHY FuturesUnordered:§4.1 规范,优于 join_all,支持流式结果收集
+        //
+        // R11 W5a(ADR-295 D8):数据面扇出上限——原实现「任务数即并发数」,
+        // fanout 64 的批次 = 64 路同时执行,与 mas-sched 控制面配额互不贯通。
+        // 上限语义澄清(ADR-295 D8):数据面执行扇出 ≠ 控制面认领配额
+        // (mas-sched max_concurrent=4 管的是 claim/lease 准入),不强行贯通;
+        // 默认 8 对齐 PlanRunner DEFAULT_CONCURRENCY / tool BatchLimits 家族。
+        // 许可在 spawn 的任务体内获取(而非 spawn 前):spawn 循环保持廉价,
+        // 排队任务只持闭包不占执行槽;任务完成即释放,后续任务顶上。
+        let max_concurrent = delegation_max_concurrent();
+        let permits = Arc::new(Semaphore::new(max_concurrent));
+        debug!(
+            fanout = sub_task_count,
+            max_concurrent, "委托批次数据面并发上限(ADR-295 D8)"
+        );
         let mut futures: FuturesUnordered<tokio::task::JoinHandle<TaskResult>> =
             FuturesUnordered::new();
 
@@ -601,16 +616,14 @@ impl DelegationExecutor {
             let timeout = effective_timeout(&task, self.default_timeout);
             let agent_id = format!("{parent_id}::{agent_id_infix}::{}", task.inner.task_id);
             let parent_id_owned = parent_id.to_string();
+            let batch_permits = Arc::clone(&permits);
 
-            let handle = tokio::spawn(execute_single_task(
-                task,
-                runner,
-                bus,
-                gea,
-                timeout,
-                agent_id,
-                parent_id_owned,
-            ));
+            let handle = tokio::spawn(async move {
+                // 许可在任务体内获取:超限任务在此排队,不占执行槽
+                let _permit = batch_permits.acquire_owned().await;
+                execute_single_task(task, runner, bus, gea, timeout, agent_id, parent_id_owned)
+                    .await
+            });
             futures.push(handle);
         }
 
@@ -721,6 +734,36 @@ impl Default for DelegationExecutor {
 /// | Complex | 60s | 0 | 120s |
 /// | Simple | 60s | 10s | 10s(受 acceptable_latency 约束) |
 /// | VeryComplex | 60s | 500s | 240s(受 4× 上限约束) |
+/// 委托批次默认数据面并发上限(ADR-295 D8,R11 W5a)
+///
+/// WHY 8:对齐执行面并发默认家族(gqep PlanRunner `DEFAULT_CONCURRENCY` /
+/// tool `BatchLimits` 均 8);WHY 不贯通 mas-sched `max_concurrent=4`:
+/// 那是**控制面认领配额**(claim/lease 准入),本值是**数据面执行扇出**,
+/// 语义分层,强行同值会把两层治理耦合(ADR-295 D8 语义澄清)。
+pub const DEFAULT_MAX_CONCURRENT_DELEGATION: usize = 8;
+
+/// 解析委托并发上限(纯函数,可单测;`env` 为 None/非法/0 ⇒ 回默认)
+fn resolve_delegation_limit(env: Option<&str>) -> usize {
+    env.and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_MAX_CONCURRENT_DELEGATION)
+}
+
+/// 生效并发上限(启动期一次读取;`CHIMERA_DELEGATION_MAX_CONCURRENT` 覆盖)
+///
+/// WHY OnceLock:禁热路径运行时开关红线(mlc `hnsw_tier_enabled_by_env`
+/// /hcw `W4_DISABLED` 同款)。
+fn delegation_max_concurrent() -> usize {
+    static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        resolve_delegation_limit(
+            std::env::var("CHIMERA_DELEGATION_MAX_CONCURRENT")
+                .ok()
+                .as_deref(),
+        )
+    })
+}
+
 fn effective_timeout(task: &AgentTask, default_timeout: Duration) -> Duration {
     // 步骤 1:根据 TaskComplexity 计算基值超时
     let base = match task.complexity {
@@ -1047,5 +1090,75 @@ mod tests {
     fn test_executor_debug_shows_gea_wired_flag() {
         let plain = DelegationExecutor::new(EventBus::new(), Duration::from_secs(60));
         assert!(format!("{plain:?}").contains("gea_wired: false"));
+    }
+
+    // ============================================================
+    // R11 W5a(ADR-295 D8):数据面扇出并发上限
+    // ============================================================
+
+    /// 解析纯函数:None/非法/0 ⇒ 默认 8;合法值生效
+    #[test]
+    fn test_resolve_delegation_limit() {
+        assert_eq!(resolve_delegation_limit(None), 8);
+        assert_eq!(resolve_delegation_limit(Some("not-a-number")), 8);
+        assert_eq!(resolve_delegation_limit(Some("0")), 8);
+        assert_eq!(resolve_delegation_limit(Some("16")), 16);
+        assert_eq!(resolve_delegation_limit(Some("1")), 1);
+    }
+
+    /// 行为契约:fanout 16 的批次在飞峰值 ≤ 上限 8 且上限内真并行
+    /// (判据口径与 toolplan_capability_table 一致:在飞峰值,不用墙钟)
+    #[tokio::test]
+    async fn delegation_batch_respects_data_plane_concurrency_cap() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let inf = Arc::clone(&in_flight);
+        let pk = Arc::clone(&peak);
+        let runner: TaskRunner = Arc::new(move |task: AgentTask| {
+            let inf = Arc::clone(&inf);
+            let pk = Arc::clone(&pk);
+            Box::pin(async move {
+                let now = inf.fetch_add(1, Ordering::SeqCst) + 1;
+                pk.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                inf.fetch_sub(1, Ordering::SeqCst);
+                Ok(format!("done-{}", task.inner.task_id))
+            })
+        });
+        let executor =
+            DelegationExecutor::with_runner(EventBus::new(), Duration::from_secs(10), runner);
+        let tasks: Vec<AgentTask> = (0..16)
+            .map(|i| {
+                let inner = Task {
+                    task_id: format!("t-{i}"),
+                    description: "cap-test".into(),
+                    status: TaskStatus::Pending,
+                    dependencies: vec![],
+                };
+                AgentTask::new(
+                    inner,
+                    TaskComplexity::Simple,
+                    100,
+                    Duration::ZERO,
+                    QualityLevel::Standard,
+                )
+            })
+            .collect();
+        let results = executor
+            .execute_delegation("cap-test", tasks)
+            .await
+            .expect("批量必须完成");
+        assert_eq!(results.len(), 16, "上限不得丢任务");
+        assert!(
+            peak.load(Ordering::SeqCst) <= 8,
+            "数据面并发不得超过上限 8(实测 {})",
+            peak.load(Ordering::SeqCst)
+        );
+        assert!(
+            peak.load(Ordering::SeqCst) > 1,
+            "上限内必须真并行(峰值 {})",
+            peak.load(Ordering::SeqCst)
+        );
     }
 }

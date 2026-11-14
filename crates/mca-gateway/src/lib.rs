@@ -88,7 +88,11 @@ pub use coalescing::{
     coalesce_failure, CoalesceKey, CoalesceResult, JoinOutcome, RequestCoalescer,
 };
 pub use codec::{Codec, DecodedResponse};
-pub use conversation_trim::{conversation_budget, estimate_tokens, trim_to_budget};
+// R12 W1-1:装配内核接线的开关面与纯函数分派入口(默认关闭,关态逐字节等价旧路径)
+pub use conversation_trim::{
+    assembly_wiring, conversation_budget, estimate_tokens, parse_assembly_wiring, trim_to_budget,
+    trim_to_budget_legacy, trim_to_budget_with, AssemblyWiring, ASSEMBLY_WIRED_ENV,
+};
 pub use cost_guard::{CostGuard, CostGuardError};
 pub use early_stop::{EarlyStopController, StopDecision, StopReason};
 pub use error::AffinityError;

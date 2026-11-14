@@ -125,10 +125,8 @@ impl CoarseRecall {
         //    WHY 并集：某些模块可能仅在 module_clvs 中（无依赖关系），仍参与语义/共变更打分
         let candidates = self.collect_candidates(input.module_clvs);
 
-        // 3. 三信号计算（并行可优化，当前串行简化）
-        let dep_scores = self.dependency_propagation(input.seed_modules, &candidates);
-        let sem_scores = self.semantic_similarity(input.seed_clv, &candidates, input.module_clvs);
-        let co_scores = self.cochange_scores(input.seed_modules, &candidates);
+        // 3. 三信号计算（R9：依赖/语义/共变更并行；线程 panic 时回退串行）
+        let (dep_scores, sem_scores, co_scores) = self.compute_signals(&input, &candidates);
 
         // 4. 融合得分
         let w = self.weights;
@@ -184,6 +182,50 @@ impl CoarseRecall {
         Ok(CoarseRecallOutput {
             modules: scores,
             elapsed_us: start.elapsed().as_micros() as u64,
+        })
+    }
+
+    /// 三信号串行计算 — 并行路径的等价回退（线程 panic 时使用）
+    fn compute_signals_serial(
+        &self,
+        input: &CoarseRecallInput<'_>,
+        candidates: &[ModuleId],
+    ) -> (
+        HashMap<ModuleId, f32>,
+        HashMap<ModuleId, f32>,
+        HashMap<ModuleId, f32>,
+    ) {
+        (
+            self.dependency_propagation(input.seed_modules, candidates),
+            self.semantic_similarity(input.seed_clv, candidates, input.module_clvs),
+            self.cochange_scores(input.seed_modules, candidates),
+        )
+    }
+
+    /// 三信号并行计算 — `std::thread::scope` 三线程，无 spawn 逃逸
+    ///
+    /// # 语义契约
+    /// - 并行与串行结果**逐位相等**（三信号互不共享可变状态，纯读）；
+    /// - 任一线程 panic ⇒ 回退串行重算（不把 panic 泄漏给调用方，也不返回半成品）；
+    /// - 不引入 async / 不修改 `CoarseRecall` 状态（`&self` 只读）。
+    fn compute_signals(
+        &self,
+        input: &CoarseRecallInput<'_>,
+        candidates: &[ModuleId],
+    ) -> (
+        HashMap<ModuleId, f32>,
+        HashMap<ModuleId, f32>,
+        HashMap<ModuleId, f32>,
+    ) {
+        std::thread::scope(|scope| {
+            let dep = scope.spawn(|| self.dependency_propagation(input.seed_modules, candidates));
+            let sem = scope
+                .spawn(|| self.semantic_similarity(input.seed_clv, candidates, input.module_clvs));
+            let co = scope.spawn(|| self.cochange_scores(input.seed_modules, candidates));
+            match (dep.join(), sem.join(), co.join()) {
+                (Ok(dep), Ok(sem), Ok(co)) => (dep, sem, co),
+                _ => self.compute_signals_serial(input, candidates),
+            }
         })
     }
 
@@ -441,6 +483,36 @@ mod tests {
             ],
             vec!["e".into()],
         )
+    }
+
+    #[test]
+    fn test_parallel_signals_equal_serial_bitwise() {
+        let recall = CoarseRecallBuilder::new()
+            .with_graph(build_simple_graph())
+            .with_cochange(CoChangeMatrix::new())
+            .build()
+            .expect("build should succeed");
+        let seed_clv = make_clv(7);
+        let module_clvs: HashMap<ModuleId, CLV> = ["a", "b", "c", "d", "e"]
+            .iter()
+            .map(|m| {
+                (
+                    m.to_string(),
+                    make_clv(m.bytes().fold(0u64, |a, b| a + b as u64)),
+                )
+            })
+            .collect();
+        let seeds = vec!["a".to_string(), "c".to_string()];
+        let input = CoarseRecallInput {
+            seed_modules: &seeds,
+            seed_clv: &seed_clv,
+            module_clvs: &module_clvs,
+            top_k: 10,
+        };
+        let candidates = recall.collect_candidates(&module_clvs);
+        let serial = recall.compute_signals_serial(&input, &candidates);
+        let parallel = recall.compute_signals(&input, &candidates);
+        assert_eq!(serial, parallel, "并行三信号必须与串行逐位相等");
     }
 
     #[test]

@@ -31,3 +31,5 @@ SesaActivationCompleted    # producer=sesa-router（gated_wiring_baseline.txt: D
 SsraFusionCompleted        # producer=ssra-fusion（gated_wiring_baseline.txt: DECORATIVE；ADR-188 B3-B4 债务）
 StreamSessionCompleted     # producer=mca-gateway（同 AffinityQuotaExhausted）
 WindowAffinityApplied      # producer=mca-gateway（同 AffinityQuotaExhausted）
+ProviderDegraded           # producer=mca-gateway（同 AffinityQuotaExhausted；R9/ADR-291 WP-B DegradedPublisher 补生产方，crate 为 GATED）
+ContextCapabilityUpdated   # producer=mca-gateway（同 AffinityQuotaExhausted；R9/ADR-291 WP-B 探针标定回写，crate 为 GATED）

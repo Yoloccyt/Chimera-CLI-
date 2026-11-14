@@ -2,7 +2,7 @@
 //! LAYER:    L10
 //! ROLE:     NEXUS-OMEGA L10 宿主层协议门面 — 核心-表面分离（WI-01）
 //! BACKEND:  memory
-//! PRODUCERS: 0 -
+//! PRODUCERS: 1 AgentTaskDelegated
 //! CONSUMERS: 2 chimera-cli,chimera-tui
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END

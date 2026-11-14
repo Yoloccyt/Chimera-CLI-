@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "gqep-executor"
 version.workspace = true
 edition.workspace = true
@@ -78,6 +78,18 @@ harness = false
 
 [[bench]]
 name = "toolplan_layers"
+harness = false
+
+# R12 W0（ADR-296）：偏斜 DAG 基准 —— 既有 toolplan_layers 只测单层，
+# 结构上测不出「层间 barrier 把长尾放大到整个后代」的代价，故补多层偏斜形状。
+[[bench]]
+name = "plan_dag_skew"
+harness = false
+
+# R12 W0（ADR-296）：跨执行面过订阅基准 —— 四面各 8 路 vs 共享 8 路预算的在飞峰值/makespan。
+# 用 bench 内最小复刻取基线，不引用 W6 才落地的 ResourceGovernor（先有判据后有实现）。
+[[bench]]
+name = "sched_plane"
 harness = false
 
 # E-5 第五例 opt-in：生产码唯二 expect(“validate 已保证”不变量)已改 fail-soft

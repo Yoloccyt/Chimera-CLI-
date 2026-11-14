@@ -110,4 +110,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- G-44: crash -> exit 2 (UNDECIDABLE, never a fake green)
+        print(f"[UNDECIDABLE] idle_wakeup_audit crashed: {exc}", file=sys.stderr)
+        sys.exit(2)

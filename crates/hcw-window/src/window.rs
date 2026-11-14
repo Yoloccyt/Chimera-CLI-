@@ -36,6 +36,8 @@ use tracing::{debug, info, warn};
 
 use crate::compressor::ContextCompressor;
 use crate::error::HcwError;
+// ADR-293: WindowGovernor/PlanContext/PlanSource 经 governor 模块（窗口装载计划）
+use crate::governor;
 use crate::selector::WindowSelector;
 use crate::selector_learner::SelectorLearnerHolder;
 use crate::types::HcwConfig;
@@ -156,6 +158,13 @@ pub struct HcwWindow {
     /// 内部 RwLock 读写分离（读 ~10ns / 写每秒<1 次），初始 fallback() ==
     /// `HcwConfig::default().selector_policy`（零行为变化保证，P2 计划 T1）
     selector_learner: Arc<SelectorLearnerHolder>,
+    // === HCW v3 P1（ADR-293）: 窗口装载计划 governor ===
+    /// governor 注入（None = 现状路径逐位不变——静态回退档）
+    ///
+    /// WHY Option 而非缺省 StaticGovernor:蓝图 §八「默认档=静态回退」，
+    /// 未装配时走既有路径零行为漂移；装配后仅 `select_window_with_context`
+    /// 消费（`select_window` 保持无上下文语义），定容只收缩不放大（min 合并）。
+    governor: Option<std::sync::Arc<dyn governor::WindowGovernor>>,
 }
 
 impl HcwWindow {
@@ -171,6 +180,8 @@ impl HcwWindow {
             config,
             // PROBE P2.1: 默认 fallback 持有器（与 config 默认策略一致）
             selector_learner: Arc::new(SelectorLearnerHolder::new()),
+            // ADR-293: 未装配 governor = 现状路径逐位不变（静态回退）
+            governor: None,
         })
     }
 
@@ -199,6 +210,27 @@ impl HcwWindow {
             event_bus,
             config,
             selector_learner: holder,
+            governor: None,
+        })
+    }
+
+    /// 创建 HcwWindow 并注入窗口装载 governor（HCW v3 P1，ADR-293）
+    ///
+    /// WHY 独立构造器:蓝图 §八「默认档=静态回退」——governor 是 opt-in 能力,
+    /// 既有构造点（20+）零破坏；`PlanContext` 由调用方在每次
+    /// [`Self::select_window_with_context`] 时传入（hcw 不感知 L8/L9/L10）。
+    pub fn with_governor(
+        config: HcwConfig,
+        event_bus: EventBus,
+        governor: std::sync::Arc<dyn governor::WindowGovernor>,
+    ) -> Result<Self, HcwError> {
+        config.validate()?;
+        Ok(Self {
+            state: Arc::new(RwLock::new(HcwState::new(WindowTier::L0))),
+            event_bus,
+            config,
+            selector_learner: Arc::new(SelectorLearnerHolder::new()),
+            governor: Some(governor),
         })
     }
 
@@ -378,6 +410,46 @@ impl HcwWindow {
     ///   条目,见 [`merge_compress_with_snapshot`]),合并后重验容量,超容走既有
     ///   "拒绝降级"分支。丢数据路径被差集合并封死,全程持锁不再必要。
     pub async fn select_window(&self, complexity: f32) -> Result<WindowTier, HcwError> {
+        self.select_window_inner(complexity, None).await
+    }
+
+    /// 带上下文的窗口选择（HCW v3 P1，ADR-293）——governor 动态定容入口
+    ///
+    /// WHY 独立方法:`PlanContext` 由调用方采集传入（hcw 不感知 L8 decb /
+    /// L9 TTG / L10 mca-gateway——蓝图 §5.2 依赖铁律）；governor 定容
+    /// **只收缩不放大**（min 合并进既有 effective_capacity），未装配
+    /// governor 时逐位委托 [`Self::select_window`] 现状路径。
+    /// 每次 plan 产出即发布 `WindowPlanApplied`（双跑对照与快照回放锚点）。
+    pub async fn select_window_with_context(
+        &self,
+        complexity: f32,
+        ctx: &governor::PlanContext,
+    ) -> Result<WindowTier, HcwError> {
+        let gov = match &self.governor {
+            Some(g) => g,
+            // 未装配 governor:静态回退,委托现状路径(逐位不变)
+            None => return self.select_window(complexity).await,
+        };
+        let plan = gov.plan(ctx);
+        // 事件先于窗口操作发布(观测留痕;Normal 观测面,失败不阻断——
+        // publish 内部对 error 的处理与既有 publish_* 一致)
+        self.publish_window_plan_applied(&plan).await?;
+        // 静态回退 plan(resident_cap=u32::MAX)不收缩;Governor plan 走 min 合并
+        let cap_override = if plan.plan_source == governor::PlanSource::StaticFallback {
+            None
+        } else {
+            Some(plan.resident_cap as usize)
+        };
+        self.select_window_inner(complexity, cap_override).await
+    }
+
+    /// select_window 三阶段主体(ADR-288 协议)——`cap_override` 为 governor
+    /// 定容收缩项(None = 既有容量路径,行为逐位不变)
+    async fn select_window_inner(
+        &self,
+        complexity: f32,
+        cap_override: Option<usize>,
+    ) -> Result<WindowTier, HcwError> {
         // SubTask 17.1:惰性兜底 — 若 listener 尚未消费 pending_context_mask,在此消费
         self.apply_pending_mask_if_any().await?;
 
@@ -391,18 +463,25 @@ impl HcwWindow {
                 return Ok(target_tier);
             }
             // Task 4:传入 OSA 动态稀疏度,使 L3 实际容量随稀疏度自适应
-            let target_capacity = self
+            let mut target_capacity = self
                 .config
                 .effective_capacity_for(target_tier, state.last_sparsity);
+            // ADR-293:governor 定容收缩(只收缩不放大,min 合并)——
+            // 常驻上限约束同时作用于降级判定容量与压缩目标
+            if let Some(cap) = cap_override {
+                target_capacity = target_capacity.min(cap);
+            }
             if target_tier > current_tier || state.total_size() <= target_capacity {
                 // 升级或容量足够:短写锁内直接切换(不压缩,临界区无 CPU 大头)
-                SelectPlan::Switch { reason: format!("complexity={complexity}") }
+                SelectPlan::Switch {
+                    reason: format!("complexity={complexity}"),
+                }
             } else {
                 // 降级且需压缩:锁外计算
                 SelectPlan::Compress {
                     target_capacity,
-                    target_size: (((target_capacity as f32)
-                        * self.config.compression_threshold) as usize)
+                    target_size: (((target_capacity as f32) * self.config.compression_threshold)
+                        as usize)
                         .max(1),
                     snapshot: state.entries.clone(),
                     version: state.mutations,
@@ -766,8 +845,12 @@ impl HcwWindow {
         let (original_size, compressed_size) = {
             let mut state = self.state.write().await;
             let had_changes = state.mutations != version;
-            let merged =
-                merge_compress_with_snapshot(report.retained_entries, &state, &snapshot, had_changes);
+            let merged = merge_compress_with_snapshot(
+                report.retained_entries,
+                &state,
+                &snapshot,
+                had_changes,
+            );
             let merged_size: usize = merged.iter().map(|e| e.token_size).sum();
             if merged_size > capacity {
                 // 合并后仍超过容量(单条目超过容量),返回错误,不替换 entries
@@ -832,6 +915,39 @@ impl HcwWindow {
         );
         Ok(())
     }
+
+    /// 发布 WindowPlanApplied 事件（HCW v3 P1，ADR-293）
+    ///
+    /// WHY 每次 governor 产 plan 即发布:蓝图 §七 P1 验收线要求「同任务
+    /// WindowPlan 快照可回放」+ §八 双跑对照回滚——事件是快照回放的锚点。
+    /// Normal 观测面,发布失败随 `?` 上抛(与既有 publish_* 一致;
+    /// 调用方 select_window_with_context 的失败语义=窗口操作失败,
+    /// 与 ContextCompressed 发布失败同级别对待)。
+    async fn publish_window_plan_applied(
+        &self,
+        plan: &governor::WindowPlan,
+    ) -> Result<(), HcwError> {
+        let event = NexusEvent::WindowPlanApplied {
+            metadata: EventMetadata::new("hcw-window"),
+            resident_cap: plan.resident_cap,
+            page_budget: plan.page_budget,
+            tier_allocation_json: serde_json::to_string(&plan.tier_allocation).unwrap_or_else(
+                |_| {
+                    // 序列化失败(理论不可达:TierAlloc 是纯数字字段)回退空对象,
+                    // 保事件可发布——观测面不因载荷异常阻断窗口操作
+                    "{}".to_string()
+                },
+            ),
+            plan_source: plan.plan_source.as_str().to_string(),
+        };
+        self.event_bus.publish(event).await?;
+        debug!(
+            resident_cap = plan.resident_cap,
+            plan_source = plan.plan_source.as_str(),
+            "WindowPlanApplied 事件已发布"
+        );
+        Ok(())
+    }
 }
 
 // ============================================================
@@ -890,6 +1006,7 @@ async fn apply_sparse_mask_to_state(
         original_count,
         retained_count,
         dropped_count,
+        folded_semantic: 0, // 稀疏化路径无语义折叠(W4b 折叠只在 importance-top-n 面)
         retained_entries: Vec::new(), // 不克隆,避免内存开销
         algorithm: "sparse-mask".into(),
     };
@@ -1057,12 +1174,8 @@ mod tests {
         assert_eq!(state.mutations, version + 1);
 
         let retained: Vec<Arc<ContextEntry>> = vec![Arc::clone(&snapshot[0])];
-        let merged = merge_compress_with_snapshot(
-            retained,
-            &state,
-            &snapshot,
-            state.mutations != version,
-        );
+        let merged =
+            merge_compress_with_snapshot(retained, &state, &snapshot, state.mutations != version);
         let ids: Vec<&str> = merged.iter().map(|e| e.id.as_str()).collect();
         assert!(ids.contains(&"a"), "快照既有条目应保留");
         assert!(
@@ -1080,12 +1193,8 @@ mod tests {
         let mut state = state;
         state.remove("a");
         let retained: Vec<Arc<ContextEntry>> = snapshot.clone();
-        let merged = merge_compress_with_snapshot(
-            retained,
-            &state,
-            &snapshot,
-            state.mutations != version,
-        );
+        let merged =
+            merge_compress_with_snapshot(retained, &state, &snapshot, state.mutations != version);
         let ids: Vec<&str> = merged.iter().map(|e| e.id.as_str()).collect();
         assert!(!ids.contains(&"a"), "已删除条目不应复活");
         assert!(ids.contains(&"b"));

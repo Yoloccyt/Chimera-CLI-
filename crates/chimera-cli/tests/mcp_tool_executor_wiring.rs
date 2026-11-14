@@ -25,6 +25,8 @@ fn config_with_mcp_server(id: &str, url: &str) -> ChimeraConfig {
                 id: id.to_string(),
                 url: Some(url.to_string()),
             }],
+            // R10 WP-T1:声明集缺省空集(fail-closed 语义不变)
+            declared_side_effects: Vec::new(),
         },
         ..ChimeraConfig::default()
     }
@@ -250,4 +252,182 @@ proptest! {
         };
         prop_assert!(err.contains("route:"), "name={:?} err={}", name, err);
     }
+}
+
+// ===========================================================================
+// R11 W1（ADR-295 D1）：声明表穿透 + MCP 并行解封
+// ===========================================================================
+//
+// 修复前的事实链：McpToolExecutor.declared_side_effects() 已返回配置表
+// （R10 WP-T1），但 ToolRuntime / exec_plan.rs 三装饰器只转发
+// capability_of / declared_tools，批量声明表在装饰器链被静默丢弃 ⇒
+// `effective_side_effect` 第三优先级查表恒空 ⇒ MCP 工具恒判「可能写」
+// 整层串行（并行封顶 = 0）。以下测试锁住修复后的两条语义：
+// ① 声明表穿透全链（build() 组合根 → 装饰器 → ToolRuntime → Composite → Mcp）；
+// ② 声明只读的工具在计划层内真并行，未声明仍保守串行（fail-closed 不放宽）。
+
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use async_trait::async_trait;
+use chimera_cli::exec_plan::{OpTimeoutExecutor, RuntimeToolExecutor};
+use gqep_executor::tool_runtime::ToolRuntime;
+use gqep_executor::toolplan_runner::{PlanGuards, PlanRunner, ToolExecutor};
+use nexus_contracts::tool_plan::{SideEffectDecl, ToolNode, ToolOp, ToolPlan};
+
+/// 记录「同时在飞峰值」并按批量声明表自报只读的探针执行器——
+/// 判据口径与 `gqep-executor/tests/toolplan_capability_table.rs` 一致
+/// （峰值是结构性证据，不用受宿主抖动影响的墙钟比值）。
+struct SideEffectProbeExecutor {
+    in_flight: Arc<AtomicUsize>,
+    peak: Arc<AtomicUsize>,
+    readonly_names: Vec<String>,
+}
+
+impl SideEffectProbeExecutor {
+    fn new(readonly_names: Vec<String>) -> Self {
+        Self {
+            in_flight: Arc::new(AtomicUsize::new(0)),
+            peak: Arc::new(AtomicUsize::new(0)),
+            readonly_names,
+        }
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for SideEffectProbeExecutor {
+    async fn execute(&self, _tool_name: &str, args_json: &str) -> Result<String, String> {
+        let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        self.peak.fetch_max(now, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+        Ok(args_json.to_string())
+    }
+
+    // 刻意不覆写 capability_of：走查表路径（声明表是本批的唯一供给面）
+    fn declared_tools(&self) -> Vec<String> {
+        self.readonly_names.clone()
+    }
+
+    fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+        self.readonly_names
+            .iter()
+            .map(|n| (n.clone(), SideEffectDecl::ReadOnly))
+            .collect()
+    }
+}
+
+/// n 个同层 ToolCall 节点（side_effect 留空 ⇒ 判定全靠声明表）
+fn probe_plan(n: usize) -> ToolPlan {
+    let nodes = (0..n)
+        .map(|i| ToolNode {
+            id: format!("t{i}"),
+            op: ToolOp::ToolCall,
+            tool_name: Some(format!("probe.tool.{i}")),
+            args_json: Some(format!(r#"{{"i":{i}}}"#)),
+            field: None,
+            predicate: None,
+            side_effect: None,
+        })
+        .collect();
+    ToolPlan {
+        id: format!("side-effect-probe-{n}"),
+        nodes,
+        edges: Vec::new(),
+    }
+}
+
+/// 把探针装进生产构造入口（with_optional_delegate）+ 生产装饰器链
+/// （RuntimeToolExecutor → OpTimeoutExecutor），返回最外层执行器与峰值句柄。
+fn probe_chain(readonly_names: Vec<String>) -> (OpTimeoutExecutor, Arc<AtomicUsize>) {
+    let probe = Arc::new(SideEffectProbeExecutor::new(readonly_names));
+    let peak = Arc::clone(&probe.peak);
+    let runtime = ToolRuntime::with_optional_delegate(
+        Some(probe as Arc<dyn ToolExecutor>),
+        Vec::new(),
+        seccore::execpolicy::PolicyAction::Allow,
+    )
+    .expect("四环链装配（policy/sandbox/route/transport 恒齐备）");
+    let outermost = OpTimeoutExecutor {
+        inner: Arc::new(RuntimeToolExecutor {
+            inner: Arc::new(runtime),
+        }),
+        per_op_timeout: Duration::from_secs(5),
+    };
+    (outermost, peak)
+}
+
+/// 穿透契约：配置声明表必须经「build() 组合根 → RuntimeToolExecutor →
+/// OpTimeoutExecutor」全链到达最外层；缺省配置恒空集（fail-closed 不放宽）。
+#[tokio::test]
+async fn declared_side_effects_flow_through_full_decorator_chain() {
+    use nexus_core::config::DeclaredSideEffectEntry;
+
+    let mut cfg = config_with_mcp_server("docsrv", "http://192.0.2.55:8080");
+    cfg.mcp.declared_side_effects.push(DeclaredSideEffectEntry {
+        tool: "mcp.docsrv.search".to_string(),
+        effect: SideEffectDecl::ReadOnly,
+    });
+    let ctx = build(&cfg).expect("组合根装配应成功");
+    let outermost = OpTimeoutExecutor {
+        inner: Arc::new(RuntimeToolExecutor {
+            inner: Arc::clone(&ctx.tool_runtime),
+        }),
+        per_op_timeout: Duration::from_secs(5),
+    };
+    let table = outermost.declared_side_effects();
+    assert_eq!(
+        table.len(),
+        1,
+        "声明表必须穿透装饰器链+ToolRuntime+CompositeToolExecutor 到达最外层，实得 {table:?}"
+    );
+    assert_eq!(table[0].0, "mcp.docsrv.search");
+    assert_eq!(table[0].1, SideEffectDecl::ReadOnly);
+
+    // 反向对照：缺省（无声明）配置 ⇒ 最外层查表恒空集
+    let ctx_default = build(&config_with_mcp_server("docsrv", "http://192.0.2.55:8080"))
+        .expect("组合根装配应成功");
+    let outermost_default = OpTimeoutExecutor {
+        inner: Arc::new(RuntimeToolExecutor {
+            inner: Arc::clone(&ctx_default.tool_runtime),
+        }),
+        per_op_timeout: Duration::from_secs(5),
+    };
+    assert!(
+        outermost_default.declared_side_effects().is_empty(),
+        "缺省配置无声明 ⇒ 恒空集（未知 ⇒ 可能写 ⇒ 串行）"
+    );
+}
+
+/// 行为契约（解封正向）：声明只读的工具经生产构造入口 + 装饰器链后层内真并行。
+/// 修复前本测试必红——声明表在 ToolRuntime/装饰器层被丢弃，恒整层串行。
+#[tokio::test]
+async fn declared_readonly_tools_run_concurrent_through_production_chain() {
+    let n = 4;
+    let names = (0..n).map(|i| format!("probe.tool.{i}")).collect();
+    let (outermost, peak) = probe_chain(names);
+    let runner = PlanRunner::new(Box::new(outermost), PlanGuards::default()).with_concurrency(8);
+    let summary = runner.run(&probe_plan(n)).await.expect("计划必须执行成功");
+    assert_eq!(summary.tool_calls, n);
+    assert_eq!(summary.nodes_executed, n);
+    assert!(
+        peak.load(Ordering::SeqCst) > 1,
+        "声明只读 ⇒ 层内必须真并行（峰值 {}，整层串行=1）",
+        peak.load(Ordering::SeqCst)
+    );
+}
+
+/// 行为契约（fail-closed 反向）：无声明 ⇒ 保守串行，与修复前逐字同语义。
+#[tokio::test]
+async fn undeclared_tools_stay_serial_fail_closed() {
+    let n = 4;
+    let (outermost, peak) = probe_chain(Vec::new());
+    let runner = PlanRunner::new(Box::new(outermost), PlanGuards::default()).with_concurrency(8);
+    runner.run(&probe_plan(n)).await.expect("计划必须执行成功");
+    assert_eq!(
+        peak.load(Ordering::SeqCst),
+        1,
+        "未声明工具必须按「可能写」保守串行（峰值 1）"
+    );
 }

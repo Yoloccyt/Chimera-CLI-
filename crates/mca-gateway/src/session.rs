@@ -135,6 +135,12 @@ impl SessionStore {
                     role        TEXT NOT NULL,
                     blocks_msgpack BLOB NOT NULL,
                     PRIMARY KEY (session_id, turn_index)
+                );
+                CREATE TABLE IF NOT EXISTS thread_handles (
+                    session_id         TEXT PRIMARY KEY,
+                    provider           TEXT NOT NULL,
+                    provider_thread_id TEXT NOT NULL,
+                    updated_at         TEXT NOT NULL
                 );",
             )
             .map_err(|e| AffinityError::Unknown {
@@ -245,6 +251,100 @@ impl SessionStore {
                 });
             }
             Ok(out)
+        })
+        .await
+        .map_err(|e| AffinityError::Unknown {
+            raw: format!("spawn_blocking join error: {e}"),
+        })?
+    }
+
+    /// 记录厂商线程句柄映射(ADR-294:session_id → provider_thread_id 底座)
+    ///
+    /// WHY 本批只落存储不接 build_request:previous_response_id 增量续传
+    /// (TTFT 优化)需真实公测端点验证(GATED 留灰度批);本表是「厂商句柄↔
+    /// 本地线程」映射的持久化底座,upsert 语义(续轮刷新句柄)。
+    pub async fn set_thread_handle(
+        &self,
+        session_id: &str,
+        provider: &str,
+        provider_thread_id: &str,
+    ) -> Result<(), AffinityError> {
+        // 治理补齐（G-写敏感门 GAP-W）:厂商线程句柄虽为服务端返回值,仍按 tier-2
+        // 写入口纪律过敏感扫描(同 record_turn 的 Pass 降误报形态——句柄常含
+        // base64 片段);命中即拒绝入库,防外部可控文本携带凭证类载荷进入持久化面。
+        let scan_view = format!("{session_id}\n{provider}\n{provider_thread_id}");
+        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            ..Default::default()
+        };
+        if nexus_contracts::sensitive::scan(&scan_view, &scan_policy).is_blocked() {
+            return Err(AffinityError::Unknown {
+                raw: "thread handle blocked: sensitive credential detected".into(),
+            });
+        }
+        let sid = session_id.to_string();
+        let provider = provider.to_string();
+        let handle = provider_thread_id.to_string();
+        let conn = self.conn.clone();
+        spawn_blocking(move || -> Result<(), AffinityError> {
+            let conn = conn.lock().map_err(|p| AffinityError::Unknown {
+                raw: format!("thread_handles 锁中毒: {p}"),
+            })?;
+            conn.execute(
+                "INSERT INTO thread_handles (session_id, provider, provider_thread_id, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(session_id) DO UPDATE SET
+                    provider = excluded.provider,
+                    provider_thread_id = excluded.provider_thread_id,
+                    updated_at = excluded.updated_at",
+                rusqlite::params![
+                    sid,
+                    provider,
+                    handle,
+                    chrono::Utc::now().to_rfc3339()
+                ],
+            )
+            .map_err(|e| AffinityError::Unknown {
+                raw: format!("upsert thread_handles: {e}"),
+            })?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| AffinityError::Unknown {
+            raw: format!("spawn_blocking join error: {e}"),
+        })?
+    }
+
+    /// 读取厂商线程句柄(None = 该会话未建立过服务端线程)
+    pub async fn get_thread_handle(&self, session_id: &str) -> Result<Option<String>, AffinityError> {
+        let sid = session_id.to_string();
+        let conn = self.conn.clone();
+        spawn_blocking(move || -> Result<Option<String>, AffinityError> {
+            let conn = conn.lock().map_err(|p| AffinityError::Unknown {
+                raw: format!("thread_handles 锁中毒: {p}"),
+            })?;
+            let mut stmt = conn
+                .prepare(
+                    "SELECT provider_thread_id FROM thread_handles
+                     WHERE session_id = ?1",
+                )
+                .map_err(|e| AffinityError::Unknown {
+                    raw: format!("prepare thread_handles: {e}"),
+                })?;
+            let mut rows = stmt
+                .query(rusqlite::params![sid])
+                .map_err(|e| AffinityError::Unknown {
+                    raw: format!("query thread_handles: {e}"),
+                })?;
+            match rows.next().map_err(|e| AffinityError::Unknown {
+                raw: format!("next thread_handles: {e}"),
+            })? {
+                Some(row) => Ok(Some(row.get(0).map_err(|e| AffinityError::Unknown {
+                    raw: format!("get provider_thread_id: {e}"),
+                })?)),
+                None => Ok(None),
+            }
         })
         .await
         .map_err(|e| AffinityError::Unknown {
@@ -379,6 +479,40 @@ mod tests {
         }
         let history = store.history(sid).await.unwrap();
         assert_eq!(history, turns, "会话往返必须逐字保真且保序");
+    }
+
+    /// ADR-294:厂商线程句柄 upsert 往返——set 后 get 返回同值;
+    /// 同 session 重 set 刷新(upsert);未设置的会话返回 None
+    #[tokio::test]
+    async fn thread_handle_upsert_roundtrip() {
+        let store = SessionStore::open(":memory:").await.unwrap();
+        assert!(
+            store.get_thread_handle("sess-h").await.unwrap().is_none(),
+            "未设置句柄前应返回 None"
+        );
+        store
+            .set_thread_handle("sess-h", "anthropic", "thread_abc")
+            .await
+            .unwrap();
+        assert_eq!(
+            store.get_thread_handle("sess-h").await.unwrap().as_deref(),
+            Some("thread_abc"),
+            "set 后 get 返回句柄"
+        );
+        // 同 session 重 set:upsert 刷新(续轮句柄轮换)
+        store
+            .set_thread_handle("sess-h", "anthropic", "thread_def")
+            .await
+            .unwrap();
+        assert_eq!(
+            store.get_thread_handle("sess-h").await.unwrap().as_deref(),
+            Some("thread_def"),
+            "upsert 刷新句柄"
+        );
+        assert!(
+            store.get_thread_handle("sess-other").await.unwrap().is_none(),
+            "会话间句柄隔离"
+        );
     }
 
     #[tokio::test]

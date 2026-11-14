@@ -25,7 +25,7 @@
 #   NEW public types with no row are red, and a row whose type moved/disappeared is STALE
 #   red -- so a W3-style physical move must re-key rows in the same commit.
 #
-# CLAIM types=231 listed=231 open=57 closed=174
+# CLAIM types=235 listed=235 open=58 closed=177
 #
 # CURRENT STATE (machine-verified: G-115 recomputes the CLAIM line above from the live tree
 # plus these rows on every run, so this paragraph can no longer rot in silence -- ADR-218):
@@ -190,6 +190,10 @@ STRUCT | type=mca/affinity::SamplingParams | class=open | reason=ADR-215 D-23: e
 STRUCT | type=mca/affinity::TokenCacheKey | class=closed
 STRUCT | type=mca/affinity::ToolDecl | class=closed
 STRUCT | type=mca/affinity::UsageReport | class=closed
+ENUM | type=mca/context_capability::CalibrationTier | class=closed | reason=R9/ADR-291: three-tier confidence set fixed by blueprint §5.3 (ExternalPrior/OwnProbe/Inferred); new tier = breaking change + ADR
+ENUM | type=mca/context_capability::ThreadSupport | class=closed | reason=R9/ADR-291: None/Beta/Stable set fixed by blueprint §5.2; Beta expiry payload is data not variant
+STRUCT | type=mca/context_capability::ContextCapabilityProfile | class=open | reason=R9/ADR-291: #[non_exhaustive] + new() sole constructor — gateway-side fields may grow with provider capability surface (blueprint §5.2)
+STRUCT | type=mca/context_capability::PricingTier | class=closed | reason=R9/ADR-291: threshold/factor two-field pair, integer-percent convention; pricing shape changes are breaking by design
 STRUCT | type=mca/omni_message::ModelConfig | class=closed
 STRUCT | type=mca/omni_message::TokenUsage | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15
 STRUCT | type=mca/price_vector::ModelPrice | class=open | reason=ADR-215 D-23: evolving data carrier (report/payload/config surface); zero external literal measured 2026-10-15

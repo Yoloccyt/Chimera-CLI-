@@ -32,11 +32,31 @@ use crate::types::MemoryId;
 /// 每节点语义边的近邻数上界(边数 = O(n·k))
 const SEMANTIC_EDGE_TOP_K: usize = 8;
 
-/// 语义建边规模切换阈值:节点数 > 该值时走 HNSW 候选生成
+/// 语义建边规模切换阈值:节点数 ≥ 该值时走 HNSW 候选生成
 ///
 /// WHY 1000:criterion 实测精确路径 1K=464ms(可接受)、2K=2.15s(平方增长),
 /// 阈值经 Stage C 基线报告从 10K 下修至 1K(性能可证伪,不接受外推乐观)。
+///
+/// R12 W2 订正(ADR-297 D1):判据由 `>` 改为 `>=`。原因是 R12 W0 取基线时实测到
+/// **同一个 bench 的三档读数非单调**:`1000=426.88ms`(精确路径,O(n²·512))
+/// 反而比 `2000=102.20ms`(HNSW)慢 **4.2×** —— 1000 恰好落在 `>` 的排除侧。
+/// 改 `>=` 后阈值点本身走 HNSW,曲线在该点连续。
+///
+/// 注意:这只是**把断崖从 1000 挪到 999**,没有消除它(999 仍是 O(n²))。
+/// 真正的消除需要把阈值继续下修到 crossover 附近(见 `memory_graph_edges` bench 的
+/// 999/1000/1001 三档),但那会改变 n ∈ (新阈值, 1000) 区间的建边语义(精确 → 近似),
+/// 属行为变更,须独立裁决;本波只做边界订正并把残余断崖测出来,不擅自改语义。
 const HNSW_SWITCH_THRESHOLD: usize = 1000;
+
+/// 规模路由判定 —— 纯函数,使"在阈值点走哪条路"可被结构测试直接钉住
+///
+/// WHY 抽成函数:原实现把判据内联在 `build_semantic_edges` 里,`>` 与 `>=` 的差别
+/// 只能靠"建边结果的近似差异"间接观察(不可靠)。抽出来后既可被单测直接断言,
+/// 也让后续下修阈值只改一处。
+#[inline]
+fn uses_hnsw(node_count: usize) -> bool {
+    node_count >= HNSW_SWITCH_THRESHOLD
+}
 
 /// HNSW 每层最大连接数(M 参数;与 repo-wiki HnswStore 生产默认一致,
 /// Malkov & Yashunin 2016 论文推荐 M ∈ [16, 48])
@@ -133,13 +153,13 @@ impl MemoryGraph {
         self.nodes.insert(node.node_id.clone(), node);
     }
 
-    /// 构建语义边 — 规模路由:≤1K 精确 Top-K,>1K HNSW 候选生成
+    /// 构建语义边 — 规模路由:`< 1K` 精确 Top-K,`≥ 1K` HNSW 候选生成
     ///
     /// 对每个节点连接 Top-K 最相似近邻中相似度 > threshold 者(双向语义边)。
-    /// 规模路由(Phase 8.3):
-    /// - **≤ `HNSW_SWITCH_THRESHOLD`**:精确全对打分 + `select_nth_unstable`
-    ///   Top-K(小规模精确且足够快,1K=464ms 实测)
-    /// - **> `HNSW_SWITCH_THRESHOLD`**:HNSW 索引查询 Top-K 候选(O(n·log n),
+    /// 规模路由(Phase 8.3;边界判据 R12 W2 由 `>` 订正为 `>=`):
+    /// - **< `HNSW_SWITCH_THRESHOLD`**:精确全对打分 + `select_nth_unstable`
+    ///   Top-K(小规模精确;1K 以下最坏 ≈ 400ms,见常量处的订正说明)
+    /// - **≥ `HNSW_SWITCH_THRESHOLD`**:HNSW 索引查询 Top-K 候选(O(n·log n),
     ///   规避 O(n²·512) 平方增长)
     ///
     /// 两路径产出的边语义等价(均为"每节点连 Top-K 超阈值近邻"),
@@ -151,7 +171,7 @@ impl MemoryGraph {
             edges.retain(|e| e.edge_type != EdgeType::SemanticRelated);
         }
 
-        if ids.len() > HNSW_SWITCH_THRESHOLD {
+        if uses_hnsw(ids.len()) {
             self.build_semantic_edges_hnsw(&ids, threshold);
         } else {
             self.build_semantic_edges_exact(&ids, threshold);
@@ -468,6 +488,34 @@ mod tests {
         // query 与 a 正交,种子相似度 0 < 0.5 → 空召回
         let results = graph.recall_with_graph(&unit_clv(1), 2, 10);
         assert!(results.is_empty());
+    }
+
+    /// R12 W2(ADR-297 D1):阈值点本身必须走 HNSW —— 钉住 `>=` 判据
+    ///
+    /// 回归背景:判据曾是 `>`，于是 `n == HNSW_SWITCH_THRESHOLD` 恰好落在精确路径，
+    /// 实测 `1000=426.88ms` 反而比 `2000=102.20ms`(HNSW) 慢 4.2×（R12 W0 基线）。
+    /// 本断言直接钉住"边界归谁"，避免有人把判据改回 `>` 而不被任何测试发现。
+    /// 阳性对照在下方 `threshold_minus_one_stays_exact`：只差一个节点就换路，
+    /// 说明这条断言不是恒真。
+    #[test]
+    fn threshold_point_uses_hnsw() {
+        assert!(
+            uses_hnsw(HNSW_SWITCH_THRESHOLD),
+            "阈值点 n={HNSW_SWITCH_THRESHOLD} 必须走 HNSW（否则断崖回到 4.2× 倒挂）"
+        );
+        assert!(
+            uses_hnsw(HNSW_SWITCH_THRESHOLD + 1),
+            "阈值点以上必须走 HNSW"
+        );
+    }
+
+    /// 阳性对照：阈值下一节点仍走精确路径（判据不是"恒真"）
+    #[test]
+    fn threshold_minus_one_stays_exact() {
+        assert!(
+            !uses_hnsw(HNSW_SWITCH_THRESHOLD - 1),
+            "阈值下一节点应仍走精确路径；若此断言失败，说明判据被改成了恒真（如 `true`）"
+        );
     }
 
     /// Phase 8.3:>1K 节点触发 HNSW 路径,相同向量簇应建立语义边

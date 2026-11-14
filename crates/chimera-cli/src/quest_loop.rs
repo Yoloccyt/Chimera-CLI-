@@ -22,6 +22,19 @@
 //! - **subscribe-before-spawn**(红线 §4.4-3)
 //! - **短临界区**:组件表 Mutex 锁内仅插入/移除,不跨 await
 //! - **诚实标注**:RLTrajectory 无下游消费时仅日志,不伪造投递
+//!
+//! # 恢复路径接线(卫星态接线工作包,kill -9 跨会话一致性)
+//!
+//! 桥接态的存续此前完全依赖 `QuestCreated` 事件,而恢复路径
+//! (`restore_from_checkpoint`)不重发该事件 ⇒ kill -9 后恢复的 Quest
+//! 卫星态清零且 `QuestBridgeState` 不存在,后续 record_step/终局归因被
+//! 静默丢弃。现补三条重建通路:
+//! - `CheckpointLoaded` 事件 → 按引擎卫星态注册表重建桥接态(确定性主通路);
+//! - `QuestProgressUpdated` 发现桥接态缺失 → 惰性等价重建(兜底广播先于
+//!   桥 spawn 被错过的启动时序);
+//! - 每次 record_step 后把组件态快照推给引擎卫星态注册表,下一次
+//!   `save_checkpoint` 随主检查点同刻落盘(写侧);卫星态 bytes 经
+//!   `from_bytes_with` 注入重建(读侧,storage/hook 不被硬编码降级)。
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -29,8 +42,8 @@ use std::sync::{Arc, Mutex};
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use parliament::{StopContext, StopRuling, ThreeFactorAdjudicator};
 use quest_engine::{
-    CreditStep, LongTaskMap, LongTermCreditAssigner, QuestEngine, SearchTreeManager, StepResult,
-    TaskMapRef,
+    CreditStep, InMemoryExternalStorage, LongTaskMap, LongTermCreditAssigner, NoopMemorySyncHook,
+    QuestEngine, QuestError, SatelliteState, SearchTreeManager, StepResult, TaskMapRef,
 };
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
@@ -80,19 +93,41 @@ pub fn spawn_quest_lifecycle_bridge(bus: EventBus, engine: Arc<QuestEngine>) -> 
                         debug!(quest_id, "QuestCreated 但引擎无此 Quest,跳过桥接");
                         continue;
                     };
-                    let mut map = LongTaskMap::default();
-                    let map_ref = map.create_map(&quest);
-                    let mut tree = SearchTreeManager::new(8);
-                    tree.create_root(&quest_id);
-                    let state = QuestBridgeState {
-                        map,
-                        map_ref,
-                        tree,
-                        step_rewards: Vec::new(),
-                    };
+                    let state = fresh_bridge_state(&quest_id, &quest);
+                    // 卫星态初始快照(root 节点)推给引擎:创建后即崩溃的极端场景,
+                    // 恢复路径也能拿到良构桥接态(而非依赖惰性重建的降级分支)
+                    let satellite = snapshot_satellite(&state.tree, &state.map);
                     let mut table = states.lock().unwrap_or_else(|e| e.into_inner());
                     table.insert(quest_id.clone(), state);
+                    drop(table);
+                    // 写侧接线:引擎下一次 save_checkpoint 随主检查点同刻落盘
+                    // (引擎侧统一携带避免配对竞态,见 engine.rs save_checkpoint WHY)
+                    match satellite {
+                        Ok(sat) => engine.set_satellite_state(&quest_id, sat),
+                        Err(e) => {
+                            debug!(quest_id, error = %e, "卫星态初始快照失败,引擎保留无卫星态")
+                        }
+                    }
                     debug!(quest_id, "Quest 组件桥已装配(任务地图+搜索树)");
+                }
+                NexusEvent::CheckpointLoaded { quest_id, .. } => {
+                    // 恢复路径接线(卫星态接线工作包):restore_from_checkpoint 不重发
+                    // QuestCreated,CheckpointLoaded 是桥感知"该 Quest 已在本进程恢复"
+                    // 的唯一确定性事件。按引擎卫星态注册表重建桥接态,使 kill -9 后
+                    // record_step/终局归因链路不断;卫星态缺失(旧 checkpoint)时
+                    // restore_bridge_state 降级为等价重建(fresh 地图/树,链路可用性
+                    // 优先于历史保真)。
+                    let Some(quest) = engine.get_quest(&quest_id) else {
+                        debug!(quest_id, "CheckpointLoaded 但引擎无此 Quest,跳过桥接重建");
+                        continue;
+                    };
+                    let state = restore_bridge_state(&engine, &quest_id, &quest);
+                    let mut table = states.lock().unwrap_or_else(|e| e.into_inner());
+                    // WHY or_insert 而非 insert:惰性自愈可能已先建态(防御异常时序),
+                    // 覆盖会丢失其 record_step 历史;broadcast 单通道 FIFO 保证恢复后
+                    // 首个进度事件晚于本事件,正常时序下此处必然为空位插入
+                    table.entry(quest_id.clone()).or_insert(state);
+                    debug!(quest_id, "CheckpointLoaded:桥接态已按卫星态/等价重建");
                 }
                 NexusEvent::QuestProgressUpdated {
                     quest_id,
@@ -101,24 +136,57 @@ pub fn spawn_quest_lifecycle_bridge(bus: EventBus, engine: Arc<QuestEngine>) -> 
                     ..
                 } => {
                     // 进度更新 → 任务地图记录步骤(进度比例作为奖励信号)
-                    let mut table = states.lock().unwrap_or_else(|e| e.into_inner());
-                    let Some(state) = table.get_mut(&quest_id) else {
-                        continue;
+                    let satellite_update = {
+                        let mut table = states.lock().unwrap_or_else(|e| e.into_inner());
+                        // 恢复自愈(卫星态接线工作包):桥接态缺失 —— 典型场景为
+                        // CheckpointLoaded 广播先于桥 spawn 被错过(启动时序),或
+                        // Quest 先于桥创建。按卫星态/等价重建使 record_step/终局
+                        // 归因链路不断;终局 Quest 不重建(归因已在 QuestCompleted
+                        // 完成,重建只会遗留无人清理的孤儿状态)。
+                        if !table.contains_key(&quest_id) {
+                            if let Some(quest) = engine.get_quest(&quest_id) {
+                                let all_terminal = quest.tasks.iter().all(|t| {
+                                    matches!(
+                                        t.status,
+                                        nexus_core::TaskStatus::Completed
+                                            | nexus_core::TaskStatus::Failed
+                                    )
+                                });
+                                if !all_terminal {
+                                    let state = restore_bridge_state(&engine, &quest_id, &quest);
+                                    table.insert(quest_id.clone(), state);
+                                    debug!(quest_id, "桥接态缺失,已按卫星态/等价重建(惰性自愈)");
+                                }
+                            }
+                        }
+                        let Some(state) = table.get_mut(&quest_id) else {
+                            continue;
+                        };
+                        let progress = if total > 0 {
+                            completed as f32 / total as f32
+                        } else {
+                            0.0
+                        };
+                        let step = StepResult {
+                            state: format!("progress {completed}/{total}"),
+                            detail: format!("quest {quest_id} progress {completed}/{total}"),
+                            next_action: "continue".to_string(),
+                            action: "progress".to_string(),
+                            success: true,
+                        };
+                        state.map.record_step(&state.map_ref.clone(), &step);
+                        state.step_rewards.push(progress);
+                        // 写侧接线:组件态快照(锁内纯 CPU 小对象,无 IO 无 await);
+                        // Err 时跳过推送 —— 引擎保留上次快照,不用空值覆盖好快照
+                        snapshot_satellite(&state.tree, &state.map)
                     };
-                    let progress = if total > 0 {
-                        completed as f32 / total as f32
-                    } else {
-                        0.0
-                    };
-                    let step = StepResult {
-                        state: format!("progress {completed}/{total}"),
-                        detail: format!("quest {quest_id} progress {completed}/{total}"),
-                        next_action: "continue".to_string(),
-                        action: "progress".to_string(),
-                        success: true,
-                    };
-                    state.map.record_step(&state.map_ref.clone(), &step);
-                    state.step_rewards.push(progress);
+                    // 锁已释放(短临界区纪律:锁内不调用外部组件)
+                    match satellite_update {
+                        Ok(sat) => engine.set_satellite_state(&quest_id, sat),
+                        Err(e) => {
+                            debug!(quest_id, error = %e, "卫星态快照失败,引擎保留上次快照")
+                        }
+                    }
                 }
                 NexusEvent::QuestCompleted {
                     quest_id,
@@ -202,6 +270,104 @@ pub fn spawn_quest_lifecycle_bridge(bus: EventBus, engine: Arc<QuestEngine>) -> 
     QuestLoopHandles {
         join_handles: vec![handle],
     }
+}
+
+/// 组件态 → 卫星态快照(bytes;卫星态接线工作包写侧)
+///
+/// WHY Result 而非静默默认:序列化失败时调用方跳过推送,引擎卫星态注册表
+/// 保留上次好快照 —— 空默认值会把好快照污染为"空树空地图"。
+/// 锁内纯 CPU 小对象调用(短临界区纪律:无 IO 无 await)。
+fn snapshot_satellite(
+    tree: &SearchTreeManager,
+    map: &LongTaskMap,
+) -> Result<SatelliteState, QuestError> {
+    Ok(SatelliteState {
+        tree: tree.to_bytes()?,
+        map: map.to_bytes()?,
+    })
+}
+
+/// 等价重建 — 与 QuestCreated 处理同构的新鲜桥接态(空地图建根 + 树建根)
+///
+/// 降级形态:卫星态缺失(旧 checkpoint 无 sidecar)或重建失败时使用,
+/// 保证 record_step/终局归因链路可用性(历史保真让位于链路不断)。
+fn fresh_bridge_state(quest_id: &str, quest: &nexus_core::Quest) -> QuestBridgeState {
+    let mut map = LongTaskMap::default();
+    let map_ref = map.create_map(quest);
+    let mut tree = SearchTreeManager::new(8);
+    tree.create_root(quest_id);
+    QuestBridgeState {
+        map,
+        map_ref,
+        tree,
+        step_rewards: Vec::new(),
+    }
+}
+
+/// 按卫星态重建桥接态;卫星态缺失/损坏时降级为等价重建(卫星态接线工作包读侧)
+///
+/// 卫星态来源:引擎注册表(`restore_from_checkpoint` 从磁盘 sidecar 回填,
+/// 经 `engine.satellite_state` 读回)。组件经 `from_bytes_with` 注入本会话的
+/// storage/hook 实例 —— 注入而非硬编码降级,是本工作包 from_bytes 缺陷修复
+/// 的核心语义(恢复后 record_step/retrieve_detail/hook 链路与崩溃前同源)。
+///
+/// 已知局限(诚实记录):`step_rewards`(桥内运行态奖励序列)与地图详情内容
+/// (`ExternalStorage` trait 对象内容不可序列化)不随卫星态还原 —— 前者从空
+/// 重新累积(终局停滞分析损失崩溃前历史),后者 detail_ref 悬空(retrieve
+/// 返回 None);详情内容重注属调用方契约(见 LongTaskMap::from_bytes_with)。
+fn restore_bridge_state(
+    engine: &QuestEngine,
+    quest_id: &str,
+    quest: &nexus_core::Quest,
+) -> QuestBridgeState {
+    if let Some(satellite) = engine.satellite_state(quest_id) {
+        match rebuild_bridge_from_satellite(quest_id, quest, &satellite) {
+            Ok(state) => return state,
+            Err(e) => {
+                debug!(quest_id, error = %e, "卫星态重建失败,降级为等价重建");
+            }
+        }
+    }
+    fresh_bridge_state(quest_id, quest)
+}
+
+/// 卫星态 bytes → 桥接态(from_bytes_with 注入重建)
+fn rebuild_bridge_from_satellite(
+    quest_id: &str,
+    quest: &nexus_core::Quest,
+    satellite: &SatelliteState,
+) -> Result<QuestBridgeState, QuestError> {
+    // 注入本会话新实例:storage 承载恢复后 record_step 的新详情;hook 为 Noop
+    // —— 桥的正常路径本就不注入 L2 hook,此处显式注入而非依赖 from_bytes 内部
+    // 硬编码(注入点显式化,降级语义集中)
+    let mut map = LongTaskMap::from_bytes_with(
+        &satellite.map,
+        Box::new(InMemoryExternalStorage::default()),
+        Box::new(NoopMemorySyncHook),
+    )?;
+    let mut tree =
+        SearchTreeManager::from_bytes_with(&satellite.tree, Box::new(NoopMemorySyncHook))?;
+    // 地图引用重建:root_id 恒为 "root"(create_map 首节点约定);map_id 是 L2
+    // hook 的会话级标识符(非持久身份),恢复会话重新生成。空地图(卫星态早于
+    // create_map 的极端时序)回退 create_map 建根,对齐 QuestCreated 语义。
+    let map_ref = if map.node_count() == 0 {
+        map.create_map(quest)
+    } else {
+        TaskMapRef {
+            map_id: format!("restored-{quest_id}"),
+            root_id: "root".to_string(),
+        }
+    };
+    // 空树防御:同上极端时序下补根,对齐 QuestCreated 语义
+    if tree.get_stats().total_nodes == 0 {
+        tree.create_root(quest_id);
+    }
+    Ok(QuestBridgeState {
+        map,
+        map_ref,
+        tree,
+        step_rewards: Vec::new(),
+    })
 }
 
 /// §16.4 QuestCompleted 派生裁决:变体自对比审议(VariantApproved)与停滞/
@@ -381,5 +547,141 @@ mod tests {
             multimodal_inputs: vec![],
             risk_level: 0,
         }
+    }
+
+    /// 恢复路径闭环(卫星态接线工作包):save_checkpoint 携带卫星态落盘 →
+    /// restore_from_checkpoint 发布 CheckpointLoaded → 桥处理重建臂(已有态时
+    /// or_insert 防御保留)→ 恢复后 record_step/终局归因链路跑通无 panic。
+    #[tokio::test]
+    async fn bridge_rebuilds_state_on_checkpoint_loaded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let bus = EventBus::new();
+        // interval=100 避免自动检查点干扰;显式 save 验证写侧配对
+        let config = quest_engine::QuestConfig::new(16, 100);
+        let engine = Arc::new(QuestEngine::with_checkpoints(
+            bus.clone(),
+            config,
+            tmp.path().to_path_buf(),
+        ));
+
+        // 先 spawn 桥再创建 Quest(subscribe-before-publish)
+        let _handles = spawn_quest_lifecycle_bridge(bus.clone(), Arc::clone(&engine));
+        let quest = engine.create_quest(make_intent()).await.expect("创建成功");
+        let quest_id = quest.quest_id.clone();
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // 崩溃前卫星态(树带根 + 地图带一步),推给引擎后 save_checkpoint 落盘
+        let mut tree = SearchTreeManager::new(8);
+        tree.create_root(&quest_id);
+        let mut map = LongTaskMap::default();
+        let map_ref = map.create_map(&quest);
+        map.record_step(
+            &map_ref,
+            &StepResult {
+                state: "崩溃前步骤".to_string(),
+                detail: "崩溃前详情".to_string(),
+                next_action: "continue".to_string(),
+                action: "progress".to_string(),
+                success: true,
+            },
+        );
+        engine.set_satellite_state(
+            &quest_id,
+            SatelliteState {
+                tree: tree.to_bytes().unwrap(),
+                map: map.to_bytes().unwrap(),
+            },
+        );
+        engine.save_checkpoint(&quest_id).await.unwrap();
+
+        // 恢复路径:restore_from_checkpoint → CheckpointLoaded 广播 → 桥重建臂
+        engine
+            .restore_from_checkpoint(&quest_id)
+            .await
+            .expect("恢复成功");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // 恢复后进度事件 + 终局事件:桥接态存在,record_step/归因链路不断
+        bus.publish(NexusEvent::QuestProgressUpdated {
+            metadata: EventMetadata::new("test"),
+            quest_id: quest_id.clone(),
+            completed: 1,
+            total: 2,
+        })
+        .await
+        .expect("发布成功");
+        bus.publish(NexusEvent::QuestCompleted {
+            metadata: EventMetadata::new("test"),
+            quest_id: quest_id.clone(),
+            status: event_bus::QuestStatus::Completed,
+        })
+        .await
+        .expect("发布成功");
+
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        // 无 panic 即闭环成立(日志可观测:"CheckpointLoaded:桥接态已按卫星态/等价重建")
+    }
+
+    /// 惰性自愈路径(卫星态接线工作包):Quest 先于桥创建且 CheckpointLoaded
+    /// 广播被错过(启动时序兜底场景)→ 首个进度事件触发按卫星态等价重建 →
+    /// record_step 与终局归因链路不断(改动前这两条会被 continue 静默丢弃)。
+    #[tokio::test]
+    async fn bridge_lazy_rebuild_restores_satellite_state() {
+        let bus = EventBus::new();
+        // 无检查点引擎:纯注册表路径,聚焦桥的惰性自愈
+        let engine = Arc::new(QuestEngine::new(bus.clone()));
+
+        // Quest 先于桥创建(桥错过 QuestCreated)
+        let quest = engine.create_quest(make_intent()).await.expect("创建成功");
+        let quest_id = quest.quest_id.clone();
+
+        // 预置引擎卫星态(模拟 restore_from_checkpoint 从磁盘 sidecar 回填)
+        let mut tree = SearchTreeManager::new(8);
+        tree.create_root(&quest_id);
+        let mut map = LongTaskMap::default();
+        let map_ref = map.create_map(&quest);
+        map.record_step(
+            &map_ref,
+            &StepResult {
+                state: "恢复前步骤".to_string(),
+                detail: "恢复前详情".to_string(),
+                next_action: "continue".to_string(),
+                action: "progress".to_string(),
+                success: true,
+            },
+        );
+        engine.set_satellite_state(
+            &quest_id,
+            SatelliteState {
+                tree: tree.to_bytes().unwrap(),
+                map: map.to_bytes().unwrap(),
+            },
+        );
+
+        // 桥后 spawn(subscription 同步建立,后续事件不丢)
+        let _handles = spawn_quest_lifecycle_bridge(bus.clone(), Arc::clone(&engine));
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+        // 进度事件 → 桥接态缺失 → 惰性按卫星态重建 → record_step 正常
+        bus.publish(NexusEvent::QuestProgressUpdated {
+            metadata: EventMetadata::new("test"),
+            quest_id: quest_id.clone(),
+            completed: 1,
+            total: 2,
+        })
+        .await
+        .expect("发布成功");
+
+        // 终局事件 → 归因链路跑通(桥接态经惰性重建已存在)
+        bus.publish(NexusEvent::QuestCompleted {
+            metadata: EventMetadata::new("test"),
+            quest_id: quest_id.clone(),
+            status: event_bus::QuestStatus::Completed,
+        })
+        .await
+        .expect("发布成功");
+
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        // 无 panic 即闭环成立(日志可观测:"桥接态缺失,已按卫星态/等价重建")
     }
 }

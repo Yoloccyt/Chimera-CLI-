@@ -506,7 +506,7 @@ jobs:
               "tiering":            ["apply_decision", "handle_quest_created"],
               "gather":             ["gather", "entangle_alone"],
               "produce_verify":     ["produce_verify", "produce_only", "verify_only"],
-              "command_validator":  ["mixed"],
+              "command_validator":  ["_mixed"],
               # 预留 WS-2(nexus-contracts xts_top_k),id 串含 "xts_top_k n=" 前缀
               "xts_top_k":          ["xts_top_k"],
               # 关键词取 criterion 目录名(bench_function 第一参数)的子串,三者互不重叠;
@@ -541,7 +541,8 @@ jobs:
               "tplan_declared_parallel":   ["toolplan_layers/readonly8_ms2/8"],
               "tplan_undeclared_serial":   ["toolplan_layers/undeclared8_ms2/1"],
               "tplan_undeclared_parallel": ["toolplan_layers/undeclared8_ms2/8"],
-              # T1：混层 c8 叶子路径（用 7r1w_ms2/8 避开 command_validator 词条 "mixed" 子串串台，I2）
+              # T1：混层 c8 叶子路径（用 7r1w_ms2/8 避开 command_validator 词条串台，I2；
+              # command_validator 收窄为 "_mixed" 以免同时命中 mixed7r1w）
               "tplan_mixed_parallel":      ["7r1w_ms2/8"],
               # ADR-260：spol_* 词条（跨 R∈{4,32,256} max median 归并；I2 已机检零重叠）
               "spol_opt_hit":  ["opt/hit_R"],

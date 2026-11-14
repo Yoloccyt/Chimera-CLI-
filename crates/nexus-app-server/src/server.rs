@@ -14,6 +14,23 @@
 //! # 断线恢复（WI-01 验收）
 //! 客户端持 `last_item_id`，重连后经 [`AppServer::replay_since`] 回放增量
 //! （Item 全量存于会话快照，kill -9 后重连渲染一致）。
+//!
+//! # threads 404 回放桥（ADR-292 D4，P3 桥——读面从预留转生产）
+//!
+//! ADR-292 修订 ADR-290 D4（追溯 ADR-259 D3/U-08 的预留裁决）：Anthropic
+//! Message threads 的 `continue` 返回 404（服务端线程 best-effort，空闲过期）
+//! 时，harness 必须重新 `create`——按 Thread 段**完整回放重建对话**。
+//! 本文件承载桥的两端：
+//!
+//! - **写面**：`thread_start` 落 `thread.started`（流首事件契约）、`turn_submit`
+//!   落 `item.append`（D1 schema，append-only，不动 `turn.submit` 既有路径）；
+//! - **读面**：[`AppServer::replay_thread_from_store`] 线程级回放入口（经
+//!   `CbmrWriter::replay_session` 段文件权威源 → `rebuild_items` 纯函数重构），
+//!   生产调用点为 [`AppServer::replay_since`] 的 store 兜底分支——内存态线程
+//!   丢失（进程重启后 DashMap 为空，即 404 的本侧形态）时从磁盘权威源重建。
+//!
+//! 落盘均为 N-4 best-effort（失败仅 warn，不影响内存语义）；ledger_parity_locks
+//! 锁 5 已按 ADR-292 D5 翻转为接生产行为锁（读面调用缺失即判红）。
 
 use async_trait::async_trait;
 use nexus_contracts::app::{
@@ -21,7 +38,8 @@ use nexus_contracts::app::{
     PermissionMode, ReqId, Thread, ThreadId, ThreadStartParams, TurnId, UserInput,
 };
 use session_store::{
-    to_model_view, CbmrWriter, ModelVisibleEvent, Offset, SessionEvent, SessionId,
+    item_append_event, rebuild_items, thread_started_event, to_model_view, CbmrWriter,
+    ModelVisibleEvent, Offset, SessionEvent, SessionId,
 };
 use thiserror::Error;
 
@@ -331,15 +349,82 @@ impl AppServer {
     /// 回放增量（断线恢复：WI-01 验收"kill -9→重连渲染一致"）
     ///
     /// 客户端持 `last_item_id`；返回该 ID 之后的所有 Item。
-    pub fn replay_since(&self, thread_id: &ThreadId, last_item_id: &ItemId) -> Option<Vec<Item>> {
-        let actor = self.sessions.get(thread_id)?;
-        let items: Vec<Item> = actor
-            .items
-            .iter()
-            .filter(|i| i.item_id.as_str() > last_item_id.as_str())
-            .cloned()
-            .collect();
-        Some(items)
+    ///
+    /// # store 兜底分支（ADR-292 D4——读面从预留转生产的生产调用点）
+    /// 内存面未命中（actor 不在 DashMap——进程重启 / 线程丢失,即 threads 404
+    /// 的本侧形态）且 store 已配置时,经 [`AppServer::replay_thread_from_store`]
+    /// 从磁盘权威源重建后按游标过滤。重建为空（旧数据仅 `turn.submit` / 线程
+    /// 从未落盘）→ 维持原 `None` 语义（ADR-292 旧数据容忍验收线,不 panic）。
+    pub async fn replay_since(
+        &self,
+        thread_id: &ThreadId,
+        last_item_id: &ItemId,
+    ) -> Option<Vec<Item>> {
+        // 内存面（原语义零改动:纯内存模式 / actor 在场,热路径不触盘）
+        if let Some(actor) = self.sessions.get(thread_id) {
+            let items: Vec<Item> = actor
+                .items
+                .iter()
+                .filter(|i| i.item_id.as_str() > last_item_id.as_str())
+                .cloned()
+                .collect();
+            return Some(items);
+        }
+        // store 兜底（ADR-292 D4:threads 404 安全网）;重建非空才接管——
+        // 空重建说明磁盘无该线程的有效 Item 流,保持「线程未知 = None」原语义
+        if self.store.is_some() {
+            if let Ok(items) = self.replay_thread_from_store(thread_id).await {
+                if !items.is_empty() {
+                    return Some(
+                        items
+                            .into_iter()
+                            .filter(|i| i.item_id.as_str() > last_item_id.as_str())
+                            .collect(),
+                    );
+                }
+            }
+            // 重建失败/为空:落盘读错误与 404 场景同姿（线程不可用）→ None;
+            // 不向调用方上抛Err——本 API 的错误面一直是 Option（线程未知）
+        }
+        None
+    }
+
+    /// 线程级回放入口（ADR-292 D4）— 从 session-store 磁盘权威源重建整个 Thread
+    ///
+    /// # 语义（threads 404 安全网）
+    /// Anthropic Message threads 的 `continue` 返回 404（服务端线程 best-effort
+    /// 过期）时，harness 重新 `create` 前按 Thread 段完整回放重建对话。本方法经
+    /// [`CbmrWriter::replay_session`]（纯段文件 k-way 归并,ADR-109——恢复路径
+    /// 必须走权威源而非可能陈旧的 SQLite 索引）读回事件流,再经
+    /// [`session_store::rebuild_items`] 纯函数重构 Item 序列（D2）。
+    ///
+    /// # thread_id 归一
+    /// 重建 Item 的 thread_id 以**请求的线程身份**为准:流内 `thread.started`
+    /// 可能因 N-4 降级（落盘失败仅 warn）缺席,重构器的流上下文退化占位
+    /// （空串）不应泄漏给协议面。
+    ///
+    /// # 旧数据容忍（ADR-292 验收线）
+    /// 仅含 `turn.submit` 的历史会话流 → 空 `Vec`（不 panic）。
+    ///
+    /// # 错误
+    /// store 未配置（纯内存模式）→ [`ServerError::StoreNotConfigured`];
+    /// store 读失败 → [`ServerError::Store`]。
+    pub async fn replay_thread_from_store(
+        &self,
+        thread_id: &ThreadId,
+    ) -> Result<Vec<Item>, ServerError> {
+        let store = self.store.as_ref().ok_or(ServerError::StoreNotConfigured)?;
+        let session_id = SessionId::new(thread_id.as_str());
+        let replayed = store
+            .replay_session(&session_id, Offset::new(0, 0))
+            .await
+            .map_err(|e| ServerError::Store(format!("线程回放失败: {e}")))?;
+        let events: Vec<SessionEvent> = replayed.into_iter().map(|ri| ri.event).collect();
+        let mut rebuilt = rebuild_items(&events);
+        for item in &mut rebuilt.items {
+            item.thread_id = thread_id.clone();
+        }
+        Ok(rebuilt.items)
     }
 
     /// 会话快照（审计/恢复）
@@ -390,6 +475,55 @@ impl AppServer {
             .await
             .map_err(|e| ServerError::Store(format!("查询回合 Offset 失败: {e}")))?
             .ok_or_else(|| ServerError::Store("flush 后 Offset 缺失(状态不一致)".into()))
+    }
+
+    /// 线程元数据落盘 — `thread.started` 事件（ADR-292 D1 写面接线）
+    ///
+    /// # WHY 写面接线（本批裁决,ADR-292 §背景）
+    /// 回放桥（[`AppServer::replay_thread_from_store`]）的消费场景是 threads
+    /// 404 重建——流内若无 `thread.started`/`item.append`,重构恒为空、安全网
+    /// 沦为装饰品。写面接线是 D4 读面语义非空的必要条件（消费场景真实性由
+    /// ADR-292 裁决,非为绿造消费者）。
+    ///
+    /// # 流序契约
+    /// `thread.started` 是会话流**首事件**——重构器以流上下文解析 Item 的
+    /// thread_id,先于任何 turn/item 事件落盘（调用方 `thread_start` 保证）。
+    /// `turn.submit` 既有写入路径不动（D1 append-only 纪律）。
+    pub async fn persist_thread_started(&self, thread: &Thread) -> Result<(), ServerError> {
+        let store = self.store.as_ref().ok_or(ServerError::StoreNotConfigured)?;
+        let session_id = SessionId::new(thread.thread_id.as_str());
+        let event = thread_started_event(thread.thread_id.as_str(), thread.created_at_ms);
+        store
+            .append(&session_id, event)
+            .await
+            .map_err(|e| ServerError::Store(format!("线程元数据入队失败: {e}")))?;
+        store
+            .flush()
+            .await
+            .map_err(|e| ServerError::Store(format!("线程元数据落盘失败: {e}")))
+    }
+
+    /// Item 内容落盘 — 逐条 `item.append` 事件（ADR-292 D1 写面接线）
+    ///
+    /// # 语义
+    /// 回放桥重建 `Vec<Item>` 的数据源:载荷为 Item 协议字段完整镜像
+    /// （`ItemAppendPayload`）。批量 append 后单次 flush（微批写收益;
+    /// 与 persist_turn 的 flush 分离——不动其既有路径与 Offset 返回语义）。
+    /// N-4 best-effort 姿态由调用方维持（失败仅 warn,内存语义保留）。
+    pub async fn persist_items(&self, thread_id: &ThreadId, items: &[Item]) -> Result<(), ServerError> {
+        let store = self.store.as_ref().ok_or(ServerError::StoreNotConfigured)?;
+        let session_id = SessionId::new(thread_id.as_str());
+        for item in items {
+            let event = item_append_event(item);
+            store
+                .append(&session_id, event)
+                .await
+                .map_err(|e| ServerError::Store(format!("Item 事件入队失败: {e}")))?;
+        }
+        store
+            .flush()
+            .await
+            .map_err(|e| ServerError::Store(format!("Item 事件落盘失败: {e}")))
     }
 
     /// 模型可见上下文 — 白名单投影出口（ADR-201 D2;WI-G11 首个生产消费方）
@@ -458,15 +592,23 @@ impl AppServer {
         if self.sessions.contains_key(&thread.thread_id) {
             return Err(ServerError::ThreadExists(thread.thread_id.as_str().into()));
         }
+        self.sessions
+            .insert(thread.thread_id.clone(), SessionActor::new(thread.clone()));
+        // ADR-292 D1 写面接线:thread.started 为会话流首事件（重构器流上下文
+        // 依赖,须先于 initial_input 触发的任何 turn/item 事件）;N-4 best-effort
+        // ——落盘失败仅 warn,不影响内存语义（与 persist_turn 同姿态）
+        if self.store.is_some() {
+            if let Err(e) = self.persist_thread_started(&thread).await {
+                tracing::warn!(
+                    thread = %thread.thread_id.as_str(),
+                    "线程元数据落盘失败(仅内存语义保留): {e}"
+                );
+            }
+        }
         let mut events = Vec::new();
         // 初始输入（可选）→ 首回合
         if let Some(input) = &params.initial_input {
-            self.sessions
-                .insert(thread.thread_id.clone(), SessionActor::new(thread.clone()));
             events.extend(self.turn_submit(&thread.thread_id, input).await?);
-        } else {
-            self.sessions
-                .insert(thread.thread_id.clone(), SessionActor::new(thread.clone()));
         }
         events.insert(
             0,
@@ -512,12 +654,6 @@ impl AppServer {
             actor.items.extend(items.iter().cloned());
         }
 
-        // 组装事件流: TurnCompleted 兜底（含 Token 用量——MVP 无真实用量，
-        // 全零；WI-03 命中率埋点接入后由 L1 填充）
-        let mut events: Vec<AppEvent> = items
-            .into_iter()
-            .map(|item| AppEvent::ItemChanged { item })
-            .collect();
         // 灰度双写:store 启用时回合落盘（此刻会话锁已释放，落盘的 await 不阻塞
         // 任何其他会话）;落盘失败仅记日志——内存语义保留,审计由 rebuild 兜底
         if self.store.is_some() {
@@ -527,7 +663,22 @@ impl AppServer {
                     "回合落盘失败(仅内存语义保留): {e}"
                 );
             }
+            // ADR-292 D1 写面接线:Item 内容逐条落盘（item.append），回放桥
+            // （replay_thread_from_store）重建 Vec<Item> 的数据源;N-4 best-effort
+            // WHY 在 into_iter 消费 items 之前:persist_items 按引用取 Item 镜像
+            if let Err(e) = self.persist_items(thread_id, &items).await {
+                tracing::warn!(
+                    thread = %thread_id.as_str(),
+                    "Item 内容落盘失败(仅内存语义保留): {e}"
+                );
+            }
         }
+        // 组装事件流: TurnCompleted 兜底（含 Token 用量——MVP 无真实用量，
+        // 全零；WI-03 命中率埋点接入后由 L1 填充）
+        let mut events: Vec<AppEvent> = items
+            .into_iter()
+            .map(|item| AppEvent::ItemChanged { item })
+            .collect();
         events.push(AppEvent::TurnCompleted {
             turn_id,
             usage: AppTokenUsage::new(0, 0, 0, 0),
@@ -803,7 +954,10 @@ mod tests {
         // 模拟断线: 客户端持 last_item_id = 首 Item
         let snap = server.snapshot(&tid).expect("快照存在");
         let last_id = &snap.items[0].item_id;
-        let replay = server.replay_since(&tid, last_id).expect("回放成功");
+        let replay = server
+            .replay_since(&tid, last_id)
+            .await
+            .expect("回放成功");
         assert_eq!(replay.len(), 1, "回放 last_item_id 之后的增量");
         assert_eq!(replay[0].item_id.as_str(), snap.items[1].item_id.as_str());
     }
@@ -935,14 +1089,17 @@ mod tests {
             .await
             .expect("提交成功");
 
-        // 显式 persist（turn_submit 已双写 1 条;本次再落 1 条,seq 连续）
+        // 显式 persist（turn_submit 已双写 turn.submit + 2 条 item.append;
+        // 本次再落 1 条 turn.submit,seq 连续）
         let off = server
             .persist_turn(&tid, &TurnId::new("turn-1"))
             .await
             .expect("落盘");
-        assert_eq!(off.seq, 1, "turn_submit 双写 seq=0,显式 persist seq=1");
+        assert_eq!(off.seq, 4, "流 = thread.started(0)+turn.submit(1)+item.append(2,3),显式 persist seq=4");
 
         // 经 replay 重建会话（纯段文件回放,不依赖内存 DashMap）
+        // ADR-292 D1 schema 后流构成:thread.started + turn.submit + item.append×2
+        // + 显式 turn.submit——D1 事件类型 append-only 追加,turn.submit 序不变
         let tree = session_store::TreeIndex::open(&dir.path().join("sessions.sqlite3"))
             .expect("重开树索引");
         let stream = session_store::replay(
@@ -953,13 +1110,28 @@ mod tests {
         )
         .expect("replay");
         let items = stream.collect().expect("collect");
-        assert_eq!(items.len(), 2, "turn_submit 双写 1 + 显式 persist 1");
-        assert!(
-            items.iter().all(|i| i.event.event_type == "turn.submit"),
-            "落盘事件类型 = turn.submit"
-        );
+        assert_eq!(items.len(), 5, "thread.started(1) + turn.submit(2) + item.append(2)");
+        let expected_types = [
+            session_store::EVENT_TYPE_THREAD_STARTED,
+            "turn.submit",
+            session_store::EVENT_TYPE_ITEM_APPEND,
+            session_store::EVENT_TYPE_ITEM_APPEND,
+            "turn.submit",
+        ];
         for (i, item) in items.iter().enumerate() {
             assert_eq!(item.offset.seq, i as u64, "回放顺序 = 写入顺序");
+            assert_eq!(
+                item.event.event_type, expected_types[i],
+                "流序 = thread.started → turn.submit → item.append×2 → turn.submit"
+            );
+        }
+
+        // 回放桥（ADR-292 D4）:store 事件流 → rebuild → Item 序列与内存快照一致
+        let snap = server.snapshot(&tid).expect("快照存在");
+        let rebuilt = server.replay_thread_from_store(&tid).await.expect("回放桥");
+        assert_eq!(rebuilt.len(), snap.items.len(), "重构条数 == 内存 Item 数");
+        for (a, b) in rebuilt.iter().zip(&snap.items) {
+            assert_eq!(a, b, "回放桥重构与内存 Item 逐条一致(零丢失)");
         }
     }
 
@@ -998,12 +1170,27 @@ mod tests {
 
         let views = server.model_visible_context(&tid).await.expect("模型视图");
         assert_eq!(views.len(), 2, "两条 turn.submit 均映射进白名单交集");
-        for (i, v) in views.iter().enumerate() {
+        // ADR-292 D1:流内 thread.started(流首)+ item.append(逐条 Item 镜像)
+        // 穿插于 turn.submit 之间——「offset = 段文件 seq 镜像」的本意是
+        // **seq 单调性**(offset 与落盘序一致),起点/间隔由 schema 组成决定,
+        // 不硬编码具体值(schema 演进时本断言零修改)
+        for pair in views.windows(2) {
+            assert!(
+                pair[1].offset > pair[0].offset,
+                "offset = 段文件 seq 镜像(单调递增): {} → {}",
+                pair[0].offset,
+                pair[1].offset
+            );
+        }
+        assert!(
+            views[0].offset >= 1,
+            "thread.started 流首事件先于任何 turn.submit(流序契约)"
+        );
+        for v in views.iter() {
             assert_eq!(
                 v.event_type, "model.request",
                 "投影时映射 canonical（ADR-201 D1）"
             );
-            assert_eq!(v.offset, i as u64, "offset = 段文件 seq 镜像");
             assert!(v.payload.is_some(), "turn_id JSON 非敏感载荷保留");
         }
 
@@ -1046,6 +1233,36 @@ mod tests {
             .await
             .expect("启动成功");
         assert_eq!(server.session_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn pure_memory_mode_replay_bridge_rejected() {
+        // ADR-292 D4:回放桥与 persist_turn 同灰度语义——纯内存模式拒绝,
+        // replay_since 内存面不受影响（actor 在场照常回放）
+        let server = AppServer::new(AppServerConfig::default());
+        let err = server
+            .replay_thread_from_store(&ThreadId::new("x"))
+            .await
+            .expect_err("纯内存模式必须拒绝回放桥");
+        assert!(matches!(err, ServerError::StoreNotConfigured));
+        server
+            .handle_op(&AppOp::ThreadStart(sample_params()))
+            .await
+            .expect("启动成功");
+        let tid = ThreadId::new("goal-1::run-1");
+        server
+            .handle_op(&AppOp::TurnSubmit {
+                thread_id: tid.clone(),
+                input: UserInput::new("你好"),
+            })
+            .await
+            .expect("提交成功");
+        let snap = server.snapshot(&tid).expect("快照存在");
+        let replay = server
+            .replay_since(&tid, &snap.items[0].item_id)
+            .await
+            .expect("内存面回放不受桥拒绝影响");
+        assert_eq!(replay.len(), 1, "内存面增量回放语义不变");
     }
 
     // ============================================================

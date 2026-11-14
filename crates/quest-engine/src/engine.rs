@@ -30,7 +30,7 @@ use nexus_core::{Checkpoint, Quest, Task, TaskStatus, ThinkingMode, UserIntent};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
-use crate::checkpoint::CheckpointManager;
+use crate::checkpoint::{CheckpointManager, SatelliteState};
 use crate::config::QuestConfig;
 use crate::coordination_metrics::{
     CoordinationCostSample, CoordinationMetricsCollector, CoordinationMetricsConfig,
@@ -92,6 +92,18 @@ pub struct QuestEngine {
     /// 共识质量/TTG 延迟),`complete_quest` 时 take 并经 builder 合入
     /// 度量样本;`cancel_quest` 同步清理防泄漏。
     pending_samples: Arc<DashMap<String, PendingCoordSample>>,
+    /// 卫星态注册表(quest_id → 最新组件态快照,卫星态接线工作包)
+    ///
+    /// WHY 内存注册表而非直通组件:搜索树/任务地图由上游桥(chimera-cli
+    /// quest_loop)持有运行态,引擎只承载"最新快照"两个字段——
+    /// **写侧**:`set_satellite_state`(桥每次 record_step 后更新);
+    /// **读侧**:`save_checkpoint` 读取并随主检查点同刻落盘(载荷富化,
+    /// durability 语义不变),`satellite_state`(恢复路径读回)。
+    /// `restore_from_checkpoint` 从磁盘 sidecar 还原时回填本表,供
+    /// 下游桥在 CheckpointLoaded 后重建组件态(kill -9 跨会话一致性)。
+    /// WHY Arc<DashMap>:与 pending_samples 同款浅共享内核(ADR-257),
+    /// Clone 视图对同一注册表可见。
+    satellites: Arc<DashMap<String, SatelliteState>>,
 }
 
 impl QuestEngine {
@@ -117,6 +129,7 @@ impl QuestEngine {
                 metrics_bus,
             ),
             pending_samples: Arc::new(DashMap::new()),
+            satellites: Arc::new(DashMap::new()),
         }
     }
 
@@ -137,6 +150,7 @@ impl QuestEngine {
             ttg_governor: None,
             metrics: CoordinationMetricsCollector::new(),
             pending_samples: Arc::new(DashMap::new()),
+            satellites: Arc::new(DashMap::new()),
         }
     }
 
@@ -156,6 +170,7 @@ impl QuestEngine {
             ttg_governor: None,
             metrics: CoordinationMetricsCollector::new(),
             pending_samples: Arc::new(DashMap::new()),
+            satellites: Arc::new(DashMap::new()),
         }
     }
 
@@ -183,6 +198,7 @@ impl QuestEngine {
             ttg_governor: Some(ttg_governor),
             metrics: CoordinationMetricsCollector::new(),
             pending_samples: Arc::new(DashMap::new()),
+            satellites: Arc::new(DashMap::new()),
         }
     }
 
@@ -202,6 +218,25 @@ impl QuestEngine {
     /// 获取检查点管理器引用(若已配置)
     pub fn checkpoint_manager(&self) -> Option<&CheckpointManager> {
         self.checkpoint_manager.as_ref()
+    }
+
+    /// 更新 Quest 的最新卫星态快照(卫星态接线工作包,写侧)
+    ///
+    /// WHY 由上游桥调用而非引擎自产:搜索树/任务地图的运行态由桥持有,
+    /// 引擎不反序列化组件态——桥每次组件态变更(如 record_step)后把
+    /// `to_bytes` 快照推给引擎,下一次 `save_checkpoint` 即随主检查点同刻落盘。
+    /// 纯内存 DashMap 插入(无 IO),调用方可高频安全触发。
+    pub fn set_satellite_state(&self, quest_id: &str, satellite: SatelliteState) {
+        self.satellites.insert(quest_id.to_string(), satellite);
+    }
+
+    /// 读取 Quest 的最新卫星态快照(读侧,bytes 克隆返回)
+    ///
+    /// 恢复路径消费:`restore_from_checkpoint` 从磁盘 sidecar 回填本表后,
+    /// 上游桥经此读回并重建任务地图/搜索树(kill -9 跨会话一致性)。
+    /// 无快照(未恢复过 / 旧 checkpoint / 已终局清理)返回 None。
+    pub fn satellite_state(&self, quest_id: &str) -> Option<SatelliteState> {
+        self.satellites.get(quest_id).map(|r| r.clone())
     }
 
     /// 设置自定义协调度量配置(builder 模式)
@@ -254,6 +289,13 @@ impl QuestEngine {
     /// (见 bus.rs `is_critical_mpsc_event`)。事件丢失不丢检查点:检查点在
     /// 发布前已由 `cm.save()` 落盘,恢复路径读磁盘而非事件;事件仅供
     /// 审计/TUI 观测,Lagged 丢失只损失一次通知。
+    /// 卫星态接线(2026-11 工作包):保存时读取卫星态注册表并随主检查点同刻落盘
+    /// (`save_with_satellite` 的 sidecar `.sat`)。WHY 载荷富化而非旁路:
+    /// 引擎自动保存(interval 倍数/终态)与桥的组件态更新是两条异步线,若桥
+    /// 自行落盘卫星态,引擎的无卫星态保存可能落在其后,恢复取最新检查点时
+    /// 卫星态配对错位;由引擎统一携带注册表快照,Quest 快照与卫星态同刻捕获,
+    /// 配对天然一致。**durability 语义不变**:同步/后台分支、事件发布、错误
+    /// 处理路径逐字保留(engine.rs durability 注释锁),仅落盘内容多一个 sidecar。
     pub async fn save_checkpoint(&self, quest_id: &str) -> Result<Checkpoint, QuestError> {
         let cm = self
             .checkpoint_manager
@@ -265,7 +307,11 @@ impl QuestEngine {
         let quest = self
             .get_quest(quest_id)
             .ok_or_else(|| QuestError::QuestNotFound(quest_id.to_string()))?;
-        let checkpoint = cm.save(Arc::new(quest)).await?;
+        // 卫星态注册表快照(无注册条目 → None,行为与历史等价)
+        let satellite = self.satellite_state(quest_id);
+        let checkpoint = cm
+            .save_with_satellite(Arc::new(quest), satellite.as_ref())
+            .await?;
 
         // 发布 CheckpointSaved 事件(Critical,EventBus 据此优先投递)
         let event = NexusEvent::CheckpointSaved {
@@ -286,24 +332,41 @@ impl QuestEngine {
     /// 从最新检查点恢复 Quest — 发布 CheckpointLoaded 事件
     ///
     /// 流程:
-    /// 1. 加载最新检查点并解码 Quest(load_latest_quest:磁盘 IO + 完整性校验 +
-    ///    MessagePack 解码 + 副本克隆全部在阻塞线程池内执行,WP-05)
+    /// 1. 加载最新检查点并解码 Quest + 卫星态(load_latest_full:磁盘 IO +
+    ///    完整性校验 + MessagePack 解码 + 副本克隆全部在阻塞线程池内执行,WP-05)
     /// 2. 存入注册表(覆盖现有条目)
-    /// 3. 发布 CheckpointLoaded 事件
+    /// 3. 卫星态回填注册表(卫星态接线工作包):Some → insert 供下游桥经
+    ///    `satellite_state` 读回重建组件态;None → remove 防旧恢复残留
+    ///    (前次恢复可能注入过卫星态,本次从无卫星态的旧 checkpoint 恢复时
+    ///    必须清空,否则桥会拿到与本次 Quest 快照不配对的陈旧组件态)
+    /// 4. 发布 CheckpointLoaded 事件
+    ///
+    /// WHY 签名保持 `Result<Quest>` 不变:恢复侧卫星态经引擎注册表传递而非
+    /// 返回值扩展,外部调用方( chimera-cli 等)零改动兼容。
     pub async fn restore_from_checkpoint(&self, quest_id: &str) -> Result<Quest, QuestError> {
         let cm = self
             .checkpoint_manager
             .as_ref()
             .ok_or_else(|| QuestError::CheckpointNotFound("checkpoints disabled".into()))?;
-        let (checkpoint, registry_quest, quest) =
-            cm.load_latest_quest(quest_id).await?.ok_or_else(|| {
+        let (checkpoint, registry_quest, quest, satellite) =
+            cm.load_latest_full(quest_id).await?.ok_or_else(|| {
                 QuestError::CheckpointNotFound(format!("no checkpoint for {quest_id}"))
             })?;
 
         // 存入注册表(若已存在则覆盖,模拟"崩溃后重启"场景)
-        // WHY 无 clone:注册表副本已在阻塞池内克隆完毕(见 load_latest_quest),
+        // WHY 无 clone:注册表副本已在阻塞池内克隆完毕(见 load_latest_full),
         // 此处仅所有权移动,async 线程零 payload 拷贝
         self.quests.insert(quest_id.to_string(), registry_quest);
+
+        // 卫星态回填:Some 写入,None 清理(语义见方法 doc 步骤 3)
+        match satellite {
+            Some(sat) => {
+                self.satellites.insert(quest_id.to_string(), sat);
+            }
+            None => {
+                self.satellites.remove(quest_id);
+            }
+        }
 
         // 发布 CheckpointLoaded 事件
         let event = NexusEvent::CheckpointLoaded {
@@ -670,6 +733,13 @@ impl QuestEngine {
             info!(quest_id = %quest_id, "ExecutionCompleted 事件已发布(Quest 不在注册表,跳过度量记录)");
         }
 
+        // 卫星态生命周期清理:终局后组件态不再参与恢复(kill -9 后恢复已终局
+        // 的 Quest 无意义),防注册表泄漏。镜像上方 pending_samples 的 take 语义。
+        // WHY 时机安全:终态转换路径中 update_task_status 先同步 save_checkpoint
+        // (durability 关键点,此时卫星态仍在注册表、随终态检查点落盘),之后才进
+        // 本方法——终态检查点必然携带卫星态,此处清理不影响其完整性。
+        self.satellites.remove(quest_id);
+
         Ok(())
     }
 
@@ -886,6 +956,8 @@ impl QuestEngine {
         self.paused_quests.remove(quest_id);
         // 协调度量接线闭环:清理待合并样本缓存(Quest 不会再 complete,防泄漏)
         self.pending_samples.remove(quest_id);
+        // 卫星态生命周期清理:取消后组件态不再参与恢复,防注册表泄漏
+        self.satellites.remove(quest_id);
 
         let event = NexusEvent::QuestCancelled {
             metadata: EventMetadata::new("quest-engine"),

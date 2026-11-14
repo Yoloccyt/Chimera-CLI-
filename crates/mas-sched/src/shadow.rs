@@ -67,29 +67,74 @@ pub enum ShadowClaimOutcome {
     Denied(DenyReason),
 }
 
-/// 影子日志 — append-only 决策记录（线程安全,可回放）
-#[derive(Debug, Default)]
+/// 影子日志默认窗口容量
+///
+/// WHY 4096(R11 W2c 尾款 / ADR-289 登记项裁决):影子期认领频率受 broker 护栏
+/// 约束(`SimplePeerScheduler::with_rate_limit` 60 次/分同参),4096 ≈ 68 分钟
+/// 决策窗口,覆盖近期诊断;更长时段的历史由消费方接线时按需导出,不进内存常驻。
+pub const SHADOW_LOG_CAPACITY: usize = 4096;
+
+/// 影子日志 — 环形窗口决策记录（线程安全,可回放）
+///
+/// WHY 有界而非 append-only Vec(R11 W2c 尾款 / ADR-289 登记「长跑内存风险;
+/// 需容量策略裁决(界/环形/分段)」):影子期(R2 解冻后,ADR-053 rev4)常驻
+/// 运行,无界 Vec 是确定性的内存泄漏面。裁决 = **环形窗口**:满容量丢弃最旧,
+/// 被挤出条目数计入 [`Self::dropped_total`](可观测性:消费方可判断窗口是否
+/// 覆盖其关注的决策时段)。
+///
+/// 语义修订(相对原「append-only 历史不可变」):收窄为**「窗口内 append-only、
+/// 顺序不可变」**——本日志是影子期决策的回放诊断面,真实审计链权威源是
+/// session-store(ADR-141)与事件流,不因本窗口语义而弱化。
+/// [`Self::replay`] 的回放覆盖范围随之为「保留窗口」。
+#[derive(Debug)]
 pub struct ShadowLog {
-    /// 决策条目（追加序 = 决策序）
-    entries: std::sync::Mutex<Vec<ShadowDecision>>,
+    /// 决策条目（追加序 = 决策序;满容量时丢弃最旧）
+    entries: std::sync::Mutex<std::collections::VecDeque<ShadowDecision>>,
+    /// 窗口容量
+    capacity: usize,
+    /// 累计被挤出条目数(诊断)
+    dropped_total: std::sync::atomic::AtomicU64,
+}
+
+impl Default for ShadowLog {
+    /// 默认 = [`Self::new`](默认窗口容量 [`SHADOW_LOG_CAPACITY`])——
+    /// 保持既有 derive(Default) 公开 API 面(容量 0 的字节面默认已被 with_capacity 钳制)
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ShadowLog {
-    /// 新建日志
+    /// 新建日志（默认窗口容量 [`SHADOW_LOG_CAPACITY`]）
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self::with_capacity(SHADOW_LOG_CAPACITY)
     }
 
-    /// 追加条目
+    /// 新建日志（自定义窗口容量;0 视为 1,保证 push 恒有落点）
+    #[must_use]
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: std::sync::Mutex::new(std::collections::VecDeque::with_capacity(
+                capacity.max(1),
+            )),
+            capacity: capacity.max(1),
+            dropped_total: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    /// 追加条目（满容量时丢弃最旧,挤出计数 +1）
     pub fn push(&self, d: ShadowDecision) {
-        self.entries
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .push(d);
+        let mut entries = self.entries.lock().unwrap_or_else(|p| p.into_inner());
+        if entries.len() >= self.capacity {
+            entries.pop_front();
+            self.dropped_total
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        entries.push_back(d);
     }
 
-    /// 条目数（诊断）
+    /// 窗口内条目数（诊断）
     #[must_use]
     pub fn len(&self) -> usize {
         self.entries.lock().unwrap_or_else(|p| p.into_inner()).len()
@@ -101,13 +146,28 @@ impl ShadowLog {
         self.len() == 0
     }
 
-    /// 快照（回放用）— 拷贝当前全量条目
+    /// 累计被挤出条目数（诊断:窗口未覆盖时段的条目量）
+    #[must_use]
+    pub fn dropped_total(&self) -> u64 {
+        self.dropped_total
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 窗口容量
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// 快照（回放用）— 拷贝当前保留窗口条目（顺序不变）
     #[must_use]
     pub fn snapshot(&self) -> Vec<ShadowDecision> {
         self.entries
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .clone()
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// 回放 — 逐条重放并逐位比对
@@ -419,6 +479,53 @@ mod tests {
             (report.replay_rate() - 1.0).abs() < 1e-9,
             "可回放率必须 100%"
         );
+    }
+
+    /// R11 W2c 尾款(ADR-289 登记项裁决):环形窗口——满容量丢弃最旧 + 挤出计数,
+    /// 窗口内顺序不可变(修订后的 append-only 语义)
+    #[test]
+    fn shadow_log_ring_evicts_oldest_and_counts_dropped() {
+        let log = ShadowLog::with_capacity(3);
+        for i in 0..5 {
+            log.push(ShadowDecision::ShouldRun {
+                task_id: TaskId::from(format!("t{i}").as_str()),
+                verdict: ShouldRunVerdict::Run,
+            });
+        }
+        assert_eq!(log.len(), 3, "窗口恒等于容量");
+        assert_eq!(log.dropped_total(), 2, "挤出计数 = 超量条目数");
+        let snap = log.snapshot();
+        assert_eq!(snap.len(), 3);
+        // 窗口保留最新 3 条(t2/t3/t4)且顺序不变
+        for (k, entry) in snap.iter().enumerate() {
+            match entry {
+                ShadowDecision::ShouldRun { task_id, .. } => {
+                    assert_eq!(
+                        task_id.as_str(),
+                        format!("t{}", k + 2),
+                        "保留窗口 = 最新 3 条且保序"
+                    );
+                }
+                other => panic!("应为 ShouldRun,got {other:?}"),
+            }
+        }
+    }
+
+    /// 容量 0 钳到 1(push 恒有落点,挤出计数如实增长——防除零/空窗歧义)
+    #[test]
+    fn shadow_log_zero_capacity_clamps_to_one() {
+        let log = ShadowLog::with_capacity(0);
+        log.push(ShadowDecision::ShouldRun {
+            task_id: TaskId::from("t0"),
+            verdict: ShouldRunVerdict::Run,
+        });
+        log.push(ShadowDecision::ShouldRun {
+            task_id: TaskId::from("t1"),
+            verdict: ShouldRunVerdict::Run,
+        });
+        assert_eq!(log.len(), 1);
+        assert_eq!(log.dropped_total(), 1);
+        assert_eq!(log.capacity(), 1);
     }
 
     /// 空日志回放 — 满分（无风险即达标）

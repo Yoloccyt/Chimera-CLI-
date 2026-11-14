@@ -97,6 +97,15 @@ impl ToolExecutor for ExecPolicyToolExecutor {
     fn declared_tools(&self) -> Vec<String> {
         self.delegate.declared_tools()
     }
+
+    // 批量副作用声明透传（R11 W1 / ADR-295 D1）——与 W4/N-6 capability_of
+    // 透传同一场景：「包装件单独作 PlanRunner executor」时批量声明表若在此
+    // 断链，effective_side_effect 第三优先级查表拿到的恒是空集 ⇒ 整层保守
+    // 串行。ToolRuntime 生产路径经 capabilities 视图绕过本包装件（不受本
+    // 转发影响），本透传只影响直连场景，与直传原始执行器行为拉齐。
+    fn declared_side_effects(&self) -> Vec<(String, nexus_contracts::tool_plan::SideEffectDecl)> {
+        self.delegate.declared_side_effects()
+    }
 }
 
 #[cfg(test)]
@@ -311,6 +320,31 @@ mod tests {
             Some(SideEffectDecl::ReadOnly)
         );
         assert_eq!(wrapper.capability_of("other"), None);
+    }
+
+    /// R11 W1（ADR-295 D1）：批量声明表透传——与 W4-T7 同场景的第三个方法。
+    /// 修复前 ExecPolicyToolExecutor 未转发 declared_side_effects，包装件
+    /// 单独作 PlanRunner executor 时配置驱动的批量声明表静默断链
+    /// （effective_side_effect 第三优先级查表恒空 ⇒ 整层保守串行）。
+    #[test]
+    fn side_effect_table_forwarding() {
+        use nexus_contracts::tool_plan::SideEffectDecl;
+        struct DeclaringExecutor;
+        #[async_trait]
+        impl ToolExecutor for DeclaringExecutor {
+            async fn execute(&self, _t: &str, _a: &str) -> Result<String, String> {
+                Ok("{}".to_string())
+            }
+            fn declared_side_effects(&self) -> Vec<(String, SideEffectDecl)> {
+                vec![("mcp.acme.search".to_string(), SideEffectDecl::ReadOnly)]
+            }
+        }
+        let wrapper =
+            ExecPolicyToolExecutor::new(Arc::new(ExecPolicy::new()), Arc::new(DeclaringExecutor));
+        let table = wrapper.declared_side_effects();
+        assert_eq!(table.len(), 1, "声明表必须透传到包装件，实得 {table:?}");
+        assert_eq!(table[0].0, "mcp.acme.search");
+        assert_eq!(table[0].1, SideEffectDecl::ReadOnly);
     }
 
     /// W4-T8(ADR-249/N-6 行为增量锁):包装件单独作 PlanRunner executor 时,

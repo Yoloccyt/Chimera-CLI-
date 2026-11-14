@@ -659,12 +659,31 @@ impl ToolPolicyRuleDef {
 pub struct McpConfig {
     /// MCP 服务器列表
     pub servers: Vec<McpServerConfig>,
+    /// 工具副作用声明集（R10 WP-T1：capability_of 语义化的配置供给面）
+    ///
+    /// WHY:执行器 `capability_of` 恒 None（ADR-256 D2 诚实声明）导致计划层
+    /// 把全部 mcp 工具按「未知 ⇒ 可能写」保守串行（并行封顶点）；本段让
+    /// 用户在配置文件显式声明只读工具（如 `mcp.github.search`），计划层
+    /// 经 `declared_side_effects` 查表解锁 readonly 并行。未声明的工具
+    /// 仍按可能写处理（fail-closed 不扩散）。
+    /// `#[serde(default)]`:旧配置文件无此段时为空集，行为与既有逐位一致。
+    pub declared_side_effects: Vec<DeclaredSideEffectEntry>,
+}
+
+/// 单条工具副作用声明（完整工具名 → 副作用类别）
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct DeclaredSideEffectEntry {
+    /// 完整工具名（`mcp.<server>.<tool>`，与执行器命名解析一致）
+    pub tool: String,
+    /// 副作用类别（snake_case：`readonly` / `write`；L0 SideEffectDecl）
+    pub effect: nexus_contracts::SideEffectDecl,
 }
 
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
             servers: default_mcp_servers(),
+            declared_side_effects: Vec::new(), // 缺省空集:未知工具按可能写保守处理
         }
     }
 }

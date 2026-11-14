@@ -470,6 +470,79 @@ impl SqliteWal {
         })?
     }
 
+    /// 批量写入预写日志（R9 / W2-T3）— 单事务 + 单次 `spawn_blocking`
+    ///
+    /// # 语义
+    /// - 与逐条 [`Self::write_ahead_log`] 等价（同样 `committed=0`、同样敏感载荷拦截）；
+    /// - 空批次为合法成功（零 IO）；
+    /// - 任一条目敏感拦截 ⇒ **整批拒绝**，不产生部分写入；
+    /// - 单事务提交：SQLite 往返次数从 N 降为 1 + 常数。
+    pub async fn write_ahead_log_batch(&self, entries: Vec<WalEntry>) -> Result<(), SccError> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        let scan_policy = nexus_contracts::sensitive::ScanPolicy {
+            on_high_entropy: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            on_secret_kv: nexus_contracts::sensitive::SensitiveDisposition::Pass,
+            ..Default::default()
+        };
+        for entry in &entries {
+            if nexus_contracts::sensitive::scan(
+                &String::from_utf8_lossy(&entry.payload),
+                &scan_policy,
+            )
+            .is_blocked()
+            {
+                return Err(SccError::WalError {
+                    reason: format!(
+                        "WAL entry {} 含敏感硬载荷,拒绝写入预写日志（整批拒绝）",
+                        entry.entry_id
+                    ),
+                });
+            }
+        }
+        let conn = self.conn.clone();
+        spawn_blocking(move || -> Result<(), SccError> {
+            let mut conn = conn.lock().map_err(|p| SccError::WalError {
+                reason: format!("Connection 锁中毒: {p}"),
+            })?;
+            let tx = conn.transaction().map_err(|e| SccError::WalError {
+                reason: format!("BEGIN 事务失败: {e}"),
+            })?;
+            {
+                let mut stmt = tx
+                    .prepare(
+                        "INSERT INTO wal_entries
+                            (entry_id, operation, context_id, payload, timestamp, committed)
+                         VALUES (?1, ?2, ?3, ?4, ?5, 0)",
+                    )
+                    .map_err(|e| SccError::WalError {
+                        reason: format!("prepare INSERT wal_entries 失败: {e}"),
+                    })?;
+                for entry in &entries {
+                    stmt.execute(rusqlite::params![
+                        &entry.entry_id,
+                        entry.operation.as_str(),
+                        entry.context_id.as_str(),
+                        &entry.payload,
+                        entry.timestamp.to_rfc3339(),
+                    ])
+                    .map_err(|e| SccError::WalError {
+                        reason: format!("批量 INSERT wal_entries 失败: {e}"),
+                    })?;
+                }
+            }
+            tx.commit().map_err(|e| SccError::WalError {
+                reason: format!("COMMIT 事务失败: {e}"),
+            })?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| SccError::WalError {
+            reason: format!("write_ahead_log_batch spawn_blocking join 错误: {e}"),
+        })?
+    }
+
     /// 提交日志(async,内部 spawn_blocking)
     ///
     /// 缓存修改成功后调用,标记指定 entry_id 为已提交(`committed=1`)。
@@ -667,6 +740,66 @@ mod tests {
             let path = db_path.to_str().expect("路径转 str 失败").to_string();
             let wal = SqliteWal::new(path).await.expect("创建 SqliteWal 失败");
             (wal, dir)
+        }
+
+        #[tokio::test]
+        async fn test_sqlite_wal_batch_write_and_recover() {
+            let (wal, _dir) = make_wal().await;
+            let entries: Vec<WalEntry> = (0..5)
+                .map(|i| {
+                    WalEntry::new(
+                        format!("batch-{i}"),
+                        WalOperation::Insert,
+                        format!("ctx-{i}"),
+                        vec![i as u8],
+                    )
+                })
+                .collect();
+            wal.write_ahead_log_batch(entries)
+                .await
+                .expect("批量写入应成功");
+
+            let uncommitted = wal.recover().await.expect("recover 应成功");
+            assert_eq!(uncommitted.len(), 5, "批量写入后应恢复 5 条未提交条目");
+
+            // 空批次为合法成功且不改变既有条目
+            wal.write_ahead_log_batch(Vec::new())
+                .await
+                .expect("空批次应成功");
+            assert_eq!(wal.recover().await.expect("recover 应成功").len(), 5);
+
+            // 提交其中一条后只少一条
+            wal.commit_log("batch-0".to_string())
+                .await
+                .expect("commit_log 应成功");
+            assert_eq!(wal.recover().await.expect("recover 应成功").len(), 4);
+        }
+
+        #[tokio::test]
+        async fn test_sqlite_wal_batch_rejects_sensitive_payload_atomically() {
+            let (wal, _dir) = make_wal().await;
+            let entry = WalEntry::new(
+                "sw-safe",
+                WalOperation::Insert,
+                "ctx-safe",
+                b"benign payload".to_vec(),
+            );
+            wal.write_ahead_log_batch(vec![entry])
+                .await
+                .expect("良性批次应成功");
+            let bad = WalEntry::new(
+                "sw-bad",
+                WalOperation::Insert,
+                "ctx-bad",
+                b"-----BEGIN RSA PRIVATE KEY-----".to_vec(),
+            );
+            let err = wal.write_ahead_log_batch(vec![bad]).await.unwrap_err();
+            assert!(matches!(err, SccError::WalError { .. }));
+            assert_eq!(
+                wal.recover().await.expect("recover 应成功").len(),
+                1,
+                "敏感拦截必须整批拒绝，不得产生部分写入"
+            );
         }
 
         #[tokio::test]

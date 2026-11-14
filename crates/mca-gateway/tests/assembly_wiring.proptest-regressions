@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e9e3b39231661aaa77ac1d3319d3c6eaf763d563c4f12bfb47970c1ca56f61ef # shrinks to input = [AffinityMessage { role: System, blocks: [Text { text: "a" }] }, AffinityMessage { role: System, blocks: [Text { text: "a" }] }], budget = 0
+cc 7bc03d95dad11cb1974780e36e67d2842a377a49e22028ee00962cca0f364b2b # shrinks to input = [AffinityMessage { role: System, blocks: [Text { text: " aa " }] }, AffinityMessage { role: System, blocks: [Text { text: "aaaa" }] }, AffinityMessage { role: System, blocks: [Text { text: " a a" }] }], budget = 0

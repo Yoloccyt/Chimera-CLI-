@@ -226,6 +226,15 @@ pub struct ContextEntry {
     /// WHY:Option 而非直接 CLV — 部分上下文(如系统提示)无语义向量,
     /// 无 CLV 时相关性取中性值 0.5,避免阻塞压缩流程
     pub clv: Option<CLV>,
+    /// 条目来源(WP-D w4 来源维度,ADR-293)——压缩评分按来源价值系数加权
+    /// (Tool 降权 = 蓝图 §5.4 AKV Rolling Drop 的内容层转译)
+    ///
+    /// WHY `Option` 而非必填:存量构造点(20+,经 `ContextEntry::new`)无来源
+    /// 信息;None 条目评分取**中性来源系数 0.5**(对齐 `DEFAULT_RELEVANCE`
+    /// 的无 CLV 中性先例),保证既有路径零语义漂移。
+    /// `#[serde(default)]`:旧 checkpoint 数据无此字段,反序列化回填 None。
+    #[serde(default)]
+    pub source: Option<crate::assemble::ContextSource>,
 }
 
 impl ContextEntry {
@@ -253,7 +262,15 @@ impl ContextEntry {
             last_accessed_at: now,
             created_at: now,
             clv: None,
+            // WP-D:构造器缺省无来源(调用方按实际来源经 with_source 链式标注)
+            source: None,
         }
+    }
+
+    /// 设置来源(链式调用,WP-D w4 标注入口)
+    pub fn with_source(mut self, source: crate::assemble::ContextSource) -> Self {
+        self.source = Some(source);
+        self
     }
 
     /// 设置 CLV(链式调用)
@@ -618,6 +635,13 @@ pub struct CompressionReport {
     pub retained_count: usize,
     /// 丢弃条目数
     pub dropped_count: usize,
+    /// 其中经 CLV 余弦语义折叠的条目数(R11 W4b / ADR-295 D7,UD-2 判据)
+    ///
+    /// 折叠条目是 dropped_count 的子集(语义重复,向评分更高者折叠)。
+    /// `#[serde(default)]`:压缩报告经事件/序列化面透出,旧载荷反序列化
+    /// 兼容为防御性默认(append-only 字段扩展,ADR-292 D1 先例)。
+    #[serde(default)]
+    pub folded_semantic: usize,
     /// 保留的条目列表(用于调用方替换原始 entries)— Arc 共享,避免压缩路径深拷贝
     ///
     /// WHY(M-01/M-02):改为 `Vec<Arc<ContextEntry>>` 后,compressor 内部
@@ -689,6 +713,26 @@ pub struct HcwConfig {
     /// 反序列化时自动用默认值 true,向后兼容。
     #[serde(default = "default_true")]
     pub parallel_compress: bool,
+    /// w4 来源维度权重(默认 0.10,WP-D ADR-293)——压缩评分的第四项系数
+    ///
+    /// WHY hcw-local 而非 L0 `SelectorWeights` 加字段:S4 学习器(omega-learner)
+    /// 的 arm 权重空间是三维 SelectorWeights 的冻结面(R2),加第四维会波及
+    /// 学习器 arm 空间——w4 权重落在 HcwConfig(hcw-local)使爆炸半径归零。
+    /// 评分公式(见 `compressor::compute_importance_score`):
+    /// `score = (w1×(1-sw))×rec + (w2×(1-sw))×freq + (w3×(1-sw))×rel + sw×src_factor`
+    /// (三项按 (1-sw) 归一保证总权重恒 1.0;src_factor 经
+    /// `assemble::source_value_factor` 单点表,None 取中性 0.5)。
+    /// 回退开关:env `CHIMERA_W4_DISABLED=1`(启动期 OnceLock)使 sw 视为 0
+    /// → 逐位回到三维旧公式。
+    ///
+    /// WHY(serde default):旧配置文件(无此字段)反序列化自动 0.10,向后兼容。
+    #[serde(default = "default_source_weight")]
+    pub source_weight: f32,
+}
+
+/// w4 缺省权重(函数形式供 serde default 引用,const 用于 DEFAULT)
+fn default_source_weight() -> f32 {
+    0.10
 }
 
 /// serde 默认值 — P1-T14 并行开关默认开启(与 faae/nmc 注入模式一致)

@@ -19,7 +19,11 @@
 //! - `relevance`(任务相关性):CLV 余弦相似度,clamp 到 [0.0, 1.0]
 //!
 //! # 设计决策(WHY)
-//! - **非语义压缩**:Week 3 阶段用重要性评分 Top-N,Week 6 NMC 后接入语义压缩
+//! - **评分语义化 + CLV 语义折叠**(R11 W4b/W4c 收口):重要性评分含任务相关性
+//!   项(task CLV × 条目 CLV 余弦,无 CLV 取中性 0.5);Top-K 内近重复 CLV 条目
+//!   (cos ≥ 0.92)向高分代表折叠,让出预算槽位(UD-2 判据,ADR-295 D7)。
+//!   原"Week 6 NMC 后接入语义压缩"的挂账自此收口(NMC 已在场,评分与折叠
+//!   均消费 CLV)
 //! - **至少保留 1 个条目**:即使所有条目都 > target_size,也保留最高分条目,
 //!   避免压缩后上下文为空(此时 compressed_size 可能 > target_size,触发窗口升级)
 //! - **compression_ratio = original/compressed**:压缩比(>1.0,越大压缩越多),
@@ -87,6 +91,7 @@ pub(crate) fn compute_importance_score(
     now: DateTime<Utc>,
     max_access_count: f32,
     time_span_ms: f32,
+    source_weight: f32,
 ) -> f32 {
     let (recency_weight, frequency_weight, relevance_weight) = weights.as_tuple();
 
@@ -104,7 +109,74 @@ pub(crate) fn compute_importance_score(
         _ => DEFAULT_RELEVANCE,
     };
 
-    recency_weight * recency + frequency_weight * frequency + relevance_weight * relevance
+    // WP-D/ADR-293:w4 来源维度——三项按 (1-sw) 归一保证总权重恒 1.0,
+    // 第四项 = sw × 来源价值系数(经 assemble::source_value_factor 单点表;
+    // None 条目取中性 0.5,对齐 DEFAULT_RELEVANCE 的无 CLV 先例)。
+    // source_weight=0(env 禁用/显式关)时 scale=1.0 且第四项为 0
+    // → 逐位回到三维旧公式(回退开关的位模式保证)。
+    let scale = 1.0 - source_weight;
+    let src_factor = match entry.source {
+        Some(source) => crate::assemble::source_value_factor(source),
+        None => NEUTRAL_SOURCE_FACTOR,
+    };
+
+    recency_weight * scale * recency
+        + frequency_weight * scale * frequency
+        + relevance_weight * scale * relevance
+        + source_weight * src_factor
+}
+
+/// WP-D:w4 禁用时的中性来源系数(None 条目/禁用回退共同取值)
+///
+/// WHY 0.5:对齐 `DEFAULT_RELEVANCE` 的无 CLV 中性先例——来源未知不奖不罚,
+/// 保证存量条目(20+ 构造点无来源标注)在默认开启下的评分偏移为均匀常数
+/// (+sw×0.5),None 集合内部相对排序不变。
+pub(crate) const NEUTRAL_SOURCE_FACTOR: f32 = 0.5;
+
+/// CHIMERA_W4_DISABLED 的启动期缓存(WP-D 回退开关)
+///
+/// WHY OnceLock:env 读取一次,热路径(compress 评分)零 env 开销;
+/// 设 "1"/"true"/"on" 时 effective_source_weight 恒 0(逐位回三维旧公式)。
+static W4_DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// 解析 w4 有效权重 — config 值经 env 回退门归一(单点生效)
+///
+/// WHY 经此函数而非直接读 config:env 开关必须在**所有** source_weight
+/// 消费点统一生效(压缩评分路径),单点封装防调用方漏读 env 造成口径分叉。
+pub(crate) fn effective_source_weight(configured: f32) -> f32 {
+    let disabled = *W4_DISABLED.get_or_init(|| {
+        std::env::var("CHIMERA_W4_DISABLED")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true") || v.eq_ignore_ascii_case("on"))
+            .unwrap_or(false)
+    });
+    if disabled {
+        0.0
+    } else {
+        configured
+    }
+}
+
+/// 语义折叠余弦阈值(UD-2 用户裁决,2026-11-14)
+///
+/// WHY 0.92:对齐 scc-cache `semantic_cache` 的相似命中先验(0.92)——同仓
+/// 两处「CLV 余弦判定语义等价」共用一档阈值,避免口径分叉。误折叠风险
+/// 由保守三前置压低(双 CLV 在场 + 高阈值 + 高分代表保留),且
+/// `CHIMERA_DEDUP_SEMANTIC=off` 可即时关断。
+pub(crate) const SEMANTIC_FOLD_THRESHOLD: f32 = 0.92;
+
+/// CHIMERA_DEDUP_SEMANTIC 的启动期缓存(W4b 回退开关)
+///
+/// WHY OnceLock:env 读取一次,压缩热路径零 env 开销(与 W4_DISABLED 同款);
+/// 设 "off" 时 semantic_fold_enabled() 恒 false,折叠块整体短路(逐位回旧行为)。
+static SEMANTIC_FOLD_DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// 语义折叠开关 — `CHIMERA_DEDUP_SEMANTIC=off` 关断(默认开启)
+pub(crate) fn semantic_fold_enabled() -> bool {
+    !*SEMANTIC_FOLD_DISABLED.get_or_init(|| {
+        std::env::var("CHIMERA_DEDUP_SEMANTIC")
+            .map(|v| v.eq_ignore_ascii_case("off"))
+            .unwrap_or(false)
+    })
 }
 
 impl ContextCompressor {
@@ -159,6 +231,7 @@ impl ContextCompressor {
                 original_count,
                 retained_count: original_count,
                 dropped_count: 0,
+                folded_semantic: 0,
                 retained_entries: Vec::new(),
                 algorithm: "none".into(),
             };
@@ -199,6 +272,8 @@ impl ContextCompressor {
         // 两者逐元素一致(确定性断言锁定),Top-K 选择与贪心保留仍串行执行,
         // 与注入前行为逐位一致。
         let weights = config.selector_policy.weights();
+        // WP-D/ADR-293:w4 有效权重经 env 回退门(单点归一)传入评分链
+        let source_weight = effective_source_weight(config.source_weight);
         let scores = crate::parallel::score_entries(
             entries,
             weights,
@@ -207,6 +282,7 @@ impl ContextCompressor {
             max_access_count,
             time_span_ms,
             config.parallel_compress,
+            source_weight,
         );
         let mut scored: Vec<(f32, &Arc<ContextEntry>)> = entries
             .iter()
@@ -251,6 +327,41 @@ impl ContextCompressor {
         // 截断到 Top-K,丢弃评分较低的条目(不在贪心保留范围内)
         scored.truncate(estimated_k);
 
+        // === R11 W4b(ADR-295 D7,UD-2 用户裁决):CLV 余弦语义折叠 ===
+        //
+        // 判据(保守三前置,全部满足才折叠):
+        // 1. 双条目 CLV 均存在(None 恒不折叠——无嵌入不奖不罚更不删,
+        //    与评分面 DEFAULT_RELEVANCE 中性先验同哲学);
+        // 2. cosine ≥ [`SEMANTIC_FOLD_THRESHOLD`](0.92,对齐 scc-cache
+        //    semantic_cache 先验);
+        // 3. 折叠向评分更高者(评分降序序处理天然保证:先见者为代表)。
+        //
+        // WHY 折叠在贪心保留之前:语义重复条目会互相挤占预算槽位,折叠后
+        // 同预算装更多**不重复**信息(Ω₂「预算化注意力」的内容层落地)。
+        // WHY 只在 Top-K 内折叠:代表与重复双双进入 Top-K 才会互抢槽位,
+        // K 外条目本就被评分丢弃,折叠对其无可观测收益;同时保住
+        // SubTask 13.7 的 O(n + K log K) 复杂度纪律(不做全量排序)。
+        // 逃生:`CHIMERA_DEDUP_SEMANTIC=off` 回无折叠旧行为(启动期一次读取)。
+        let mut fold_flags = vec![true; scored.len()];
+        let mut folded_semantic = 0usize;
+        if semantic_fold_enabled() {
+            let mut kept_clvs: Vec<&CLV> = Vec::new();
+            for (index, (_, entry)) in scored.iter().enumerate() {
+                let Some(clv) = entry.clv.as_ref() else {
+                    continue; // 前置 1:无 CLV 恒保留
+                };
+                let is_dup = kept_clvs
+                    .iter()
+                    .any(|kept| kept.cosine_similarity(clv) >= SEMANTIC_FOLD_THRESHOLD);
+                if is_dup {
+                    fold_flags[index] = false;
+                    folded_semantic += 1;
+                } else {
+                    kept_clvs.push(clv);
+                }
+            }
+        }
+
         // 贪心保留 Top-N 使总大小 ≤ effective_target
         // 在贪心前保留最高分条目作为 fallback(避免压缩后上下文为空)
         // WHY:若所有条目 token_size > effective_target,retained 为空,
@@ -270,7 +381,12 @@ impl ContextCompressor {
         // 避免 `ContextEntry` 深拷贝(content String 被复制)。
         // 1000 条目保留 100 条时,从 100 次 String clone 降为 100 次 refcount inc。
         // token_size 等字段访问通过 Arc 的 Deref 自动解引用,无需修改。
+        // W4b:语义折叠条目在此让出预算槽位(fold_flags 与 scored 同序对齐)。
+        let mut fold_iter = fold_flags.iter();
         for (score, entry) in scored {
+            if !fold_iter.next().copied().unwrap_or(true) {
+                continue;
+            }
             if compressed_size + entry.token_size <= effective_target {
                 compressed_size += entry.token_size;
                 retained.push(Arc::clone(entry));
@@ -311,6 +427,7 @@ impl ContextCompressor {
             original_count,
             retained_count,
             dropped_count,
+            folded_semantic,
             retained_entries: retained,
             algorithm: "importance-top-n".into(),
         }
@@ -621,5 +738,87 @@ mod tests {
         // 验证 fallback 确实切换到 Static 权重(非 Learned)
         assert!(config_fallback.selector_policy.is_static());
         assert!(!config_fallback.selector_policy.is_learned());
+    }
+
+    // ============================================================
+    // WP-D/ADR-293:w4 来源维度行为锁
+    // ============================================================
+
+    /// w4 行为锁 1:sw=0 时逐位回到三维旧公式(回退开关的位模式保证)
+    #[test]
+    fn test_w4_zero_source_weight_is_bitwise_legacy() {
+        let mut legacy = make_entry("e-1", 100, 5, 1_000);
+        legacy.source = Some(crate::assemble::ContextSource::Tool);
+        let now = Utc::now();
+        let weights = SelectorWeights::DEFAULT;
+
+        let with_w4_off = compute_importance_score(&legacy, weights, None, now, 5.0, 2_000.0, 0.0);
+        // 手算三维旧公式(实现改造前的形态)
+        let delta_ms = (now - legacy.last_accessed_at).num_milliseconds().max(0) as f32;
+        let recency = 1.0 - (delta_ms / 2_000.0).min(1.0);
+        let frequency = legacy.access_count as f32 / 5.0;
+        let legacy_score = 0.4 * recency + 0.3 * frequency + 0.3 * 0.5;
+
+        assert_eq!(with_w4_off, legacy_score, "sw=0 必须逐位等于三维旧公式");
+    }
+
+    /// w4 行为锁 2:None 条目取中性 0.5——评分偏移为均匀常数(+sw×0.5),
+    /// None 集合内部相对排序不变
+    #[test]
+    fn test_w4_unlabeled_entries_keep_relative_order() {
+        let now = Utc::now();
+        let weights = SelectorWeights::DEFAULT;
+        let mk = |id: &str, freq: u32, age: i64| {
+            let mut e = make_entry(id, 100, freq, age);
+            e.source = None;
+            e
+        };
+        let a = mk("a", 5, 100);
+        let b = mk("b", 2, 3_000);
+
+        let (score_a_new, score_b_new) = (
+            compute_importance_score(&a, weights, None, now, 5.0, 4_000.0, 0.10),
+            compute_importance_score(&b, weights, None, now, 5.0, 4_000.0, 0.10),
+        );
+        let (score_a_old, score_b_old) = (
+            compute_importance_score(&a, weights, None, now, 5.0, 4_000.0, 0.0),
+            compute_importance_score(&b, weights, None, now, 5.0, 4_000.0, 0.0),
+        );
+
+        // None 条目 = 旧三项 × (1-sw) + sw×0.5 —— 相对序保持
+        assert_eq!(
+            (score_a_new > score_b_new),
+            (score_a_old > score_b_old),
+            "None 条目集合内部相对排序在默认开启下不变"
+        );
+        // 均匀偏移:score_new = score_old×(1-sw) + sw×0.5(数学恒等式抽查)
+        let expected_a = score_a_old * 0.9 + 0.10 * 0.5;
+        assert!(
+            (score_a_new - expected_a).abs() < 1e-5,
+            "None 条目公式: 新 {score_a_new} vs 期望 {expected_a}"
+        );
+    }
+
+    /// w4 行为锁 3:Tool 来源降权(蓝图 §5.4「tool-response 类条目降权」)
+    #[test]
+    fn test_w4_tool_source_downweighted() {
+        use crate::assemble::ContextSource;
+        let now = Utc::now();
+        let weights = SelectorWeights::DEFAULT;
+        let mk = |id: &str, src: ContextSource| {
+            let mut e = make_entry(id, 100, 3, 500);
+            e.source = Some(src);
+            e
+        };
+        let tool = mk("tool", ContextSource::Tool);
+        let system = mk("sys", ContextSource::System);
+
+        let tool_score = compute_importance_score(&tool, weights, None, now, 3.0, 2_000.0, 0.10);
+        let sys_score = compute_importance_score(&system, weights, None, now, 3.0, 2_000.0, 0.10);
+        // 其余维度相同:分差 = sw × (1.0 - 0.3) = 0.07
+        assert!(
+            (sys_score - tool_score - 0.10 * 0.7).abs() < 1e-5,
+            "Tool 相对 System 的降权差 = sw×(factor 差): {sys_score} vs {tool_score}"
+        );
     }
 }

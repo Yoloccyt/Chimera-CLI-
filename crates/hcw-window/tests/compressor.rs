@@ -401,3 +401,61 @@ fn bench_compress_100k_select_nth_unstable() {
         p50 as f64 / 1_000_000.0
     );
 }
+
+// ===========================================================================
+// R11 W4b（ADR-295 D7 / UD-2）：CLV 余弦语义折叠
+// ===========================================================================
+
+/// 单位基向量第 d 维 = 1、其余 = 0 的 512 维 CLV（正交基，余弦可精确控制）
+fn basis_clv(d: usize) -> CLV {
+    let mut v = vec![0.0_f32; nexus_core::CLV::DIMENSION];
+    v[d] = 1.0;
+    CLV::from_vec(v).expect("512 维单位向量必合法")
+}
+
+/// 近重复 CLV：dim0 主分量 + dim1 小扰动（与基向量 0 余弦 ≈0.98 ≥ 0.92 阈值）
+fn near_dup_clv() -> CLV {
+    let mut v = vec![0.0_f32; nexus_core::CLV::DIMENSION];
+    v[0] = 0.98;
+    v[1] = 0.199;
+    CLV::from_vec(v).expect("近重复向量必合法")
+}
+
+/// 折叠让位端到端：近重复条目被折叠后，其预算槽位由语义正交的条目补入
+/// （无折叠时廉价的重复条目会占住预算；折叠后同预算装的是不重复信息）。
+#[test]
+fn semantic_fold_frees_slot_for_distinct_content() {
+    let dup_a = make_entry("dup-a", 100, 10, 0).with_clv(basis_clv(0));
+    let dup_b = make_entry("dup-b", 1, 5, 10).with_clv(near_dup_clv());
+    let distinct = make_entry("distinct", 1, 8, 20).with_clv(basis_clv(1));
+    let filler = make_entry("filler", 50, 1, 30); // 无 CLV
+    let entries = to_arc(vec![dup_a, dup_b, distinct, filler]);
+    // 原始 152 > 预算 102 ⇒ 触发压缩；min_token=1 ⇒ estimated_k=102 ≥ 4，
+    // 全部条目进入 Top-K（折叠面可见）
+    let report =
+        ContextCompressor::compress(&HcwConfig::default(), &entries, 102, None, Utc::now());
+    assert_eq!(report.folded_semantic, 1, "dup-b 必须被语义折叠");
+    let ids: Vec<&str> = report
+        .retained_entries
+        .iter()
+        .map(|e| e.id.as_str())
+        .collect();
+    assert!(!ids.contains(&"dup-b"), "折叠条目不得进入保留集: {ids:?}");
+    assert!(
+        ids.contains(&"dup-a") && ids.contains(&"distinct"),
+        "高分代表与语义正交条目必须保留: {ids:?}"
+    );
+    assert_eq!(report.retained_count, ids.len());
+}
+
+/// UD-2 前置 1：无 CLV 的条目恒不折叠（即便内容完全相同——内容级重复
+/// 归 assemble 精确/规范化去重管，压缩面只认嵌入判据）
+#[test]
+fn semantic_fold_never_touches_clv_less_entries() {
+    let x = make_entry("x", 50, 10, 0);
+    let y = make_entry("y", 1, 5, 10); // 无 CLV
+    let entries = to_arc(vec![x, y]);
+    let report = ContextCompressor::compress(&HcwConfig::default(), &entries, 60, None, Utc::now());
+    assert_eq!(report.folded_semantic, 0, "无 CLV 恒不折叠");
+    assert_eq!(report.retained_count, 2, "两条目均保留");
+}

@@ -45,6 +45,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          fetch-depth: 0
+          # WHY fetch-depth: 0: 本 job 的 G-25 wiring 静态只读审计含
+          # check_deleted_crate_registry.py——它用 `git log --diff-filter=D`
+          # 全历史扫描已删 crate 面（CODE_WIKI §3.12 对账）；shallow clone
+          # （默认 depth 1）下该 git log 返回空集 → [ENV-FAIL] cannot decide。
+          # 全历史拉取是该门（以及任何基于 git log 的对账门）在 CI 上成立的前提。
 
       # WHY: 可回溯性断言(F-06/W0.4-r, ADR-250)——下列 5 份文档是 ADR 索引/发布指南/
       # 工具链专项决策链(ADR-239~255)的唯一载体,靠 .gitignore 精确豁免入库;豁免行被
@@ -307,6 +313,17 @@ jobs:
         run: |
           python3 scripts/check_workflow_yaml_lexical.py --selftest
           python3 scripts/check_workflow_yaml_lexical.py
+
+      # WHY (R11 W1 / ADR-295 D1): ToolExecutor 能力视图有三个转发方法,declared_side_effects
+      # 是 R9 后加的——四处包装器(ToolRuntime/exec_plan 三装饰器/ExecPolicy)当时只转发
+      # 前两个,配置驱动的批量声明表在装饰器链被静默丢弃,MCP 并行封顶保持 0(实测 R11 前
+      # MCP 工具恒整层串行)。本门锁「覆写了 capability_of + declared_tools 的 impl 必须
+      # 同时覆写 declared_side_effects」,防止未来新增包装件再次只转发一半。先 --selftest
+      # 证明门有牙再跑真实裁决(缺目录/0 文件退 2 致盲守卫)。
+      - name: ToolExecutor side-effect forwarding guard (G-143, G-144)
+        run: |
+          python3 scripts/check_executor_side_effect_forwarding.py --selftest
+          python3 scripts/check_executor_side_effect_forwarding.py
 
       # WHY: 源文件级可达性门(ADR-213 D-18)。ADR-160 的可达性棘轮数的是 crate,而 cargo
       # 对「某个 .rs 没有任何 mod 指向它」一个警告都不给:该文件从不被解析,其 #[cfg(test)]

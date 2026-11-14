@@ -87,6 +87,10 @@ pub(crate) fn should_parallel(config_flag: bool) -> bool {
 ///
 /// `entries` 以切片借用传入;并行路径在主线程一次性 `Arc::new(entries.to_vec())`
 /// 做引用计数复制(仅 N 次 refcount inc,条目内容 Arc 零复制),闭包内零输入复制。
+// WHY 8 参:评分链纯数据参数化(weights/source_weight/时间窗/归一化基准),
+// 聚合成 ScoreParams 结构会为每 chunk 闭包引入额外 clone/capture 形态变化,
+// 收益(签名短)不抵形态漂移风险——项目内 compute_importance_score 同款先例
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn score_entries(
     entries: &[Arc<ContextEntry>],
     weights: SelectorWeights,
@@ -95,6 +99,7 @@ pub(crate) fn score_entries(
     max_access_count: f32,
     time_span_ms: f32,
     parallel_enabled: bool,
+    source_weight: f32,
 ) -> Vec<f32> {
     if !should_parallel(parallel_enabled)
         || bridge().route(TaskKind::HcwEntryScore, entries.len()) == DispatchPlan::Inline
@@ -106,6 +111,7 @@ pub(crate) fn score_entries(
             now,
             max_access_count,
             time_span_ms,
+            source_weight,
         );
     }
     match score_parallel(
@@ -115,6 +121,7 @@ pub(crate) fn score_entries(
         now,
         max_access_count,
         time_span_ms,
+        source_weight,
     ) {
         Ok(scores) => scores,
         Err(e) => {
@@ -126,6 +133,7 @@ pub(crate) fn score_entries(
                 now,
                 max_access_count,
                 time_span_ms,
+                source_weight,
             )
         }
     }
@@ -140,11 +148,20 @@ fn score_serial(
     now: DateTime<Utc>,
     max_access_count: f32,
     time_span_ms: f32,
+    source_weight: f32,
 ) -> Vec<f32> {
     entries
         .iter()
         .map(|e| {
-            compute_importance_score(e, weights, task_clv, now, max_access_count, time_span_ms)
+            compute_importance_score(
+                e,
+                weights,
+                task_clv,
+                now,
+                max_access_count,
+                time_span_ms,
+                source_weight,
+            )
         })
         .collect()
 }
@@ -164,6 +181,7 @@ fn score_parallel(
     now: DateTime<Utc>,
     max_access_count: f32,
     time_span_ms: f32,
+    source_weight: f32,
 ) -> Result<Vec<f32>, String> {
     // 主线程一次性引用计数复制(仅 N 次 Arc refcount inc,内容零复制);闭包内零复制
     let all: Arc<Vec<Arc<ContextEntry>>> = Arc::new(entries.to_vec());
@@ -188,6 +206,7 @@ fn score_parallel(
                             now,
                             max_access_count,
                             time_span_ms,
+                            source_weight,
                         )
                     })
                     .collect()
@@ -295,6 +314,7 @@ mod tests {
             max_access_count,
             time_span_ms,
             config_flag,
+            0.0, // 测试基线=三维旧公式(w4 不参与确定性断言)
         )
     }
 
@@ -408,6 +428,7 @@ mod tests {
                     now,
                     max_access_count,
                     time_span_ms,
+                    0.0, // 测试基线=三维旧公式(与 score_all 同口径)
                 )
             })
             .collect()
