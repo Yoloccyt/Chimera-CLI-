@@ -184,7 +184,11 @@ mod tests {
             ItemId::new(format!("turn-{}-{}", n / 2 + 1, n % 2 + 1)),
             ThreadId::new("goal-1::run-1"),
             TurnId::new(format!("turn-{}", n / 2 + 1)),
-            if n.is_multiple_of(2) { "message" } else { "tool_call" },
+            if n.is_multiple_of(2) {
+                "message"
+            } else {
+                "tool_call"
+            },
             status,
             &format!(r#"{{"content":"内容-{n}","n":{n}}}"#),
         );
@@ -196,7 +200,9 @@ mod tests {
 
     /// 标准线程流:thread.started + N 条 item.append（写入侧镜像顺序）
     fn seed_events(n: usize) -> (Vec<SessionEvent>, Vec<Item>) {
-        let originals: Vec<Item> = (0..n).map(|i| item(i, if i == 2 { Some("extras-2") } else { None })).collect();
+        let originals: Vec<Item> = (0..n)
+            .map(|i| item(i, if i == 2 { Some("extras-2") } else { None }))
+            .collect();
         let mut events = vec![thread_started_event("goal-1::run-1", 1_700_000_000_000)];
         for it in &originals {
             events.push(item_append_event(it));
@@ -271,7 +277,11 @@ mod tests {
         // 游标往返:以 cursors[1].offset 为 resume 点 → 其后事件重构出后缀序列
         let resume_at = result.cursors[1].offset as usize;
         let suffix = rebuild_items(&events[resume_at + 1..]);
-        assert_eq!(suffix.items.len(), originals.len() - 2, "resume 后缀条数正确");
+        assert_eq!(
+            suffix.items.len(),
+            originals.len() - 2,
+            "resume 后缀条数正确"
+        );
         for (a, b) in suffix.items.iter().zip(&originals[2..]) {
             // WHY 只比内容字段不比 thread_id:后缀切片不含 thread.started,
             // 线程身份退化为空串占位（模块文档 thread_id 退化语义）
@@ -296,10 +306,12 @@ mod tests {
             item_append_event(&item(1, None)),
         ];
         let result = rebuild_items(&events);
-        assert!(result
-            .items
-            .iter()
-            .all(|i| i.thread_id.as_str() == "goal-1::run-1"),
-            "损坏的 thread.started 不清空流上下文");
+        assert!(
+            result
+                .items
+                .iter()
+                .all(|i| i.thread_id.as_str() == "goal-1::run-1"),
+            "损坏的 thread.started 不清空流上下文"
+        );
     }
 }

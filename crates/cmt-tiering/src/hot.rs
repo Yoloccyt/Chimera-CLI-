@@ -273,7 +273,10 @@ impl HotTier {
     /// Warm/Cold 层早已是 metadata-only 采集,Hot 层全量克隆与之不对称。
     /// 谓词在 DashMap 分片读锁内对借用值判定(纯同步计算,无 await,
     /// 不引入持锁跨 await),仅通过筛选的条目被克隆,非候选条目零拷贝。
-    pub fn list_matching(&self, predicate: impl Fn(&CapabilityEntry) -> bool) -> Vec<CapabilityEntry> {
+    pub fn list_matching(
+        &self,
+        predicate: impl Fn(&CapabilityEntry) -> bool,
+    ) -> Vec<CapabilityEntry> {
         self.entries
             .iter()
             .filter(|r| predicate(r.value()))
