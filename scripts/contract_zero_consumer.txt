@@ -22,7 +22,7 @@
 # Why there is no minimum: `zero` is the debt -- wiring types up drives it to
 # 0, and a floor there would make this gate's green depend on the defect.
 #
-# CLAIM defs=242 zero=73 one=88 ge2=81 gap=161 baseline=161 rows=73 sum=OK
+# CLAIM defs=246 zero=75 one=86 ge2=85 gap=161 baseline=161 rows=75 sum=OK
 AffinityOverrides | consumers=0 | declared_in=mca/affinity
 AgreementTrendPoint | consumers=0 | declared_in=safety/calibration
 BadCaseConversion | consumers=0 | declared_in=safety/calibration
@@ -72,6 +72,7 @@ OutputProcessingContract | consumers=0 | declared_in=spec/harness_dimensions
 PeakPeriod | consumers=0 | declared_in=mca/affinity
 PlanEdge | consumers=0 | declared_in=spec/tool_plan
 PlanViolation | consumers=0 | declared_in=spec/blueprint
+PricingTier | consumers=0 | declared_in=mca/context_capability
 ProjectedMatrix | consumers=0 | declared_in=vector_math/mcsm
 QuotaLimits | consumers=0 | declared_in=memory/quota
 RLAction | consumers=0 | declared_in=seams/rl_types
@@ -89,6 +90,7 @@ SensitiveKind | consumers=0 | declared_in=safety/sensitive
 ServiceTier | consumers=0 | declared_in=mca/affinity
 StopStrategyConfig | consumers=0 | declared_in=spec/harness_dimensions
 TaskOrchestrationContract | consumers=0 | declared_in=spec/harness_dimensions
+ThreadSupport | consumers=0 | declared_in=mca/context_capability
 ToolFailure | consumers=0 | declared_in=safety/errors
 ToolInteractionContract | consumers=0 | declared_in=spec/harness_dimensions
 ValidationRule | consumers=0 | declared_in=spec/harness_dimensions
