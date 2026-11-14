@@ -108,3 +108,5 @@ sesa-router|three_layer_routing|dev-only|三层路由实验基准
 session-store|replay_bench|dev-only|会话回放开发基准(session_store 已注册主链)
 ssra-fusion|fusion_benchmark|dev-only|融合层整体基准
 scc-cache|lru_select_victim|dev-only|R11 W2e(ADR-295)LRU 规模标定产物——一次性裁决数据(256/4096 µs 级实测 13.22/337.55µs),非契约面;重开条件=容量≥4096 部署形态需门控时升格 run_bench
+gqep-executor|plan_dag_skew|dev-only|R12 W0(ADR-296) 偏斜 DAG 基线——既有 toolplan_layers 只测单层,结构上测不出层间 barrier 把长尾放大到整个后代的代价;重开条件=W4 就绪派发落地且偏斜实测显著后按 CI 首跑校准升格 registered
+gqep-executor|sched_plane|dev-only|R12 W0(ADR-296) 跨面过订阅基线——四面各 8 路 vs 共享 8 路预算的在飞峰值与 makespan;bench 内最小复刻,不引用 W6 才落地的 ResourceGovernor;重开条件=W6 治理器接线后按实测升格 registered

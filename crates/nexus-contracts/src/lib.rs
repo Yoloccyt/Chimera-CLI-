@@ -347,6 +347,18 @@ pub use safety::budget_tier;
 /// 契约类型,供 L10 mca-gateway / L6 omega-learner 共享。
 pub use mca::affinity;
 
+/// 模型上下文能力档案 — HCW v3 P0（ADR-291）的 L0 契约面
+///
+/// 承载 `ContextCapabilityProfile` / `CalibrationTier` / `ThreadSupport` 等
+/// "按有效窗口定容"的能力数据，供 mca-gateway（L10 写入）与 hcw-window（L2 只读）共享。
+///
+/// WHY 必须在 crate 根再导出一层（R12 W0 / ADR-296 订正）：模块真实落点是 sibling crate
+/// `nexus-contracts-mca/src/mca/context_capability.rs`，而 `ADR_033_EXCEPTION_MODULES`
+/// 已把它登记为受控纯逻辑例外。`l0_exception_registry` 的不变量 1 要求"每个登记名都在
+/// crate 根有 `pub use <group>::<name>;` 声明"——缺了声明，登记表与实况就漂移，两条断言
+/// 会长期红；而摘掉登记又会让 G-119 判 REGISTRY-GAP。补这一行是唯一同时满足两门的解。
+pub use mca::context_capability;
+
 /// 命令验证契约 — 攻击类型/命令/策略/trait 上提(ADR-054 决策 3,P9-T4)
 ///
 /// 承载 `AttackType` / `Command` / `BlockedPattern` / `CommandPolicy` /
@@ -595,7 +607,12 @@ pub const ADR_033_EXCEPTION_MODULES: &[&str] = &[
     "formal_props", // collect_results 结果归并 + from_result_with_auto_confidence 置信度分档
     "harness_dimensions", // default_contract 六维默认契约装配
     "variant",  // VariantId::new 标识归一化构造
-    // R9/ADR-291 补齐（G-119 从源码派生现形）：context_capability 能力档案的受控纯逻辑
+    // R12 W0 订正（ADR-296）：本行由 R9/ADR-291 加入，但当时漏了两件同批动作——
+    // ① crate 根没有对应的 `pub use mca::context_capability;` 声明；
+    // ② 测试侧 `SUBSTANTIVE_LOGIC_MODULES` 未同步。
+    // 于是 `l0_exception_registry` 的两条不变量长期红（多登记 + 无根声明），而 G-119
+    // 又要求"有派生逻辑必须登记"——两门互斥。订正方式 = 补根声明 + 补测试期望集，
+    // 而不是摘掉本行（摘掉会让 G-119 报 REGISTRY-GAP，把真模块藏起来）。
     "context_capability", // external_prior_profile 七模型先验表查选 + CalibrationTier::as_str 映射 + ThreadSupport::is_supported 判定（确定性，无 IO/随机）
 ];
 

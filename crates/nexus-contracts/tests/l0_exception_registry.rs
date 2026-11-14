@@ -52,6 +52,11 @@ const SUBSTANTIVE_LOGIC_MODULES: &[&str] = &[
     "formal_props",
     "harness_dimensions",
     "variant",
+    // R12 W0 订正（ADR-296）：与 lib.rs `ADR_033_EXCEPTION_MODULES` 同批加入。
+    // 该模块落点在 sibling crate（nexus-contracts-mca/src/mca/），原本只登记在
+    // lib.rs 一侧而本表未同步 ⇒ 两个不变量一红（多登记）一绿（无根声明那条也红）。
+    // 基线口径：本表与 lib.rs 登记表必须**同批**修改，否则本测试逐字判红。
+    "context_capability",
 ];
 
 /// W3 子模块化后的 10 个组模块（结构锁，防回退平铺）。
