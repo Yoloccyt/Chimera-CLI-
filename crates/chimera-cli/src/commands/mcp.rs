@@ -68,6 +68,7 @@ pub async fn execute(
             tool,
             args,
             network,
+            endpoint,
         } => {
             if *network {
                 // 副作用可见性（ADR-245 D4）：真实 TCP 生效时在 stderr 留痕
@@ -77,7 +78,18 @@ pub async fn execute(
                     "mcp call: 已显式启用真实 TCP 传输（可能产生网络请求）"
                 );
             }
-            call_tool(&mesh, server, tool, args, perm, json, dry_run, runtime).await
+            call_tool(
+                &mesh,
+                server,
+                tool,
+                args,
+                endpoint.as_deref(),
+                perm,
+                json,
+                dry_run,
+                runtime,
+            )
+            .await
         }
         McpAction::Inspect { server } => inspect_server(&mesh, server, json).await,
         McpAction::Query {
@@ -234,7 +246,8 @@ async fn serve_server() -> Result<()> {
 #[derive(Debug, Serialize)]
 struct McpCallResult<'a> {
     success: bool,
-    transaction_id: &'a str,
+    transaction_id: Option<&'a str>,
+    payload: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -254,12 +267,13 @@ struct McpCallPayload<'a> {
 ///
 /// `dry_run=true`(Task 2.2):permission 与准入前置都通过后只输出预览,
 /// 不调用 execute_transaction（预览必须反映真实结论，故前置不可跳过）。
-#[allow(clippy::too_many_arguments)] // 7 个参数均为命令面既有语义位;合并成结构体属独立重构
+#[allow(clippy::too_many_arguments)] // CLI adapter: mirrors clap args 1:1
 async fn call_tool(
     mesh: &McpMesh,
     server: &str,
     tool: &str,
     args: &[String],
+    endpoint: Option<&str>,
     perm: &PermissionCtx,
     json: bool,
     dry_run: bool,
@@ -307,28 +321,64 @@ async fn call_tool(
         return Ok(());
     }
 
+    // Phase 4 / ADR-230：v2 单调用（显式 args + payload），默认关闭。
+    if std::env::var("CHIMERA_MCP_CALL_V2").ok().as_deref() == Some("on") {
+        let Some(endpoint) = endpoint else {
+            return Err(ChimeraCliError::ConfigError(
+                "mcp call v2 需要 --endpoint <host:port>".into(),
+            )
+            .into());
+        };
+        let server_record = MeshServer::new(server, endpoint, vec![tool.to_string()]);
+        mesh.register_server(server_record).map_err(|error| {
+            ChimeraCliError::EngineError(format!("MCP 服务器注册失败: {error}"))
+        })?;
+        let args_json = args.join(" ");
+        let payload_text = mesh
+            .invoke_tool(server, tool, &args_json, None)
+            .await
+            .map_err(|error| ChimeraCliError::EngineError(format!("MCP 工具调用失败: {error}")))?;
+        let payload = McpCallPayload {
+            server,
+            tool,
+            args,
+            result: McpCallResult {
+                success: true,
+                transaction_id: None,
+                payload: Some(&payload_text),
+            },
+        };
+        return output::emit(json, &payload, || {
+            output::print_success(&format!(
+                "MCP 工具调用完成: {server}/{tool} -> {payload_text}"
+            ));
+            Ok(())
+        });
+    }
+
     // 真实调用 McpMesh::execute_transaction
     // WHY 返回 EngineError:目标 server 若未出现在本次注册（含 stdio 跳过/SSRF 拒绝），
     // execute_transaction 仍返回 ServerNotFound（既有语义保持不变）。
     // args 全量透传（ADR-253 D1）：随 Prepare 帧抵达参与者，不再在 CLI 层静默丢弃。
+    // 旧路径（默认）：2PC 事务语义，逐位保留。
     let result = mesh
         .execute_transaction(vec![server.to_string()], tool.to_string(), args.to_vec())
         .await
         .map_err(|e| ChimeraCliError::EngineError(format!("MCP 工具调用失败: {e}")))?;
-
+    let transaction_id = result.transaction_id.clone();
     let payload = McpCallPayload {
         server,
         tool,
         args,
         result: McpCallResult {
             success: result.success,
-            transaction_id: &result.transaction_id,
+            transaction_id: Some(&transaction_id),
+            payload: None,
         },
     };
     output::emit(json, &payload, || {
         output::print_success(&format!(
-            "MCP 工具调用完成: {server}/{tool}(transaction: {})",
-            result.transaction_id
+            "MCP 工具调用完成: {server}/{tool}(transaction: {transaction_id})"
         ));
         Ok(())
     })

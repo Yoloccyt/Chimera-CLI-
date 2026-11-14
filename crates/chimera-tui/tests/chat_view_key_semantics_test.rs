@@ -82,12 +82,14 @@ fn wheel(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
 ///
 /// 长对话使会话流行数超出可视区,滚动键/滚轮的生效与否可经渲染帧判别。
 fn seed_long_conversation(app: &mut TuiApp, n: usize) {
-    app.state_mut().chat_messages = (0..n)
-        .map(|i| chimera_tui::ChatMessage {
-            role: chimera_tui::ChatRole::Assistant,
-            content: format!("msg-{i:02}"),
-        })
-        .collect();
+    app.state_mut().chat_messages = std::sync::Arc::new(
+        (0..n)
+            .map(|i| chimera_tui::ChatMessage {
+                role: chimera_tui::ChatRole::Assistant,
+                content: format!("msg-{i:02}"),
+            })
+            .collect::<Vec<_>>(),
+    );
 }
 
 // ============================================================
@@ -263,12 +265,11 @@ fn chat_view_bottom_down_keeps_following() {
     // 流式新回复到达:跟随语义下新消息应立即可见。
     // 判别力:修复前按 ↓ 已解除 follow,且中间渲染帧把偏移钳回旧底部,
     // 新消息行恰在视口外 → contains 必败。
-    app.state_mut()
-        .chat_messages
-        .push(chimera_tui::ChatMessage {
-            role: chimera_tui::ChatRole::Assistant,
-            content: "msg-40-new-reply".into(),
-        });
+    // chat_messages 现为 Arc<Vec<_>>：测试内追加走 make_mut（与生产写路径同一语义）
+    std::sync::Arc::make_mut(&mut app.state_mut().chat_messages).push(chimera_tui::ChatMessage {
+        role: chimera_tui::ChatRole::Assistant,
+        content: "msg-40-new-reply".into(),
+    });
     let after_new = render_frame_text(&mut app);
     assert!(
         after_new.contains("msg-40-new-reply"),
@@ -294,12 +295,11 @@ fn chat_view_bottom_wheel_down_keeps_following() {
         "贴底向下滚轮应保持贴底画面不变"
     );
 
-    app.state_mut()
-        .chat_messages
-        .push(chimera_tui::ChatMessage {
-            role: chimera_tui::ChatRole::Assistant,
-            content: "msg-40-new-reply".into(),
-        });
+    // chat_messages 现为 Arc<Vec<_>>：测试内追加走 make_mut（与生产写路径同一语义）
+    std::sync::Arc::make_mut(&mut app.state_mut().chat_messages).push(chimera_tui::ChatMessage {
+        role: chimera_tui::ChatRole::Assistant,
+        content: "msg-40-new-reply".into(),
+    });
     let after_new = render_frame_text(&mut app);
     assert!(
         after_new.contains("msg-40-new-reply"),

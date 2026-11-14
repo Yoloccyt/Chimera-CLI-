@@ -21,7 +21,8 @@ use unicode_width::UnicodeWidthStr;
 /// 构造带对话历史与状态的 TuiState
 fn state_with(messages: Vec<ChatMessage>, status: ChatStatus) -> TuiState {
     let mut s = TuiState::new();
-    s.chat_messages = messages;
+    // Phase 6B/T6B.2：字段改 Arc<Vec<_>>，测试构造点包一层
+    s.chat_messages = std::sync::Arc::new(messages);
     s.chat_status = status;
     s
 }

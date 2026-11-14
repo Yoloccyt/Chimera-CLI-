@@ -58,6 +58,9 @@ crates/nexus-app-server/src/sse.rs:121        # DESIGN SSE writer: single-connec
 #  shutdown() to the multi-line ".lock()...take()" chain must redden
 #  G-27/G-35.)
 crates/decb-governor/src/governor.rs:564      # SCANNER-DEBT `current_total` is `*total` copy; state guard already block-scoped
+# 合流裁决（2026-11-14）：feat 侧删掉的这一行是**旧键（:556）已被 :604 取代**后的残留，
+# 不是"新豁免"——HEAD 的 :604 是 CI acquisition-line 口径的现役键（await sites 615/637/646），
+# 故保留 HEAD 行；若保留 feat 的 :556 会同时触发 STALE（代码已移动）与 G-27 键集失配。
 crates/mcp-mesh/src/quantum/participant_client.rs:604 # SCANNER-DEBT `pooled` is a TcpStream removed from the pool; guard dies at and_then stmt end (acquisition line; await sites 615/637/646)
 crates/pvl-layer/src/producer.rs:123          # SCANNER-DEBT `strategy` is `*read()` Copy value; read guard dies at stmt end
 crates/session-store/src/writer.rs:638        # SCANNER-DEBT `has_pending` is a bool; flush deliberately runs outside the lock (acquisition line; await at 642) [re-key 576->638 2026-11-14, CI acquisition-line 口径]

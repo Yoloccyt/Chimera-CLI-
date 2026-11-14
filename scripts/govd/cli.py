@@ -266,14 +266,18 @@ def cmd_run(args):
                                  "selected": len(ordered), "skipped": len(skipped)})
 
 
-    free = shutil.disk_usage(str(ROOT)).free / 1024 ** 3
     attempts = []
     order = {t.id: i for i, t in enumerate(tasks)}
 
     def execute(task):
-        if task.kind == "heavy" and task.disk_gb and free < task.disk_gb:
-            return Attempt(task.id, 1, Verdict.UNKNOWN, None, 0.0, "disk",
-                           cmd_digest=task.cmd_digest())
+        if task.kind == "heavy" and task.disk_gb:
+            # WHY 磁盘余额在执行点现取，而不是循环外采样一次：并发下越靠后的门用的
+            # 是越旧的读数，于是 UNKNOWN（"这道门真的不可判"）会退化成"来不及看"。
+            # 判据的正确性不允许这种混淆 —— 串行时两者恰好等价，所以旧写法从不显红。
+            free_gib = shutil.disk_usage(str(ROOT)).free / 1024 ** 3
+            if free_gib < task.disk_gb:
+                return Attempt(task.id, 1, Verdict.UNKNOWN, None, 0.0, "disk",
+                               cmd_digest=task.cmd_digest())
         hit = reuse.get(task.id)
         if hit and hit[1] == task.cmd_digest():
             # The gate did not run here. It is reported as ok because the operator
@@ -305,9 +309,14 @@ def cmd_run(args):
             print("  " + task.id + " " + prior[task.id] + " (resumed, not re-run)")
     futs = []
     cancelled = False
+    # `--jobs` 显式优先；未指定（默认 0）时落到 profile 的 jobs。
+    # WHY 这里必须有兜底：policy.toml 声明的 pr=4 / nightly=2 / release=1 / local=1
+    # 在全仓没有任何读取方（唯一消费者曾且只有 `args.jobs`），于是"并发档位"是死配置，
+    # 验证面恒串行 —— 静默忽略型解析器：传了不认，也不报错。
+    jobs = args.jobs if args.jobs > 0 else profile.jobs
     try:
-        if args.jobs and args.jobs > 1:
-            with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+        if jobs > 1:
+            with ThreadPoolExecutor(max_workers=jobs) as pool:
                 futs = [pool.submit(execute, t) for t in pending]
                 for fut in as_completed(futs):
                     record(fut.result())

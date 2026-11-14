@@ -1117,8 +1117,11 @@ pub struct TuiState {
     pub tick_mode: TickMode,
     // === M3b Chat 面板字段 ===
     /// 对话历史(数据驱动 Chat 面板,由 ChatSync 单一拥有并经 DataSnapshot 同步)
+    ///
+    /// Phase 6B/T6B.2:`Arc<Vec<_>>` —— 每 tick 从快照同步到本状态只加引用计数,
+    /// 不再深拷整段历史;面板读它走 deref(与 Vec 用法一致)。
     #[serde(default)]
-    pub chat_messages: Vec<ChatMessage>,
+    pub chat_messages: Arc<Vec<ChatMessage>>,
     /// 当前对话会话状态(思考中/工具执行中/空闲,驱动 Chat 状态指示器)
     #[serde(default)]
     pub chat_status: ChatStatus,
@@ -1422,7 +1425,7 @@ impl TuiState {
             net_tx_history: Vec::new(),
             tick_mode: TickMode::default(),
             // M3b Chat 面板默认值(空历史 + 空闲状态)
-            chat_messages: Vec::new(),
+            chat_messages: Arc::new(Vec::new()),
             chat_status: ChatStatus::default(),
             last_action_feedback_seq: 0,
             handshake: None,

@@ -5,53 +5,55 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-# L1 Core:提供 id_newtype! 宏(生成 OperationId newtype)
+# L1 Core:鎻愪緵 id_newtype! 瀹?鐢熸垚 OperationId newtype)
 nexus-contracts = { workspace = true }
-# R4-2(ADR-263):评测式分配器,optional + feature 门(不默认),bench A/B 裁决
+# R4-2(ADR-263):璇勬祴寮忓垎閰嶅櫒,optional + feature 闂?涓嶉粯璁?,bench A/B 瑁佸喅
 mimalloc = { workspace = true, optional = true }
-# L4 Security: execpolicy 决策审计 + 规则引擎（P4-T3 接线:ToolExecutor 挂审批流水线）
+# L4 Security: execpolicy 鍐崇瓥瀹¤ + 瑙勫垯寮曟搸锛圥4-T3 鎺ョ嚎:ToolExecutor 鎸傚鎵规祦姘寸嚎锛?
 seccore = { workspace = true }
 nexus-core = { workspace = true }
-# L1 Core:跨层通信唯一通道,发布 GatherCompleted/OperationTimedOut/OrphanCallDetected 事件
+# L1 Core:璺ㄥ眰閫氫俊鍞竴閫氶亾,鍙戝竷 GatherCompleted/OperationTimedOut/OrphanCallDetected 浜嬩欢
 event-bus = { workspace = true }
-# L4 Security:QEEP 协议,提供 OrphanDetector 与 entangle 包裹(零孤儿调用保证)
+# L4 Security:QEEP 鍗忚,鎻愪緵 OrphanDetector 涓?entangle 鍖呰９(闆跺鍎胯皟鐢ㄤ繚璇?
 qeep-protocol = { workspace = true }
-# 异步运行时:tokio::time::timeout 包装单操作超时
+# 寮傛杩愯鏃?tokio::time::timeout 鍖呰鍗曟搷浣滆秴鏃?
 tokio = { workspace = true }
-# 配置与结果类型序列化(#[derive(Serialize, Deserialize)])
+# Tool execution plane: CancellationToken 娉ㄥ叆锛堜笌 chimera-cli call_budget 鍚屾簮锛?
+tokio-util = { workspace = true }
+# 閰嶇疆涓庣粨鏋滅被鍨嬪簭鍒楀寲(#[derive(Serialize, Deserialize)])
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-# 库层错误类型标准(§4.1:库层用自定义 thiserror enum)
+# 搴撳眰閿欒绫诲瀷鏍囧噯(搂4.1:搴撳眰鐢ㄨ嚜瀹氫箟 thiserror enum)
 thiserror = { workspace = true }
-# 结构化日志(事件发布失败告警)
+# 缁撴瀯鍖栨棩蹇?浜嬩欢鍙戝竷澶辫触鍛婅)
 tracing = { workspace = true }
-# FuturesUnordered 流式聚集(对应 A.2 设计决策:流式处理,内存占用更低)
+# FuturesUnordered 娴佸紡鑱氶泦(瀵瑰簲 A.2 璁捐鍐崇瓥:娴佸紡澶勭悊,鍐呭瓨鍗犵敤鏇翠綆)
 futures = { workspace = true }
 async-trait = { workspace = true }
-# UUIDv7 操作 ID 生成(时间有序,便于追溯)
-# 时间戳(聚集延迟计算)
+# UUIDv7 鎿嶄綔 ID 鐢熸垚(鏃堕棿鏈夊簭,渚夸簬杩芥函)
+# 鏃堕棿鎴?鑱氶泦寤惰繜璁＄畻)
 
-# R4-2(ADR-263):分配器评测 feature——启用后本 crate 的 bench 二进制以
-# mimalloc 为全局分配器;采纳与否由 A/B 实测裁决(判据见 ADR-263)
+# R4-2(ADR-263):鍒嗛厤鍣ㄨ瘎娴?feature鈥斺€斿惎鐢ㄥ悗鏈?crate 鐨?bench 浜岃繘鍒朵互
+# mimalloc 涓哄叏灞€鍒嗛厤鍣?閲囩撼涓庡惁鐢?A/B 瀹炴祴瑁佸喅(鍒ゆ嵁瑙?ADR-263)
 [features]
 allocator-mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
-# 性能基准框架(SubTask 24.6)
-# WHY async_tokio:启用 `Bencher::to_async` 方法,支持异步基准测试
+# 鎬ц兘鍩哄噯妗嗘灦(SubTask 24.6)
+# WHY async_tokio:鍚敤 `Bencher::to_async` 鏂规硶,鏀寔寮傛鍩哄噯娴嬭瘯
 criterion = { workspace = true, features = ["async_tokio"] }
-# 属性测试框架(SubTask 24.6)
+# 灞炴€ф祴璇曟鏋?SubTask 24.6)
 proptest = { workspace = true }
-# ADR-241 W3-T3 裁决用：沙箱门缓存的「无锁读候选」同轮对照基准。
-# WHY 只作 dev-dependency：候选实现尚未采纳（须先由同轮对照证明收益>0），
-# 裁决前不进生产依赖，避免供应链面无谓扩大。
+# ADR-241 W3-T3 瑁佸喅鐢細娌欑闂ㄧ紦瀛樼殑銆屾棤閿佽鍊欓€夈€嶅悓杞鐓у熀鍑嗐€?
+# WHY 鍙綔 dev-dependency锛氬€欓€夊疄鐜板皻鏈噰绾筹紙椤诲厛鐢卞悓杞鐓ц瘉鏄庢敹鐩?0锛夛紝
+# 瑁佸喅鍓嶄笉杩涚敓浜т緷璧栵紝閬垮厤渚涘簲閾鹃潰鏃犺皳鎵╁ぇ銆?
 dashmap = { workspace = true }
-# tokio 测试工具
+# tokio 娴嬭瘯宸ュ叿
 tokio-test = { workspace = true }
-# JSON 序列化测试(config.rs serde 往返测试)
+# JSON 搴忓垪鍖栨祴璇?config.rs serde 寰€杩旀祴璇?
 serde_json = { workspace = true }
 
-# 性能基准配置:harness=false 以使用 criterion 自定义 main
+# 鎬ц兘鍩哄噯閰嶇疆:harness=false 浠ヤ娇鐢?criterion 鑷畾涔?main
 [[bench]]
 name = "gather"
 harness = false
@@ -60,18 +62,18 @@ harness = false
 name = "tool_runtime_chain"
 harness = false
 
-# 性能增量（2026-11-06）：四环链分层归因基准（policy/sandbox/route/transport 各环占比）
+# 鎬ц兘澧為噺锛?026-11-06锛夛細鍥涚幆閾惧垎灞傚綊鍥犲熀鍑嗭紙policy/sandbox/route/transport 鍚勭幆鍗犳瘮锛?
 [[bench]]
 name = "tool_dispatch_layers"
 harness = false
 
-# 性能增量（2026-11-06）：批量派发「串行 vs 有界并行」吞吐对照
+# 鎬ц兘澧為噺锛?026-11-06锛夛細鎵归噺娲惧彂銆屼覆琛?vs 鏈夌晫骞惰銆嶅悶鍚愬鐓?
 [[bench]]
 name = "tool_runtime_batch"
 harness = false
 
-# 性能增量（2026-11-06）：PlanRunner 只读层「concurrency=1 vs 8」墙钟对照
-# ADR-249：链级拥有/借用同轮对照（owned vs borrowed × c1/c4/c8；反转主次裁决尺）
+# 鎬ц兘澧為噺锛?026-11-06锛夛細PlanRunner 鍙灞傘€宑oncurrency=1 vs 8銆嶅閽熷鐓?
+# ADR-249锛氶摼绾ф嫢鏈?鍊熺敤鍚岃疆瀵圭収锛坥wned vs borrowed 脳 c1/c4/c8锛涘弽杞富娆¤鍐冲昂锛?
 [[bench]]
 name = "dispatch_borrowed_chain"
 harness = false
@@ -80,19 +82,25 @@ harness = false
 name = "toolplan_layers"
 harness = false
 
-# R12 W0（ADR-296）：偏斜 DAG 基准 —— 既有 toolplan_layers 只测单层，
-# 结构上测不出「层间 barrier 把长尾放大到整个后代」的代价，故补多层偏斜形状。
+# R12 W0锛圓DR-296锛夛細鍋忔枩 DAG 鍩哄噯 鈥斺€?鏃㈡湁 toolplan_layers 鍙祴鍗曞眰锛?
+# 缁撴瀯涓婃祴涓嶅嚭銆屽眰闂?barrier 鎶婇暱灏炬斁澶у埌鏁翠釜鍚庝唬銆嶇殑浠ｄ环锛屾晠琛ュ灞傚亸鏂滃舰鐘躲€?
 [[bench]]
 name = "plan_dag_skew"
 harness = false
 
-# R12 W0（ADR-296）：跨执行面过订阅基准 —— 四面各 8 路 vs 共享 8 路预算的在飞峰值/makespan。
-# 用 bench 内最小复刻取基线，不引用 W6 才落地的 ResourceGovernor（先有判据后有实现）。
+# R12 W0锛圓DR-296锛夛細璺ㄦ墽琛岄潰杩囪闃呭熀鍑?鈥斺€?鍥涢潰鍚?8 璺?vs 鍏变韩 8 璺绠楃殑鍦ㄩ宄板€?makespan銆?
+# 鐢?bench 鍐呮渶灏忓鍒诲彇鍩虹嚎锛屼笉寮曠敤 W6 鎵嶈惤鍦扮殑 ResourceGovernor锛堝厛鏈夊垽鎹悗鏈夊疄鐜帮級銆?
 [[bench]]
 name = "sched_plane"
 harness = false
 
-# E-5 第五例 opt-in：生产码唯二 expect(“validate 已保证”不变量)已改 fail-soft
-# 错误 JSON(与执行失败同型)；余命中全在 cfg(test) mod/benches/tests，按惯用法 allow。
+# 合并自 feat/toolplane-execution（ADR-233 追加节九）：ToolPlan 并行/串行对照基座。
+# 与上方 R12 W0 的两个基准并存：那两个测「调度形状」，本项测「计划路径的串行 vs 并行」。
+[[bench]]
+name = "tool_plan"
+harness = false
+
+# E-5 绗簲渚?opt-in锛氱敓浜х爜鍞簩 expect(鈥渧alidate 宸蹭繚璇佲€濅笉鍙橀噺)宸叉敼 fail-soft
+# 閿欒 JSON(涓庢墽琛屽け璐ュ悓鍨?锛涗綑鍛戒腑鍏ㄥ湪 cfg(test) mod/benches/tests锛屾寜鎯敤娉?allow銆?
 [lints]
 workspace = true

@@ -24,6 +24,7 @@ fn config_with_mcp_server(id: &str, url: &str) -> ChimeraConfig {
             servers: vec![McpServerConfig {
                 id: id.to_string(),
                 url: Some(url.to_string()),
+                ..Default::default()
             }],
             // R10 WP-T1:声明集缺省空集(fail-closed 语义不变)
             declared_side_effects: Vec::new(),

@@ -31,9 +31,12 @@ KNOWN_KEYS = {
 PROFILES = ("pr", "nightly", "release", "local")
 EXES = ("{python}", "bash", "pwsh", "cargo", "git")
 SOURCES = ("gate", "rust", "external", "diagnostic")
+# 清单头注声明的 test_kind 词表。此前只校验「是字符串」，于是 2026-11 前已有 4 行
+# 写成 `single_crate`（头注里根本没有这个词）而全库无门发现 —— ADR-235 S1 补齐。
+TEST_KINDS = ("crate_unit", "cross_crate")
 ID_RE = re.compile(r"^G-\d+$")
 TASK_ID_RE = re.compile(r"^(R|E|X|D)-\d+$")
-PROFILE_KEYS = {"include_heavy", "jobs", "allow_mutating", "reuse_ok"}
+PROFILE_KEYS = {"include_heavy", "jobs", "allow_mutating"}
 EXEC_KEYS = {"whitelist", "default_timeout_s", "heavy_timeout_s", "env_retry",
              "mutating_prefixes"}
 ROLE_KEYS = {"profiles"}
@@ -74,10 +77,14 @@ def validate_policy(doc):
     """Validate govd's policy.toml against the ADR-228 §3.3-§3.5 invariants.
 
     WHY a gate for the policy file: profiles, the executable whitelist and the
-    reuse/mutating switches are exactly the permissions model, and until now
-    nothing checked them. A typo (`alow_mutating`) or a `reuse_ok = true` under
-    `[profiles.release]` would silently weaken the scheduler while every gate
-    stayed green -- the Spec forbids reuse in a release run outright.
+    mutating switch are exactly the permissions model, and until now nothing
+    checked them. A typo (`alow_mutating`) would silently weaken the scheduler
+    while every gate stayed green.
+
+    `reuse_ok` used to live here too; ADR-235 S1 deleted it because nothing ever
+    read it (the per-run CLI flag drives reuse, the profile field did not). It is
+    now rejected as POLICY_UNKNOWN_KEY — declaring it at all is the failure mode,
+    which is strictly stronger than the old "must stay false" check.
     """
     problems = []
 
@@ -102,15 +109,11 @@ def validate_policy(doc):
             continue
         for key in sorted(set(row) - PROFILE_KEYS):
             bad("POLICY_UNKNOWN_KEY", "profiles.%s: unknown key %r" % (name, key))
-        for key in ("include_heavy", "allow_mutating", "reuse_ok"):
+        for key in ("include_heavy", "allow_mutating"):
             if key in row and not isinstance(row[key], bool):
                 bad("POLICY_TYPE", "profiles.%s.%s must be a bool" % (name, key))
         if "jobs" in row and (not _is_int(row["jobs"]) or row["jobs"] < 1):
             bad("POLICY_JOBS", "profiles.%s.jobs must be an int >= 1" % name)
-        if row.get("reuse_ok") is True:
-            bad("POLICY_REUSE", "profiles.%s.reuse_ok must stay false: reuse is a "
-                                "per-run CLI opt-in, and a release verdict may never "
-                                "be inherited (ADR-228 §3.4)" % name)
         if row.get("allow_mutating") is True and name not in MUTATING_ALLOWED_PROFILES:
             bad("POLICY_MUTATING", "profiles.%s.allow_mutating is only allowed for %s"
                 % (name, list(MUTATING_ALLOWED_PROFILES)))
@@ -204,6 +207,10 @@ def validate(gates, *, family="gate"):
         for key in ("ci_exempt", "ci_advisory", "test_kind", "owner"):
             if key in g and not isinstance(g[key], str):
                 bad("TYPE", "%s: %s must be a string" % (gid, key))
+        if "test_kind" in g and g["test_kind"] not in TEST_KINDS:
+            bad("TEST_KIND", "%s: test_kind %r not in %s (清单头注声明的词表;"
+                             " 只校验类型时写错值不会红 —— ADR-235 S1)"
+                % (gid, g["test_kind"], list(TEST_KINDS)))
         if "timeout_s" in g and (not _is_int(g["timeout_s"]) or g["timeout_s"] <= 0):
             bad("TIMEOUT", "%s: timeout_s must be a positive int" % gid)
         if "retry" in g and (not _is_int(g["retry"]) or not -1 <= g["retry"] <= 3):
@@ -307,6 +314,8 @@ def selftest() -> int:
         ("empty", [], "EMPTY"),
         ("bool-expect", [_gate(expect=True)], "EXPECT"),
         ("bad-source", [_gate(source="bogus")], "SOURCE"),
+        # ADR-235 S1: 这个值就是 2026-11 前 4 行真实写错的形态（头注里没有它）。
+        ("bad-test-kind", [_gate(test_kind="single_crate")], "TEST_KIND"),
     ]
     for name, rows, code in cases:
         want(name, code in codes(rows), codes(rows))
@@ -317,7 +326,7 @@ def selftest() -> int:
 
     good_policy = {
         "profiles": {p: {"include_heavy": p != "pr", "jobs": 2,
-                        "allow_mutating": p == "release", "reuse_ok": False}
+                        "allow_mutating": p == "release"}
                      for p in PROFILES},
         "exec": {"whitelist": list(EXES), "default_timeout_s": 300,
                  "heavy_timeout_s": 1800, "env_retry": 1,
@@ -326,9 +335,10 @@ def selftest() -> int:
     }
     want("policy-valid-clean", validate_policy(good_policy) == [])
     policy_cases = [
-        ("policy-release-reuse",
-         lambda d: d["profiles"].__setitem__("release", {**d["profiles"]["release"], "reuse_ok": True}),
-         "POLICY_REUSE"),
+        ("policy-declares-deleted-reuse-ok",
+         lambda d: d["profiles"].__setitem__("release",
+                                             {**d["profiles"]["release"], "reuse_ok": True}),
+         "POLICY_UNKNOWN_KEY"),
         ("policy-mutating-in-pr",
          lambda d: d["profiles"].__setitem__("pr", {**d["profiles"]["pr"], "allow_mutating": True}),
          "POLICY_MUTATING"),

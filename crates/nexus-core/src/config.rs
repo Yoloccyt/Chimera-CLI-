@@ -1,4 +1,4 @@
-//! Chimera CLI 配置类型定义 — 15 个顶层 section 的纯数据结构
+﻿//! Chimera CLI 配置类型定义 — 15 个顶层 section 的纯数据结构
 //!
 //! 对应架构层:L1 Core(类型定义);加载逻辑位于 L10 chimera-cli
 //!
@@ -688,12 +688,12 @@ impl Default for McpConfig {
     }
 }
 
-/// 单个 MCP 服务器配置(url 型)
+/// 单个 MCP 服务器配置
 ///
-/// WHY 只有 `id` + `url`(ADR-255):原 `command`/`args`(stdio 模式)与
-/// `auth`(oauth/password)三字段有 schema 零消费——注册端只读 `url`,
-/// mcp-mesh 无 stdio 拉起、无任何认证透传逻辑,字段存在只会诱导"填了就
-/// 生效"的假象,随死配置收口移除;旧配置中的多余键被静默忽略,读取兼容。
+/// WHY 保留 `command`/`args`(ADR-235 stdio 链路):ADR-255 曾按"schema 零消费"
+/// 收口移除 stdio 三字段,但 tool plane 的 MCP 发现(`StdioTransport::spawn`)
+/// 是它们的真实消费者 —— 该前提已不成立,故 `command`/`args` 随 stdio 能力保留;
+/// 未配置时 `None`(HTTP/URL 型走既有 `url` 路径),旧配置读取兼容。
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 pub struct McpServerConfig {
@@ -701,6 +701,20 @@ pub struct McpServerConfig {
     pub id: String,
     /// 服务端点(URL;须公网可达,loopback/保留段在注册阶段即被 SSRF 校验拒绝)
     pub url: Option<String>,
+    /// stdio 模式:启动命令
+    pub command: Option<String>,
+    /// stdio 模式:命令参数
+    pub args: Option<Vec<String>>,
+    /// 认证方式:oauth / password / none
+    pub auth: Option<String>,
+    /// stdio 模式:显式注入的环境变量(在安全白名单之外,见 ADR-235 S4)
+    pub env: std::collections::BTreeMap<String, String>,
+    /// 单请求超时(毫秒);0 = 默认 30s
+    pub timeout_ms: u64,
+    /// 是否采信该服务器自报的 `readOnlyHint`(默认 false:hint 不可信,ADR-235 D1)
+    pub trust_readonly_hints: bool,
+    /// 是否启用该服务器(默认 false:本波不默认连任何 MCP,ADR-235 D2)
+    pub enabled: bool,
 }
 
 /// 默认 MCP 服务器列表

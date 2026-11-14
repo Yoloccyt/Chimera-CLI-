@@ -36,8 +36,8 @@
 //!         ├── list             # 列出已配置 Provider
 //!         ├── show <name>      # Provider 详情
 //!         ├── set-default <n>  # 设置默认 Provider
-//!         ├── test [name]      # 探测连通性（mock）
-//!         ├── channels         # 本地静态渠道表
+//!         ├── test [name]      # 探测连通性
+//!         ├── channels         # 本地静态渠道表(Quality / Balanced / Cost / Speed)
 //!         └── strategy [name]  # 显示/设置 model_router.strategy
 //! ```
 
@@ -183,6 +183,13 @@ chimera run --execute \"部署变更\"                 # 申请执行(当前被�
         /// 执行计划（默认关闭：仅展示计划与流式回复；开启前需沙箱派发链端到端验证）
         #[arg(long)]
         execute: bool,
+        /// 走 LLM 工具循环（Phase 7，ADR-232）
+        ///
+        /// WHY 单次旗而非全局：`run` 的旧语义（Quest 分解 + 打字机输出）是既有契约，
+        /// 循环是另一条产出路径；用显式旗让用户逐次选择，而不是改默认行为。
+        /// 未传本旗时 `CHIMERA_LLM_LOOP=apply` 仍会让 chat / TUI 走循环。
+        #[arg(long)]
+        llm: bool,
     },
     /// 启动 chat REPL（非 TUI 流式对话，支持 slash 命令）
     ///
@@ -222,15 +229,18 @@ chimera                                        # 无子命令时默认启动 TUI
         #[arg(long)]
         protocol: bool,
     },
-    /// Quest 管理（长期任务的创建/查询/取消/检查点）
+    /// Quest 管理（长期任务的创建/查询/取消/检查点/执行）
     #[command(
         long_about = "Quest 是 NEXUS-OMEGA 的长期任务单元，经 QuestEngine 分解为多个子任务。\n\
-支持 list/show/cancel/checkpoint 4 个子动作。\n\
-注:进程内 ephemeral 引擎不跨进程持久化，真实 Quest 管理请用 `chimera tui`。",
+支持 list/show/cancel/checkpoint/execute 5 个子动作。\n\
+注:进程内 ephemeral 引擎不跨进程持久化，真实 Quest 管理请用 `chimera tui`。\n\
+execute 默认关闭，需 CHIMERA_QUEST_EXEC=apply（多根并行另需 CHIMERA_QUEST_DAG=multi_root）。",
         after_long_help = "EXAMPLES:\n  \
 chimera quest list                             # 列出所有 Quest\n  \
 chimera --json quest show <quest-id>           # 查看 Quest 详情(JSON 格式)\n  \
-chimera --yes quest cancel <quest-id>          # 取消 Quest(跳过确认)"
+chimera --yes quest cancel <quest-id>          # 取消 Quest(跳过确认)\n  \
+CHIMERA_QUEST_EXEC=apply chimera --yes quest execute \\\n    \
+--prompt \"拉取数据。生成报告。\" --plans plans.json   # 执行任务计划"
     )]
     Quest {
         /// Quest 子命令动作
@@ -327,6 +337,20 @@ chimera mcp inspect <server>                   # 检查服务器详情"
         /// MCP 子命令动作(list/serve/call/inspect)
         #[command(subcommand)]
         action: McpAction,
+    },
+    /// 工具执行面 — 列出/调用/执行 ToolPlan（默认关闭）
+    #[command(
+        long_about = "工具执行面:列出已注册工具、调用单个工具、执行 ToolPlan DAG。\n\
+默认关闭;需 CHIMERA_TOOL_PLANE=observe|apply。proc.exec 需要 --yes 或交互确认。",
+        after_long_help = "EXAMPLES:\n  \
+chimera tool list                              # 列出已注册工具\n  \
+CHIMERA_TOOL_PLANE=apply chimera tool call echo.echo --args '{\"x\":1}'  # 调用工具\n  \
+CHIMERA_TOOL_PLANE=apply chimera tool plan --file plan.json  # 执行 DAG"
+    )]
+    Tool {
+        /// Tool 子命令动作(list/call/plan)
+        #[command(subcommand)]
+        action: ToolAction,
     },
     /// 红队安全审计
     ///
@@ -437,12 +461,12 @@ chimera completions powershell >> $PROFILE                 # 生成 PowerShell �
         /// 目标 shell(bash/zsh/fish/powershell/elvish)
         shell: clap_complete::Shell,
     },
-    /// LLM Provider 管理(读取 `model_router.providers` 配置)
+    /// LLM Provider 管理(统一入口,封装 mca-gateway / `model_router` 配置节)
     #[command(
-        long_about = "LLM Provider 管理(读取 `model_router.providers` 配置)\n\
+        long_about = "LLM Provider 管理(统一入口,封装 mca-gateway / `model_router` 配置节)\n\
 \n\
-管理 Provider / Channel / Strategy。`test` 与 `strategy set` 当前为 mock 骨架，\n\
-待 mca-gateway 接线后替换；无独立路由 crate。",
+管理 Provider / Channel / Strategy,支持连通性测试与持久化配置。\n\
+`test` 与 `strategy set` 为 mock 骨架,待 mca-gateway 接线后替换;无独立路由 crate。",
         after_long_help = "EXAMPLES:\n  \
 chimera llm list                              # 列出已配置 Provider\n  \
 chimera llm test deepseek                     # 探测连通性\n  \
@@ -574,6 +598,21 @@ pub enum QuestAction {
         /// Quest ID
         id: String,
     },
+    /// 执行 Quest 的任务计划(Phase 5;默认关闭,CHIMERA_QUEST_EXEC=apply 才生效)
+    Execute {
+        /// 计划文件:`task_id -> ToolPlan` 的 JSON
+        #[arg(long)]
+        plans: String,
+        /// 执行进程内已存在的 Quest(与 --prompt 二选一)
+        #[arg(long)]
+        id: Option<String>,
+        /// 由提示词新建 Quest 后立即执行(与 --id 二选一)
+        #[arg(long)]
+        prompt: Option<String>,
+        /// 有任务缺计划即报错(默认跳过该任务并级联跳过其后继)
+        #[arg(long)]
+        strict: bool,
+    },
 }
 
 /// Config 子命令动作
@@ -618,6 +657,9 @@ pub enum McpAction {
         /// 会**真实发起网络请求**（远端或本机监听端口）。测试/门禁不得开启。
         #[arg(long)]
         network: bool,
+        /// 服务器端点(v2 单调用需要,如 "203.0.113.1:8080")
+        #[arg(long)]
+        endpoint: Option<String>,
     },
     /// 检查 MCP 服务器详情(注册时间 / 心跳 / 支持工具清单)
     Inspect {
@@ -644,6 +686,33 @@ pub enum McpAction {
         /// 连接服务器 endpoint 发送 `QueryRequest` 帧。
         #[arg(long)]
         network: bool,
+    },
+}
+
+/// Tool 子命令动作（Phase 3）
+#[derive(Subcommand, Debug)]
+pub enum ToolAction {
+    /// 列出已注册工具
+    List,
+    /// 调用单个工具
+    Call {
+        /// 工具名（provider.tool）
+        tool: String,
+        /// 参数 JSON（默认 {}）
+        #[arg(long, default_value = "{}")]
+        args: String,
+        /// 超时（ms；覆盖 provider 默认）
+        #[arg(long)]
+        timeout_ms: Option<u64>,
+    },
+    /// 执行 ToolPlan JSON 文件
+    Plan {
+        /// 计划文件路径
+        #[arg(long)]
+        file: String,
+        /// 层内最大并发（默认取 CHIMERA_TOOL_MAX_PARALLEL_PLAN）
+        #[arg(long)]
+        max_parallel: Option<usize>,
     },
 }
 

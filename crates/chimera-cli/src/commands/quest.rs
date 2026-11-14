@@ -7,6 +7,7 @@
 //! - `quest show <id>` — 查看 Quest 详情(人类可读 / JSON)
 //! - `quest cancel <id>` — 取消 Quest(触发 permission prompt,除非 `--yes`)
 //! - `quest checkpoint <id>` — 创建检查点,输出 checkpoint_id
+//! - `quest execute` — 执行任务计划(Phase 5,默认关闭:`CHIMERA_QUEST_EXEC=apply`)
 //!
 //! # 设计决策(WHY)
 //! - **共享组合根引擎**:与 `chimera run` 一致,经 dispatch 共享 `ctx.engine`
@@ -25,6 +26,10 @@
 use anyhow::Result;
 use quest_engine::QuestEngine;
 use serde::Serialize;
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 use crate::cli::QuestAction;
 use crate::composition::AppContext;
@@ -32,6 +37,7 @@ use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
 use crate::output;
 use crate::permission::{self, PermissionCtx};
+use crate::quest_exec::{JsonPlanPlanner, QuestExecConfig, QuestExecMode, QuestExecutor};
 
 /// 执行 quest 子命令 — 兼容层 thin wrapper（M4-P1）
 ///
@@ -74,6 +80,29 @@ pub async fn execute_with_ctx(
         QuestAction::Show { id } => show_quest(engine, id, json).await,
         QuestAction::Cancel { id } => cancel_quest(engine, id, perm, json, dry_run).await,
         QuestAction::Checkpoint { id } => checkpoint_quest(engine, id, json).await,
+        QuestAction::Execute {
+            plans,
+            id,
+            prompt,
+            strict,
+        } => {
+            if dry_run {
+                eprintln!(
+                    "[dry-run] 将执行 Quest 计划 {plans}(id={id:?} prompt={prompt:?}),不执行"
+                );
+                return Ok(());
+            }
+            execute_quest(
+                ctx,
+                plans,
+                id.as_deref(),
+                prompt.as_deref(),
+                *strict,
+                perm,
+                json,
+            )
+            .await
+        }
     }
 }
 
@@ -206,6 +235,133 @@ async fn checkpoint_quest(engine: &QuestEngine, id: &str, json: bool) -> Result<
         }),
         Err(e) => Err(ChimeraCliError::EngineError(format!("检查点创建失败: {e}")).into()),
     }
+}
+
+/// `quest execute` — Phase 5 任务执行面入口（默认关闭）
+///
+/// WHY 自建 ephemeral `Arc<QuestEngine>`：CLI 是一次性进程，Quest 注册表不跨进程
+/// 持久化（见模块头），故 `--prompt` 是唯一能造出 Quest 的路径；`--id` 保留给长生命
+/// 周期宿主（TUI / app-server）复用本函数时寻址既有 Quest —— 本进程查不到就诚实报错，
+/// 不做任何"假装找到"的降级。
+#[allow(clippy::too_many_arguments)] // CLI adapter: mirrors clap flags 1:1
+async fn execute_quest(
+    ctx: &AppContext,
+    plans_path: &str,
+    id: Option<&str>,
+    prompt: Option<&str>,
+    strict: bool,
+    perm: &PermissionCtx,
+    json: bool,
+) -> Result<()> {
+    // 1. 灰度门（默认 Off —— 未显式启用绝不起子进程/不动工具面）
+    let cfg = QuestExecConfig::from_env();
+    if cfg.mode == QuestExecMode::Off {
+        return Err(ChimeraCliError::ConfigError(
+            "quest execute 默认关闭：设 CHIMERA_QUEST_EXEC=apply 启用；\
+多根并行另需 CHIMERA_QUEST_DAG=multi_root"
+                .to_string(),
+        )
+        .into());
+    }
+
+    // 2. 计划表（task_id -> ToolPlan）
+    let planner = JsonPlanPlanner::from_path(Path::new(plans_path)).map_err(|error| {
+        ChimeraCliError::ConfigError(format!("计划文件 {plans_path} 不可用: {error}"))
+    })?;
+
+    // 3. ephemeral 引擎：dag_mode 必须透传给 decompose，否则 MultiRoot 只放开了并发窗口
+    //    而任务仍是伪链（永远只有 1 个就绪），等于窗口形同虚设。
+    //    装配走组合根 `build_quest_engine`（ADR-231 D1）：QuestEngine 的构造点必须
+    //    只有 composition.rs 一处，否则"进程里有几台引擎"重新变成不可数的事实。
+    let engine = crate::composition::build_quest_engine(ctx.bus.clone(), cfg.dag_mode);
+    let quest_id = match (id, prompt) {
+        (Some(existing), _) => existing.to_string(),
+        (None, Some(text)) => {
+            let intent = nexus_core::UserIntent {
+                intent_id: next_intent_id(),
+                raw_text: text.to_string(),
+                multimodal_inputs: vec![],
+                // 计划由用户显式提供（非模型生成），风险取低档；副作用仍由工具面把关
+                risk_level: 30,
+            };
+            engine
+                .create_quest(intent)
+                .await
+                .map_err(|error| ChimeraCliError::EngineError(format!("Quest 创建失败: {error}")))?
+                .quest_id
+        }
+        (None, None) => {
+            return Err(ChimeraCliError::ConfigError(
+                "必须提供 --prompt <文本> 或 --id <quest-id>".to_string(),
+            )
+            .into())
+        }
+    };
+
+    // 4. --strict：缺计划即红（默认跳过，让"补计划后重跑同一 Quest"成立）
+    if strict {
+        let quest = engine
+            .get_quest(&quest_id)
+            .ok_or_else(|| ChimeraCliError::EngineError(format!("Quest 不存在: {quest_id}")))?;
+        let unplanned: Vec<&str> = quest
+            .tasks
+            .iter()
+            .filter(|t| !planner.contains(&t.task_id))
+            .map(|t| t.task_id.as_str())
+            .collect();
+        if !unplanned.is_empty() {
+            return Err(ChimeraCliError::ConfigError(format!(
+                "--strict: 任务无计划: {unplanned:?}（补齐 {plans_path} 或去掉 --strict 按跳过处理）"
+            ))
+            .into());
+        }
+    }
+
+    // 5. 破坏性操作前确认（与 `quest cancel` 同口径：permission → dry-run → 执行）
+    let details = format!(
+        "quest={quest_id}, plans={plans_path}, dag={:?}, tasks={}",
+        cfg.dag_mode,
+        engine.get_quest(&quest_id).map_or(0, |q| q.tasks.len())
+    );
+    if !permission::confirm(perm, "执行 Quest 任务计划", &details).await? {
+        return Err(
+            ChimeraCliError::PermissionDenied(format!("用户拒绝执行 Quest {quest_id}")).into(),
+        );
+    }
+
+    // 6. 执行（限额与开关按 env 装配；组合根侧 build_tool_runtime 不收总线，ADR-229 D5）
+    let runtime = crate::composition::build_tool_runtime(&ChimeraConfig::default())
+        .map_err(|error| ChimeraCliError::EngineError(format!("工具执行面装配失败: {error}")))?;
+    let executor = QuestExecutor::new(
+        Arc::clone(&engine),
+        runtime,
+        Arc::new(planner),
+        Arc::clone(&ctx.sched),
+        cfg,
+    );
+    let report = executor
+        .run(&quest_id, CancellationToken::new())
+        .await
+        .map_err(|error| ChimeraCliError::EngineError(format!("Quest 执行失败: {error}")))?;
+
+    // 7. 输出（typed payload 走 emit，人类可读走 print_success）
+    output::emit(json, &report, || {
+        output::print_success(&format!(
+            "Quest {quest_id} 执行完成: completed={} failed={} skipped={} cancelled={} ({}ms)",
+            report.completed, report.failed, report.skipped, report.cancelled, report.duration_ms
+        ));
+        Ok(())
+    })
+}
+
+/// 进程内唯一 intent_id —— WHY 不引 uuid 依赖：一次性 CLI 路径，pid + 原子序号足够
+fn next_intent_id() -> String {
+    static SEQ: AtomicU64 = AtomicU64::new(1);
+    format!(
+        "intent-{}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::SeqCst)
+    )
 }
 
 // ============================================================

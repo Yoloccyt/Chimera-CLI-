@@ -1,4 +1,4 @@
-//! CRATE-CONTRACT BEGIN
+﻿//! CRATE-CONTRACT BEGIN
 //! LAYER:    L7
 //! ROLE:     聚集查询执行协议 — 并发异步操作的聚集汇聚与超时治理
 //! BACKEND:  memory
@@ -88,6 +88,10 @@ pub mod streaming_dispatch;
 pub mod timeout;
 /// T2-3/T2-4: 工具运行时执行面 — 强制沙箱四环派发链（policy→sandbox→route→transport）
 pub mod tool_runtime;
+/// Tool execution plane（L7）— 合并自 feat/toolplane-execution（ADR-233 追加节九）：
+/// 统一 ToolRuntime / Provider / Scheduler / Registry。与本 crate 根的 `tool_runtime`
+/// **并存不互替**：同名类型 `ToolRuntime` 分处两个模块路径，根命名空间只保留既有那个。
+pub mod tool_plane;
 /// P3-T8: 声明式 ToolPlan 解释执行（v4.0 WI-16,PTC 计划批编排）
 pub mod toolplan_runner;
 pub mod types;
@@ -101,7 +105,9 @@ pub use timeout::with_timeout;
 // P3-T7: 流式派发公开 API（WI-17）
 pub use streaming_dispatch::{DispatchOutcome, DispatchedCall, SideEffect, StreamingDispatcher};
 // P3-T8: PTC 计划批编排公开 API（WI-16）
-pub use toolplan_runner::{PlanGuards, PlanRunner, PlanSummary, ToolExecutor};
+pub use toolplan_runner::{
+    PlanGuards, PlanRunError, PlanRunOptions, PlanRunner, PlanSummary, ToolExecutor,
+};
 // P4-T3: execpolicy 接线公开 API
 pub use exec_tool_executor::ExecPolicyToolExecutor;
 // T2-3/T2-4: 强制沙箱派发链公开 API（T1-2 追加生产接线 ToolRuntime/InProcDispatcher）
@@ -112,6 +118,15 @@ pub use tool_runtime::{
     AllowAllSandboxGate, DispatchError, DispatchFuture, DispatchRequest, DispatcherBuilder,
     InProcDispatcher, SandboxGate, SandboxedDispatcher, SeccoreSandboxGate, ToolDispatcher,
     ToolRuntime,
+};
+// Tool execution plane 公开 API — **刻意排除 `ToolRuntime`**：与上方
+// `tool_runtime::ToolRuntime` 同名不同物，根上同时导出即 E0252。
+// 对侧代码经 `use gqep_executor::tool_plane::{…}` 全路径引用（已核验 llm/tool_loop.rs），
+// 故根上不导出该名字不破坏任何调用方。
+pub use tool_plane::{
+    BoundedToolScheduler, SchedSnapshot, ToolDescriptor, ToolError, ToolInvocation, ToolMetrics,
+    ToolMetricsSnapshot, ToolOrigin, ToolOutcome, ToolPriority, ToolProvider, ToolRegistry,
+    ToolRuntimeConfig, ToolScheduler, ToolStatus,
 };
 pub use types::{GatherCollected, GatherResult, GqepFuture, OperationId};
 

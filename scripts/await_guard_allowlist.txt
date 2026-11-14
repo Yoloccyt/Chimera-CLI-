@@ -52,6 +52,8 @@ crates/nexus-app-server/src/sse.rs:121         # DESIGN SSE writer: single-conne
 # batch (G-27 machine-checks the two key sets 1:1).
 # Tooth check: revert shutdown() to the multi-line chain -> G-27/G-35 must redden.
 crates/decb-governor/src/governor.rs:564            # SCANNER `current_total` is `*total` copy; state guard already block-scoped
+# 合流裁决（2026-11-14）：与 lock_await_freeze.txt 同步保留 HEAD 的现役键 :604
+# （feat 侧删的是已被 :604 取代的旧键 :556；G-27 机器校验两表键集 1:1，本行必须成对存在）。
 # Re-keyed 2026-11-07: c6eb9b6 (ADR-253 D1 args 透传) 在本文件上方加行,把
 crates/mcp-mesh/src/quantum/participant_client.rs:604 # SCANNER `pooled` is a TcpStream removed from the pool; guard dies at and_then stmt end (acquisition line; await sites 615/637/646)
 crates/pvl-layer/src/producer.rs:123                # SCANNER `strategy` is `*read()` Copy value; read guard dies at stmt end

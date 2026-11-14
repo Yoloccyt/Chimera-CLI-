@@ -36,6 +36,9 @@ criterion = { workspace = true, features = ["async_tokio"] }
 tempfile = { workspace = true }
 # 属性测试(T-3 / 四维深审):SSRF 防线不变量生成式验证
 proptest = { workspace = true }
+# tokio test-util:2PC 超时/退避用例改在**虚拟时钟**下跑（start_paused），
+# 与 mas-sched / nexus-hook / chimera-mas 的同用途写法一致（ADR-236 S4）。
+tokio = { workspace = true, features = ["full", "test-util"] }
 
 # 性能基准配置:harness=false 以使用 criterion 自定义 main
 [[bench]]

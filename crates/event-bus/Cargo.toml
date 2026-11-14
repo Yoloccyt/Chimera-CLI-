@@ -40,6 +40,9 @@ crossbeam-queue = { workspace = true }
 tokio = { workspace = true }
 # tracing-test:捕获 tracing 日志,验证 Critical 事件无订阅者时的 warn 日志(SubTask 17.2)
 tracing-test = { workspace = true }
+# tracing-subscriber(Phase 6A/T6A.5):接收日志分级需要按 EnvFilter 真实放行/抑制,
+# tracing-test 的固定级 subscriber 无法表达"info 下不可见、debug 下可见"这组判据。
+tracing-subscriber = { workspace = true }
 # criterion:性能基准测试框架(§7.1 测试矩阵约定)
 criterion = { workspace = true }
 # proptest:属性测试框架,用于 NexusEvent severity/type_name/topic 不变量验证

@@ -1,4 +1,4 @@
-//! QuestEngine 实现 — 任务分解、生命周期管理与事件广播
+﻿//! QuestEngine 实现 — 任务分解、生命周期管理与事件广播
 //!
 //! 对应架构层:L9 Quest
 //! 对应创新点:TTG(Thinking Toggle Governance)+ LHQP(Long-Horizon Quest Persistence)
@@ -508,12 +508,16 @@ impl QuestEngine {
             }]);
         }
 
-        // WP-E 方案 C(用户裁决):按配置选择依赖推断策略。
-        // Linear(默认)与旧硬编码逐字节等价(decompose::tests::linear_matches_legacy
-        // 锁定);HeuristicDag 的依赖边只指向更早句子,结构上无环,
-        // 生产路径仍经 create_quest 的 validate_dag 防御校验。
+        // WP-E 方案 C(用户裁决) + R12 合流(ADR-300)：两套旋钮并存且语义正交。
+        // - `dag_mode == MultiRoot` ⇒ 句子间无依赖（对方 ADR-231，允许多根并行）；
+        // - 否则走 `dependency_inference(dependency_mode)`：Linear 与旧硬编码逐字节等价
+        //   （`decompose::tests::linear_matches_legacy` 锁定），HeuristicDag 的边只指向
+        //   更早句子 ⇒ 结构上无环，生产路径仍经 create_quest 的 validate_dag 防御校验。
+        // WHY MultiRoot 优先于 HeuristicDag：前者是"显式要求无依赖"的强声明，后者是推断
+        // 策略；用户显式要无依赖时不应被推断器重新连边。
+        let multi_root = matches!(self.config.dag_mode, crate::config::DagMode::MultiRoot);
         let strategy = dependency_inference(self.config.dependency_mode);
-        let dependencies = strategy.infer(&sentences);
+        let inferred = strategy.infer(&sentences);
 
         let tasks = sentences
             .iter()
@@ -522,7 +526,11 @@ impl QuestEngine {
                 task_id: format!("task-{idx}"),
                 description: sentence.clone(),
                 status: TaskStatus::Pending,
-                dependencies: dependencies[idx].clone(),
+                dependencies: if multi_root {
+                    Vec::new()
+                } else {
+                    inferred[idx].clone()
+                },
             })
             .collect();
         Ok(tasks)
@@ -1028,11 +1036,16 @@ fn is_valid_transition(from: TaskStatus, to: TaskStatus) -> bool {
         (Pending, Running)
             | (Running, Completed)
             | (Running, Failed)
+            // Phase 5 / ADR-231:调度器可在任务启动前失败/取消，也可取消运行中任务。
+            | (Pending, Failed)
+            | (Pending, Cancelled)
+            | (Running, Cancelled)
             // 幂等转换:同状态视为合法(避免重复触发报错)
             | (Pending, Pending)
             | (Running, Running)
             | (Completed, Completed)
             | (Failed, Failed)
+            | (Cancelled, Cancelled)
     )
 }
 
@@ -1154,7 +1167,9 @@ mod tests {
         assert!(!is_valid_transition(Completed, Running));
         assert!(!is_valid_transition(Failed, Running));
         assert!(!is_valid_transition(Pending, Completed));
-        assert!(!is_valid_transition(Pending, Failed));
+        // Phase 5: Pending→Failed 已合法（调度器可在启动前失败）；
+        // Completed→Failed 仍非法（终态不可改写）。
+        assert!(!is_valid_transition(Completed, Failed));
     }
 
     #[test]
@@ -1718,5 +1733,45 @@ mod tests {
             .list_checkpoints(&quest.quest_id)
             .unwrap();
         assert_eq!(ids.len(), 1, "终态转换的检查点必须同步落盘(ADR-286)");
+    }
+
+    #[tokio::test]
+    async fn decompose_multi_root_has_no_synthetic_edges() {
+        let config = QuestConfig {
+            dag_mode: crate::config::DagMode::MultiRoot,
+            ..Default::default()
+        };
+        let engine = QuestEngine::with_config(EventBus::new(), config);
+        let quest = engine
+            .create_quest(make_intent("一。二。三。"))
+            .await
+            .expect("quest");
+        assert_eq!(quest.tasks.len(), 3);
+        assert!(
+            quest.tasks.iter().all(|task| task.dependencies.is_empty()),
+            "multi-root must not synthesize linear edges: {:?}",
+            quest.tasks
+        );
+    }
+
+    #[tokio::test]
+    async fn decompose_linear_default_unchanged() {
+        let engine = QuestEngine::new(EventBus::new());
+        let quest = engine
+            .create_quest(make_intent("一。二。三。"))
+            .await
+            .expect("quest");
+        assert_eq!(quest.tasks[1].dependencies, vec!["task-0".to_string()]);
+        assert_eq!(quest.tasks[2].dependencies, vec!["task-1".to_string()]);
+    }
+
+    #[test]
+    fn phase5_status_transitions_are_valid() {
+        use TaskStatus::*;
+        assert!(is_valid_transition(Pending, Failed));
+        assert!(is_valid_transition(Pending, Cancelled));
+        assert!(is_valid_transition(Running, Cancelled));
+        assert!(is_valid_transition(Cancelled, Cancelled));
+        assert!(!is_valid_transition(Completed, Running));
     }
 }

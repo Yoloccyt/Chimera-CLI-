@@ -22,9 +22,10 @@
 use crate::config::{ChimeraConfig, ToolPolicyAction};
 use anyhow::{Context, Result};
 use event_bus::{logging::BusLogger, EventBus};
+use gqep_executor::tool_plane::ToolProvider as _;
 use nexus_app_server::{AppServer, AppServerConfig, QuestBackend};
 use quest_engine::QuestEngine;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 // R2 解冻阶段③ 前置：进化编排器（T3.1,feature-gated）
 #[cfg(feature = "r2_unfreeze")]
@@ -534,6 +535,205 @@ pub fn build_with_sharding(
     })
 }
 
+/// 取工具执行面（Phase 3 / ADR-229）— 仅供 `chimera tool` 与 LLM/Quest 入口使用。
+///
+/// ADR-234 S4 起它是一条**取用**而非一次装配：进程内只装配一次，后续返回同一实例
+/// （见 [`shared_tool_plane`]）。
+///
+/// WHY 不塞进 [`AppContext`]：one-shot 命令不应为工具执行面付装配税。
+/// WHY 不收 `EventBus` 参数：执行面的可观测承诺是 `ToolMetrics` 快照 + tracing
+/// 结构化日志（ADR-229 D5，事件面零新增变体），它一条事件也不发。上一版留着
+/// `_bus: EventBus` 这个"当前仅保留句柄"的参数，结果三处 `chimera tool` 调用点
+/// 各自 `EventBus::new()` 造出三条无人订阅的隐形总线，既触发
+/// `check_composition_root.py` 的 R2 旁路告警，又会让读代码的人以为"传了总线就会有事件"。
+/// 需要发事件的层（LLM 循环的 `BudgetExceeded`）自己持有总线。
+pub fn build_tool_runtime(
+    config: &ChimeraConfig,
+) -> Result<Arc<gqep_executor::tool_plane::ToolRuntime>> {
+    Ok(Arc::clone(shared_tool_plane_with(config)?.runtime()))
+}
+
+/// 进程内共享的工具执行面（ADR-234 S4）。
+///
+/// WHY 连描述符全集一起缓存：`ToolRegistry::descriptors()` 是"整表 clone + sort_by"
+/// 的冷路径列举（它自己的文档就这么自述），而 `llm_answer_with` 原先每次应答调一次
+/// —— TUI 每轮 chat 都在为一张不会变的表重复印票。缓存后调用方拿到的是**借用**，
+/// 不再是新分配的 Vec。
+///
+/// WHY 这份快照不会与真注册集漂移：`ToolRuntime::new` 收走 `Arc<ToolRegistry>` 之后，
+/// 对外只暴露 `&Arc<ToolRegistry>`，而 `ToolRegistry::register` 需要 `&mut self`
+/// ⇒ 装配之后不存在晚注册通道，工具集合按构造即冻结。
+pub(crate) struct SharedToolPlane {
+    runtime: Arc<gqep_executor::tool_plane::ToolRuntime>,
+    descriptors: Vec<gqep_executor::tool_plane::ToolDescriptor>,
+    /// MCP 会话保活：客户端任务跑在它自己的 runtime 上（ADR-235 S6）。
+    /// 无 `enabled` server 时是空装配、不建 runtime；**字段存在即会话存活**。
+    _mcp: crate::tool_plane::McpPlane,
+}
+
+impl SharedToolPlane {
+    pub(crate) fn runtime(&self) -> &Arc<gqep_executor::tool_plane::ToolRuntime> {
+        &self.runtime
+    }
+
+    pub(crate) fn descriptors(&self) -> &[gqep_executor::tool_plane::ToolDescriptor] {
+        &self.descriptors
+    }
+}
+
+/// 唯一实例槽。`OnceLock` 而非 `Mutex<Option<..>>`：装配是一次性的，读多写零，
+/// 且失败时**不写入**（见 [`shared_tool_plane`]），所以不存在"缓存了错误"的形态。
+static SHARED_TOOL_PLANE: OnceLock<SharedToolPlane> = OnceLock::new();
+
+/// 取共享执行面；首次调用时装配，之后返回同一份。
+///
+/// WHY 只在成功时落缓存：装配失败（如 MCP provider 注册被拒）若被固化，进程余生
+/// 都会拿着一个 `Err` —— 那是把一次性故障升级成永久故障。
+/// WHY `get_or_init` 而不是先 `set` 再读：并发首调可能各装配一份，`get_or_init`
+/// 让其中一个胜出、另一个随作用域释放 —— 多装配一次是良性浪费，而不是两个实例
+/// 同时存活（那才会让限额与指标口径分裂）。
+///
+/// 语义变更（如实登记）：执行面限额读的是**首次装配时**的 `CHIMERA_TOOL_*`。
+/// 全仓无任何进程内 `set_var("CHIMERA_TOOL…")` 调用点（现取 0 命中），而 `chimera`
+/// 的进程生命周期就是命令生命周期，故实际行为不变。
+pub(crate) fn shared_tool_plane() -> Result<&'static SharedToolPlane> {
+    // LLM 路径（run.rs）不持有配置对象，用默认配置 —— 与 `llm_answer_with` 里
+    // `ChimeraConfig::default()` 的口径一致；配置驱动装配见 `build_tool_runtime`。
+    shared_tool_plane_with(&ChimeraConfig::default())
+}
+
+/// 带配置的取用入口：**首次调用决定缓存**（进程内 config/env 视为不变）。
+fn shared_tool_plane_with(config: &ChimeraConfig) -> Result<&'static SharedToolPlane> {
+    if let Some(existing) = SHARED_TOOL_PLANE.get() {
+        return Ok(existing);
+    }
+    let built = assemble_tool_plane(config).context("assemble tool execution plane")?;
+    Ok(SHARED_TOOL_PLANE.get_or_init(|| built))
+}
+
+/// 真正的装配体（原 `build_tool_runtime` 的函数体，逐语句搬移，语义未改）。
+fn assemble_tool_plane(config: &ChimeraConfig) -> Result<SharedToolPlane> {
+    let plane = crate::tool_plane::ToolPlaneConfig::from_env();
+    let mut registry = gqep_executor::tool_plane::ToolRegistry::new();
+    registry.register(Arc::new(crate::tool_plane::EchoToolProvider::new()))?;
+    registry.register(Arc::new(crate::tool_plane::ProcessToolProvider::new(
+        plane.max_payload_bytes,
+    )))?;
+    // MCP provider 走"装配期发现快照"（ADR-235 S6）：只对 `enabled = true` 的
+    // server 建连 + `initialize` + `tools/list`；单个 server 失败只跳过它自己，
+    // 不阻塞启动（D6）。HTTP 传输不在本波范围 ⇒ 显式 warn 后跳过（D2）。
+    // 默认配置里三条 `default_mcp_servers()` 全是 `enabled = false` ⇒ 空装配、
+    // 不建 runtime（默认路径零成本，装配结果与旧行为一致）。
+    let mcp_plane = crate::tool_plane::assemble_mcp(
+        &config.mcp.servers,
+        Arc::new(crate::tool_plane::FenceGate::default_secure()),
+    );
+    let mcp_provider = Arc::new(crate::tool_plane::McpToolProvider::new(Arc::clone(
+        &mcp_plane.snapshot,
+    )));
+    if !mcp_provider.descriptors().is_empty() {
+        registry.register(mcp_provider)?;
+    }
+    let scheduler = Arc::new(gqep_executor::tool_plane::BoundedToolScheduler::new(
+        plane.max_inflight,
+        plane.max_inflight,
+        256,
+        plane.max_inflight,
+    ));
+    let runtime_config = gqep_executor::tool_plane::ToolRuntimeConfig {
+        interactive_inflight: plane.max_inflight,
+        background_inflight: plane.max_inflight,
+        max_waiters: 256,
+        max_provider_inflight: plane.max_inflight,
+        default_timeout_ms: plane.default_timeout_ms,
+        max_payload_bytes: plane.max_payload_bytes,
+        max_batch: 1024,
+    };
+    let runtime = Arc::new(gqep_executor::tool_plane::ToolRuntime::new(
+        Arc::new(registry),
+        None,
+        scheduler,
+        runtime_config,
+    ));
+    // 描述符在装配点取一次（排序后的全集），此后各轮应答只借用同一段内存。
+    // WHY 这里不违反「Top-K 必须 select_nth_unstable」：Top-K 铁律针对的是
+    // 「从 N 里取前 K」，本处是 N==K 的全量列举，`sort_by` 是为报告/模型的
+    // 稳定顺序，不是被误用的选择。
+    let descriptors = runtime.registry().descriptors();
+    Ok(SharedToolPlane {
+        runtime,
+        descriptors,
+        // 保活：这里一 drop，MCP 的 runtime 与会话全部结束。
+        _mcp: mcp_plane,
+    })
+}
+
+/// 装配 Quest 引擎（Phase 5 / ADR-231 D1）—— 唯一 sanctioned 的 `QuestEngine` 构造点。
+///
+/// WHY 必须由组合根出引擎：`check_composition_root.py` R2 把 `QuestEngine::with_*`
+/// 视为装配构造点，命令侧直接调用就是"一个进程里有几台引擎"不可数的那笔结构债
+/// （v2.30 §3 实测 9 条总线里只有 1 条享有 Critical 投递保证，同一病理）。
+/// `dag_mode` 是**参数**而不是第二装配点：`Linear` 与 `MultiRoot` 只差一个配置字段，
+/// 装配语义一致；把它做成入参才能让 ADR-231 D3 的"多根并行需显式开"仍然只有一处定义。
+#[must_use]
+pub fn build_quest_engine(bus: EventBus, dag_mode: quest_engine::DagMode) -> Arc<QuestEngine> {
+    Arc::new(QuestEngine::with_config(
+        bus,
+        quest_engine::QuestConfig {
+            dag_mode,
+            ..quest_engine::QuestConfig::default()
+        },
+    ))
+}
+
+/// 构造 LLM 客户端（Phase 7 / ADR-232）—— 三态，默认不可用
+///
+/// 1. `CHIMERA_LLM_PROVIDER=mock` ⇒ 离线回声客户端（CI 与无 key 试跑；永不出 ToolUse，
+///    单轮即收敛，输出前缀 `mock-echo:` 明示其非真实模型）；
+/// 2. `--features mca` ⇒ [`crate::llm::mca_client::McaLlmClient`]，从
+///    `config.model_router.providers[0]` 装配（只装配，不发网络）；
+/// 3. 其余 ⇒ `ConfigError` 带可执行提示。
+///
+/// WHY 不静默回落到 mock：把"没配 provider"伪装成"模型答得很好"会让用户以为
+/// 闭环已通；宁可退出码 1 让用户显式选择 mock。
+pub fn build_llm_client(config: &ChimeraConfig) -> Result<Arc<dyn crate::llm::client::LlmClient>> {
+    if std::env::var("CHIMERA_LLM_PROVIDER")
+        .map(|value| value.eq_ignore_ascii_case("mock"))
+        .unwrap_or(false)
+    {
+        return Ok(Arc::new(crate::llm::mock::EchoLlmClient));
+    }
+    build_llm_client_from_config(config)
+}
+
+/// 非 mock 档：feature `mca` 时经 mca-gateway 装配，否则给可执行提示
+///
+/// WHY 拆成两个同名 cfg 函数而非在函数体里挂 `#[cfg]` 块：语句位上的属性块
+/// 不参与条件编译（会被照常编译，非 `mca` 构建里直接编译失败）。
+#[cfg(feature = "mca")]
+fn build_llm_client_from_config(
+    config: &ChimeraConfig,
+) -> Result<Arc<dyn crate::llm::client::LlmClient>> {
+    crate::llm::mca_client::McaLlmClient::from_config(config)
+        .map(|client| Arc::new(client) as Arc<dyn crate::llm::client::LlmClient>)
+        .map_err(|error| {
+            crate::error::ChimeraCliError::ConfigError(format!("LLM provider 不可用: {error}"))
+                .into()
+        })
+}
+
+#[cfg(not(feature = "mca"))]
+fn build_llm_client_from_config(
+    _config: &ChimeraConfig,
+) -> Result<Arc<dyn crate::llm::client::LlmClient>> {
+    Err(crate::error::ChimeraCliError::ConfigError(
+        "未启用 LLM provider：重新编译加 `--features mca`，\
+或设 CHIMERA_LLM_PROVIDER=mock 走离线回声档"
+            .to_string(),
+    )
+    .into())
+}
+
 /// 会话持久化数据目录：`~/.chimera/sessions/`（C-63）
 ///
 /// WHY 与 [`crate::experience_loop::experience_db_path`] 同族（同目录、同 home 展开）：
@@ -1016,5 +1216,44 @@ mod tests {
         // 未设 ⇒ 同样回落
         let none = session_dir_from(None);
         assert_eq!(none, empty, "未设与空串应得到同一个默认目录");
+    }
+
+    /// ADR-234 S4：共享执行面的描述符是装配点取好的**借用**，不是每次重列。
+    ///
+    /// 三条断言各管一件事，缺一即退化成空转：
+    /// ① 非空 —— 空 `slice` 的 `as_ptr()` 是同一个对齐的 dangling 指针，
+    ///    那时候"两次地址相等"比什么都能成立；
+    /// ② 两次取用同址 —— 证明调用方拿到的不是各克隆一份的新 Vec；
+    /// ③ 与注册表实况同名同序 —— 证明 ①② 缓存的是真内容而非一份空东西。
+    #[test]
+    fn shared_tool_plane_descriptors_are_a_snapshot_not_a_relist() {
+        let cached = shared_tool_plane()
+            .expect("assemble shared tool plane")
+            .descriptors();
+        assert!(
+            !cached.is_empty(),
+            "空描述符会让下面的指针等值断言恒真（dangling 指针彼此相等）"
+        );
+        let again = shared_tool_plane().expect("second access").descriptors();
+        assert!(
+            std::ptr::eq(cached.as_ptr(), again.as_ptr()),
+            "两次取用必须返回同一段内存，而不是每次重新 clone + sort 一张新表"
+        );
+        let fresh = shared_tool_plane()
+            .expect("access")
+            .runtime()
+            .registry()
+            .descriptors();
+        assert_eq!(
+            cached
+                .iter()
+                .map(|descriptor| descriptor.name.as_str())
+                .collect::<Vec<_>>(),
+            fresh
+                .iter()
+                .map(|descriptor| descriptor.name.as_str())
+                .collect::<Vec<_>>(),
+            "快照必须与注册表实况逐位相同（两侧都已按名排序）"
+        );
     }
 }

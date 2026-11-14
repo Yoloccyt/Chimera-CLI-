@@ -29,6 +29,7 @@ fn config_with_server(id: &str, url: &str) -> ChimeraConfig {
     config.mcp.servers = vec![McpServerConfig {
         id: id.to_string(),
         url: Some(url.to_string()),
+        ..Default::default()
     }];
     config
 }
@@ -50,6 +51,7 @@ fn call_action(server: &str, tool: &str, args: Vec<String>) -> McpAction {
         tool: tool.to_string(),
         args,
         network: false,
+        endpoint: None,
     }
 }
 

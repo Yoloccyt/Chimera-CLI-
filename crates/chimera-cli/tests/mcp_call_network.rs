@@ -31,6 +31,7 @@ fn config_with_server(id: &str, url: &str) -> ChimeraConfig {
     config.mcp.servers = vec![McpServerConfig {
         id: id.to_string(),
         url: Some(url.to_string()),
+        ..Default::default()
     }];
     config
 }
@@ -68,6 +69,7 @@ async fn default_call_never_opens_network() {
         tool: "text.echo".to_string(),
         args: vec![r#"{"text":"hi"}"#.to_string()],
         network: false,
+        endpoint: None,
     };
 
     let runtime = allow_runtime();
@@ -86,6 +88,7 @@ async fn network_flag_does_not_bypass_ssrf_guard() {
         tool: "text.echo".to_string(),
         args: vec![],
         network: true,
+        endpoint: None,
     };
 
     let runtime = allow_runtime();

@@ -48,6 +48,7 @@ use futures::stream::{FuturesUnordered, StreamExt};
 use hcw_window::{WindowSelector, WindowTier};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Semaphore;
 use tracing::{debug, warn};
 
 // ============================================================
@@ -256,7 +257,10 @@ impl BatchConfig {
 /// 批量执行结果 — `BatchExecutor::execute_batch` 返回值
 #[derive(Debug, Clone)]
 pub struct BatchResult {
-    /// 各块执行结果(顺序与输入 `chunks` 一一对应)
+    /// 各块执行结果(**完成序**,`FuturesUnordered` 流式取出,与输入 `chunks` 顺序无关)
+    ///
+    /// WHY 不保序:块与结果都自带 `task_id`,按完成先后汇聚可让调用方尽早处理;
+    /// 需要挂载序时调用方按 `task_id` 自行对齐(与 `DelegationExecutor` 口径一致)。
     pub results: Vec<TaskResult>,
     /// 实际使用的并发度
     pub effective_concurrency: usize,
@@ -367,6 +371,12 @@ impl BatchExecutor {
         let effective_conc = self.config.max_concurrency;
 
         // 复用 delegation.rs 的 FuturesUnordered + tokio::time::timeout 模式
+        //
+        // Phase 5 T5.7:先取 permit 再 spawn。此前 max_concurrency 只出现在返回值里,
+        // 8 块会一次性全 spawn(实测峰值 8 ≫ 配置 2),即"报告并发 ≠ 生效并发"。
+        // permit 在 spawned task 结束时随 `_permit` drop 归还 ⇒ 滑动窗口而非分批屏障。
+        // WHY `.max(1)`:BatchConfig 字段公开,可字面量构造 0;Semaphore::new(0) 会 panic。
+        let semaphore = Arc::new(Semaphore::new(effective_conc.max(1)));
         let mut futures: FuturesUnordered<tokio::task::JoinHandle<TaskResult>> =
             FuturesUnordered::new();
 
@@ -376,15 +386,16 @@ impl BatchExecutor {
             let timeout = effective_timeout(&chunk, self.config.default_timeout);
             let agent_id = format!("{parent_id}::batch::{}", chunk.inner.task_id);
             let parent_id_owned = parent_id.to_string();
+            let permit = Arc::clone(&semaphore).acquire_owned().await.map_err(|_| {
+                MasError::DelegationFailed {
+                    reason: "批量执行并发信号量已关闭".to_string(),
+                }
+            })?;
 
-            let handle = tokio::spawn(execute_single_chunk(
-                chunk,
-                runner,
-                bus,
-                timeout,
-                agent_id,
-                parent_id_owned,
-            ));
+            let handle = tokio::spawn(async move {
+                let _permit = permit;
+                execute_single_chunk(chunk, runner, bus, timeout, agent_id, parent_id_owned).await
+            });
             futures.push(handle);
         }
 
@@ -996,6 +1007,81 @@ mod tests {
                     | TaskPriority::Critical
             ),
             "有效优先级合法"
+        );
+    }
+
+    // ============================================================
+    // Phase 5 T5.7: max_concurrency 必须真正限流(此前只报告不生效)
+    // ============================================================
+
+    /// 峰值在飞计数器 — runner 闭包内进出各一次,peak 取历史最大值
+    ///
+    /// WHY 结构断言而非墙钟:并行度是否生效只能由"同时在飞数"证明,
+    /// 计时断言在共享宿主上会因调度噪声假红/假绿。
+    #[tokio::test]
+    async fn test_chunker_respects_max_concurrency() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        /// 构造"在飞计数 + 20ms 睡眠"的 runner
+        fn counting_runner(live: &Arc<AtomicUsize>, peak: &Arc<AtomicUsize>) -> TaskRunner {
+            let live = Arc::clone(live);
+            let peak = Arc::clone(peak);
+            Arc::new(move |_t: AgentTask| {
+                let live = Arc::clone(&live);
+                let peak = Arc::clone(&peak);
+                Box::pin(async move {
+                    let now = live.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    live.fetch_sub(1, Ordering::SeqCst);
+                    Ok("ok".to_string())
+                })
+            })
+        }
+
+        let chunks: Vec<AgentTask> = (0..8)
+            .map(|i| make_task(&format!("cap-{i}"), TaskComplexity::Simple, 100))
+            .collect();
+
+        // 上界:cap=2 时 8 块不得同时 in-flight
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let executor = BatchExecutor::new(
+            BatchConfig::new(2, Duration::from_secs(5)),
+            counting_runner(&live, &peak),
+            EventBus::new(),
+        );
+        let result = executor
+            .execute_batch(chunks.clone(), "parent-cap2")
+            .await
+            .expect("限流不影响完整性");
+        assert_eq!(result.results.len(), 8, "限流不得丢弃任何块");
+        assert_eq!(result.effective_concurrency, 2, "报告并发 = 配置并发");
+        let observed = peak.load(Ordering::SeqCst);
+        assert!(
+            observed <= 2,
+            "峰值在飞 {observed} 必须 ≤ max_concurrency=2"
+        );
+        assert_eq!(observed, 2, "8 块 × 20ms 必然出现 2 路同飞(否则窗口未生效)");
+        assert_eq!(live.load(Ordering::SeqCst), 0, "计数不得泄漏");
+
+        // 下界:BatchConfig::new(0) 钳到 1 ⇒ 严格串行
+        let live1 = Arc::new(AtomicUsize::new(0));
+        let peak1 = Arc::new(AtomicUsize::new(0));
+        let executor1 = BatchExecutor::new(
+            BatchConfig::new(0, Duration::from_secs(5)),
+            counting_runner(&live1, &peak1),
+            EventBus::new(),
+        );
+        let result1 = executor1
+            .execute_batch(chunks, "parent-cap0")
+            .await
+            .expect("cap=0 应视为 1");
+        assert_eq!(result1.results.len(), 8);
+        assert_eq!(
+            peak1.load(Ordering::SeqCst),
+            1,
+            "max_concurrency=0 必须退化为串行(峰值 1)"
         );
     }
 }

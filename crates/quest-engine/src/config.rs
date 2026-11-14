@@ -1,4 +1,4 @@
-//! Quest Engine 配置类型 — 任务分解与检查点策略参数
+﻿//! Quest Engine 配置类型 — 任务分解与检查点策略参数
 //!
 //! 对应架构层:L9 Quest
 //!
@@ -11,6 +11,16 @@
 use serde::{Deserialize, Serialize};
 
 use crate::decompose::DependencyMode;
+/// 任务图生成模式（Phase 5 / ADR-231）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DagMode {
+    /// 规则分解器旧行为：句子间线性依赖链（默认，向后兼容）。
+    #[default]
+    Linear,
+    /// 句子间无依赖：多根 DAG，允许 QuestExecutor 并行执行。
+    MultiRoot,
+}
 
 /// Quest Engine 配置 — 控制任务分解上限与检查点频率
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +56,9 @@ pub struct QuestConfig {
     /// 关键路径税,去抖的 per-quest 状态与竞态复杂度不划算(ADR-286 登记)。
     #[serde(default)]
     pub checkpoint_async: bool,
+    /// 任务图生成模式（默认 Linear；MultiRoot 需显式 opt-in）。
+    #[serde(default)]
+    pub dag_mode: DagMode,
 }
 
 impl Default for QuestConfig {
@@ -55,18 +68,20 @@ impl Default for QuestConfig {
             checkpoint_interval: 3,
             dependency_mode: DependencyMode::default(),
             checkpoint_async: true,
+            dag_mode: DagMode::Linear,
         }
     }
 }
 
 impl QuestConfig {
-    /// 创建自定义配置
+    /// 创建自定义配置（`dag_mode = Linear`，保持旧签名语义）。
     pub fn new(max_tasks_per_quest: u32, checkpoint_interval: u32) -> Self {
         Self {
             max_tasks_per_quest,
             checkpoint_interval,
             dependency_mode: DependencyMode::default(),
             checkpoint_async: true,
+            dag_mode: DagMode::Linear,
         }
     }
 }

@@ -191,6 +191,65 @@ pub enum McpError {
         /// 失败原因(广播通道关闭 / 无订阅者等)
         reason: String,
     },
+
+    // === MCP 语义层（JSON-RPC 2.0，ADR-235）===
+    //
+    // 与上面的 2PC/网格错误刻意分开命名：两条协议互不复用错误语义，读错误的人
+    // 不该去猜"这是网格事务失败还是某个 MCP 服务器回了 error"。
+    /// JSON-RPC 帧畸形或消息形状非法（缺 `jsonrpc`、`id` 类型错、
+    /// result 与 error 同时出现或同时缺失等）
+    #[error("MCP 协议错误: {reason}")]
+    Protocol {
+        /// 具体违规描述（面向排障，不参与分支判定）
+        reason: String,
+    },
+
+    /// 传输层失败（读写 IO、对端进程管道断开等）
+    #[error("MCP 传输错误: {reason}")]
+    Transport {
+        /// 具体 IO 原因
+        reason: String,
+    },
+
+    /// 服务端在 JSON-RPC `error` 成员里返回的错误
+    #[error("MCP 服务端错误 {code}: {message}")]
+    Remote {
+        /// JSON-RPC 错误码
+        code: i64,
+        /// 错误消息
+        message: String,
+    },
+
+    /// 单个请求超过客户端配置的超时
+    #[error("MCP 请求超时: {method} (超时 {timeout_ms}ms)")]
+    RequestTimeout {
+        /// 请求方法名（如 `tools/list`）
+        method: String,
+        /// 超时阈值（毫秒）
+        timeout_ms: u64,
+    },
+
+    /// 对端已关闭：所有在途请求被立即失败（不得挂死）
+    #[error("MCP 连接已关闭")]
+    Closed,
+
+    /// 服务器回了一个我们不支持的 `protocolVersion`
+    #[error("MCP 协议版本不受支持: 请求 {requested}, 收到 {got}")]
+    UnsupportedVersion {
+        /// 客户端请求的版本
+        requested: String,
+        /// 服务器声明的版本
+        got: String,
+    },
+
+    /// 出站命令被 SecCore fence 拒绝（spawn 前的安全闸）
+    #[error("MCP 出站命令被拒: {program} ({reason})")]
+    Denied {
+        /// 被拒的可执行文件名
+        program: String,
+        /// fence 给出的原因
+        reason: String,
+    },
 }
 
 #[cfg(test)]

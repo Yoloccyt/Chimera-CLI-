@@ -1,0 +1,39 @@
+{
+  "id": "diamond",
+  "nodes": [
+    {
+      "id": "root",
+      "op": "tool_call",
+      "tool_name": "echo.echo",
+      "args_json": "{\"v\":\"root\"}",
+      "side_effect": "read_only"
+    },
+    {
+      "id": "left",
+      "op": "tool_call",
+      "tool_name": "echo.echo",
+      "args_json": "{\"v\":\"left\"}",
+      "side_effect": "read_only"
+    },
+    {
+      "id": "right",
+      "op": "tool_call",
+      "tool_name": "echo.echo",
+      "args_json": "{\"v\":\"right\"}",
+      "side_effect": "read_only"
+    },
+    {
+      "id": "sink",
+      "op": "tool_call",
+      "tool_name": "echo.echo",
+      "args_json": "{\"v\":\"sink\"}",
+      "side_effect": "read_only"
+    }
+  ],
+  "edges": [
+    { "from": "root", "to": "left" },
+    { "from": "root", "to": "right" },
+    { "from": "left", "to": "sink" },
+    { "from": "right", "to": "sink" }
+  ]
+}

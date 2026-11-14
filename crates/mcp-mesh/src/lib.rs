@@ -47,6 +47,9 @@ pub mod types;
 // P3-T11: MCP client_v2 客户端闭环（WI-22:发现 + schema 缓存 + 路由注册,ADR-150）
 pub mod client_v2;
 
+// ADR-235: MCP 语义层（JSON-RPC 2.0 + 传输接缝）—— 与上面的自研 2PC 协议无关
+pub mod protocol;
+
 // === 关键类型重导出,简化外部导入 ===
 pub use config::MeshConfig;
 pub use error::McpError;

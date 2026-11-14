@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use anyhow::Result;
 use repo_wiki::agent_grep::{AgentGrep, AgentGrepConfig};
 use repo_wiki::behavior_localization::{BehaviorLocalizer, HarnessHandbook};
-use repo_wiki::WikiStore;
 
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
@@ -28,9 +27,9 @@ pub async fn execute(pattern: &str, config: &ChimeraConfig, json: bool) -> Resul
     // 1. 解析数据库路径（展开 ~）
     let db_path = expand_db_path(&config.repo_wiki.db_path)?;
 
-    // 2. 打开 WikiStore（连接池 + WAL + FTS5）
-    let store = WikiStore::open(&db_path)
-        .map_err(|e| ChimeraCliError::EngineError(format!("WikiStore 打开失败: {e}")))?;
+    // 2. 打开 WikiStore（连接池 + WAL + FTS5）—— §4.4 红线 2：同步 DB IO 走 blocking 池
+    //    （Phase 6A/T6A.2；与 `chimera wiki` 共用同一出口，不再在 async 上下文直接 open）
+    let store = crate::db_open::open_wiki_store(db_path).await?;
 
     // 3. 双通道检索（同步库 API 在 spawn_blocking 中执行）
     let store = store.clone();

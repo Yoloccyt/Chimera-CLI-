@@ -25,6 +25,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 # 异步运行时: hook 命令超时熔断(tokio::process + timeout,不阻主流程)
 tokio = { workspace = true, features = ["process"] }
+# Phase 5: PostToolUse 有界并行（FuturesUnordered，不 spawn、不脱离 &self）
+futures = { workspace = true }
 
 [dev-dependencies]
 # 测试用时间控制

@@ -315,6 +315,10 @@ impl PlanGuardOverrides {
                 .budget_bytes
                 .map_or(base.budget_bytes, |v| v.min(base.budget_bytes)),
             timeout_ms: base.timeout_ms,
+            // 合流新增字段（feat/toolplane-execution 的 `PlanGuards::max_parallel`）。
+            // CLI 无对应覆写开关 ⇒ 原样透传基线值：本结构的方法契约是"只能收紧、绝不放宽"，
+            // 凭空给一个默认值会悄悄改变 `run_with` 的在飞窗口上界。
+            max_parallel: base.max_parallel,
         }
     }
 }

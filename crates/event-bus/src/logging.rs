@@ -431,25 +431,61 @@ impl BusLogger {
 
     /// 记录事件接收成功
     ///
-    /// 日志字段:module、level=INFO、timestamp、context_id=event_id、
-    /// operation="event_received"、event_type、total_received
+    /// 分级(Phase 6A/T6A.5,与 [`log_publish`](Self::log_publish) 同款判据):
+    /// Critical 保留 `info!`(安全事件必须默认可见);普通事件降 `debug!`——
+    /// 默认 `EnvFilter=info` 下接收面不再逐事件写 stderr(TUI/REPL 每 tick 都收,
+    /// 刷屏且每条多一次 `event_id` 堆分配),格式化只在日志真被放行时发生。
+    ///
+    /// 日志字段:module、context_id=event_id、operation="event_received"、
+    /// event_type、event_severity、total_received
     pub fn log_recv(&self, event: &NexusEvent) {
-        let event_id = event.metadata().event_id.to_string();
-        let event_type = event.type_name();
+        // 计数器无条件累加（日志里只是快照），避免"关日志就不计数"。
         let total = self.total_received.fetch_add(1, Ordering::Relaxed) + 1;
 
-        info!(
-            module = %self.module_id,
-            level = "INFO",
-            context_id = %event_id,
-            operation = "event_received",
-            event_type = %event_type,
-            total_received = total,
-            "事件已接收: type={event_type} context_id={event_id} total_received={total}",
-            event_type = event_type,
-            event_id = event_id,
-            total = total,
-        );
+        let severity = event.severity();
+        let is_critical = severity == EventSeverity::Critical;
+        let enabled = if is_critical {
+            tracing::enabled!(tracing::Level::INFO)
+        } else {
+            tracing::enabled!(tracing::Level::DEBUG)
+        };
+        if !enabled {
+            return;
+        }
+
+        // WHY 放在 enabled 之后：这两句是堆分配/格式化,降级的日志不该付这笔钱
+        let event_id = event.metadata().event_id.to_string();
+        let event_type = event.type_name();
+        let severity_str = format!("{severity:?}");
+
+        if is_critical {
+            info!(
+                module = %self.module_id,
+                level = "INFO",
+                context_id = %event_id,
+                operation = "event_received",
+                event_type = %event_type,
+                event_severity = %severity_str,
+                total_received = total,
+                "事件已接收: type={event_type} severity={severity_str} context_id={event_id} total_received={total}",
+                event_type = event_type,
+                event_id = event_id,
+                total = total,
+            );
+        } else {
+            debug!(
+                module = %self.module_id,
+                context_id = %event_id,
+                operation = "event_received",
+                event_type = %event_type,
+                event_severity = %severity_str,
+                total_received = total,
+                "事件已接收: type={event_type} severity={severity_str} context_id={event_id} total_received={total}",
+                event_type = event_type,
+                event_id = event_id,
+                total = total,
+            );
+        }
     }
 
     /// 记录接收超时

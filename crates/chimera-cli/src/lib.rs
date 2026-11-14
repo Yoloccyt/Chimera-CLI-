@@ -1,114 +1,122 @@
 //! CRATE-CONTRACT BEGIN
 //! LAYER:    L10
-//! ROLE:     Chimera CLI — NEXUS-OMEGA AI 编码代理的命令行入口
+//! ROLE:     Chimera CLI 鈥?NEXUS-OMEGA AI 缂栫爜浠ｇ悊鐨勫懡浠よ鍏ュ彛
 //! BACKEND:  fs
-//! PRODUCERS: 13 ClaimIssued,ClaimRetracted,OperationTimedOut,ParentSelected,StopRulingIssued…
+//! PRODUCERS: 14 BudgetExceeded,ClaimIssued,ClaimRetracted,OperationTimedOut,ParentSelected鈥?
 //! CONSUMERS: 0 -
 //! MATURITY: NOT-IMPL-CN|PLACEHOLDER-EN
 //! CRATE-CONTRACT END
-//! Chimera CLI — NEXUS-OMEGA AI 编码代理的命令行入口
+//! Chimera CLI 鈥?NEXUS-OMEGA AI 缂栫爜浠ｇ悊鐨勫懡浠よ鍏ュ彛
 //!
-//! 对应架构层:L10 Interface
-//! 对应创新点:无(用户交互入口,但承载 Figment 多源配置合并)
+//! 瀵瑰簲鏋舵瀯灞?L10 Interface
+//! 瀵瑰簲鍒涙柊鐐?鏃?鐢ㄦ埛浜や簰鍏ュ彛,浣嗘壙杞?Figment 澶氭簮閰嶇疆鍚堝苟)
 //!
-//! ## 模块组织
-//! - [`cli`][]:Clap 子命令定义(`Cli`、`Commands`、`QuestAction`、`ConfigAction`)
-//! - [`config`][]:Figment 配置加载(`ChimeraConfig` 及多源合并逻辑)
-//! - [`commands`][]:各子命令的业务骨架(`run`/`tui`/`quest`/`config`/`wiki`/`parliament`)
+//! ## 妯″潡缁勭粐
+//! - [`cli`][]:Clap 瀛愬懡浠ゅ畾涔?`Cli`銆乣Commands`銆乣QuestAction`銆乣ConfigAction`)
+//! - [`config`][]:Figment 閰嶇疆鍔犺浇(`ChimeraConfig` 鍙婂婧愬悎骞堕€昏緫)
+//! - [`commands`][]:鍚勫瓙鍛戒护鐨勪笟鍔￠鏋?`run`/`tui`/`quest`/`config`/`wiki`/`parliament`)
 //!
-//! ## 配置优先级
-//! Figment 合并顺序(后者覆盖前者):
-//! 1. 内置默认值(`ChimeraConfig::default`)
-//! 2. 配置文件(默认 `~/.chimera/omega.yaml`)
-//! 3. 环境变量(前缀 `CHIMERA_`,嵌套用 `__` 分隔,如 `CHIMERA_QUEST__MAX_TASKS_PER_QUEST`)
+//! ## 閰嶇疆浼樺厛绾?
+//! Figment 鍚堝苟椤哄簭(鍚庤€呰鐩栧墠鑰?:
+//! 1. 鍐呯疆榛樿鍊?`ChimeraConfig::default`)
+//! 2. 閰嶇疆鏂囦欢(榛樿 `~/.chimera/omega.yaml`)
+//! 3. 鐜鍙橀噺(鍓嶇紑 `CHIMERA_`,宓屽鐢?`__` 鍒嗛殧,濡?`CHIMERA_QUEST__MAX_TASKS_PER_QUEST`)
 //!
-//! `--config` 只选择配置文件路径，不进入 Figment（CLI 参数不是第 4 源）。
+//! `--config` 鍙€夋嫨閰嶇疆鏂囦欢璺緞锛屼笉杩涘叆 Figment锛圕LI 鍙傛暟涓嶆槸绗?4 婧愶級銆?
 //!
-//! ## 热加载方案(注释说明,骨架暂不实现)
-//! 配置热加载计划通过两种机制实现:
-//! - **Unix**:捕获 `SIGHUP` 信号,触发 `ChimeraConfig::load` 重载
-//! - **跨平台**:使用 `notify` crate 监听 `omega.yaml` 文件变更,debounce 500ms 后重载
+//! ## 鐑姞杞芥柟妗?娉ㄩ噴璇存槑,楠ㄦ灦鏆備笉瀹炵幇)
+//! 閰嶇疆鐑姞杞借鍒掗€氳繃涓ょ鏈哄埗瀹炵幇:
+//! - **Unix**:鎹曡幏 `SIGHUP` 淇″彿,瑙﹀彂 `ChimeraConfig::load` 閲嶈浇
+//! - **璺ㄥ钩鍙?*:浣跨敤 `notify` crate 鐩戝惉 `omega.yaml` 鏂囦欢鍙樻洿,debounce 500ms 鍚庨噸杞?
 //!
-//!   重载后通过 `event-bus` 广播 `ConfigReloaded` 事件,各子系统订阅并应用新配置。
-//!   当前 Week 8 已完成静态加载,热加载为未来增强项(优先级 P3)。
+//!   閲嶈浇鍚庨€氳繃 `event-bus` 骞挎挱 `ConfigReloaded` 浜嬩欢,鍚勫瓙绯荤粺璁㈤槄骞跺簲鐢ㄦ柊閰嶇疆銆?
+//!   褰撳墠 Week 8 宸插畬鎴愰潤鎬佸姞杞?鐑姞杞戒负鏈潵澧炲己椤?浼樺厛绾?P3)銆?
 //!
-//! # 快速示例
-//! WHY 选此示例:展示最常用路径 —— `Cli::parse_from` 解析参数 + `ChimeraConfig::default` 内置默认,
-//! 覆盖 CLI 入口与配置加载两条核心 API,且无需 IO 可在 doctest 直接运行。
+//! # 蹇€熺ず渚?
+//! WHY 閫夋绀轰緥:灞曠ず鏈€甯哥敤璺緞 鈥斺€?`Cli::parse_from` 瑙ｆ瀽鍙傛暟 + `ChimeraConfig::default` 鍐呯疆榛樿,
+//! 瑕嗙洊 CLI 鍏ュ彛涓庨厤缃姞杞戒袱鏉℃牳蹇?API,涓旀棤闇€ IO 鍙湪 doctest 鐩存帴杩愯銆?
 //! ```
 //! use chimera_cli::{Cli, Commands, QuestAction, ChimeraConfig};
 //! use clap::Parser;
 //!
-//! // Cli 实现 clap::Parser,可从字符串切片解析(便于测试与脚本调用)
+//! // Cli 瀹炵幇 clap::Parser,鍙粠瀛楃涓插垏鐗囪В鏋?渚夸簬娴嬭瘯涓庤剼鏈皟鐢?
 //! let cli = Cli::parse_from(["chimera", "quest", "list"]);
-//! // Quest 变体含子命令级 `json` flag(Task 1.7 引入,与全局 --json 兼容回退),
-//! // matches! 模式用 `..` 忽略其他字段,保持 doctest 对字段扩展的健壮性
+//! // Quest 鍙樹綋鍚瓙鍛戒护绾?`json` flag(Task 1.7 寮曞叆,涓庡叏灞€ --json 鍏煎鍥為€€),
+//! // matches! 妯″紡鐢?`..` 蹇界暐鍏朵粬瀛楁,淇濇寔 doctest 瀵瑰瓧娈垫墿灞曠殑鍋ュ．鎬?
 //! assert!(matches!(cli.command, Some(Commands::Quest { action: QuestAction::List, .. })));
 //!
-//! // ChimeraConfig 实现 Default,提供内置兜底配置(对应 omega.yaml 缺省值)
+//! // ChimeraConfig 瀹炵幇 Default,鎻愪緵鍐呯疆鍏滃簳閰嶇疆(瀵瑰簲 omega.yaml 缂虹渷鍊?
 //! let _config = ChimeraConfig::default();
 //! ```
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs, clippy::all)]
 
-/// Action 编排器(消费 TuiActionRequested,路由 quest.* 域到 QuestEngine 真实执行)
+/// Action 缂栨帓鍣?娑堣垂 TuiActionRequested,璺敱 quest.* 鍩熷埌 QuestEngine 鐪熷疄鎵ц)
 pub mod action_orchestrator;
-/// 启动 banner 输出(品牌 ASCII art,可通过 `--no-banner` 关闭)
+/// 鍚姩 banner 杈撳嚭(鍝佺墝 ASCII art,鍙€氳繃 `--no-banner` 鍏抽棴)
 pub mod banner;
-/// `/bench` 一期：build.rs 静态计数 provider（供 commands::tui 装配 BenchPanel）。
+/// `/bench` 涓€鏈燂細build.rs 闈欐€佽鏁?provider锛堜緵 commands::tui 瑁呴厤 BenchPanel锛夈€?
 mod bench_provider;
-/// 统一调用预算包装 — 超时 + CancellationToken 注入(M2,M1-方向5:
-/// chat/quest 主路径 LLM/长操作的本层兜底防护,超时发 OperationTimedOut 事件)
+/// 缁熶竴璋冪敤棰勭畻鍖呰 鈥?瓒呮椂 + CancellationToken 娉ㄥ叆(M2,M1-鏂瑰悜5:
+/// chat/quest 涓昏矾寰?LLM/闀挎搷浣滅殑鏈眰鍏滃簳闃叉姢,瓒呮椂鍙?OperationTimedOut 浜嬩欢)
 pub mod call_budget;
-/// Clap 子命令定义
+/// Clap 瀛愬懡浠ゅ畾涔?
 pub mod cli;
-/// 子命令业务骨架
+/// 瀛愬懡浠や笟鍔￠鏋?
 pub mod commands;
-/// 集中组合根 — AppContext/协议宿主真实装配（C12 + C1，评审波次 1）
+/// 闆嗕腑缁勫悎鏍?鈥?AppContext/鍗忚瀹夸富鐪熷疄瑁呴厤锛圕12 + C1锛岃瘎瀹℃尝娆?1锛?
 pub mod composition;
-/// Figment 多源配置加载
+/// Figment 澶氭簮閰嶇疆鍔犺浇
 pub mod config;
-/// CLI 错误类型(结构化错误码,Task 0.2 将据此映射 ExitCode 矩阵)
+/// 鍚屾 DB 鎵撳紑鐨勭粺涓€鍑哄彛(Phase 6A/搂4.4 绾㈢嚎 2:rusqlite open 蹇呰蛋 blocking 姹?
+pub mod db_open;
+/// CLI 閿欒绫诲瀷(缁撴瀯鍖栭敊璇爜,Task 0.2 灏嗘嵁姝ゆ槧灏?ExitCode 鐭╅樀)
 pub mod error;
-/// `exec --plan` 工具执行内核接线（E1′：内置工具 + 四环链 + 三层超时 + Scc 回写）
+/// `exec --plan` 宸ュ叿鎵ц鍐呮牳鎺ョ嚎锛圗1鈥诧細鍐呯疆宸ュ叿 + 鍥涚幆閾?+ 涓夊眰瓒呮椂 + Scc 鍥炲啓锛?
 pub mod exec_plan;
-/// §16.1 经验卡片闭环组合根接线(Phase 10 审计修复 Wave 1:
-/// ExperienceCardBus 主链 + L3 双流持久化 + L2/L6 消费 + 五维审计)
+/// 搂16.1 缁忛獙鍗＄墖闂幆缁勫悎鏍规帴绾?Phase 10 瀹¤淇 Wave 1:
+/// ExperienceCardBus 涓婚摼 + L3 鍙屾祦鎸佷箙鍖?+ L2/L6 娑堣垂 + 浜旂淮瀹¤)
 pub mod experience_loop;
-/// TUI ↔ 编排器协议握手服务端(Concord W10,ADR-082:TuiHello 应答 + SEC-4 一次性)
+/// TUI 鈫?缂栨帓鍣ㄥ崗璁彙鎵嬫湇鍔＄(Concord W10,ADR-082:TuiHello 搴旂瓟 + SEC-4 涓€娆℃€?
 pub mod handshake;
-/// McpToolExecutor — `mcp.<server>.<tool>` 接入四环传输环(ADR-256:复合执行器
-/// 前缀分派 + 组合根唯一装配;传输恒 InProcessClient 零网络副作用)
+/// LLM 宸ュ叿寰幆(Phase 7,ADR-232:妯″瀷 鈫?宸ュ叿澶氳疆闂幆,榛樿鍏抽棴)
+pub mod llm;
+/// McpToolExecutor 鈥?`mcp.<server>.<tool>` 鎺ュ叆鍥涚幆浼犺緭鐜?ADR-256:澶嶅悎鎵ц鍣?
+/// 鍓嶇紑鍒嗘淳 + 缁勫悎鏍瑰敮涓€瑁呴厤;浼犺緭鎭?InProcessClient 闆剁綉缁滃壇浣滅敤)
 pub mod mcp_tool_executor;
-/// 批量归因指标 Sink(W3/F-03/ADR-248 C-A:TelemetryBatchSink → BusLogger 计数器)
+/// 鎵归噺褰掑洜鎸囨爣 Sink(W3/F-03/ADR-248 C-A:TelemetryBatchSink 鈫?BusLogger 璁℃暟鍣?
 pub mod metrics_sink;
-/// Quest 分解编排器(消费 TuiChatSubmitted,经 QuestEngine 真实分解并流式回发)
+/// Quest 鍒嗚В缂栨帓鍣?娑堣垂 TuiChatSubmitted,缁?QuestEngine 鐪熷疄鍒嗚В骞舵祦寮忓洖鍙?
 pub mod orchestrator;
-/// P1 候选③（ADR-211 Accepted）：`agent spawn` 前 mas-sched claim 准入
-/// （env 三态 `CHIMERA_SCHED_CLAIM`，off 默认逐位等价）
-/// + `ClaimIssued`/`ClaimRetracted` 生产发出点（Normal/Parliament Topic）。
+/// P1 鍊欓€夆憿锛圓DR-211 Accepted锛夛細`agent spawn` 鍓?mas-sched claim 鍑嗗叆
+/// 锛坋nv 涓夋€?`CHIMERA_SCHED_CLAIM`锛宱ff 榛樿閫愪綅绛変环锛?
+/// + `ClaimIssued`/`ClaimRetracted` 鐢熶骇鍙戝嚭鐐癸紙Normal/Parliament Topic锛夈€?
 mod sched_claim;
-// PROBE P3.2: 超窗兜底桥（kvbsr→repo-wiki→hcw 两级检索真实链路）
+// PROBE P3.2: 瓒呯獥鍏滃簳妗ワ紙kvbsr鈫抮epo-wiki鈫抙cw 涓ょ骇妫€绱㈢湡瀹為摼璺級
 pub mod overwindow_bridge;
-// PROBE P2.2: 选择器学习编排器（S4 → holder → window 注入链）
-/// 统一输出 helper(Task 1.7 JSON / Task 1.12 彩色 + 表格 + 进度)
+// PROBE P2.2: 閫夋嫨鍣ㄥ涔犵紪鎺掑櫒锛圫4 鈫?holder 鈫?window 娉ㄥ叆閾撅級
+/// 缁熶竴杈撳嚭 helper(Task 1.7 JSON / Task 1.12 褰╄壊 + 琛ㄦ牸 + 杩涘害)
 pub mod output;
-/// Permission prompt 机制(Task 1.11)
+/// Permission prompt 鏈哄埗(Task 1.11)
 pub mod permission;
-/// Quest 生命周期组件桥(Phase 10 审计修复 Wave 2:
-/// LongTaskMap/SearchTreeManager/LongTermCreditAssigner 事件桥接装配)
+/// Quest 鎵ц闈?Phase 5/ADR-231):浠诲姟绾х绾?+ DAG 灏辩华闃熷垪 + 宸ュ叿璁″垝鎵ц
+pub mod quest_exec;
+/// Quest 鐢熷懡鍛ㄦ湡缁勪欢妗?Phase 10 瀹¤淇 Wave 2:
+/// LongTaskMap/SearchTreeManager/LongTermCreditAssigner 浜嬩欢妗ユ帴瑁呴厤)
 pub mod quest_loop;
-// Milestone C-3: rl-client 通道（HttpRlClient feature-gated，NoopRlClient 常驻）
+// Milestone C-3: rl-client 閫氶亾锛圚ttpRlClient feature-gated锛孨oopRlClient 甯搁┗锛?
 pub mod rl_client;
 pub mod selector_orchestrator;
-/// 命令装配分类(编译期穷尽,决定是否装配 AppContext)
+/// 鍛戒护瑁呴厤鍒嗙被(缂栬瘧鏈熺┓灏?鍐冲畾鏄惁瑁呴厤 AppContext)
 pub mod spec;
+/// Tool execution plane 鐨?L10 provider 閫傞厤鍣?+ env 閰嶇疆锛圥hase 3锛?
+pub mod tool_plane;
 
-// === 公开 API 重导出 ===
+// === 鍏紑 API 閲嶅鍑?===
 pub use cli::{Cli, Commands, ConfigAction, QuestAction};
 pub use config::{ChimeraConfig, LazyConfig};
 pub use error::ChimeraCliError;
 
-/// Crate 版本(从 workspace.package.version 派生)
+/// Crate 鐗堟湰(浠?workspace.package.version 娲剧敓)
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

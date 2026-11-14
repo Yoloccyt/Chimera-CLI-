@@ -35,6 +35,49 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use nexus_contracts::tool_plan::{guards, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan};
 use tokio::sync::Semaphore;
+use tokio_util::sync::CancellationToken;
+
+/// 计划级执行上下文 —— 一次 `run_with` 内恒定不变的部分
+///
+/// WHY 合成一个借用结构体而不是把 5 个标量逐个透传给执行器:上下文属于**同一次运行**，
+/// 逐参数透传会让 [`ToolExecutor`] 的签名随每个新需求增长（每加一个字段就改 10 个实现）;
+/// 结构体承载则可继续加字段而不破坏既有实现（加性要求）。
+///
+/// # 字段
+/// - `plan_id`:计划 ID（执行器据此构造可追溯的 `call_id`）;
+/// - `approve_writes`:[`PlanRunOptions::approve_writes`]（显式写放行位）;
+/// - `cancel`:调用方取消令牌（`None` = 无外部取消，执行器自决）。
+///
+/// 全部是借用（`&'a str` / `Option<&'a _>`），故 `Copy`：传递不产生所有权转移。
+#[derive(Debug, Clone, Copy)]
+pub struct PlanExecCtx<'a> {
+    /// 计划 ID（用于构造可追溯的 `call_id`）
+    pub plan_id: &'a str,
+    /// 运行选项里的显式写放行位（[`PlanRunOptions::approve_writes`]）
+    pub approve_writes: bool,
+    /// 调用方的取消令牌（`None` = 无外部取消，执行器自决）
+    pub cancel: Option<&'a CancellationToken>,
+}
+
+/// 节点级执行上下文 —— 执行器要据此判断「该节点是否已获批准」
+///
+/// # 字段
+/// - `plan`:所属计划的 [`PlanExecCtx`]（同一运行内各节点共享）;
+/// - `node_id`:节点 ID（计划内唯一，区别于工具名：同工具的两个节点必须可分辨）;
+/// - `side_effect`:节点**自己**声明的副作用（`None` = 未声明）。
+///
+/// WHY `side_effect` 只用节点声明而不再回落到执行器能力表:这里是「执行器该不该
+/// 已经拿到批准」的输入，节点声明是计划作者的意图；能力表是执行器的自报（可能错），
+/// 拿它来放行写入等于让被审计方给自己发许可。
+#[derive(Debug, Clone, Copy)]
+pub struct NodeExecCtx<'a> {
+    /// 所属计划的上下文
+    pub plan: PlanExecCtx<'a>,
+    /// 节点 ID（计划内唯一）
+    pub node_id: &'a str,
+    /// 节点自己声明的副作用（`None` = 未声明，按不需要批准处理）
+    pub side_effect: Option<SideEffectDecl>,
+}
 
 /// 工具执行器 — 接入方注入（execpolicy 审批/沙箱/超时/审计流水线挂载点）
 ///
@@ -51,6 +94,31 @@ pub trait ToolExecutor: Send + Sync {
     /// # 返回
     /// 执行结果字符串（JSON 形态;失败返回 Err,由调用方按节点错误处理）
     async fn execute(&self, tool_name: &str, args_json: &str) -> Result<String, String>;
+
+    /// 带节点上下文的执行入口 —— [`PlanRunner::run_with`] 实际调用的方法
+    ///
+    /// # 参数
+    /// - `ctx`:节点上下文（计划 ID / 写放行位 / 取消令牌 / 节点 ID / 节点副作用声明）;
+    /// - `tool_name`:工具名;
+    /// - `args_json`:参数 JSON（原样透传）。
+    ///
+    /// # 返回
+    /// 与 [`execute`](Self::execute) 同型：成功为结果字符串，失败为 Err（由调用方按
+    /// `PlanRunOptions::fail_fast` 决定终止还是写回节点错误）。
+    ///
+    /// # WHY 默认实现丢弃上下文并退回 `execute`
+    /// 加性是硬要求：`execute` 有 10 个实现（含全部测试夹具），直接扩它的签名会把一次
+    /// 编排层修复扩散成 10 处无关改动。默认实现 ⇒ legacy 执行器行为**逐位不变**，
+    /// 只有真要把 `approved` / `call_id` / 取消令牌装配进真实调用的适配器
+    /// （如 `tool_plane::runtime::RuntimeExecutor`）才覆盖本方法。
+    async fn execute_node(
+        &self,
+        _ctx: &NodeExecCtx<'_>,
+        tool_name: &str,
+        args_json: &str,
+    ) -> Result<String, String> {
+        self.execute(tool_name, args_json).await
+    }
 
     /// 自报该工具的副作用属性 —— 计划未写 `side_effect` 时的**派生真值源**
     ///
@@ -97,6 +165,19 @@ pub struct PlanGuards {
     pub budget_bytes: usize,
     /// 只读模式（true = 拒绝 Write 节点——Plan 模式投影）
     pub readonly_only: bool,
+    /// 在飞节点上限（默认 8；1 = 串行）
+    ///
+    /// 用途:[`PlanRunner::run_with`] 在 `PlanRunOptions::max_parallel == 0` 时的
+    /// **回落基线**（派发窗口上界，最终钳到 ≥ 1）。
+    ///
+    /// # WHY 与 [`PlanRunner::concurrency`] 分设两个字段而不复用同一个值
+    /// 两者调度单位不同:`concurrency` 是 legacy [`PlanRunner::run`] 里**只读层的段内
+    /// 并发上界**（层屏障版，`with_concurrency` 覆写），而本字段是 `run_with` 的**在飞
+    /// 节点窗口**（依赖就绪即派发，无层概念）。若让 `run_with` 去读 `concurrency`，
+    /// `with_concurrency` 就会悄悄改变新入口的派发形状，反之亦然 —— 两条路径各自有
+    /// 独立的行为锁定测试，任何一个旋钮都不该同时移动两处。默认值同为 8，故默认
+    /// 配置下两者的数字观感一致，但**永不互相写入**。
+    pub max_parallel: usize,
 }
 
 impl Default for PlanGuards {
@@ -106,8 +187,81 @@ impl Default for PlanGuards {
             timeout_ms: guards::MAX_TIMEOUT_MS,
             budget_bytes: guards::MAX_BUDGET_BYTES,
             readonly_only: false,
+            max_parallel: 8,
         }
     }
+}
+
+/// [`PlanRunner::run_with`] 的运行选项（与 legacy `run` 解耦，便于渐进接线）
+///
+/// `Default` 即「沿用 [`PlanGuards`] 的基线 + 非 fail-fast + 不放行写 + 无外部取消」，
+/// 与 legacy `run` 的隐式行为一致。
+#[derive(Debug, Clone, Default)]
+pub struct PlanRunOptions {
+    /// 在飞节点上限（0 = 使用 [`PlanGuards::max_parallel`]；最终钳到 ≥ 1）
+    pub max_parallel: usize,
+    /// 计划级**绝对** deadline（ms；0 = 使用 [`PlanGuards::timeout_ms`]）
+    pub timeout_ms: u64,
+    /// true = 任一节点失败立即返回 [`PlanRunError::NodeFailed`]；
+    /// false = 错误作为该节点的结果继续（legacy `run` 的 fail-soft 语义）
+    pub fail_fast: bool,
+    /// true = 放行可能写节点（仅在 [`PlanGuards::readonly_only`] 为真时有意义：
+    /// 只读投影下写节点默认被拒，本旗是显式覆盖；`false` 保持 fail-closed）
+    pub approve_writes: bool,
+    /// 外部取消令牌（`None` = 不可外部取消）
+    pub cancel: Option<CancellationToken>,
+}
+
+/// [`PlanRunner::run_with`] 的失败类型
+///
+/// WHY 与 legacy `run` 的 `Result<_, PlanError>` 分开:legacy 的 `Err` 只有「计划非法」
+/// 一个来源（`PlanError`），而 `run_with` 多出 deadline / 取消 / fail-fast 节点失败三类
+/// **运行期**终止 —— 把它们硬塞进 `PlanError` 会让「计划不合法」与「计划跑超时」共用一个
+/// 类型，调用方无法区分「退化逐次调用」与「该重试还是该放弃」。
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum PlanRunError {
+    /// 计划校验失败（环/超步数/悬空边/不完整调用）。
+    #[error("invalid plan: {0}")]
+    Invalid(PlanError),
+    /// 计划级 deadline 到期（`completed` = 终止前已提交的节点数）。
+    #[error("plan timed out after {completed} completed nodes")]
+    TimedOut {
+        /// 已完成节点数。
+        completed: usize,
+    },
+    /// 外部取消（`completed` = 终止前已提交的节点数）。
+    #[error("plan cancelled after {completed} completed nodes")]
+    Cancelled {
+        /// 已完成节点数。
+        completed: usize,
+    },
+    /// `fail_fast = true` 时某节点失败。
+    #[error("node {node_id} failed after {completed} completed nodes: {error}")]
+    NodeFailed {
+        /// 失败节点 ID。
+        node_id: String,
+        /// 失败原因（纯文本）。
+        error: String,
+        /// 失败前已完成的节点数。
+        completed: usize,
+    },
+}
+
+impl From<PlanError> for PlanRunError {
+    fn from(value: PlanError) -> Self {
+        Self::Invalid(value)
+    }
+}
+
+/// 内部节点失败分类（不暴露给调用方 —— 公开面统一折叠成 [`PlanRunError`]）
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NodeFailure {
+    /// 工具返回 Err（`fail_fast` 决定终止或写回节点错误）
+    Failed(String),
+    /// 绝对 deadline 到期
+    Timeout,
+    /// 外部取消
+    Cancelled,
 }
 
 /// 截断原因 — 区分「计划级熔断」与「回填预算超限」（ADR-268）
@@ -289,6 +443,235 @@ impl PlanRunner {
             truncated,
             truncation,
         })
+    }
+
+    /// 依赖就绪即派发的新执行入口（ADR-233 追加节九）
+    ///
+    /// # 与 legacy [`run`](Self::run) 的差异
+    /// - 并发单位是**在飞节点窗口**（`max_parallel`）而不是「层」:节点前驱全部提交后
+    ///   即可派发，不再被同层无关慢节点挡住（旧层屏障的代价见 ADR-233 W1a）;
+    /// - 超时是**绝对 deadline**（`timeout_at`），不是每层重置;
+    /// - 支持 [`CancellationToken`] 外部取消;
+    /// - 回填预算按**增量**累加（legacy `run` 仍是 O(n²) 全量求和，保持逐位不变）;
+    /// - 多终端节点返回 `{"terminals":{...}}`，单终端保持旧语义。
+    ///
+    /// # 写屏障（派发准入与 legacy 同一真值源）
+    /// 每个待派发节点都过 [`node_is_read_safe`]（进而 [`effective_side_effect`]）:
+    /// **非读安全节点（显式 Write / 未声明但执行器未报只读）独占窗口** —— 只有在飞为空时
+    /// 才派发它，派发后立即停止填充窗口，于是「写/读」与「写/写」永不并发。
+    ///
+    /// WHY 不能沿用「整层无条件 `FuturesUnordered`」:那会按 `node.side_effect == Some(Write)`
+    /// 之外的判据放行，**省略 `side_effect` 字段即可绕过写屏障**（F-A21 的同一类缺陷），
+    /// 执行器能力表/批量声明提供的只读真值也会被无视。窗口内的只读并发仍受
+    /// `max_parallel` 上界约束（`Semaphore` 由窗口长度天然给出，无需第二个信号量）。
+    ///
+    /// 写节点的**相对执行序**由就绪队列决定:播种按节点声明序、推进按边表序，
+    /// 都可复现 ⇒ 同层多个写节点的顺序跨运行稳定（不被 `HashMap` 迭代序污染）。
+    ///
+    /// # 返回
+    /// - `Ok(PlanSummary)`:运行收敛（预算耗尽时 `truncated = true`，
+    ///   `truncation = Some(BudgetBytes)`）;
+    /// - `Err(PlanRunError)`:校验失败 / deadline / 取消 / `fail_fast` 下节点失败。
+    pub async fn run_with(
+        &self,
+        plan: &ToolPlan,
+        opts: &PlanRunOptions,
+    ) -> Result<PlanSummary, PlanRunError> {
+        let started = Instant::now();
+        plan.validate(self.guards.max_steps)?;
+
+        // 只读投影：写节点默认被拒，`approve_writes` 是显式覆盖（fail-closed 默认）。
+        // 判据与 legacy `run` 逐字同口径：未知属性按「可能写」保守处理（F-A21）。
+        if self.guards.readonly_only && !opts.approve_writes {
+            for node in &plan.nodes {
+                if node.op == ToolOp::ToolCall
+                    && effective_side_effect(
+                        node,
+                        self.executor.as_ref(),
+                        node.tool_name.as_deref().unwrap_or_default(),
+                    ) != Some(SideEffectDecl::ReadOnly)
+                {
+                    return Err(PlanRunError::Invalid(PlanError::IncompleteToolCall(
+                        node.id.clone(),
+                    )));
+                }
+            }
+        }
+
+        // 一次性建图（O(V+E)）：调度只看依赖是否就绪，不再分批于「层」。
+        let mut graph = build_graph(plan)?;
+        let preds = predecessor_map(plan);
+        let timeout_ms = if opts.timeout_ms == 0 {
+            self.guards.timeout_ms
+        } else {
+            opts.timeout_ms
+        };
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        let max_parallel = if opts.max_parallel == 0 {
+            self.guards.max_parallel
+        } else {
+            opts.max_parallel
+        }
+        .max(1); // 窗口 0 会让「排空即提交」永远拿不到完成事件 = 挂死
+        let cancel = opts.cancel.as_ref();
+
+        let mut env: HashMap<String, String> = HashMap::new();
+        let mut counters = RunCounters::default();
+        // 每次运行一份计划级上下文：执行器据此构造可追溯、可取消、审批语义显式的调用。
+        let plan_ctx = PlanExecCtx {
+            plan_id: &plan.id,
+            approve_writes: opts.approve_writes,
+            cancel,
+        };
+
+        let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
+        loop {
+            // 取消/deadline 的判定点放在**派发顶**：每提交一个节点就重判一次，
+            // `completed` 语义 = 已提交节点数（与 `Ok` 分支的计数同源）。
+            if cancel.is_some_and(CancellationToken::is_cancelled) {
+                return Err(PlanRunError::Cancelled {
+                    completed: counters.nodes_executed,
+                });
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(PlanRunError::TimedOut {
+                    completed: counters.nodes_executed,
+                });
+            }
+
+            // 窗口未满就把已就绪的节点发出去 —— 不再等整层。
+            while in_flight.len() < max_parallel {
+                let Some(&pos) = graph.ready.front() else {
+                    break;
+                };
+                let node = &plan.nodes[pos];
+                // 写屏障：读安全节点随时可填窗口；「可能写」节点必须等在飞排空（独占窗口）。
+                let read_safe = node_is_read_safe(node, self.executor.as_ref());
+                if read_safe || in_flight.is_empty() {
+                    graph.ready.pop_front();
+                } else {
+                    break;
+                }
+                let input = inputs_of_precomputed(&preds, &env, &node.id);
+                in_flight.push(self.node_future(node, input, deadline, cancel, plan_ctx));
+                if !read_safe {
+                    break; // 写节点独占：窗口本轮不再补充，避免读写并发
+                }
+            }
+
+            // 排空即提交：提交只发生在这个单所有者循环里，
+            // 于是提交序列是 DAG 偏序的一条线性化 —— 节点的全部前驱在派发时已提交。
+            let Some((node, result)) = in_flight.next().await else {
+                break;
+            };
+            self.commit(
+                &mut graph,
+                &mut env,
+                &mut counters,
+                node,
+                result,
+                opts.fail_fast,
+            )?;
+            if counters.halted {
+                break;
+            }
+        }
+
+        Ok(PlanSummary {
+            plan_id: plan.id.clone(),
+            summary: terminal_summary(plan, &env),
+            tool_calls: counters.tool_calls,
+            nodes_executed: counters.nodes_executed,
+            duration_ms: started.elapsed().as_millis() as u64,
+            truncated: counters.truncated,
+            // `run_with` 的 deadline 到期是 `Err(TimedOut)`，不会产出摘要，
+            // 故摘要上的截断原因只可能是回填预算（ADR-268 的两个真值源在此不重不漏）。
+            truncation: counters.truncated.then_some(TruncationReason::BudgetBytes),
+        })
+    }
+
+    /// 提交一次节点完成 —— 计数、预算、环境、后继就绪四件事都只在这里发生
+    ///
+    /// WHY 单点提交:提交序列因此是 DAG 偏序的**一条线性化**，「派发某节点时其全部前驱
+    /// 已提交」才可被 [`inputs_of_precomputed`] 的 debug 断言当场验证;若把提交分散到
+    /// 多处（例如各并发 join 分支各自入库），该不变式就无从检查。
+    ///
+    /// # 返回
+    /// - `Err`:本次运行立即终止（`fail_fast` 节点失败 / 超时 / 取消）;
+    /// - `Ok`:`counters.halted` 为真表示预算耗尽，由调用方收敛为 `Ok(PlanSummary)`。
+    fn commit(
+        &self,
+        graph: &mut Graph,
+        env: &mut HashMap<String, String>,
+        counters: &mut RunCounters,
+        node: &ToolNode,
+        result: Result<String, NodeFailure>,
+        fail_fast: bool,
+    ) -> Result<(), PlanRunError> {
+        counters.nodes_executed += 1;
+        if node.op == ToolOp::ToolCall {
+            counters.tool_calls += 1;
+        }
+        let value = match result {
+            Ok(value) => value,
+            // 非 fail-fast：错误作为节点结果，下游可见并自行处理（legacy fail-soft 语义）。
+            Err(NodeFailure::Failed(error)) if !fail_fast => format!(r#"{{"error":{error:?}}}"#),
+            Err(NodeFailure::Failed(error)) => {
+                return Err(PlanRunError::NodeFailed {
+                    node_id: node.id.clone(),
+                    error,
+                    completed: counters.nodes_executed - 1,
+                })
+            }
+            Err(NodeFailure::Timeout) => {
+                return Err(PlanRunError::TimedOut {
+                    completed: counters.nodes_executed - 1,
+                })
+            }
+            Err(NodeFailure::Cancelled) => {
+                return Err(PlanRunError::Cancelled {
+                    completed: counters.nodes_executed - 1,
+                })
+            }
+        };
+
+        let remaining = self.guards.budget_bytes.saturating_sub(counters.used_bytes);
+        let (value, cut) = truncate_to_budget(value, remaining);
+        if cut {
+            counters.truncated = true;
+        }
+        counters.used_bytes += value.len();
+        env.insert(node.id.clone(), value);
+        if counters.used_bytes >= self.guards.budget_bytes {
+            counters.truncated = true;
+            counters.halted = true;
+        }
+        graph.advance(&node.id);
+        Ok(())
+    }
+
+    /// 单节点 future —— 绝对 deadline + 取消，返回节点引用与结果
+    ///
+    /// WHY 把 `timeout_at`/取消塞进 future 而不是在外面包一层:这样「哪个节点被超时/取消」
+    /// 的信息随完成事件一起回到 [`Self::commit`]，计数与错误归因不会错位
+    /// （`completed` 必须指「终止前已提交的节点数」）。
+    async fn node_future<'a>(
+        &'a self,
+        node: &'a ToolNode,
+        input: String,
+        deadline: tokio::time::Instant,
+        cancel: Option<&'a CancellationToken>,
+        plan_ctx: PlanExecCtx<'a>,
+    ) -> (&'a ToolNode, Result<String, NodeFailure>) {
+        let result = tokio::select! {
+            result = tokio::time::timeout_at(deadline, self.exec_node_ctx(node, &input, plan_ctx)) => result,
+            _ = wait_cancel(cancel) => return (node, Err(NodeFailure::Cancelled)),
+        };
+        match result {
+            Ok(Ok(value)) => (node, Ok(value)),
+            Ok(Err(error)) => (node, Err(NodeFailure::Failed(error))),
+            Err(_) => (node, Err(NodeFailure::Timeout)),
+        }
     }
 
     /// 单层执行 — 全读并发 / 全写串行 / 混层按「写屏障」分段
@@ -490,6 +873,56 @@ impl PlanRunner {
         }
     }
 
+    /// 带上下文的单节点执行 —— [`Self::run_with`] 专用（legacy `run` 仍走 [`Self::exec_node`]）
+    ///
+    /// # 参数
+    /// - `node`:待执行节点;
+    /// - `input`:由前驱结果拼出的输入（数据算子用；ToolCall 忽略）;
+    /// - `plan_ctx`:本次运行的计划级上下文，与 `node` 一起装配成 [`NodeExecCtx`] 交给
+    ///   [`ToolExecutor::execute_node`]。
+    ///
+    /// # 返回
+    /// - `Ok(String)`:执行结果;
+    /// - `Err(String)`:工具失败**或** ToolCall 缺字段。与 legacy 不同，这里不在内部把
+    ///   错误折叠成 `{"error":...}` 节点结果 —— 是否终止由 `fail_fast` 决定，故折叠推迟到
+    ///   [`Self::commit`]。
+    ///
+    /// WHY 与 [`Self::exec_node`] 并存而不改它的签名:legacy `run` 的行为必须逐位不变
+    /// （`tests/toolplan_concurrency_proptest.rs` 的不变量锁），其「Err 折叠成节点错误文本」
+    /// 的 fail-soft 语义就在这里分叉。
+    async fn exec_node_ctx(
+        &self,
+        node: &ToolNode,
+        input: &str,
+        plan_ctx: PlanExecCtx<'_>,
+    ) -> Result<String, String> {
+        match node.op {
+            ToolOp::ToolCall => {
+                // validate 已保证二者齐备，但缺字段仍 fail-soft（错误文本可审计、不 panic）。
+                let Some(tool) = node.tool_name.as_deref() else {
+                    return Err("missing tool_name".to_string());
+                };
+                let Some(args) = node.args_json.as_deref() else {
+                    return Err("missing args_json".to_string());
+                };
+                let ctx = NodeExecCtx {
+                    plan: plan_ctx,
+                    node_id: &node.id,
+                    side_effect: node.side_effect,
+                };
+                self.executor.execute_node(&ctx, tool, args).await
+            }
+            ToolOp::Map => Ok(map_field(input, node.field.as_deref().unwrap_or(""))),
+            ToolOp::Filter => Ok(filter_by_predicate(
+                input,
+                node.predicate.as_deref().unwrap_or(""),
+            )),
+            ToolOp::Aggregate => Ok(aggregate_field(input, node.field.as_deref().unwrap_or(""))),
+            ToolOp::Limit => Ok(limit_input(input)),
+            ToolOp::Sort => Ok(sort_by_field(input, node.field.as_deref().unwrap_or(""))),
+        }
+    }
+
     /// 节点输入 — 首节点用 "[]" 空数组,后续节点取前驱结果 join
     fn inputs_of(&self, plan: &ToolPlan, env: &HashMap<String, String>, node_id: &str) -> String {
         let preds: Vec<&str> = plan
@@ -506,6 +939,190 @@ impl PlanRunner {
             "[]".to_string()
         } else {
             format!("[{}]", parts.join(","))
+        }
+    }
+}
+
+/// 一次 `run_with` 运行的可变计数与预算状态（[`PlanRunner::commit`] 的唯一写入面）
+#[derive(Default)]
+struct RunCounters {
+    /// 已提交的 ToolCall 节点数
+    tool_calls: usize,
+    /// 已提交的节点数（含数据算子）
+    nodes_executed: usize,
+    /// 已回填的字节数（增量累加，不重扫环境）
+    used_bytes: usize,
+    /// 有节点结果被预算截断（或预算已耗尽）—— 粘滞位，进 `PlanSummary`
+    truncated: bool,
+    /// 预算耗尽:与 `truncated` 分开，因为截断只标记内容而仍可继续执行
+    halted: bool,
+}
+
+/// 依赖就绪调度用的图 —— 节点以 `plan.nodes` 下标索引
+///
+/// WHY 下标而非 ID:层屏障版每层每节点都要 `plan.nodes.iter().find`（O(V)）并
+/// `clone` 整个 `ToolNode`;这里一次性建表，之后调度只碰 `usize`。
+///
+/// WHY `succ`/`remaining` 按**原始边表**建立（重复边计多次）:[`predecessor_map`]
+/// 对重复边给出重复前驱，节点输入的字节因此含重复父值;`remaining` 必须同样
+/// 「每条边递减一次」才能在最后一次重复递减时归零 ⇒ 输入内容与 legacy `run` 逐位相同。
+struct Graph<'p> {
+    /// 节点 ID → `plan.nodes` 下标
+    idx: HashMap<&'p str, usize>,
+    /// 每条出边的目标下标（按原始边表序）
+    succ: Vec<Vec<usize>>,
+    /// 尚未满足的入边数；归零即就绪
+    remaining: Vec<usize>,
+    /// 就绪队列（播种按节点声明序，推进按边表序 ⇒ 同一计划的派发与写序可复现）
+    ready: VecDeque<usize>,
+}
+
+impl Graph<'_> {
+    /// 提交一个节点后推进它的每条出边；某后继首次归零即入队
+    ///
+    /// WHY 判「从非零跨到零」而不是「当前为零」:`remaining` 与 `succ` 同源于原始边表，
+    /// 正常情况下严格同步；一旦不同步（重复边少计一次），`saturating_sub` 会让同一后继
+    /// 在每条多余出边上再次满足「为零」而**二次入队** —— 副作用节点被执行两遍是最坏的
+    /// 一类错误，比少执行贵得多，所以入队条件带上「此前非零」。
+    fn advance(&mut self, from: &str) {
+        let Some(&pos) = self.idx.get(from) else {
+            return;
+        };
+        for edge in 0..self.succ[pos].len() {
+            let to = self.succ[pos][edge];
+            if let Some(left) = self.remaining.get_mut(to) {
+                let before = *left;
+                *left = before.saturating_sub(1);
+                if before > 0 && *left == 0 {
+                    self.ready.push_back(to);
+                }
+            }
+        }
+    }
+}
+
+/// 一次性建图 —— O(V+E)，取代每层重算的 [`compute_layers`]
+///
+/// 依赖 [`ToolPlan::validate`] 已排除重复 ID 与悬空边；这里仍返回 [`PlanError`] 而不是
+/// `expect`：调用顺序是运行期的事实，不该用 panic 兜。
+fn build_graph(plan: &ToolPlan) -> Result<Graph<'_>, PlanError> {
+    let mut idx: HashMap<&str, usize> = HashMap::with_capacity(plan.nodes.len());
+    for (pos, node) in plan.nodes.iter().enumerate() {
+        if idx.insert(node.id.as_str(), pos).is_some() {
+            return Err(PlanError::DuplicateNodeId(node.id.clone()));
+        }
+    }
+    let mut succ: Vec<Vec<usize>> = vec![Vec::new(); plan.nodes.len()];
+    let mut remaining: Vec<usize> = vec![0; plan.nodes.len()];
+    for edge in &plan.edges {
+        let (Some(&from), Some(&to)) = (idx.get(edge.from.as_str()), idx.get(edge.to.as_str()))
+        else {
+            let unknown = if idx.contains_key(edge.from.as_str()) {
+                edge.to.as_str()
+            } else {
+                edge.from.as_str()
+            };
+            return Err(PlanError::UnknownNode(unknown.to_string()));
+        };
+        succ[from].push(to);
+        remaining[to] += 1;
+    }
+    let ready = (0..plan.nodes.len())
+        .filter(|&pos| remaining[pos] == 0)
+        .collect();
+    Ok(Graph {
+        idx,
+        succ,
+        remaining,
+        ready,
+    })
+}
+
+/// 前驱表 —— 一次构建，替代 `run_with` 为每个节点全边扫描
+fn predecessor_map(plan: &ToolPlan) -> HashMap<&str, Vec<&str>> {
+    let mut preds: HashMap<&str, Vec<&str>> = HashMap::new();
+    for edge in &plan.edges {
+        preds
+            .entry(edge.to.as_str())
+            .or_default()
+            .push(edge.from.as_str());
+    }
+    preds
+}
+
+/// 用前驱表拼节点输入（与 [`PlanRunner::inputs_of`] 同语义）
+///
+/// 依赖就绪即派发 ⇒ 每个前驱在派发时都已提交，故 `parts` 与 `parents` **等长**；
+/// 过去的静默 `filter_map` 会把缺失的前驱吃掉，节点于是拿到一个少了某段输入的数组
+/// 却毫无征兆。debug 档当场中止，release 档仍走原路径（不新增 panic 面）。
+fn inputs_of_precomputed(
+    preds: &HashMap<&str, Vec<&str>>,
+    env: &HashMap<String, String>,
+    node_id: &str,
+) -> String {
+    let Some(parents) = preds.get(node_id) else {
+        return "[]".to_string();
+    };
+    let parts: Vec<&str> = parents
+        .iter()
+        .filter_map(|parent| env.get(*parent).map(String::as_str))
+        .collect();
+    debug_assert_eq!(
+        parts.len(),
+        parents.len(),
+        "node {node_id} dispatched before all its predecessors committed"
+    );
+    if parts.is_empty() {
+        "[]".to_string()
+    } else {
+        format!("[{}]", parts.join(","))
+    }
+}
+
+/// 取消分支：无 token 时永不就绪
+async fn wait_cancel(cancel: Option<&CancellationToken>) {
+    match cancel {
+        Some(token) => token.cancelled().await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// 回填预算截断（退到 UTF-8 字符边界，绝不切出半个多字节字符）
+fn truncate_to_budget(mut value: String, remaining: usize) -> (String, bool) {
+    if value.len() <= remaining {
+        return (value, false);
+    }
+    let mut end = remaining;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    (value, true)
+}
+
+/// 终端节点汇总：单终端保持 legacy 语义；多终端返回 `{"terminals":{...}}`
+///
+/// WHY 多终端要带键:legacy `run` 在多个终端里按声明序倒序取一个（ADR-277），
+/// 那是**丢信息**的 —— 依赖就绪派发下多条分支同时收敛是常态，其余终端的结果同样是
+/// 计划产出，静默丢弃会让模型误以为只有一条路径被执行过。
+fn terminal_summary(plan: &ToolPlan, env: &HashMap<String, String>) -> String {
+    let terminals: Vec<&str> = plan
+        .nodes
+        .iter()
+        .filter(|node| !plan.edges.iter().any(|edge| edge.from == node.id))
+        .map(|node| node.id.as_str())
+        .collect();
+    match terminals.as_slice() {
+        [] => "{}".to_string(),
+        [only] => env.get(*only).cloned().unwrap_or_else(|| "{}".to_string()),
+        many => {
+            let mut entries: Vec<String> = Vec::with_capacity(many.len());
+            for id in many {
+                let value = env.get(*id).cloned().unwrap_or_else(|| "{}".to_string());
+                let key = serde_json::to_string(id).unwrap_or_else(|_| "\"\"".to_string());
+                entries.push(format!("{key}:{value}"));
+            }
+            format!("{{\"terminals\":{{{}}}}}", entries.join(","))
         }
     }
 }

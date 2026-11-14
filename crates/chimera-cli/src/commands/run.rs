@@ -22,6 +22,9 @@
 //! v2.9.0-omega Task 1.7:接受 `json` flag(JSON 成功 envelope 在本命令输出)
 //! v2.9.0-omega Task 1.11:接受 `perm`(Task 1.1 真实接入外部命令执行时使用)
 
+use std::sync::Arc;
+use std::time::Duration;
+
 use anyhow::Result;
 use gqep_executor::tool_runtime::{
     BatchLimits, BatchOutcome, DispatchError, DispatchOutcome, DispatchRequest,
@@ -37,7 +40,7 @@ use crate::call_budget::{call_with_budget, CallBudgetError, DEFAULT_CALL_BUDGET}
 use crate::composition::AppContext;
 use crate::config::ChimeraConfig;
 use crate::error::ChimeraCliError;
-use crate::orchestrator::{build_error_reply, build_quest_reply, plan_chunks};
+use crate::orchestrator::{build_error_reply, build_quest_reply};
 use crate::output;
 use crate::permission::{confirm_with, PermissionCtx, PermissionDecision, PermissionGate};
 
@@ -534,6 +537,9 @@ pub async fn execute_with_ctx(
 ///
 /// WHY 独立 async fn:chunk_delay 涉及 `tokio::time::sleep`,需在 async 上下文执行。
 /// 测试可通过 `CHIMERA_RUN_CHUNK_DELAY_MS=0` 环境变量禁用延迟以加速。
+///
+/// Phase 6A/T6A.1:写入下沉到 [`stream_to`],批量宽度经
+/// `CHIMERA_STREAM_BATCH_CHARS` 控制(默认 1 = 逐字符,与旧行为逐字节相同)。
 async fn stream_to_stdout(reply: &str) {
     // ADR-280：env 显式值 > TTY 判定 > 默认。非 TTY（管道/脚本）自动归零，
     // 消除 N×20ms 的纯观感睡眠；TTY 下输出逐字节不变。
@@ -541,27 +547,203 @@ async fn stream_to_stdout(reply: &str) {
         "CHIMERA_RUN_CHUNK_DELAY_MS",
         DEFAULT_CHUNK_DELAY_MS,
     );
+    // WHY 借 `Stdout` 句柄而非 `StdoutLock`：句柄每次 write 内部取放锁,
+    // 不会把**进程级全局锁**跨 `sleep().await` 持有(旧实现靠逐次 lock 作用域达成)。
+    let _ = stream_to(
+        reply,
+        delay,
+        stream_batch_chars_from_env(),
+        &mut std::io::stdout(),
+    )
+    .await;
+}
 
-    // 复用 orchestrator::plan_chunks 保证 CLI 与 TUI 切分逻辑一致
-    use std::io::Write;
-    let stdout = std::io::stdout();
-    for delta in plan_chunks(reply) {
-        // WHY 锁作用域只包住单次写入:`StdoutLock` 是**进程级全局锁**，持它跨
-        // `sleep().await` 会让其他任务（tracing 输出、进度提示）在整段流式
-        // 节奏期间全部排队。写完即放，把 await 留在锁外。
-        {
-            let mut lock = stdout.lock();
-            // WHY write! 而非 print!:逐字符 flush,保证管道实时可见
-            let _ = write!(lock, "{delta}");
-            let _ = lock.flush();
-        }
-        if !delay.is_zero() {
-            tokio::time::sleep(delay).await;
+/// stdout 流式输出的默认批宽（1 = 逐字符,保持既有观感与 flush 语义）
+///
+/// WHY 默认 1 而非 8:事件发布面(H-a `orchestrator`)早已批聚合,但**终端逐字符
+/// 打字机节奏是用户可见行为**;批宽只减少 write/flush 次数,总延迟经
+/// [`batch_delay`] 摊销保持不变,故启用批量是用户显式选择而非默认变更。
+pub const DEFAULT_STREAM_BATCH_CHARS: usize = 1;
+
+/// 每批的 sleep 时长 = 单字符延迟 × 该批字符数（保持总墙钟与逐字符路径一致）
+#[must_use]
+pub fn batch_delay(per_char_delay: Duration, chars: usize) -> Duration {
+    per_char_delay.saturating_mul(chars.max(1) as u32)
+}
+
+/// 从 `CHIMERA_STREAM_BATCH_CHARS` 读批宽（非法/0 值回退默认,不 panic）
+#[must_use]
+pub fn stream_batch_chars_from_env() -> usize {
+    std::env::var("CHIMERA_STREAM_BATCH_CHARS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_STREAM_BATCH_CHARS)
+}
+
+/// 按批把 `reply` 写入任意 `sink`,每批一次 write + flush,末尾补一个换行
+///
+/// # 语义
+/// - **字节等价**:`batch=1` 与 `batch>1` 写出的字节完全相同（切分复用
+///   `orchestrator::plan_chunks_batched`,按 `char` 而非 byte,多字节安全）;
+/// - **节奏不变**:每批 sleep = [`batch_delay`],故总墙钟与逐字符路径相同;
+///   `per_char_delay` 为零时完全不 sleep（测试/CI 加速路径）;
+/// - **不吞换行**:末尾 `writeln!` 与旧实现一致（只 write,不额外 flush）。
+///
+/// WHY 泛型 sink:`run` / `chat` 两条流式路径此前各抄一份逐字符循环,
+/// 批量语义只能改两处；抽到这里后测试可用内存 sink 断言字节与写次数,
+/// 不必捕获进程 stdout。
+pub async fn stream_to<W: std::io::Write>(
+    reply: &str,
+    per_char_delay: Duration,
+    batch: usize,
+    sink: &mut W,
+) -> std::io::Result<()> {
+    use crate::orchestrator::plan_chunks_batched;
+    for delta in plan_chunks_batched(reply, batch) {
+        write!(sink, "{delta}")?;
+        sink.flush()?;
+        let sleep_for = batch_delay(per_char_delay, delta.chars().count());
+        if !sleep_for.is_zero() {
+            tokio::time::sleep(sleep_for).await;
         }
     }
-    // 末尾换行(与 [done] 标记分行)
-    let mut lock = stdout.lock();
-    let _ = writeln!(lock);
+    writeln!(sink)?;
+    Ok(())
+}
+
+// ============================================================
+// Phase 7（ADR-232）—— LLM 工具循环入口，默认关闭
+// ============================================================
+
+/// 无旗调用点（chat / TUI `agent.chat`）的灰度判据：`CHIMERA_LLM_LOOP=apply|on`
+///
+/// WHY 不在这里看 `--llm`：`--llm` 是 `run` 的单次旗，chat/TUI 没有该旗；
+/// 两条路径共用 [llm_answer]，但启用方式不同（显式旗 vs 环境档）。
+#[must_use]
+pub fn llm_loop_enabled() -> bool {
+    matches!(
+        std::env::var("CHIMERA_LLM_LOOP").ok().as_deref(),
+        Some("apply") | Some("on")
+    )
+}
+
+/// 跑一轮 LLM 工具循环，返回循环产出（最终文本 + 计数 + 停止原因）
+///
+/// WHY 公开给 chat / TUI 复用：三条入口各自抄一份"装配客户端 + 运行时 + 审批"
+/// 一定会漂（工具集、审批口径、预算配置三处最容易分叉），收敛成一个函数后
+/// 只有输出形态不同。
+pub async fn llm_answer(
+    bus: &event_bus::EventBus,
+    prompt: &str,
+    perm: &PermissionCtx,
+) -> Result<crate::llm::LlmLoopOutcome> {
+    llm_answer_with(bus, prompt, &crate::llm::approval::CliApproval::new(*perm)).await
+}
+
+/// [`llm_answer`] 的审批注入版
+///
+/// WHY 拆两层：CLI/chat 有 stdin 可以用 `CliApproval` 逐条问人，而 TUI 拥有终端
+/// 控制权、不能从后台任务读 stdin —— 它必须换一档（当前取 `DenyWrites`，
+/// 写工具的 TUI 弹窗审批属后续波次，见 ADR-232 待办）。
+pub async fn llm_answer_with(
+    bus: &event_bus::EventBus,
+    prompt: &str,
+    approval: &dyn crate::llm::approval::ToolApproval,
+) -> Result<crate::llm::LlmLoopOutcome> {
+    use crate::llm::tool_loop::{LlmToolLoop, LlmToolLoopConfig};
+
+    // WHY 默认配置：build_llm_client 的口径走 env + 内置默认，
+    // chat 的 repl_loop 与 TUI 编排器都只持 bus（Arc 廉价共享，同源事件面）
+    let config = ChimeraConfig::default();
+    let client = crate::composition::build_llm_client(&config)?;
+    // ADR-234 S4：执行面进程内只装配一次，这里取的是共享实例；工具声明全集
+    // 也是装配点取好的**借用**，不再每次应答重跑一遍 clone + sort。
+    let plane = crate::composition::shared_tool_plane()
+        .map_err(|e| ChimeraCliError::EngineError(format!("工具执行面装配失败: {e}")))?;
+    let chain = LlmToolLoop::new(
+        client,
+        Arc::clone(plane.runtime()),
+        bus.clone(),
+        LlmToolLoopConfig::from_env(),
+    );
+    let outcome = chain
+        .run(
+            prompt,
+            plane.descriptors(),
+            &CancellationToken::new(),
+            approval,
+        )
+        .await
+        .map_err(llm_loop_to_cli_error)?;
+    Ok(outcome)
+}
+
+/// 循环错误 → CLI 错误码映射
+///
+/// WHY 分流：provider 未配置属"用户可纠正的配置问题"(退出码 1)；
+/// 取消沿用既有 `UserCancelled`(4)；其余按引擎故障(3)。
+fn llm_loop_to_cli_error(error: crate::llm::LlmLoopError) -> ChimeraCliError {
+    use crate::llm::client::{LlmError, LlmLoopError};
+    match error {
+        LlmLoopError::Cancelled { .. } => ChimeraCliError::UserCancelled,
+        LlmLoopError::Client(LlmError::ProviderUnavailable(message)) => {
+            ChimeraCliError::ConfigError(format!("LLM provider 不可用: {message}"))
+        }
+        LlmLoopError::Client(other) => ChimeraCliError::EngineError(other.to_string()),
+    }
+}
+
+/// `run --llm` 的 JSON 载荷（typed 字段，编译期校验）
+#[derive(serde::Serialize)]
+struct LlmPayload<'a> {
+    /// 模型最终文本
+    text: &'a str,
+    /// 补全轮数
+    turns: usize,
+    /// 派发的工具调用数
+    tool_calls: usize,
+    /// 因审批未通过而未执行的调用数
+    denied_tool_calls: usize,
+    /// 停止原因（final / max_turns / max_tool_calls / max_repeat / budget）
+    stop: &'a str,
+}
+
+fn stop_label(stop: crate::llm::LlmLoopStop) -> &'static str {
+    use crate::llm::LlmLoopStop as S;
+    match stop {
+        S::Final => "final",
+        S::MaxTurns => "max_turns",
+        S::MaxToolCalls => "max_tool_calls",
+        S::MaxRepeatToolCalls => "max_repeat_tool_calls",
+        S::Budget => "budget",
+    }
+}
+
+/// `chimera run --llm "..."` 主体
+pub async fn execute_llm_with_ctx(
+    ctx: &AppContext,
+    prompt: &str,
+    json: bool,
+    perm: &PermissionCtx,
+) -> Result<()> {
+    tracing::info!(prompt = %prompt, "LLM 工具循环单次任务");
+    let outcome = llm_answer(&ctx.bus, prompt, perm).await?;
+
+    if json {
+        let payload = LlmPayload {
+            text: &outcome.text,
+            turns: outcome.turns,
+            tool_calls: outcome.tool_calls,
+            denied_tool_calls: outcome.denied_tool_calls,
+            stop: stop_label(outcome.stop),
+        };
+        return output::print_json(&payload).map_err(Into::into);
+    }
+
+    stream_to_stdout(&outcome.text).await;
+    println!("[done]");
+    Ok(())
 }
 
 // ============================================================

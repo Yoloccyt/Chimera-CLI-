@@ -230,23 +230,16 @@ pub async fn execute_with_ctx(
         return run_result;
     }
 
-    let pipeline = build_data_pipeline(subscriber, &tui_config).await;
-
-    // 创建 TUI 应用，使用实时数据管道而非空桩。
-    let mut app =
-        chimera_tui::TuiApp::with_data_source(tui_config, Box::new(Arc::clone(&pipeline)))
-            .context("TUI 初始化失败")?;
-
-    // M4:将 EventBus 注入 TUI,使控制面板可发布请求事件。
-    // 保留 bus 所有权,后续仍需要克隆给上游控制订阅者。
-    app = chimera_tui::TuiApp::with_event_bus(app, bus.clone());
-
     // M4 review fix:启动 quest-engine 控制事件订阅者,
     // 消费 TUI 发布的 QuestPauseRequested/QuestResumeRequested,
     // 形成 TUI → EventBus → 上游处理 → 状态反馈的端到端路径。
     // B1(2026-09-06 复评):启用检查点管理器 —— `/quest checkpoint` 编排命令
     // 依赖 engine.save_checkpoint;目录与 tui.yaml 同根(~/.chimera/checkpoints)。
     // M9:引擎/订阅者改经 assemble_quest_stack 从共享 ctx 装配(见该函数 WHY)。
+    //
+    // Phase 6A/T6A.4:整块**上移到数据管道之前**——它只依赖 ctx/bus,与 TuiApp
+    // 构造无关,而上移后它产出的 `engine` 就能让下面两个 SQLite 打开并行。
+    // 订阅者提早启动对 §4.4 红线 3（broadcast 先 subscribe 再 spawn）只会更安全。
     let checkpoint_dir = chimera_tui::TuiConfig::default_path()
         .parent()
         .map(|p| p.join("checkpoints"))
@@ -269,26 +262,43 @@ pub async fn execute_with_ctx(
         ..Default::default()
     };
 
-    // §16.1 经验卡片闭环装配(Phase 10 审计修复 Wave 1):组合根接线
-    // ExperienceCardBus 主链 — L3 SQLite 双流持久化(含 Critical 高分卡) +
-    // L2 MlcEngine 卡片消费 + L6 算子反馈回流 + RuntimeAuditor 五维报告
-    // 周期发布(打通 SelfAssessmentPanel) + 协调度量订阅器。
-    // WHY 失败不阻断启动:闭环装配是增强链路,降级后 TUI 核心交互仍可用;
-    // 失败经 warn 日志可观测(与 TuiBible 回退同款错误处理准则)。
+    // Phase 6A/T6A.4:两个互不依赖的 SQLite 打开并行,而非先后各等一次。
+    // - build_data_pipeline:MetricsHistory(`~/.chimera` 指标历史库,内部 spawn_blocking)
+    // - spawn_experience_loop:§16.1 经验卡片闭环的 L3 双流持久化库
+    // WHY join 而非串行:两段都是"打开即返回句柄"的冷启动 IO,串行代价 = t1+t2,
+    // 并行 = max(t1,t2);二者共享的只有 bus/engine/tui_config,无数据依赖。
+    // WHY 经验闭环失败仍降级:闭环装配是增强链路,失败经 warn 可观测,不阻断启动
+    // (与 TuiBible 回退同款错误处理准则)。
+    let (pipeline, experience_result) = tokio::join!(
+        build_data_pipeline(subscriber, &tui_config),
+        crate::experience_loop::spawn_experience_loop(
+            bus.clone(),
+            Arc::clone(&engine),
+            config.enable_strategy_cap,
+        )
+    );
     // WHY 下划线前缀持有:绑定存活至函数结束,保持后台任务与 Arc 句柄生命周期。
-    let experience_loop_handles = match crate::experience_loop::spawn_experience_loop(
-        bus.clone(),
-        Arc::clone(&engine),
-        config.enable_strategy_cap,
-    )
-    .await
-    {
+    let experience_loop_handles = match experience_result {
         Ok(handles) => Some(handles),
         Err(e) => {
             tracing::warn!(error = %e, "经验卡片闭环装配失败,降级运行(闭环不可用)");
             None
         }
     };
+
+    // 创建 TUI 应用，使用实时数据管道而非空桩。
+    let mut app =
+        chimera_tui::TuiApp::with_data_source(tui_config, Box::new(Arc::clone(&pipeline)))
+            .context("TUI 初始化失败")?;
+
+    // M4:将 EventBus 注入 TUI,使控制面板可发布请求事件。
+    // 保留 bus 所有权,后续仍需要克隆给上游控制订阅者。
+    app = chimera_tui::TuiApp::with_event_bus(app, bus.clone());
+
+    // §16.1 经验卡片闭环装配(Phase 10 审计修复 Wave 1):组合根接线
+    // ExperienceCardBus 主链 — L3 SQLite 双流持久化(含 Critical 高分卡) +
+    // L2 MlcEngine 卡片消费 + L6 算子反馈回流 + RuntimeAuditor 五维报告
+    // 周期发布(打通 SelfAssessmentPanel) + 协调度量订阅器。
 
     // FC-05(2026-09-06 评估):经验卡片可视化面板接线 —— 组合根注入 L2
     // MlcEngine 卡片系统统计(运行期真实数据,不再恒显 "Awaiting")。
@@ -300,22 +310,11 @@ pub async fn execute_with_ctx(
         ))));
     }
 
-    // §16.1 L9 组件装配(Phase 10 审计修复 Wave 2):
-    // 1. Ambient Mode 后台常驻订阅器(资源看门狗/记忆整理/检查点调度,
-    //    BudgetExceeded/ResourceRecovered/CheckpointSaved 双通道;NoopTidyHook
-    //    默认——真实记忆整理由 mlc-engine 接线方注入,依赖倒置先例)。
-    let ambient_handle = quest_engine::spawn_ambient_subscriber(
-        bus.clone(),
-        Arc::clone(&engine),
-        quest_engine::AmbientModeConfig::default(),
-        Arc::new(quest_engine::NoopTidyHook),
-    );
-    // 2. Quest 生命周期组件桥:QuestCreated/Progress/Completed 事件驱动
-    //    LongTaskMap + SearchTreeManager + LongTermCreditAssigner 真实运行。
-    let _quest_loop =
-        crate::quest_loop::spawn_quest_lifecycle_bridge(bus.clone(), Arc::clone(&engine));
-    // WHY 持有:ambient_handle/quest_loop 绑定存活至函数结束(后台任务生命周期)。
-    let _ambient_handle = ambient_handle;
+    // §16.1 L9 组件装配(Phase 10 审计修复 Wave 2):Ambient Mode 后台常驻订阅器 +
+    // Quest 生命周期组件桥。WHY 抽成 spawn_l9_sidecars：本函数是组合根装配序列，
+    // 直接内联已把长度顶到 §6.1 的 200 行红线；这两条链路自成一组（只依赖 bus+engine），
+    // 移出后调用处一眼可读，句柄仍由本作用域持有到函数结束。
+    let (_ambient_handle, _quest_loop) = spawn_l9_sidecars(&bus, &engine);
 
     // Concord W10 T10.2(ADR-082):启动协议握手应答器 — 响应 TUI 启动时
     // 发布的 TuiHello,协商兼容级别并回 TuiHelloAck(SEC-4 一次性);
@@ -330,9 +329,14 @@ pub async fn execute_with_ctx(
     let pipeline_for_compact = Arc::clone(&pipeline);
     let chat_provider: crate::action_orchestrator::ChatMessagesProvider = Arc::new(move || {
         chimera_tui::TuiDataSource::snapshot(&*pipeline_for_compact)
-            .map(|snapshot| snapshot.chat_messages.clone())
+            // Phase 6B/T6B.2：快照字段改 `Arc<Vec<_>>`，此处按 provider 契约交出
+            // owned `Vec`（冷路径：只在 `/compact` 编排命令触发时复制一次）
+            .map(|snapshot| (*snapshot.chat_messages).clone())
             .unwrap_or_default()
     });
+
+    // 写工具审批通道：接收端注入 app，发送端交下面的编排器（B1 收下不取用，B3 换档）
+    let approval_gate = install_approval_gate(&mut app);
 
     // P0 交互链:启动 Action 编排器,消费命令面板/斜杠/面板派发的 TuiActionRequested,
     // 按 action_id 域前缀路由:quest.* 驱动同一 engine 真实执行,回发 TuiActionCompleted/Failed。
@@ -344,6 +348,8 @@ pub async fn execute_with_ctx(
         Some(chat_provider),
         // B2:/compact 策展配置随 TuiConfig 四源合并后透传编排器
         curation_cfg,
+        // 写工具审批闸门：agent.chat 进 LLM 循环时，写调用逐条经它弹窗问人
+        Some(approval_gate),
     ));
 
     // 启动 TUI 事件循环(阻塞直到用户退出)
@@ -361,6 +367,36 @@ pub async fn execute_with_ctx(
 
     tracing::info!("TUI 已退出");
     run_result
+}
+
+/// §16.1 L9 组件装配(Phase 10 审计修复 Wave 2)——Ambient 常驻订阅器 + Quest 生命周期桥。
+///
+/// 1. Ambient Mode 后台常驻订阅器(资源看门狗/记忆整理/检查点调度,
+///    BudgetExceeded/ResourceRecovered/CheckpointSaved 双通道;NoopTidyHook
+///    默认——真实记忆整理由 mlc-engine 接线方注入,依赖倒置先例)。
+/// 2. Quest 生命周期组件桥:QuestCreated/Progress/Completed 事件驱动
+///    LongTaskMap + SearchTreeManager + LongTermCreditAssigner 真实运行。
+///
+/// WHY 返回句柄而不是在函数内丢弃:`execute_with_ctx` 必须把这两条后台链路的绑定
+/// 存活到函数结束(进程 teardown 语义),句柄若在 helper 内被 drop 就提前撤销了该承诺。
+/// WHY 两条链路都在此同步订阅后再 spawn:§4.4 红线 #3(broadcast 不缓存历史,
+/// `subscribe()` 必须先于 `tokio::spawn()`,否则启动瞬间的事件静默丢失)。
+fn spawn_l9_sidecars(
+    bus: &event_bus::EventBus,
+    engine: &Arc<quest_engine::QuestEngine>,
+) -> (
+    tokio::task::JoinHandle<()>,
+    crate::quest_loop::QuestLoopHandles,
+) {
+    let ambient = quest_engine::spawn_ambient_subscriber(
+        bus.clone(),
+        Arc::clone(engine),
+        quest_engine::AmbientModeConfig::default(),
+        Arc::new(quest_engine::NoopTidyHook),
+    );
+    let quest_loop =
+        crate::quest_loop::spawn_quest_lifecycle_bridge(bus.clone(), Arc::clone(engine));
+    (ambient, quest_loop)
 }
 
 /// v3-engine M2(ADR-061):CLI flag 优先,设置 env var 让 TuiApp 在渲染时
@@ -465,6 +501,24 @@ async fn build_data_pipeline(
     }
 }
 
+/// 建写工具审批通道对：接收端注入 app，返回发送端交编排器（第三波 B 批）。
+///
+/// WHY 抽成函数而非内联在 `execute_with_ctx`：后者是组合根装配序列，物理行数本就贴着
+/// §6.1 的 200 行红线走，把通道对与它的三条 WHY 内联进去即越线（本批实测 195 → 205）；
+/// 与同文件 `build_overwindow_handle` / `spawn_l9_sidecars` 的既有处置一致——装配步骤
+/// 各自成函数，调用处一眼可读。
+///
+/// WHY 必须在 `app.run()` 之前调用：若晚于帧循环启动，任务侧发来的请求在本帧取不到，
+/// 而通道另一端尚未建立 ⇒ 任务读到 `Disconnected`，按 fail-closed 走拒——那会把
+/// "还没来得及问人"误记成"人不同意"，是本能力最不可接受的假阴性。
+fn install_approval_gate(
+    app: &mut chimera_tui::TuiApp,
+) -> chimera_tui::approval_gate::ApprovalGate {
+    let (gate, rx) = tokio::sync::mpsc::unbounded_channel();
+    app.install_approval_requests(rx);
+    gate
+}
+
 /// P1(ADR-072):构造超窗兜底桥并返回注入 Action 编排器所需的 [`OverWindowHandle`]。
 ///
 /// 桥挂 TUI 会话总线——触发时发布 OverWindowFallbackTriggered,经 subscriber
@@ -486,7 +540,9 @@ fn build_overwindow_handle(
                 .ok()
                 .map(|snapshot| {
                     let mut corpus = String::new();
-                    for msg in &snapshot.chat_messages {
+                    // Phase 6B/T6B.2：字段是 `Arc<Vec<_>>`，`for` 位不做 deref  coercion，
+                    // 显式 iter()（语义不变：仍按入栈顺序遍历整段历史）
+                    for msg in snapshot.chat_messages.iter() {
                         corpus.push_str(&msg.content);
                         corpus.push('\n');
                     }

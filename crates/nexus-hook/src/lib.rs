@@ -38,7 +38,7 @@ pub mod lifecycle;
 
 pub use audit::{AuditSink, HookAudit, HookAuditEntry, NoopAuditSink};
 pub use config::{HookConfig, HookSpec, TrustLevel};
-pub use executor::{HookError, HookExecutor, HookResult};
+pub use executor::{HookError, HookExecutor, HookResult, HookTriggerOpts};
 pub use lifecycle::LifecycleEvent;
 
 /// 预导入模块 — 提供最常用类型

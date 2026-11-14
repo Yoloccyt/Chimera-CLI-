@@ -114,6 +114,38 @@ pub struct TuiApp {
     ///
     /// WHY 集中:`chat_session_id` + `palette` 聚合,便于扩展多会话/命令历史。
     pub(crate) chat_session: ChatSession,
+    /// 异步导出回执(Phase 6B/T6B.5)
+    ///
+    /// `/export` 的敏感数据扫描 + 序列化 + 写盘全部离开 UI 线程；本字段持有
+    /// oneshot 接收端与目标路径,由 `step()` 在后续帧轮询并落状态栏。
+    /// `None` = 无在飞导出。
+    pub(crate) pending_export: Option<(
+        tokio::sync::oneshot::Receiver<Result<(), String>>,
+        std::path::PathBuf,
+    )>,
+    /// 写工具审批请求接收端（第三波 B 批，ADR-232 D6）
+    ///
+    /// 由组合根 `chimera-cli::commands::tui` 建通道对后经
+    /// [`TuiApp::install_approval_requests`] 注入；`step()` 每帧 `try_recv` 成弹窗。
+    /// `None` = 该 app 不接审批（测试与 headless 档），此时任务侧一律走拒。
+    ///
+    /// WHY 挂在 `TuiApp` 而非 `TuiState`：这是 tokio channel 句柄（不可序列化、
+    /// 非 Clone 语义参与方），同仓先例是 `pending_export` 与
+    /// `experience_card_provider` 都落在 `TuiApp`。
+    pub(crate) approval_rx:
+        Option<tokio::sync::mpsc::UnboundedReceiver<crate::approval_gate::ApprovalTicket>>,
+    /// 待答的写工具审批：`call_id` → 一次性回执发送端（第三波 B 批）
+    ///
+    /// WHY 单独一张表而不是把 sender 塞进弹窗：`PopupKind` 要能序列化，sender 不能。
+    /// 完整状态是「这张表 ∪ 弹窗栈上的 Approval」，两者的差集都由 `poll_approvals`
+    /// 的清扫按**拒**收口 —— 表里有而弹窗没了＝人没同意；弹窗在而表里没有＝答不出去。
+    pub(crate) pending_approvals:
+        std::collections::HashMap<String, tokio::sync::oneshot::Sender<bool>>,
+    /// 导出目录覆盖(Phase 6B/T6B.5):`None` = `~/.chimera/exports`
+    ///
+    /// WHY 做成可注入字段而非读环境变量:测试需要确定性地指定落盘位置,而
+    /// `env::set_var` 是进程级共享态,同一二进制的并发测试会互相污染。
+    pub(crate) export_dir: Option<std::path::PathBuf>,
     /// 上一次 Chat 视图 Esc 的毫秒时间戳(Concord W4 T4.5 Esc Esc rewind)
     ///
     /// WHY 不持久化:双击窗口是瞬时交互状态,跨会话无意义。
@@ -331,11 +363,24 @@ impl TuiApp {
             action_registry: crate::actions::ActionRegistry::with_builtin_domains(),
             // F-08:斜杠注册表构造期一次,四处消费点(补全/提交/导航/渲染)零重建
             slash_registry: crate::actions::SlashCommandRegistry::with_builtin_commands(),
+            // Phase 6B/T6B.5:导出改异步后,构造期无在飞任务、无目录覆盖
+            pending_export: None,
+            approval_rx: None,
+            pending_approvals: Default::default(),
+            export_dir: None,
         };
         // F-37:主题强调色装配期注入 —— 面板层仅持 &TuiState 不可达 TuiApp 主题
         // (见 Panel::set_accent),切主题时亦经此广播(cycle_theme_action)。
         app.broadcast_accent();
         Ok(app)
+    }
+
+    /// 覆盖导出目录(Phase 6B/T6B.5)
+    ///
+    /// WHY 公开:导出路径此前只能落在 `~/.chimera/exports`,测试无法断言落盘结果
+    /// 而不污染真实用户目录;本 setter 同时给用户自定义位置的能力。
+    pub fn set_export_dir(&mut self, dir: std::path::PathBuf) {
+        self.export_dir = Some(dir);
     }
 
     /// 将主题强调色广播到全部面板(F-37)
@@ -378,6 +423,23 @@ impl TuiApp {
                 provider,
             ));
         }
+    }
+
+    /// 注入写工具审批请求接收端（第三波 B 批，ADR-232 D6）
+    ///
+    /// 组合根建通道对后调用：发送端交编排器（任务侧），接收端留在本 app，
+    /// 由 `step()` 每帧轮询成弹窗（`poll_approvals`，B2 落）。
+    ///
+    /// WHY setter 而非构造参数：`with_data_source` 的签名被测试与三条装配路径共用，
+    /// 而对端通道要在 app 建好之后、起编排器之前才成形——与
+    /// `install_experience_card_provider` 同一先例（注入式，不加构造 arity）。
+    /// 重复调用**替换**旧接收端：让最后一个注入者持有回路，避免两条通道并存时
+    /// 弹窗来自 A 而应答流向 B（那会把待批任务永久挂住）。
+    pub fn install_approval_requests(
+        &mut self,
+        rx: tokio::sync::mpsc::UnboundedReceiver<crate::approval_gate::ApprovalTicket>,
+    ) {
+        self.approval_rx = Some(rx);
     }
 
     /// WI(/bench 一期)：安装基准统计提供者（chimera-cli build.rs 静态计数 provider）。
@@ -498,3 +560,59 @@ mod tests;
 /// WHY 同时门控 `v3-engine`:被测对象(`render_frame_v3_to` 等)仅在该 feature 下存在。
 #[cfg(all(test, feature = "v3-engine"))]
 mod v3_render_tests;
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test code idiom; E-5 targets production code
+mod approval_wiring_tests {
+    use super::*;
+    use crate::approval_gate::{ApprovalRequest, ApprovalTicket};
+    use crate::types::ViewMode;
+
+    /// 构造一条待批请求（内容无关，只有 `call_id` 参与断言）
+    fn ticket(call_id: &str) -> ApprovalTicket {
+        (
+            ApprovalRequest {
+                call_id: call_id.to_string(),
+                tool: "fs.write".to_string(),
+                args_preview: "{}".to_string(),
+            },
+            tokio::sync::oneshot::channel::<bool>().0,
+        )
+    }
+
+    fn app() -> TuiApp {
+        TuiApp::new(TuiConfig {
+            default_view_mode: ViewMode::Dashboard,
+            persist_state: false,
+            ..Default::default()
+        })
+        .expect("默认配置应可建 app")
+    }
+
+    /// B1 骨架断言：默认不接审批；注入后在位；二次注入**替换**而非并存。
+    ///
+    /// WHY 测"替换"：两条接收端并存时，弹窗会来自 A 而应答流向 B，待批任务被永久
+    /// 挂住（比"没接审批"更糟——它看起来在问人）。用两个 sender 的 send 结果区分
+    /// 谁还活着，不依赖任何内部表示。
+    #[test]
+    fn install_approval_requests_is_singular_and_replaces_previous() {
+        let mut app = app();
+        assert!(
+            app.approval_rx.is_none(),
+            "未注入时不得持有审批回路（测试与 headless 档一律走拒）"
+        );
+
+        let (tx_a, rx_a) = tokio::sync::mpsc::unbounded_channel::<ApprovalTicket>();
+        app.install_approval_requests(rx_a);
+        assert!(app.approval_rx.is_some(), "注入后接收端应在位");
+
+        let (tx_b, rx_b) = tokio::sync::mpsc::unbounded_channel::<ApprovalTicket>();
+        app.install_approval_requests(rx_b);
+
+        assert!(tx_b.send(ticket("call-b")).is_ok(), "后注入者必须持有回路");
+        assert!(
+            tx_a.send(ticket("call-a")).is_err(),
+            "前一个接收端应随替换被丢弃——两条并存会把待批任务挂死"
+        );
+    }
+}

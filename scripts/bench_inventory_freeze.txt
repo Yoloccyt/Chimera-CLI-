@@ -24,6 +24,16 @@
 #   按本文件自订约定「删除一行 = 该 bench 升格为受门禁守护」—— 它早已升格,这行是升格时漏撤的旧账。
 #   删除后 I6 下限(len>=70)余量 75→74 仍满足;改前/改后 --selftest 输出逐字节相同,
 #   --static-only 的 rc/I5/I7/VERDICT 全部不变,唯一 stdout 差异是 I6 自报数 (75)→(74)。
+# gqep-executor|tool_plan 与 chimera-cli|llm_tool_loop_bench 两行已删除(2026-11-04,
+#   ADR-234 S8)：按本文件约定「删除一行 = 该 bench 升格为受门禁守护」,二者均已入
+#   perf_thresholds.toml 的 [[run_bench]] 与 8 个组级阈值键,且 bench_check.yml 的
+#   run_bench 行同批补齐(I7 机器对拍)。dev-only **行数** 64→62（行法：正则
+#   `^[crate]|[bench]|dev-only|`；**不要用 `grep -c dev-only`** —— 它把头注里
+#   提到该词的注释行一起算进去，实测会报 71 这种错数；本行初稿正是这么写错的，
+#   2026-11-04 第五波 S1 订正）。I6 的真实下限是 **>=60**（见
+#   check_perf_redlines.py 的 I6，历史 70→65→60），上方 2026-09-21 那行
+#   写的 "len>=70" 是**当时**的下限陈述、非现值 —— 抄它会误判本批违规。
+#   原由头「首跑无对照值故不入四表阈值」已被 S8 的实测取代(两轮同码取数见波次报告)。
 chimera-cli|overwindow_bridge|dev-only|overwindow 桥接开发探针,无 SLO
 chimera-cli|quest_orchestrator_bench|dev-only|Quest 编排黑盒探索基准
 chimera-cli|composition_root_bench|dev-only|C12 组合根装配延迟基线(build/build_app_server),启动路径探针,不入四表阈值
@@ -110,3 +120,4 @@ ssra-fusion|fusion_benchmark|dev-only|融合层整体基准
 scc-cache|lru_select_victim|dev-only|R11 W2e(ADR-295)LRU 规模标定产物——一次性裁决数据(256/4096 µs 级实测 13.22/337.55µs),非契约面;重开条件=容量≥4096 部署形态需门控时升格 run_bench
 gqep-executor|plan_dag_skew|dev-only|R12 W0(ADR-296) 偏斜 DAG 基线——既有 toolplan_layers 只测单层,结构上测不出层间 barrier 把长尾放大到整个后代的代价;重开条件=W4 就绪派发落地且偏斜实测显著后按 CI 首跑校准升格 registered
 gqep-executor|sched_plane|dev-only|R12 W0(ADR-296) 跨面过订阅基线——四面各 8 路 vs 共享 8 路预算的在飞峰值与 makespan;bench 内最小复刻,不引用 W6 才落地的 ResourceGovernor;重开条件=W6 治理器接线后按实测升格 registered
+mlc-engine|l2_lock_contention|dev-only|R12 W2-2(ADR-297 邻接) 锁竞争取证基准——以 try_write 成功率证明评分期间写锁空出,并记录写者 p95 随读者数的劣化;非契约面;重开条件=读锁竞争进入生产 p95 观测面时升格 run_bench

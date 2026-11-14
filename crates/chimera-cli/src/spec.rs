@@ -102,7 +102,8 @@ pub fn plan(cmd: Option<&Commands>) -> CommandPlan {
             | Grep { .. }
             | Audit { .. }
             | Llm { .. }
-            | Mcp { .. },
+            | Mcp { .. }
+            | Tool { .. },
         ) => CommandPlan::NoContext,
     }
 }
@@ -137,7 +138,7 @@ pub fn needs_full_config(cmd: Option<&Commands>) -> bool {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::cli::{AgentAction, ConfigAction, LlmAction, McpAction, QuestAction};
+    use crate::cli::{AgentAction, ConfigAction, LlmAction, McpAction, QuestAction, ToolAction};
 
     /// 构造全部 19 个子命令 + None，逐一断言分类。
     ///
@@ -206,7 +207,22 @@ mod tests {
                         tool: "t".into(),
                         args: vec![],
                         network: false,
+                        endpoint: None,
                     },
+                }),
+                CommandClass::FullContext,
+            ),
+            (
+                Some(Commands::Tool {
+                    action: ToolAction::List,
+                }),
+                CommandClass::NoContext,
+            ),
+            (
+                Some(Commands::Run {
+                    prompt: "x".into(),
+                    execute: false,
+                    llm: false,
                 }),
                 CommandClass::FullContext,
             ),
@@ -220,6 +236,7 @@ mod tests {
                 Some(Commands::Run {
                     prompt: "x".into(),
                     execute: false,
+                    llm: false,
                 }),
                 CommandClass::FullContext,
             ),
@@ -318,6 +335,7 @@ mod tests {
             Some(Commands::Run {
                 prompt: "x".into(),
                 execute: false,
+                llm: false,
             }),
             Some(Commands::Exec {
                 prompt: Some("x".into()),
@@ -353,6 +371,7 @@ mod tests {
                     tool: "t".into(),
                     args: vec![],
                     network: false,
+                    endpoint: None,
                 },
             }),
         ];
@@ -382,6 +401,7 @@ mod tests {
             Some(Commands::Run {
                 prompt: "x".into(),
                 execute: false,
+                llm: false,
             }),
             Some(Commands::Chat),
             Some(Commands::Serve),
@@ -391,6 +411,7 @@ mod tests {
                     tool: "t".into(),
                     args: vec![],
                     network: false,
+                    endpoint: None,
                 },
             }),
         ];

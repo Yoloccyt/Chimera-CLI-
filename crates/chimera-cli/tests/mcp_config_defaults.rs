@@ -38,6 +38,7 @@ async fn list_chain_with_injected_url_server_succeeds() {
     cfg.mcp.servers.push(McpServerConfig {
         id: "ci-probe".to_string(),
         url: Some("https://203.0.113.1:8443".to_string()),
+        ..Default::default()
     });
 
     // --yes 跳过交互确认(list 本身非破坏性,构造合法 PermissionCtx 即可)
@@ -59,6 +60,7 @@ async fn list_chain_with_ssrf_blocked_server_still_succeeds() {
     cfg.mcp.servers.push(McpServerConfig {
         id: "loopback-probe".to_string(),
         url: Some("https://127.0.0.1:8443".to_string()),
+        ..Default::default()
     });
 
     let perm = PermissionCtx {

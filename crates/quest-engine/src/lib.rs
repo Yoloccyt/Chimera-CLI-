@@ -1,25 +1,25 @@
-//! CRATE-CONTRACT BEGIN
+﻿//! CRATE-CONTRACT BEGIN
 //! LAYER:    L9
-//! ROLE:     长期任务引擎 — Quest 分解、检查点持久化与思考模式治理
+//! ROLE:     闀挎湡浠诲姟寮曟搸 鈥?Quest 鍒嗚В銆佹鏌ョ偣鎸佷箙鍖栦笌鎬濊€冩ā寮忔不鐞?
 //! BACKEND:  fs
-//! PRODUCERS: 12 CheckpointLoaded,CheckpointSaved,CoordinationRatioReported,ExecutionCompleted,NexusStateChanged…
+//! PRODUCERS: 12 CheckpointLoaded,CheckpointSaved,CoordinationRatioReported,ExecutionCompleted,NexusStateChanged鈥?
 //! CONSUMERS: 2 chimera-cli,nexus-app-server
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
-//! 长期任务引擎 — Quest 分解、检查点持久化与思考模式治理
+//! 闀挎湡浠诲姟寮曟搸 鈥?Quest 鍒嗚В銆佹鏌ョ偣鎸佷箙鍖栦笌鎬濊€冩ā寮忔不鐞?
 //!
-//! 对应架构层:L9 Quest
-//! 对应创新点:TTG(Thinking Toggle Governance)+ LHQP(Long-Horizon Quest Persistence)
+//! 瀵瑰簲鏋舵瀯灞?L9 Quest
+//! 瀵瑰簲鍒涙柊鐐?TTG(Thinking Toggle Governance)+ LHQP(Long-Horizon Quest Persistence)
 //!
-//! # 核心职责
-//! - 从 `UserIntent` 分解任务图(DAG),校验无环后创建 Quest
-//! - 维护 Task 状态机(Pending→Running→Completed/Failed),广播进度事件
-//! - TTG 自动思考模式治理:基于 Quest 复杂度与 DECB 预算档位自动选择 Fast/Standard/Deep
-//! - 模式切换通过 EventBus 发布 ThinkingModeSwitched 事件,供 Parliament 等下游订阅
-//! - 完成 Quest 时广播 ExecutionCompleted 事件
-//! - LHQP 检查点持久化:Quest 状态序列化为 MessagePack 落盘,崩溃后可恢复
+//! # 鏍稿績鑱岃矗
+//! - 浠?`UserIntent` 鍒嗚В浠诲姟鍥?DAG),鏍￠獙鏃犵幆鍚庡垱寤?Quest
+//! - 缁存姢 Task 鐘舵€佹満(Pending鈫扲unning鈫扖ompleted/Failed),骞挎挱杩涘害浜嬩欢
+//! - TTG 鑷姩鎬濊€冩ā寮忔不鐞?鍩轰簬 Quest 澶嶆潅搴︿笌 DECB 棰勭畻妗ｄ綅鑷姩閫夋嫨 Fast/Standard/Deep
+//! - 妯″紡鍒囨崲閫氳繃 EventBus 鍙戝竷 ThinkingModeSwitched 浜嬩欢,渚?Parliament 绛変笅娓歌闃?
+//! - 瀹屾垚 Quest 鏃跺箍鎾?ExecutionCompleted 浜嬩欢
+//! - LHQP 妫€鏌ョ偣鎸佷箙鍖?Quest 鐘舵€佸簭鍒楀寲涓?MessagePack 钀界洏,宕╂簝鍚庡彲鎭㈠
 //!
-//! # 快速示例
+//! # 蹇€熺ず渚?
 //! ```
 //! use event_bus::EventBus;
 //! use nexus_core::{UserIntent, MultimodalInput};
@@ -30,7 +30,7 @@
 //! let engine = QuestEngine::new(bus);
 //! let intent = UserIntent {
 //!     intent_id: "i-1".into(),
-//!     raw_text: "分析需求。设计方案。".into(),
+//!     raw_text: "鍒嗘瀽闇€姹傘€傝璁℃柟妗堛€?.into(),
 //!     multimodal_inputs: vec![MultimodalInput::Text("...".into())],
 //!     risk_level: 10,
 //! };
@@ -49,44 +49,44 @@ pub mod config;
 pub mod control;
 pub mod coordination_metrics;
 pub mod dag;
-/// WP-E(R7 批次): 任务依赖推断策略接口(方案 C:策略 + 配置开关,默认 Linear)
+/// WP-E(R7 鎵规): 浠诲姟渚濊禆鎺ㄦ柇绛栫暐鎺ュ彛(鏂规 C:绛栫暐 + 閰嶇疆寮€鍏?榛樿 Linear)
 pub mod decompose;
 pub mod engine;
 pub mod error;
-/// Phase 9 §14.2: 长任务地图（TencentDB 机制：短摘要入上下文 + 详情外置 + 地图注入）
+/// Phase 9 搂14.2: 闀夸换鍔″湴鍥撅紙TencentDB 鏈哄埗锛氱煭鎽樿鍏ヤ笂涓嬫枃 + 璇︽儏澶栫疆 + 鍦板浘娉ㄥ叆锛?
 pub mod long_task_map;
-/// Phase 9 二次审查增强 §14.4: 长时程信用分配器（SHARP 统计版时间维度）
+/// Phase 9 浜屾瀹℃煡澧炲己 搂14.4: 闀挎椂绋嬩俊鐢ㄥ垎閰嶅櫒锛圫HARP 缁熻鐗堟椂闂寸淮搴︼級
 pub mod long_term_credit;
-/// Phase 9 二次审查增强: L2 记忆层协同接口（MemorySyncHook 依赖倒置）
+/// Phase 9 浜屾瀹℃煡澧炲己: L2 璁板繂灞傚崗鍚屾帴鍙ｏ紙MemorySyncHook 渚濊禆鍊掔疆锛?
 pub mod memory_sync_hook;
 pub mod metrics_sync;
-/// Phase 9 §14.1: OpenMLE 搜索树管理器（经验卡片进化树，与 dag.rs 任务 DAG 语义分离）
+/// Phase 9 搂14.1: OpenMLE 鎼滅储鏍戠鐞嗗櫒锛堢粡楠屽崱鐗囪繘鍖栨爲锛屼笌 dag.rs 浠诲姟 DAG 璇箟鍒嗙锛?
 pub mod search_tree;
 
-// P3-T13c: Loop 终止记分卡（v4.0 WI-32:收敛×边际×配额三维打分）
+// P3-T13c: Loop 缁堟璁板垎鍗★紙v4.0 WI-32:鏀舵暃脳杈归檯脳閰嶉涓夌淮鎵撳垎锛?
 pub mod scorecard;
-/// P1-1: NexusStateChanged EventBus 适配器(L1 Core 深度优化,依赖倒置接线)
+/// P1-1: NexusStateChanged EventBus 閫傞厤鍣?L1 Core 娣卞害浼樺寲,渚濊禆鍊掔疆鎺ョ嚎)
 pub mod state_listener;
 pub mod trajectory_exporter;
 pub mod ttg;
 pub mod types;
 pub mod wal;
 
-// === 关键类型重导出,简化外部导入 ===
+// === 鍏抽敭绫诲瀷閲嶅鍑?绠€鍖栧閮ㄥ鍏?===
 pub use arbitration::ArbitrationLayer;
-// Milestone B-2: Ambient Mode（后台常驻守护循环:资源看门狗/记忆整理/检查点调度）
+// Milestone B-2: Ambient Mode锛堝悗鍙板父椹诲畧鎶ゅ惊鐜?璧勬簮鐪嬮棬鐙?璁板繂鏁寸悊/妫€鏌ョ偣璋冨害锛?
 pub use ambient_mode::{
     spawn_ambient_subscriber, spawn_ambient_subscriber_with_receivers, AmbientModeConfig,
     MemoryTidyHook, NoopTidyHook,
 };
-// 卫星态接线工作包:检查点关联组件态快照(tree/map bytes)公开 API
+// 鍗槦鎬佹帴绾垮伐浣滃寘:妫€鏌ョ偣鍏宠仈缁勪欢鎬佸揩鐓?tree/map bytes)鍏紑 API
 pub use checkpoint::{CheckpointManager, SatelliteState};
-pub use config::QuestConfig;
-// WP-E(R7 批次): 依赖推断策略公开 API(方案 C,chimera-cli run --execute 波次开关消费 DependencyMode)
+pub use config::{DagMode, QuestConfig};
+// WP-E(R7 鎵规): 渚濊禆鎺ㄦ柇绛栫暐鍏紑 API(鏂规 C,chimera-cli run --execute 娉㈡寮€鍏虫秷璐?DependencyMode)
 pub use decompose::{
     dependency_inference, DependencyInference, DependencyMode, HeuristicDag, LinearChain,
 };
-// P2-1: 协调成本/推理增益比值度量(三重悖论推理悖论红线)
+// P2-1: 鍗忚皟鎴愭湰/鎺ㄧ悊澧炵泭姣斿€煎害閲?涓夐噸鎮栬鎺ㄧ悊鎮栬绾㈢嚎)
 pub use control::{
     handle_control_event, spawn_control_subscriber, spawn_control_subscriber_with_receiver,
 };
@@ -96,25 +96,25 @@ pub use coordination_metrics::{
 };
 pub use engine::QuestEngine;
 pub use error::QuestError;
-// Phase 9 §14.2: 长任务地图公开 API 重导出
+// Phase 9 搂14.2: 闀夸换鍔″湴鍥惧叕寮€ API 閲嶅鍑?
 pub use long_task_map::{
     ExternalStorage, InMemoryExternalStorage, LongTaskMap, NodeStatus, StepResult, TaskEdge,
     TaskMapRef, TaskNode,
 };
-// Phase 9 §14.1: OpenMLE 搜索树公开 API 重导出
+// Phase 9 搂14.1: OpenMLE 鎼滅储鏍戝叕寮€ API 閲嶅鍑?
 pub use search_tree::{SearchTreeManager, TreeError, TreeStats};
-// Phase 9 二次审查增强 §14.4: 长时程信用分配器公开 API 重导出
+// Phase 9 浜屾瀹℃煡澧炲己 搂14.4: 闀挎椂绋嬩俊鐢ㄥ垎閰嶅櫒鍏紑 API 閲嶅鍑?
 pub use long_term_credit::{CreditAssignment, CreditStep, LongTermCreditAssigner};
-// Phase 9 二次审查增强: L2 记忆层协同接口公开 API 重导出
+// Phase 9 浜屾瀹℃煡澧炲己: L2 璁板繂灞傚崗鍚屾帴鍙ｅ叕寮€ API 閲嶅鍑?
 pub use memory_sync_hook::{MemorySyncHook, NoopMemorySyncHook};
-// 协调度量接线闭环:待合并样本与观测事件订阅器
-// (消费 DebateCompleted / DelegationCompleted,填充协调成本 Option 字段)
+// 鍗忚皟搴﹂噺鎺ョ嚎闂幆:寰呭悎骞舵牱鏈笌瑙傛祴浜嬩欢璁㈤槄鍣?
+// (娑堣垂 DebateCompleted / DelegationCompleted,濉厖鍗忚皟鎴愭湰 Option 瀛楁)
 pub use metrics_sync::{
     spawn_metrics_subscriber, spawn_metrics_subscriber_with_receiver, PendingCoordSample,
 };
-// P1-1: NexusState 状态变更 → NexusStateChanged 事件适配器
+// P1-1: NexusState 鐘舵€佸彉鏇?鈫?NexusStateChanged 浜嬩欢閫傞厤鍣?
 pub use state_listener::{BusStateChangeListener, STATE_LISTENER_SOURCE};
-// P4-W16.1.3: Quest 轨迹导出器类型重导出(供 L5 omega-learner / L9 efficiency-monitor 使用)
+// P4-W16.1.3: Quest 杞ㄨ抗瀵煎嚭鍣ㄧ被鍨嬮噸瀵煎嚭(渚?L5 omega-learner / L9 efficiency-monitor 浣跨敤)
 pub use trajectory_exporter::{
     export_trajectory, export_trajectory_from_quest, ContextSummary, QuestTrajectory, TaskProgress,
     TrajectoryAction, TrajectoryReward, TrajectoryState,
@@ -122,11 +122,11 @@ pub use trajectory_exporter::{
 pub use ttg::{ComplexityScore, ModeSwitchReason, TtgConfig, TtgGovernor};
 pub use types::{CheckpointMeta, TaskResult};
 
-/// 默认 Quest 配置
+/// 榛樿 Quest 閰嶇疆
 ///
-/// 生产推荐值:
-/// - max_tasks_per_quest: 16(与 GQEP 批处理窗口对齐)
-/// - checkpoint_interval: 3(每 3 个 Task 完成触发检查点)
+/// 鐢熶骇鎺ㄨ崘鍊?
+/// - max_tasks_per_quest: 16(涓?GQEP 鎵瑰鐞嗙獥鍙ｅ榻?
+/// - checkpoint_interval: 3(姣?3 涓?Task 瀹屾垚瑙﹀彂妫€鏌ョ偣)
 pub fn default_config() -> QuestConfig {
     QuestConfig::default()
 }

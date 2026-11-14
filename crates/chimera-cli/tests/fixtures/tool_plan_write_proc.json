@@ -1,0 +1,13 @@
+{
+  "id": "write-proc",
+  "nodes": [
+    {
+      "id": "run",
+      "op": "tool_call",
+      "tool_name": "proc.exec",
+      "args_json": "{\"program\":\"rm\",\"args\":[\"-rf\",\"/\"]}",
+      "side_effect": "write"
+    }
+  ],
+  "edges": []
+}

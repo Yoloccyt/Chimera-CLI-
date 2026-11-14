@@ -7,11 +7,14 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 import xml.etree.ElementTree as ET
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import ExitStack, redirect_stderr, redirect_stdout
+from concurrent.futures import ThreadPoolExecutor as _RealPool
 from pathlib import Path
+from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[3]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -21,6 +24,16 @@ from scripts.govd.model import Attempt, Profile, RunMeta, Task, Verdict
 
 MANIFEST = ROOT / "scripts" / "gate_manifest.toml"
 POLICY = ROOT / "scripts" / "govd" / "policy.toml"
+
+# Single pinned census of gate_manifest.toml. Adding or removing a gate must
+# update these three numbers in the same commit (G-147 wiring: 149 =
+# 142 light + 7 heavy; 2026-11-14 合流 = HEAD 144 道 + feat 侧 5 道，两门重号按
+# G-148/G-149 顺延，见 gate_manifest.toml 的「合流裁决」块). Every other assertion in this file derives from here
+# instead of repeating the literals -- on the wiring day three separate
+# assertions failed for what is one fact, which is the cost of duplicating it.
+# 自锁已实测：只加门不改这三值 ⇒ 本文件自己的 test_real_census 先红（149 != 148）。
+CENSUS_TOTAL, CENSUS_LIGHT, CENSUS_HEAVY = 149, 142, 7
+PR_SUM_LINE = f"selected={CENSUS_LIGHT} total={CENSUS_TOTAL} skipped={CENSUS_HEAVY}"
 
 def make_task(**kw):
     base = {"id": "T-1", "cmd": "{python} -c pass", "expect": 0,
@@ -160,10 +173,10 @@ class ManifestTests(TempDirTest):
     def test_real_census(self):
         tasks = manifest.load(MANIFEST)
         ids = [t.id for t in tasks]
-        self.assertEqual(len(tasks), 142)
-        self.assertEqual(len(set(ids)), 142)
-        self.assertEqual(sum(1 for t in tasks if t.kind == "light"), 135)
-        self.assertEqual(sum(1 for t in tasks if t.kind == "heavy"), 7)
+        self.assertEqual(len(tasks), CENSUS_TOTAL)
+        self.assertEqual(len(set(ids)), CENSUS_TOTAL)
+        self.assertEqual(sum(1 for t in tasks if t.kind == "light"), CENSUS_LIGHT)
+        self.assertEqual(sum(1 for t in tasks if t.kind == "heavy"), CENSUS_HEAVY)
 
     def test_digest_is_order_independent_and_sensitive(self):
         tasks = manifest.load(MANIFEST)
@@ -245,11 +258,11 @@ class PlannerTests(unittest.TestCase):
 
     def test_mutating_requires_both_profile_and_flag(self):
         tasks = [make_task(id="M-1", mutating=True), make_task(id="L-1")]
-        pr = Profile("pr", False, 1, False, False)
+        pr = Profile("pr", False, 1, False)
         selected, skipped = planner.plan(tasks, pr, False)
         self.assertEqual([t.id for t in selected], ["L-1"])
         self.assertEqual([t.id for t in skipped], ["M-1"])
-        rel = Profile("release", True, 1, True, False)
+        rel = Profile("release", True, 1, True)
         self.assertEqual(len(planner.plan(tasks, rel, True)[0]), 2)
         self.assertEqual(len(planner.plan(tasks, rel, False)[0]), 1)
 
@@ -265,7 +278,6 @@ class PolicyTests(unittest.TestCase):
         self.assertFalse(self.pol.profiles["pr"].include_heavy)
         self.assertTrue(self.pol.profiles["nightly"].include_heavy)
         self.assertTrue(self.pol.profiles["release"].allow_mutating)
-        self.assertFalse(self.pol.profiles["release"].reuse_ok)
         self.assertIsNone(policy.role_check(self.pol, "ci", "pr"))
         self.assertIn("may not run", policy.role_check(self.pol, "ci", "release"))
         self.assertIn("unknown role", policy.role_check(self.pol, "root", "pr"))
@@ -440,7 +452,7 @@ class CliTests(TempDirTest):
             rc = cli.main(["list", "--profile", "pr"])
         out = buf.getvalue()
         self.assertEqual(rc, 0)
-        self.assertIn("selected=135 total=142 skipped=7", out)
+        self.assertIn(PR_SUM_LINE, out)
 
     def test_list_rejects_role_profile_pair(self):
         buf = io.StringIO()
@@ -454,7 +466,7 @@ class CliTests(TempDirTest):
                                "--profile", "pr"], cwd=str(ROOT), capture_output=True,
                               text=True, encoding="utf-8", errors="replace", timeout=120)
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
-        self.assertIn("selected=135 total=142 skipped=7", proc.stdout)
+        self.assertIn(PR_SUM_LINE, proc.stdout)
 
 
 class SelectionTests(unittest.TestCase):
@@ -667,7 +679,7 @@ class TaskFamilySelectionTests(unittest.TestCase):
 
     def test_pr_lane_sees_no_task_families(self):
         pr_ids = self.ids("pr")
-        self.assertEqual(pr_ids, set(), "pr must stay 135 light + 7 heavy gates only")
+        self.assertEqual(pr_ids, set(), "pr must stay gate-only (no task families)")
 
     def test_nightly_gets_external_rows_only(self):
         nightly = self.ids("nightly")
@@ -1060,6 +1072,218 @@ class MutatingGuardTests(TempDirTest):
         self.assertEqual(rc, 0, out)
         self.assertNotIn("UNDECIDABLE", out)
         self.assertEqual(calls, [])
+
+class JobsAndDiskSamplingTests(TempDirTest):
+    """ADR-234 S6: `profile.jobs` must have a consumer, and the disk budget must
+    be read where it is applied.
+
+    Two defects, both invisible to any single-gate test:
+
+    * `policy.toml` declared pr=4 / nightly=2 / release=1 / local=1, but the run
+      loop only ever looked at `args.jobs` (default 0) -- so every lane was
+      serial and the declared numbers were a decorative surface. A flag that is
+      parsed and ignored never goes red on its own, hence these cases drive
+      `cmd_run` and observe the executor that actually got constructed.
+    * the free-disk reading was taken once, before the loop. Serially that is
+      indistinguishable from sampling per gate; concurrently, later gates judge
+      against a stale snapshot, which turns UNKNOWN ("this gate genuinely cannot
+      be decided here") into "we did not look in time". The discriminator below
+      feeds two different readings and requires the second gate to see the
+      second number.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.pol = policy.load(str(POLICY))
+
+    def _attempt(self, task):
+        return Attempt(task.id, 1, Verdict.OK, 0, 0.01, "rc=0")
+
+    def drive(self, tasks, flags, profile, disk_free_gib=None, pool_spy=None):
+        """Run `cmd_run` over stubbed execution; return (rc, stdout, executed ids)."""
+        calls = []
+
+        def execute(task, _policy, bash_path, logs, n):
+            calls.append(task.id)
+            return self._attempt(task)
+
+        args = cli.build_parser().parse_args(["run", "--profile", profile] + flags)
+        patches = [
+            mock.patch.object(cli, "ROOT", self.tmp),
+            mock.patch.object(cli, "load_all", lambda name="": (tasks, self.pol)),
+            mock.patch.object(policy, "snapshot", side_effect=[set(), set()]),
+            mock.patch.object(cli, "_execute_one", side_effect=execute),
+        ]
+        if disk_free_gib is not None:
+            readings = iter([g * 1024 ** 3 for g in disk_free_gib])
+            counter = {"n": 0}
+
+            def fake_usage(_path):
+                counter["n"] += 1
+                return SimpleNamespace(free=next(readings))
+
+            patches.append(mock.patch.object(cli.shutil, "disk_usage",
+                                             side_effect=fake_usage))
+            self.disk_calls = counter
+        if pool_spy is not None:
+            patches.append(mock.patch.object(cli, "ThreadPoolExecutor",
+                                             lambda *a, **kw: pool_spy(a, kw)))
+        with ExitStack() as stack:
+            for p in patches:
+                stack.enter_context(p)
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.cmd_run(args)
+        return rc, buf.getvalue(), calls
+
+    # -- judgement 1: which worker count does the pool actually get? -----------
+
+    def recorded_pools(self):
+        seen = []
+
+        def spy(args, kwargs):
+            workers = kwargs.get("max_workers", args[0] if args else None)
+            seen.append(workers)
+            return _RealPool(workers)
+
+        self.pools = seen
+        return spy
+
+    def test_unspecified_jobs_falls_back_to_the_profile_number(self):
+        """`--jobs` absent (0 = "unspecified") must land on profile.jobs, not on serial."""
+        tasks = tuple(make_task(id="J-%d" % i) for i in range(3))
+        rc, out, calls = self.drive(tasks, [], "pr", pool_spy=self.recorded_pools())
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(sorted(calls), sorted(t.id for t in tasks), out)
+        self.assertEqual(self.pools, [self.pol.profiles["pr"].jobs],
+                         "profile pr declares jobs=4; the pool must be sized by it")
+
+    def test_explicit_jobs_wins_over_the_profile(self):
+        tasks = tuple(make_task(id="J-%d" % i) for i in range(3))
+        rc, _out, _calls = self.drive(tasks, ["--jobs", "2"], "pr",
+                                      pool_spy=self.recorded_pools())
+        self.assertEqual(rc, 0, _out)
+        self.assertEqual(self.pools, [2], "explicit CLI must override the profile")
+
+    def test_jobs_one_stays_serial_even_when_the_profile_is_concurrent(self):
+        """The parity leg depends on this: `--jobs 1` must not quietly become pr's 4."""
+        tasks = tuple(make_task(id="J-%d" % i) for i in range(3))
+        rc, out, calls = self.drive(tasks, ["--jobs", "1"], "pr",
+                                    pool_spy=self.recorded_pools())
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(sorted(calls), sorted(t.id for t in tasks))
+        self.assertEqual(self.pools, [], "jobs=1 must take the serial branch")
+
+    def test_local_profile_jobs_one_is_serial(self):
+        tasks = (make_task(id="J-1"),)
+        rc, out, calls = self.drive(tasks, [], "local",
+                                    pool_spy=self.recorded_pools())
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(calls, ["J-1"])
+        self.assertEqual(self.pools, [], "local declares jobs=1")
+
+    # -- judgement 2: the disk budget is read per gate, not per run ------------
+
+    def test_disk_budget_sampled_at_the_gate_that_uses_it(self):
+        """Two heavies, generous then stingy: only the second may go UNKNOWN.
+
+        Under run-level sampling both gates read the *first* number, so both
+        execute and the stale-reading bug is undetectable in-process. Here the
+        second gate must be UNKNOWN("disk") -- which is only possible if its own
+        reading was taken.
+        """
+        tasks = (make_task(id="H-1", kind="heavy", disk_gb=20.0),
+                 make_task(id="H-2", kind="heavy", disk_gb=20.0))
+        rc, out, calls = self.drive(tasks, [], "release", disk_free_gib=[100.0, 10.0])
+        self.assertEqual(calls, ["H-1"], "gate 2 must not execute on a 10 GiB disk")
+        self.assertIn("H-2 unknown", out)
+        self.assertIn("H-1 ok", out)
+        self.assertEqual(self.disk_calls["n"], 2,
+                         "one reading per disk-gated gate; a single call means the "
+                         "sample was taken outside the executor")
+        self.assertEqual(rc, 2,
+                         "unknown is undecidable, and undecidable never exits 0 "
+                         "(the lane's own dialect: a gate that could not be judged "
+                         "must not be reported as a pass)")
+
+
+class NeedsSemanticsTests(TempDirTest):
+    """What `needs` actually buys: ordering, **not** mutual exclusion.
+
+    立项时假设"给 cargo 类 heavy 门彼此建 needs 边，就能避免它们互踩包锁/内存"。
+    读码否证了它：`needs` 只有两个消费者 —— `manifest.py`(目标存在性校验) 与
+    `planner.toposort`(排序)。`cli.cmd_run` 的执行环把 pending **整批** submit 进
+    `ThreadPoolExecutor(max_workers=jobs)`，之后再 `as_completed` 收 —— 全程不查
+    `needs`。所以并发档下，被依赖者与依赖者可以同时在跑，边只提供"排队序"。
+
+    这两条测试是**特征锁**（描述现状，不是先红后绿）：
+    - jobs=2 ⇒ 区间重叠（证明 needs 不是互斥；若哪天实现了真正的依赖门控，本条
+      必须被有意识地改写，而不是让人以为加了边就安全）；
+    - jobs=1 ⇒ 区间不重叠（阳性对照：缺了它，"重叠"断言可能只是因为仪器根本
+      分辨不出串行）。
+    两条都另外断言 `start_A < start_B`：needs 提供的、也是唯一可依赖的保证。
+    """
+
+    SLEEP = '"import time;time.sleep(0.25)"'
+
+    def drive(self, flags):
+        """Run two real (subprocess) gates where B needs A; return (intervals, start order)."""
+        order = []
+        intervals = {}
+        tick = {"n": 0}
+        lock = threading.Lock()
+        real_execute_one = cli._execute_one
+        tasks = (
+            make_task(id="T-A", cmd="{python} -c " + self.SLEEP),
+            make_task(id="T-B", cmd="{python} -c " + self.SLEEP, needs=("T-A",)),
+        )
+
+        def spy(task, policy_arg, bash_path, logs, n):
+            with lock:
+                tick["n"] += 1
+                start = tick["n"]
+                order.append(task.id)
+            attempt = real_execute_one(task, policy_arg, bash_path, logs, n)
+            with lock:
+                tick["n"] += 1
+                intervals[task.id] = (start, tick["n"])
+            return attempt
+
+        args = cli.build_parser().parse_args(["run", "--profile", "pr"] + flags)
+        with mock.patch.object(cli, "ROOT", self.tmp), \
+             mock.patch.object(cli, "load_all", lambda name="": (tasks, policy.load(str(POLICY)))), \
+             mock.patch.object(policy, "snapshot", side_effect=[set(), set()]), \
+             mock.patch.object(cli, "_execute_one", side_effect=spy):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.cmd_run(args)
+        self.assertEqual(rc, 0, buf.getvalue())
+        self.assertEqual(set(intervals), {"T-A", "T-B"}, "两道门都应真跑出 attempt")
+        return intervals, order
+
+    def test_needs_orders_but_does_not_mutually_exclude_under_jobs_two(self):
+        intervals, order = self.drive(["--jobs", "2"])
+        self.assertEqual(order[0], "T-A", "needs 必须让被依赖者先入队")
+        start_a, end_a = intervals["T-A"]
+        start_b, _end_b = intervals["T-B"]
+        self.assertLess(start_a, start_b, "排队序：A 先于 B 开始")
+        self.assertLess(
+            start_b, end_a,
+            "并发档下 B 在 A 结束前就开始了 ⇒ needs 只提供排序，**不是**互斥锁。"
+            "别把'加了边'当成'它们不会同时跑'",
+        )
+
+    def test_needs_is_serial_under_jobs_one_the_control_that_makes_the_above_non_vacuous(self):
+        intervals, order = self.drive(["--jobs", "1"])
+        self.assertEqual(order, ["T-A", "T-B"])
+        _start_a, end_a = intervals["T-A"]
+        start_b, _end_b = intervals["T-B"]
+        self.assertLess(
+            end_a, start_b,
+            "串行腿必须测出'A 完全结束后 B 才开始'。若这里也重叠，说明区间仪器"
+            "分辨不出串行，上一条测试的重叠断言就是空转（恒真）",
+        )
+
 
 if __name__ == "__main__":
     # F30 dialect: an uncaught crash must exit 2, never borrow the interpreter's 1

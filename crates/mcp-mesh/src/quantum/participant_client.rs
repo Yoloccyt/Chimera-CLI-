@@ -42,7 +42,7 @@
 //! 两者层次不同:单阶段超时让快速失败(单个参与者无响应)触发 Abort,
 //! 避免等待事务总超时才回滚。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -122,6 +122,28 @@ pub struct QueryRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct QueryResponse {
     /// 响应负载(成功时为查询产出,失败时由 McpError 传递错误)
+    pub payload: String,
+}
+
+/// 单服务器工具调用请求 — 非事务、显式携带 args（Phase 4 / ADR-230）
+///
+/// WHY 不复用 2PC：`TwoPcResponse` 只有 Ack/Nack，没有结果载荷；把 args 与
+/// payload 塞进事务协议会污染 2PC 语义。工具调用是"一次请求一次响应"，
+/// 2PC 仍是多服务器原子提交的唯一通道。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolInvokeRequest {
+    /// 调用关联 id（LLM 循环/CLI 用于回填）
+    pub call_id: String,
+    /// 工具名（MCP 服务器解释）
+    pub tool: String,
+    /// 原始 JSON 参数
+    pub args_json: String,
+}
+
+/// 单服务器工具调用响应 — 携带结果载荷。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToolInvokeResponse {
+    /// 工具产出（原始文本/JSON）
     pub payload: String,
 }
 
@@ -216,6 +238,23 @@ pub trait ParticipantClient: Send + Sync {
         query_id: &'a str,
         query: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>>;
+
+    /// 单服务器工具调用（Phase 4 / ADR-230）— 非事务、显式 args、返回 payload。
+    ///
+    /// 默认实现返回 `ProtocolError`（旧 mock/第三方实现无需改动即可编译）；
+    /// `InProcessClient`/`MockParticipantClient` 与 `TcpParticipantClient` 覆写。
+    fn invoke_tool<'a>(
+        &'a self,
+        server: &'a MeshServer,
+        _request: ToolInvokeRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+        Box::pin(async move {
+            Err(McpError::ProtocolError {
+                server_id: server.server_id.clone(),
+                reason: "invoke_tool unsupported by this participant client".into(),
+            })
+        })
+    }
 }
 
 // ============================================================
@@ -348,6 +387,21 @@ impl ParticipantClient for InProcessClient {
             Ok(format!("result@{query}@{query_id}@{}", server.server_id))
         })
     }
+
+    fn invoke_tool<'a>(
+        &'a self,
+        server: &'a MeshServer,
+        request: ToolInvokeRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+        let delay_ms = Self::simulated_delay_ms(&server.server_id);
+        Box::pin(async move {
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            Ok(format!(
+                "echo@{}@{}@{}",
+                request.tool, request.args_json, server.server_id
+            ))
+        })
+    }
 }
 
 // ============================================================
@@ -415,7 +469,13 @@ pub struct TcpParticipantClient {
     /// 的并发读写需互斥(同一 stream 不能同时 write_all 和 read_exact)。
     /// `Mutex` 保证同一 endpoint 的 stream 串行使用,避免数据混乱。
     /// 替代方案 `deadpool-tokio` 引入额外依赖,自维护 HashMap 足够轻量。
-    connection_pool: Arc<std::sync::Mutex<HashMap<String, TcpStream>>>,
+    ///
+    /// WHY 每 endpoint 一条**队列**而不是一条 `TcpStream`（W4a）：槽位只有一条时，
+    /// 并发批次里第一个请求把它 `remove` 走，其余请求都看到"池是空的"⇒ 各自新建连接，
+    /// 归还时又互相 `insert` 覆盖同一槽 —— 于是 (a) 并发下根本没有复用，(b) 被覆盖的那条
+    /// 连接直接关闭（fd 抖动），(c) 下一批仍然只能复用一条。队列把"每 endpoint 的可用连接数"
+    /// 与"并发度"这两件事分开，覆盖丢失不再发生。
+    connection_pool: Arc<std::sync::Mutex<HashMap<String, VecDeque<TcpStream>>>>,
 }
 
 impl TcpParticipantClient {
@@ -582,6 +642,81 @@ impl TcpParticipantClient {
         Ok(response.payload)
     }
 
+    /// 发送工具调用请求并等待响应(带单阶段超时)。
+    async fn send_tool_invoke(
+        &self,
+        server: &MeshServer,
+        request: ToolInvokeRequest,
+    ) -> Result<String, McpError> {
+        let deadline = Duration::from_millis(self.phase_timeout_ms);
+        let result = timeout(deadline, self.send_tool_invoke_inner(server, &request)).await;
+        match result {
+            Ok(inner) => inner,
+            Err(_) => Err(McpError::NetworkError {
+                server_id: server.server_id.clone(),
+                endpoint: server.endpoint.clone(),
+                reason: format!("工具调用单阶段超时({}ms)", self.phase_timeout_ms),
+            }),
+        }
+    }
+
+    /// `send_tool_invoke` 内部实现（无超时包装）。
+    async fn send_tool_invoke_inner(
+        &self,
+        server: &MeshServer,
+        request: &ToolInvokeRequest,
+    ) -> Result<String, McpError> {
+        self.validate_endpoint_dns(&server.server_id, &server.endpoint)
+            .await?;
+        let payload = serde_json::to_vec(request).map_err(|e| McpError::ProtocolError {
+            server_id: server.server_id.clone(),
+            reason: format!("工具调用请求序列化失败: {e}"),
+        })?;
+        let resp_data = self.send_frame_and_recv(server, &payload).await?;
+        let response: ToolInvokeResponse =
+            serde_json::from_slice(&resp_data).map_err(|e| McpError::ProtocolError {
+                server_id: server.server_id.clone(),
+                reason: format!("工具调用响应反序列化失败: {e}"),
+            })?;
+        Ok(response.payload)
+    }
+
+    /// 每个 endpoint 最多缓存多少条空闲连接。
+    ///
+    /// WHY 8：一次 2PC/批量调用的在飞上限由 `ToolPlaneConfig::max_inflight` 决定，
+    /// 而 mesh 侧对同一参与者的并发请求典型是 fanout（一阶段一个），个位数即覆盖；
+    /// 上限存在的意义是**不让池无界增长**——超出的连接在请求结束时直接关闭，
+    /// 而不是攒着占 fd。
+    const MAX_POOLED_STREAMS_PER_ENDPOINT: usize = 8;
+
+    /// 取一条空闲连接（锁内只做 pop，不跨 `.await`，§4.4 反模式 #1）。
+    ///
+    /// WHY 顺手清掉空队列：留着 `endpoint -> []` 的条目会让 map 只增不减
+    /// （每个见过的 endpoint 永久占一行），与"连接数有界"是同一件事的两半。
+    fn take_pooled_stream(&self, endpoint: &str) -> Option<TcpStream> {
+        let mut pool = self.connection_pool.lock().ok()?;
+        let stream = pool.get_mut(endpoint)?.pop_front();
+        if pool.get(endpoint).is_some_and(VecDeque::is_empty) {
+            pool.remove(endpoint);
+        }
+        stream
+    }
+
+    /// 归还一条连接；池满则让这条连接随作用域结束而关闭。
+    ///
+    /// WHY 失败流不走这里：`try_send_on_stream` 出错时连接状态已不可信（半帧、
+    /// 对端关闭），归还它会污染后续请求 —— 只归还成功的连接由调用方保证。
+    fn put_pooled_stream(&self, endpoint: &str, stream: TcpStream) {
+        let Ok(mut pool) = self.connection_pool.lock() else {
+            return; // 锁中毒：丢掉这一条连接比 panic 更符合"池是优化不是契约"
+        };
+        let queue = pool.entry(endpoint.to_string()).or_default();
+        if queue.len() >= Self::MAX_POOLED_STREAMS_PER_ENDPOINT {
+            return;
+        }
+        queue.push_back(stream);
+    }
+
     /// 发送帧并接收响应(复用连接池)
     ///
     /// Task 0.7 SubTask 0.7.11: 优先从连接池取已建立的 TcpStream,
@@ -598,12 +733,8 @@ impl TcpParticipantClient {
         server: &MeshServer,
         payload: &[u8],
     ) -> Result<Vec<u8>, McpError> {
-        // 尝试从连接池取已建立的 stream
-        let pooled = self
-            .connection_pool
-            .lock()
-            .ok()
-            .and_then(|mut pool| pool.remove(&server.endpoint).map(Some).unwrap_or(None));
+        // 尝试从连接池取已建立的 stream（锁内只 pop，不跨 await）
+        let pooled = self.take_pooled_stream(&server.endpoint);
 
         // 1. 若有 pooled stream,先尝试复用
         if let Some(stream) = pooled {
@@ -614,10 +745,8 @@ impl TcpParticipantClient {
             );
             match self.try_send_on_stream(server, stream, payload).await {
                 Ok((resp_data, stream)) => {
-                    // 成功:将 stream 归还连接池
-                    if let Ok(mut pool) = self.connection_pool.lock() {
-                        pool.insert(server.endpoint.clone(), stream);
-                    }
+                    // 成功:将 stream 归还连接池（复用失败的那条不归还，见 `put_pooled_stream`）
+                    self.put_pooled_stream(&server.endpoint, stream);
                     return Ok(resp_data);
                 }
                 Err(e) => {
@@ -646,9 +775,7 @@ impl TcpParticipantClient {
         let (resp_data, stream) = self.try_send_on_stream(server, stream, payload).await?;
 
         // 4. 成功:将 stream 归还连接池
-        if let Ok(mut pool) = self.connection_pool.lock() {
-            pool.insert(server.endpoint.clone(), stream);
-        }
+        self.put_pooled_stream(&server.endpoint, stream);
 
         Ok(resp_data)
     }
@@ -818,6 +945,14 @@ impl ParticipantClient for TcpParticipantClient {
             query: query.to_string(),
         };
         Box::pin(async move { self.send_query(server, request).await })
+    }
+
+    fn invoke_tool<'a>(
+        &'a self,
+        server: &'a MeshServer,
+        request: ToolInvokeRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+        Box::pin(async move { self.send_tool_invoke(server, request).await })
     }
 }
 
@@ -1021,6 +1156,19 @@ impl ParticipantClient for MockParticipantClient {
             Ok(format!(
                 "mock_result@{query}@{query_id}@{}",
                 server.server_id
+            ))
+        })
+    }
+
+    fn invoke_tool<'a>(
+        &'a self,
+        server: &'a MeshServer,
+        request: ToolInvokeRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<String, McpError>> + Send + 'a>> {
+        Box::pin(async move {
+            Ok(format!(
+                "mock_invoke@{}@{}@{}",
+                request.tool, request.args_json, server.server_id
             ))
         })
     }
@@ -1468,5 +1616,139 @@ mod tests {
 
         let result = client.rollback(&server, "tx-1").await;
         assert!(result.is_ok());
+    }
+
+    /// 一次并发发 4 个 prepare 给同一参与者 —— 连接池在并发下是否真的复用，只有
+    /// "同一批里多个请求同时在飞"才看得出来（串行时池里那条总能被复用，两版实现同形）。
+    async fn prepare_four(
+        client: &TcpParticipantClient,
+        server: &MeshServer,
+    ) -> [Result<(), McpError>; 4] {
+        let (a, b, c, d) = tokio::join!(
+            // 合流后 `prepare` 增加第 4 参 `args: &[String]`（feat/toolplane-execution 的
+            // ToolInvokeRequest 面）；本测试只关心连接复用与在飞并发，工具参数取空集。
+            client.prepare(server, "tx-a", "op", &[]),
+            client.prepare(server, "tx-b", "op", &[]),
+            client.prepare(server, "tx-c", "op", &[]),
+            client.prepare(server, "tx-d", "op", &[])
+        );
+        [a, b, c, d]
+    }
+
+    /// 并发批次必须**复用**已建立的连接，而不是每批再新建一批。
+    ///
+    /// 夹具两处是刻意的：① 服务端在**同一条连接上循环处理多帧**——否则"复用"与
+    /// "重连"在可观测行为上完全相同，测试就成了量一个不存在的东西；② 计数 `accept`
+    /// 次数，它是"新建了几条连接"的直接观测量，不依赖时序也不依赖计时。
+    #[tokio::test]
+    async fn concurrent_batches_reuse_pooled_connections() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tokio::net::TcpListener;
+
+        let accepted: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind 失败");
+        let addr = listener.local_addr().expect("local_addr 失败");
+        let counted = Arc::clone(&accepted);
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    return;
+                };
+                counted.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    loop {
+                        let mut len_buf = [0u8; 4];
+                        if sock.read_exact(&mut len_buf).await.is_err() {
+                            return;
+                        }
+                        let len = u32::from_be_bytes(len_buf) as usize;
+                        let mut data = vec![0u8; len];
+                        if sock.read_exact(&mut data).await.is_err() {
+                            return;
+                        }
+                        let Ok(ack) = serde_json::to_vec(&TwoPcResponse::Ack) else {
+                            return;
+                        };
+                        let prefix = (ack.len() as u32).to_be_bytes();
+                        if sock.write_all(&prefix).await.is_err()
+                            || sock.write_all(&ack).await.is_err()
+                        {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+
+        let client = TcpParticipantClient::with_phase_timeout(1_000);
+        // 直接构造 MeshServer 绕过 register 的 SSRF 校验（127.0.0.1 在黑名单内），
+        // 与本文件其它 TCP 用例同一手法：测的是连接复用，不是 SSRF 面。
+        let server = MeshServer {
+            server_id: "pool-test".into(),
+            endpoint: addr.to_string(),
+            capabilities: vec![],
+            last_heartbeat: chrono::Utc::now(),
+        };
+
+        let first = prepare_four(&client, &server).await;
+        for outcome in first {
+            assert!(outcome.is_ok(), "第一批并发请求应全部成功: {outcome:?}");
+        }
+        let after_first = accepted.load(Ordering::SeqCst);
+
+        let second = prepare_four(&client, &server).await;
+        for outcome in second {
+            assert!(outcome.is_ok(), "第二批并发请求应全部成功: {outcome:?}");
+        }
+        let after_second = accepted.load(Ordering::SeqCst);
+
+        assert_eq!(
+            after_first, 4,
+            "第一批允许各建一条（池初值为空）；实测 {after_first} 条 accept"
+        );
+        assert_eq!(
+            after_second, after_first,
+            "第二批必须复用池里的 4 条连接 —— 每 endpoint 只存一条时，3 条并发会各自新建"
+        );
+    }
+
+    /// 每一条走连接池的请求路径，都必须**先做 DNS 复验**。
+    ///
+    /// WHY 结构断言而不是行为断言：本地无法让同一个域名在两次解析之间从公网 IP 变成
+    /// 内网 IP（那需要一个可控 DNS），而真实的回归形状恰恰是"为了省一次 DNS 往返，
+    /// 把复验挪出热路径或挪回 register"。所以这里直接机检：每一个 `send_frame_and_recv`
+    /// 调用点之前，同一函数体内必须出现 `validate_endpoint_dns`。挪走即红。
+    ///
+    /// 连接池改动（W4a）正是这条判据的活跃风险面：池复用让第二次请求不再新建 TCP 连接，
+    /// 于是"只在 connect 前复验"的写法会自然地想跟着跳过 —— 那正是 DNS rebinding
+    /// 二次校验存在的全部理由所在。
+    #[test]
+    fn every_frame_roundtrip_is_prefixed_by_dns_revalidation() {
+        const SRC: &str = include_str!("participant_client.rs");
+        // 只扫生产区：`tests` 模块里就写着这个被匹配的字符串本身，整文件扫描会
+        // 匹配到扫描器自己（实测第一次跑就报"第 4 处没有复验"——那第 4 处是本测试）。
+        let production = SRC
+            .split(
+                "
+#[cfg(test)]",
+            )
+            .next()
+            .expect("文件里应有一个 tests 模块边界");
+        let mut sites = 0usize;
+        for (idx, _) in production.match_indices("self.send_frame_and_recv(") {
+            sites += 1;
+            let fn_start = production[..idx]
+                .rfind("async fn ")
+                .expect("调用点应位于某个 async fn 内");
+            let body = &SRC[fn_start..idx];
+            assert!(
+                body.contains("validate_endpoint_dns("),
+                "第 {sites} 处 send_frame_and_recv 之前没有 DNS 复验 ⇒ 池复用会跳过 SSRF 二次校验"
+            );
+        }
+        assert!(
+            sites >= 3,
+            "至少 prepare/query/invoke 三条路径各一处；实测 {sites} 处，说明扫描面缩了"
+        );
     }
 }

@@ -27,10 +27,12 @@ fn config_with_servers() -> ChimeraConfig {
         McpServerConfig {
             id: "s-a".into(),
             url: Some("http://203.0.113.10:8001".into()),
+            ..Default::default()
         },
         McpServerConfig {
             id: "s-b".into(),
             url: Some("http://203.0.113.10:8002".into()),
+            ..Default::default()
         },
     ];
     config

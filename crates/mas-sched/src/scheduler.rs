@@ -220,6 +220,41 @@ impl PeerScheduler for SimplePeerScheduler {
 }
 
 impl SimplePeerScheduler {
+    /// 回收过期租约（Phase 5）— 移除并释放 peer 并发计数。
+    ///
+    /// 锁序与 `claim` 一致：先取 `leases` 写锁，释放后再取 `peer_concurrency`。
+    /// 返回被移除的 task_id（按哈希表遍历序，调用方不应依赖顺序）。
+    pub fn reap_expired_at(&self, now: Instant) -> Vec<String> {
+        let expired: Vec<(String, String)> = {
+            let mut leases = self
+                .leases
+                .write()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let ids: Vec<String> = leases
+                .iter()
+                .filter(|(_, lease)| lease.lease_until <= now)
+                .map(|(task_id, _)| task_id.to_string())
+                .collect();
+            let mut removed = Vec::with_capacity(ids.len());
+            for task_id in ids {
+                if let Some(lease) = leases.remove(&TaskId::from(task_id.clone())) {
+                    removed.push((task_id, lease.peer_id));
+                }
+            }
+            removed
+        };
+        for (_, peer_id) in &expired {
+            self.decrement_peer(peer_id);
+        }
+        expired.into_iter().map(|(task_id, _)| task_id).collect()
+    }
+
+    /// 回收所有已过期租约（`Instant::now()`）。
+    #[must_use]
+    pub fn reap_expired(&self) -> Vec<String> {
+        self.reap_expired_at(Instant::now())
+    }
+
     /// 递减 peer 并发计数（handoff/释放内部辅助,无任务时移除条目）
     fn decrement_peer(&self, peer_id: &str) {
         let mut peers = self
@@ -538,5 +573,56 @@ mod tests {
             matches!(s.claim(&cb), ClaimOutcome::Granted(_)),
             "peer-b 有独立频率配额,不因 a 超频受连累"
         );
+    }
+
+    /// Phase 5:过期租约回收后释放 peer 并发容量。
+    #[test]
+    fn reap_expired_releases_capacity() {
+        let s = SimplePeerScheduler::new();
+        let mut c1 = claim("t1", "p1");
+        c1.est_duration_ms = 10;
+        c1.quota = crate::types::Quota {
+            max_concurrent: 1,
+            max_duration_ms: 10,
+            priority_weight: 1.0,
+        };
+        assert!(matches!(s.claim(&c1), ClaimOutcome::Granted(_)));
+        std::thread::sleep(Duration::from_millis(25));
+        assert_eq!(s.reap_expired(), vec!["t1".to_string()]);
+        assert_eq!(s.lease_count(), 0);
+        let mut c2 = claim("t2", "p1");
+        c2.est_duration_ms = 10;
+        c2.quota = c1.quota;
+        assert!(
+            matches!(s.claim(&c2), ClaimOutcome::Granted(_)),
+            "回收后同 peer 应能重新 claim（容量已释放）"
+        );
+    }
+
+    /// Phase 5:续期不产生第二份租约。
+    #[test]
+    fn renew_lease_extends_without_double_count() {
+        let s = SimplePeerScheduler::new();
+        let c = claim("t1", "p1");
+        assert!(matches!(s.claim(&c), ClaimOutcome::Granted(_)));
+        assert_eq!(
+            s.renew_lease("t1", "p1").expect("renew"),
+            RenewOutcome::Renewed
+        );
+        assert_eq!(s.lease_count(), 1);
+    }
+
+    /// Phase 5:移交与回编排层释放租约。
+    #[test]
+    fn handoff_transfers_and_releases() {
+        let s = SimplePeerScheduler::new();
+        let c = claim("t1", "p1");
+        assert!(matches!(s.claim(&c), ClaimOutcome::Granted(_)));
+        s.handoff("t1", "p2").expect("handoff");
+        assert_eq!(s.lease_count(), 1);
+        assert_eq!(s.should_run("t1"), ShouldRunVerdict::Run);
+        s.handoff("t1", HANDOFF).expect("handoff to orchestrator");
+        assert_eq!(s.lease_count(), 0);
+        assert_eq!(s.should_run("t1"), ShouldRunVerdict::NoActionableWork);
     }
 }

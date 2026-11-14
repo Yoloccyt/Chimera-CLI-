@@ -11,6 +11,15 @@
 #   expect      期望退出码（0=绿；1=按设计为红，例如未提交前的耦合审计）
 #   kind        light（秒级，可随手跑） | heavy（需编译/长时间，跑前查磁盘）
 #   disk_gb     heavy 项要求的最低 D 盘空闲 GB（低于则跳过并判"不可判定"，不判通过）
+#   needs       前置门 id 列表（v2 字段）。它只买得到两件事：planner.toposort 的
+#               **入列顺序**，以及"声明了 needs 的计划拒绝 --shard 切分"。
+#               它**不是互斥锁**：jobs>1 时执行环把 pending 整批 submit 进线程池，
+#               全程不读 needs ⇒ 被依赖者与依赖者可以同时在跑。实测锁见
+#               scripts/govd/tests/test_govd.py::NeedsSemanticsTests
+#               （jobs=2 断言区间重叠；jobs=1 作阳性对照断言不重叠，
+#               否则"重叠"可能只是仪器分辨不出串行的空转）。
+#               因此"给 cargo 类 heavy 门彼此加 needs 以免互踩包锁"是无效缓解 ——
+#               那条互斥本来就由 cargo 自己的 target-dir 锁提供（后来者等待而非损坏）。
 #   test_kind   评测生命周期标注（v2.3 §(b.6)，与 39 分层对齐，渐进回写）：
 #               crate_unit（单 crate 内单测门）| cross_crate（跨 crate 集成/静态审计门）。
 #               缺省视为未标注（不判红）；新增/改动门应就近标齐。run_gate_manifest.py
@@ -1260,7 +1269,7 @@ spec_ref = "ADR-214 决策 3（D-22：`#[non_exhaustive]` 与 wire 字段序正�
 cmd = "{python} scripts/check_l0_extensibility_class.py"
 expect = 0
 kind = "light"
-test_kind = "single_crate"
+test_kind = "cross_crate"
 note = "L0 公共类型可扩展性分级台账。补的洞有量纲性：实测 nexus-contracts 有 103 `pub enum` + 124 `pub struct`（门自报 227 生产面；未 blank 未遮尾的裸 grep 报 228，多的那个是 `vector_math/vector.rs:342 InMemoryVectorStore` 落在 cfg(test) 尾内）且 `#[non_exhaustive]` **命中 0** ⇒ 今天每个公共类型都是封闭的，新增任一变体/字段对 30+ 消费 crate 都是源码级破坏（`ExperienceCard` 61 处外部字面量、上一波漏跑 `--all-targets` 才暴露的 E0063 是同一敞口的两次显形）。**为何不是无脑加标**：本仓在承重位置刻意反着用它——`event-bus/src/registry.rs` 的 `define_event_registry!` 展开 5 个无通配 match，正是靠「新增变体必须被每个消费方处理」当安全属性；裁决类（verdict/failure/severity/strategy）保留封闭才对，展示/格式/词表类才适合开放。于是政策落成语义锁：`class=open ⇔ 带属性`、`class=closed ⇔ 不带属性`——**开一个类型必须同批做两件事**（翻行 + 加属性 + ≥24 字符理由），只做一半即 CLASS_MISMATCH 红；单加属性是「静默摘掉下游强制处理」，单翻行是「台账说谎」，两者都是本仓反复被咬的形态。新增公共类型无行⇒NEW 红；类型搬移/消失而行不撤⇒STALE 红（W3 式物理搬移须同批改键）。行畸形 / class 取值非法 / open 缺理由 / 重复行 / 抽取数<`TYPES_FLOOR(150)` ⇒ 退 2 不可判定，且 **floor 守卫刻意排在 `--emit` 之前**：致盲的解析器不得把自己的致盲写成一份「干净」基线（那等于把致盲洗白进台账）。现取基线：227 行全 closed（与「属性命中 0」的实况同构，emit 派生故首跑即自洽）——本门不新增任何决定，它把一个从未被显式声明的默认值变成可评审、可回退的登记，使第一次「开放某类型」成为有人签字的动作而非副产物。待开短名单（21 个零提及 enum + 64 个无外部字面量 struct）与其反面论证记于 ADR-214 D-22；其中范围教训值得留档：首轮只扫 `crates/*/src` 得 22 个候选，实测 `VerificationMethod` 在根 `tests/e2e` 三个文件里被匹配 ⇒ 下游面**必须含根 tests/**，否则候选集偏松、照它加标会在 e2e 的穷尽匹配处编译断裂。**ADR-218 追加 CLAIM 轴**：本台账头注曾长期自称「all 227 rows are closed, because L0 measures ZERO #[non_exhaustive] today」，而实测 16 个 src 文件带该属性、56 行为 open——散文比使它成立的那个动作活得更久，且当时无任何门覆盖头注。现改为一行机器核验的 `# CLAIM types=NNN listed=NNN open=N closed=N`，每次由实况+行集重算比对：缺行⇒退 2（不肯描述自己的台账无法审它是否说谎）、不符⇒CLAIM 红、出现第二行⇒malformed（一份台账两副自述）。本门由此从「修一处漂移」升级为「让这类漂移没有生存空间」，并与 G-119 的 CLAIM 形态共用同一约定。"
 
 [[gate]]
@@ -1269,7 +1278,7 @@ spec_ref = "G-115 配套（门自身有牙，沿 G-20/G-92/G-99/G-105/G-107/G-10
 cmd = "{python} scripts/check_l0_extensibility_class.py --selftest"
 expect = 0
 kind = "light"
-test_kind = "single_crate"
+test_kind = "cross_crate"
 note = "断言数以 `--selftest` **自报**（本行不抄数——原先此处写「15 条断言」而代码实为 17，正是 CLAIM 轴要在台账侧终结的那类手抄计数漂移）。走生产同一组抽取函数（tempdir 真树 + `module_key` 复用 G-105 实现）：①生产面键集与期望**逐集相等**（crate 根文件是模块 `lib` 而非 `m`——本门首版该断言写成 `... or len(types)==6`，键全错仍报绿，即本仓反复禁止的恒真守卫，已改为严格集合相等并在源码注明原因）②`#[cfg(test)]` 尾内声明不得入册 ③属性识别精确命中两个声明为 open 的类型且不误报另两个 ④**doc 注释里出现的 `#[non_exhaustive]` 不算属性** ⑤class 与属性全一致⇒rc 0，且 open/closed 分开计数 ⑥植入属性不翻行⇒CLASS_MISMATCH ⑦**反向**翻行不加属性⇒同样 CLASS_MISMATCH（两向都要咬得住）⑧新类型无行⇒NEW ⑨类型消失而行留存⇒STALE ⑩成对撤除⇒转绿 ⑪四类不可判定各判 malformed（open 缺理由 / class 取值非法 / 未知键 / 重复行）⑫`0 < TYPES_FLOOR ≤ 真实抽取数`（夹具仅 6 类型，故该断言必须对真树取数）。任一断言不成立⇒退 1。开发期由本夹具连续现形三处真缺陷：`ne` 元组键 vs 字符串键、NEW 分支 `%` 优先级写错致 3 占位符只给 2 参数（TypeError＝该判据从未跑通）、`evaluate` 与调用方双打印。ADR-218 增 CLAIM 轴后补 6 条：无 CLAIM⇒退 2、植入不符 CLAIM⇒红且同时打印两个数、第二行 CLAIM⇒malformed、夹具自带 CLAIM 被正确捕获、真台账行集无畸形、真台账 CLAIM 与实况逐值相等（最后这条专防「加了判据却交付一份自己过不了的台账」）。"
 
 # ============================================================
@@ -1308,7 +1317,7 @@ spec_ref = "ADR-218 决策 1（『受控纯逻辑』的逻辑量判据）+ ADR-0
 cmd = "{python} scripts/check_l0_logic_ledger.py"
 expect = 0
 kind = "light"
-test_kind = "single_crate"
+test_kind = "cross_crate"
 note = "L0 受控逻辑台账，判据形态是完备性对拍而非体量棘轮（用户裁定的形态；体量棘轮与『无例外硬约束』两个反方案在 ADR-218 一并否决并记理由）。键集 = C(派生 fn) ∪ T(D7 政策表) ∪ R(lib.rs 现读登记名中派生不中的模块)，与 scripts/l0_logic_ledger.txt 严格相等：派生有构造而无行⇒NEW 红（这就是被关死的洞——L0 新增实质逻辑必须有人签一行 class+basis 才能落地）；行指向的构造消失⇒STALE 红；class 与派生读数矛盾⇒CLASS_MISMATCH 红；头注 CLAIM 与实况不符⇒CLAIM 红；行畸形/未知键/basis<24 字符/class 或 exempt 越词表/重复键/登记名解析歧义/四地板任一不达⇒退 2 不可判定（致盲的解析器绝不被读作『干净』）。为何取并集而非『派生==登记』：实测 C ⊉ R（三个已登记模块在派生结果里没有对应构造），若以 C 为判据首轮即无解——此结论自第四轮起不变。**被第六轮实测推翻的是当时的机制归因**：原句称三例「逻辑形如 match→变体决策表，被 LOOKUP 一票否决抑制」，实算其中两例（archive_monotonicity::assert_archive_monotonicity、experience_card::normalize）的 `=>` 计数为 0、体长 7 未达 D1(bl≥12)/D3(bl≥25)，根本没有可被否决的 match 臂；只有 safety/errors::to_nexus_error（bl=36 / `=>`=10 / call=9）确是否决抑制。归因自第六轮起由 mech/near/supp 三个**机器字段**承担（mech_of() 单一派生，值域 DETECTED|LOOKUP-SUPPRESSED|BELOW-DETECTOR|NO-BODY|TABLE，与既有 detectors/bl/br/ar 一样逐字 diff），并新增 BASIS_MECH_RX 令 basis 散文不得再叙述机制——命中判**退 2 而非退 1**（读者无法判断散文与字段谁描述这棵树，那是「判不了」不是「判出违规」）。--write 迁移按 ; 切子句丢弃叙述性者，剩余不足 24 字符则拒绝改动而打印 [BASIS-KEEP] 点名人工。回滚耦合：新脚本对旧台账 rc 2（缺 mech 键）、旧脚本对新台账 rc 2（未知键）⇒ 脚本与台账必须同 commit 同退。D8「决策表检测器」经实测否决（公式 A 对目标抓 0 个=死键；公式 B「臂内含表达式」必然误伤 ≥12 个现存合法形态且收益上限只把 3 行盲区收口到 1 行），重议触发条件记 ADR-220 决策 3/4。七检测器 D1..D7（fn 级：体积/分支/循环/算法词表/比较密度/let 密度；D7 模块级 const [T; N≥8] 政策表轴）+ LOOKUP 否决复现 lib.rs:499-500『小型访问器与 enum as_str 属平凡、不登记』这条既有裁决而不与之打架：实测 vector.rs 生产面最大函数体 7 行，ADR-033:286 的『零逻辑成立』量体结论被本门机器复现。词法同源：blank_rust 与 test_tail_mask 从 G-99 import，module_key 从 G-105 import（双份解析器必漂是本仓既有病灶）。刻意不判『登记与否』为红：lib.rs 拥有登记表这一事实，台账拥有 class 与 basis；门每次现读 lib.rs 并打印 REG=YES|NO，且台账禁止出现 registered= 键（第二真值源守卫）。原「把 11 个模块补进 lib.rs 属待批批次 P1-REG」已于第五轮落地（登记表扩至全量、[REGISTRY-GAP] 归零），本行不再抄名册。读数一律由脚本自报（默认模式打印 [SCOPE] 与 [OK] 行的 derived_fns/dup_fns/tables/registered/rows/class 分布/mech 分布，--selftest 打印断言数与本门分布）——本行此前抄过一份首跑快照（含 derived_fns=52、dup_fns=1、registered=17、REGISTRY-GAP=11 与 11 个模块名），全部随 P1-REG 与幻影体修复而失效，与 G-116/G-120 记录过的同一病灶（抄进散文的计数必然比代码先腐烂），处置一致：改指针。地板 FILES_FLOOR=55 SRC_LINES_FLOOR=18000 DERIVED_FN_FLOOR=15 REG_RESOLVED_FLOOR=12。"
 
 [[gate]]
@@ -1317,7 +1326,7 @@ spec_ref = "G-119 配套（门自身有牙，沿 G-20/G-92/G-99/G-105/G-107/G-10
 cmd = "{python} scripts/check_l0_logic_ledger.py --selftest"
 expect = 0
 kind = "light"
-test_kind = "single_crate"
+test_kind = "cross_crate"
 note = "断言数以 `--selftest` **自报**，本行不抄数（G-116 note 已因「写 15 条而代码实为 17」吃过同一课；本门首版写「29 条」，主会话修 G-119 签名预算/幻影体后实为 34——抄进散文的计数必然比代码先腐烂，故改指针）。全部断言走生产同一组抽取/判定函数（tempdir 真树 + 复用 G-99/G-105 同源件，禁测试专用副本）：①植入 40 行 sort/loop fn 必须派生 ②match 臂内含算术+let 的函数必须派生（证明 LOOKUP 否决不吃『表体内含计算』）③D7 政策表轴对 const [(K,u8);9] 有牙 ④植入负例：三个单 match 返常量访问器 + as_str + 四个无体 trait 声明，派生 fn 数严格为 0（不写 or len==0 式恒真断言）⑤cfg(test) 尾内逻辑不得入集 ⑥doc 注释里的伪代码 fn 不得当真码 ⑦VOCAB 命中即 D2 非死轴 ⑧夹具行与实况一致⇒rc 0 ⑨删一行⇒NEW ⑩删构造留行⇒STALE ⑪class=trivial 而 D1/D3 仍命中⇒CLASS_MISMATCH ⑫CLAIM 与实况不符⇒红 ⑬basis<24 字符⇒2 ⑭class 越词表⇒2 ⑮⑯同一夹具分别以 LF 与 CRLF 落盘，派生结果逐项相等（L0 src 现混合 11 CRLF/53 LF，行尾是本仓静默 0 命中的头号成因）⑰台账出现 registered= 键即 malformed⇒2（第二真值源守卫）⑱未知行 kind 不跳过而判 malformed ⑲每个登记名在 L0 树内唯一解析（判据是 len(resolved)==len(names) 且无歧义注记，不写死名数——P1-REG 使登记表 17→28 时，原先写死「17」的断言在一棵完全健康的树上假红） ⑳-㉓四地板各自 0<floor≤真树读数（夹具规模小，故地板断言必须对真树取数）㉔真树 D7≥1（re.MULTILINE 一旦丢失，夹具仍绿而实况致盲——此断言专防该轴向）㉕㉖dup_fns 在 CLAIM 内被钉住：注入重名⇒dup_fns=1，无重名⇒dup_fns=0（同模块两 impl 块重名会折叠成一键，折叠量若不落 CLAIM 即成新隐身位）㉗真树对空台账判红且有 NEW（Extractor 非致盲）㉘NEW 行数≥DERIVED_FN_FLOOR。㉙-㉝（第六轮机制轴）mech 值域越词表⇒2、mech 与实算不符⇒[MECH] 红、手写 near 与实算不符⇒[MECH] 红、basis 叙述机制⇒2（植桩用的是**已入库那三句原词**，所以禁令是对着它存在的成因验的而不是对着编造的样本）、MECH_VOCAB 五个值各有专属夹具（否则 mech_of 恒返回同一个值也能全绿）；另加跨字段不变量：BELOW-DETECTOR 必有 near 且 supp=0、LOOKUP-SUPPRESSED 必有 supp≥1、NO-BODY 的模块必真无生产体，且真树侧只断言「结构自洽 + near 点名该模块内真实存在的函数」，**不断言哪个模块该归哪一类**（那会把今天的实测焊成规格，正是 ADR-218 D-44 记过的形态）；迁移面两条：--write 只丢叙述性子句而保留引用、以及当全部子句都在叙述机制时**拒绝改动**而非把 basis 削短到违规。上述列举为代表性形态、**非穷尽**——穷尽式清单正是「抄进散文的计数必然比代码先腐烂」的同一病灶，权威读数一律以 --selftest 自报为准。开发期本夹具先于任何 CI 接线咬出四处真缺陷：TABLE_RE 缺 re.MULTILINE 使 D7 恒 0 命中、SRC_LINES 误取非空行口径（15007 vs wc -l 25700）触发地板而暴露口径错配、同模块重名 fn 被键集折叠、POS_BRANCHY 首版仅 6 行不含 let 因而无任何检测器命中（断言本身是错的，不是门错）。任一断言不成立⇒退 1。"
 
 # ============================================================
@@ -1596,6 +1605,23 @@ kind = "light"
 test_kind = "cross_crate"
 note = "crates/*/src 生产码中，同时覆写 capability_of + declared_tools 的 impl ToolExecutor 块必须同时覆写 declared_side_effects——防装饰器/包装器只转发一半能力视图面（R9 后加的方法在 ToolRuntime/三装饰器/ExecPolicy/Builtin 四处静默断链，MCP 并行封顶保持 0，R11 W1 修复）。#[cfg(test)] mod 内夹具豁免；显式 SIDE_EFFECT_FORWARDING_EXEMPT: <理由> 行豁免。缺目录/0 文件退 2 致盲守卫。"
 
+# ============================================================
+# G-145..G-149 —— 工具执行面契约（G-148/G-149）+ LLM 循环默认值（G-145/G-146）
+# + govd 自测面（G-147）；ADR-229 / ADR-232 / ADR-234。
+# 两门各配 --selftest（G-148/G-149、G-145/G-146）：先证有牙，再跑真实裁决（沿 G-135..G-140 先例）。
+# 断言数以 --selftest 自报为准，本块不抄数。
+# 定位：本组是**第二方法**——G-08/G-45/G-46 读 cargo metadata 解析后的依赖图，
+# optional / feature-gated 边在那里的形态与本组读的 manifest 文本、源码文本不同。
+#
+# 合流裁决（2026-11-14，两门一道不删）：两侧同时占用 G-143/G-144——
+#   HEAD = ToolExecutor 声明表穿透双门（check_executor_side_effect_forwarding.py，ADR-295 D1）；
+#   feat = 工具执行面契约双门（check_tool_plane_contract.py，ADR-229 D2/D4/D5）。
+# 按 ADR-233 合流纪律「先到先得 + 后到顺延」：HEAD 的 G-143/G-144 号位保留
+# （crates/chimera-cli/src/exec_plan.rs 注释、ADR-295 报告与 ci.yml 步骤名均已按此号登记），
+# feat 侧双门顺延为 G-148/G-149，排在 G-147 之后以保持号序递增；
+# feat 侧 G-145/G-146/G-147 号位无冲突，原号保留。
+# ============================================================
+
 [[gate]]
 id = "G-144"
 spec_ref = "G-143 配套（门自身有牙）"
@@ -1604,3 +1630,57 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "7 夹具：全转发绿 / 漏转发红 / 显式豁免绿 / cfg(test) mod 豁免 / 仅 execute 最小实现绿 / 泛型参数红 / 限定 trait 路径红。任一断言不成立 ⇒ 退 2。"
+
+[[gate]]
+id = "G-145"
+spec_ref = "ADR-232 D2/D4/D5/D7"
+cmd = "{python} scripts/check_llm_loop_defaults.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "LLM 工具循环的四条默认值承诺——改宽后编译与既有测试都不会红（llm_off_legacy 只证「未开开关时旧路径不变」，证不了开关本身仍是白名单），故只能静态判据。L1 commands/run.rs::llm_loop_enabled 必须是 Some(\"apply\") | Some(\"on\") 白名单且不得出现 _ => true 兜底（D7 默认关闭）；L2 max_turns/max_tool_calls/max_repeat_tool_calls/max_total_tokens 四重上限**外加 max_parallel_tools（并发窗口）**在 LlmToolLoopConfig::default() 里齐备且非零，五个 CHIMERA_LLM_MAX_* 以带引号完整字面量匹配（窗口也在上限面内：删掉 chunking 既不红编译也不红既有测试，只让并行度变无界，而 tests/llm_tool_loop.rs 断言的 peak<=8 绑的就是这个窗口）（裸子串会把改名后的同前缀常量也算命中，该漏抓已固化成夹具）；L3 pub struct LlmLoopOutcome 的 derive 行不得含 Default（D4：漏落 stop 必须编译不过，而非静默等于 Final）；L4 src/llm 递归扫描的生产码零 unwrap/expect（cfg(test) 尾除外，与 E-5 同口径）且非 mca 档 build_llm_client_from_config 返回 ConfigError（D2：不 panic、不空回）；L5 src/llm 构造的事件集合必须属于 {BudgetExceeded}（D5）。default() 体解析为空 ⇒ 退 2，不当绿。"
+
+[[gate]]
+id = "G-146"
+spec_ref = "G-145 配套（门自身有牙）"
+cmd = "{python} scripts/check_llm_loop_defaults.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "夹具文件集 =「必需单文件 + llm/ 目录实况（递归）」：必需集缺失响亮报错、目录里多出的 .rs 自动进扫描面（硬枚举会把夹具覆盖率钉死在抄写那一刻）。未改动夹具判绿；植入缺陷分别使 L1（白名单扩成 _ => true）、L2（上限默认改 0 / 删掉一个 env 读取点 / 并发窗口 env 读取点改名 / 并发窗口默认改 0）、L3（outcome 派生 Default）、L4（生产码 unwrap、**子目录 llm/inner/leak.rs 里的 unwrap**）、L5（构造白名单外事件）判红；反向边界：cfg(test) 段里的 unwrap 不得判红；输入目录缺失必须退 2。任一断言不成立 ⇒ 退 1。"
+
+# ============================================================
+# G-147 -- govd 调度器自测面入门（ADR-234 S9 / ADR-228 §3.6）
+# 轴分工：G-137..G-140 判"清单与 CI 是否互相咬合"，本门判"调度器自身的行为断言
+# 是否还成立"。此前 84 条断言只存在于手跑面，任何把 jobs/磁盘/重试语义改坏的
+# 提交都能全绿合入。
+# ============================================================
+[[gate]]
+id = "G-147"
+spec_ref = "ADR-234 S9 / ADR-228 §3.6（自测面必须有绊线）"
+cmd = "{python} scripts/govd/tests/test_govd.py"
+expect = 0
+kind = "light"
+timeout_s = 120
+test_kind = "cross_crate"
+note = "govd（验证调度器）全部行为断言：选择/拓扑/分片拒剪、resume 账本、重试语义、取消、报告面产物、普查计数、jobs 解析与磁盘余额取数位置。自锁机制：文件里的 CENSUS_TOTAL/LIGHT/HEAVY 是本清单的唯一计数钉点，加门或删门不同批改这三值 ⇒ 本门自身红（沿 G-143..G-146 先例：一处事实一处钉，禁止在别处复述字面量）。S6 的两条判据也在此面：未指定 --jobs 时池大小必须等于 profile.jobs（改前恒 0 ⇒ 红），两道 heavy 门喂两个磁盘读数时第二道必须 UNKNOWN 且 disk_usage 恰被调 2 次（循环外采样 ⇒ 两道全执行 ⇒ 红）。CI 侧同步新增阻塞步（ADR-234 裁决：不接 CI 就不能靠 ci_exempt 绕过 G-137 方向 B）。"
+
+# 合流顺延（原 feat 侧 G-143）：工具执行面契约静态门（ADR-229 D2/D4/D5）。
+[[gate]]
+id = "G-148"
+spec_ref = "ADR-229 D2/D4/D5"
+cmd = "{python} scripts/check_tool_plane_contract.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "执行面四条编译期抓不到的判据：C1 L10 tool_plane 的 provider_id 字面量互异、非空且不低于门内地板（递归扫描含子目录；0 命中判红不判绿）；C2 crates/gqep-executor/Cargo.toml 的 [dependencies] 不得出现 L8-L10 成员（依赖铁律的第二方法，与读 cargo metadata 的 G-08/G-45 形态不同）；C3 crates/gqep-executor/src/tool_plane 内不得出现 NexusEvent:: 构造点（ADR-229 D5：可观测性走 ToolMetrics+tracing，新变体须走七点位同批）；C4 ToolPlaneMode 的 #[default] 必贴 Off 且 from_env 兜底为 _ => ToolPlaneMode::Off（ADR-229 D4：非法 env 不得当成启用）。缺目录/缺 manifest/[dependencies] 解析出 0 条 ⇒ 退 2 判不可判定，不判绿；tool_plane 递归文件数低于地板亦判红（防误删致盲）。"
+
+# 合流顺延（原 feat 侧 G-144）：G-148 的 --selftest 夹具。
+[[gate]]
+id = "G-149"
+spec_ref = "G-148 配套（门自身有牙）"
+cmd = "{python} scripts/check_tool_plane_contract.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "夹具在 tempdir 复制真树文件并走与生产同一个 run_all：未改动夹具必须判绿；植入缺陷分别使 C1（注册名与 echo 撞车 / provider_id 全部改名致 0 命中 / **子目录 providers/dup.rs 撞名**）、C2（L7 加 chimera-cli 依赖）、C3（构造 NexusEvent）、C4（#[default] 移到 Apply / 非法 env 兜底改成 Apply）判红；反向边界：只有 use event_bus::NexusEvent 而无构造点不得判红（否则门在无关改动上狼来了）；整目录缺失必须退 2。子目录夹具是递归扫描的回归锁——把枚举改回 os.listdir 即红（已用非递归探针实测该断言失败）。任一断言不成立 ⇒ 退 1。"

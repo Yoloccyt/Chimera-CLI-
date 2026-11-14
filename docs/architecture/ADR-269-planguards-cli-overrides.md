@@ -29,10 +29,17 @@ impl PlanGuardOverrides {
             max_steps: self.max_steps.map_or(base.max_steps, |v| v.min(base.max_steps)),
             budget_bytes: self.budget_bytes.map_or(base.budget_bytes, |v| v.min(base.budget_bytes)),
             timeout_ms: base.timeout_ms,
+            // R12 合流（feat/toolplane-execution）新增 PlanGuards::max_parallel：
+            // CLI 无覆写开关 ⇒ 原样透传基线值（本方法契约是"只收紧、绝不放宽"）。
+            max_parallel: base.max_parallel,
         }
     }
 }
 ```
+
+> **2026-11-14 更新**：`PlanGuards` 在合流中加入 `max_parallel`（`run_with` 的在飞节点窗口，
+> 与 legacy `run` 的 `concurrency` 是**独立旋钮**、同默认 8、互不写入）。本 ADR 的
+> 「只收紧」契约不变；CLI 目前**不**提供该字段的覆写开关。
 
 **只收紧**的理由：既有默认（64 步 / 64 KiB / 非只读）就是当前生产契约。
 允许 CLI 放宽会让「同一个二进制在不同参数下有不同的资源上界」，

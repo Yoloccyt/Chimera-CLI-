@@ -363,6 +363,9 @@ fn lookup_table_2(key: &str) -> Option<&'static str> {
         "status.export_csv_prompt" => "Export as CSV?",
         "status.export_failed" => "Export failed: {}",
         "status.export_blocked" => "Cannot export: {}",
+        // Phase 6B/T6B.5:写盘离开 UI 线程,先显"正在导出"
+        "status.export_pending" => "Exporting to: {}",
+        "status.export_interrupted" => "export task terminated (no receipt received)",
         // B4-I(F-65 补口):导出成功提示(单词级英文硬编码收口)
         "status.exported" => "Exported: {}",
         // B4-I:窗格技术标签(focus_pane 状态提示;zh 侧译为 无/主区/窗格)

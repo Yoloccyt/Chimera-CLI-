@@ -3,9 +3,15 @@
 # after a split so the cap ratchets DOWN. Key is path::fn (stable across
 # line drift); cap is the measured max length.
 
-crates/chimera-cli/src/composition.rs::build_with_sharding|214  # production >200 lines (open debt: split before it grows)
+# 合流裁决（2026-11-14，取并集 + 同键取更严格/更新值；cap 一律 = 合流后实测 max）:
+#   * 两侧独有的条目都保留（composition / experience_loop 来自 HEAD）。
+#   * new_internal: HEAD 467 vs feat 465 -> 取 465（更紧，且是 feat 侧重测值）。
+#   * build_with_sharding: HEAD 214 是合流前基线；两边合流后本文件实测 279 -> 取 279
+#     （register 的语义就是 cap=measured max，留 214 会判 GROWTH 红）。
+#   * popup.rs::render|215: feat 侧已把它拆到 200 行以下，实测不再命中 -> 删除该行
+#     （保留即 [STALE] 红，与「registered but no longer measured」同族）。
+crates/chimera-cli/src/composition.rs::build_with_sharding|279  # production >200 lines (open debt: split before it grows)
 crates/chimera-cli/src/experience_loop.rs::spawn_experience_loop|207  # production >200 lines (open debt: split before it grows)
-crates/chimera-tui/src/data/pipeline.rs::new_internal|467  # production >200 lines (open debt: split before it grows)
-crates/chimera-tui/src/popup.rs::render|215  # production >200 lines (open debt: split before it grows)
+crates/chimera-tui/src/data/pipeline.rs::new_internal|465  # production >200 lines (open debt: split before it grows)
 crates/event-bus/tests/filtered_subscriber_test.rs::test_topic_mapping_covers_all_variants|484  # test-side >200 lines (assertion table/bench body, not shipped)
 crates/mca-gateway/tests/token_efficiency_bench.rs::render_report|256  # test-side >200 lines (assertion table/bench body, not shipped)

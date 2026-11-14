@@ -42,7 +42,7 @@ const SUBCOMMAND_EXAMPLES: &[(&str, &str)] = &[
     ),
     (
         "quest",
-        "EXAMPLES:\n  chimera quest list        # 列出\n  chimera --json quest show <id>  # 详情\n  chimera --yes quest cancel <id>  # 取消",
+        "EXAMPLES:\n  chimera quest list        # 列出\n  chimera --json quest show <id>  # 详情\n  chimera --yes quest cancel <id>  # 取消\n  CHIMERA_QUEST_EXEC=apply chimera --yes quest execute --plans plans.json --prompt \"拉取。落盘。\"  # 执行(默认关闭)",
     ),
     (
         "llm",
@@ -75,6 +75,10 @@ const SUBCOMMAND_EXAMPLES: &[(&str, &str)] = &[
     (
         "mcp",
         "EXAMPLES:\n  chimera mcp list          # 列出 MCP 服务器\n  chimera --yes mcp call srv tool  # 调用工具",
+    ),
+    (
+        "tool",
+        "EXAMPLES:\n  chimera tool list          # 列出工具\n  CHIMERA_TOOL_PLANE=apply chimera tool call echo.echo --args '{\"x\":1}'  # 调用\n  CHIMERA_TOOL_PLANE=apply chimera tool plan --file plan.json  # 执行 DAG",
     ),
     (
         "audit",

@@ -1,4 +1,4 @@
-//! Critical 事件 mpsc 旁路背压契约测试(P0-1 修复)
+﻿//! Critical 事件 mpsc 旁路背压契约测试(P0-1 修复)
 //!
 //! 背景:审计报告 `docs/audit/quad-perspective-progress-audit-v2.25.0-omega.md` SYN-P0-1
 //! 指出:quest-engine 的 ambient_mode 双通道订阅(broadcast Normal + mpsc 旁路 Critical)

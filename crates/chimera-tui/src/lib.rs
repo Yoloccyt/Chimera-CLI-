@@ -46,6 +46,7 @@ pub mod app;
 // Action 统一层 / 组件系统 / 自研渲染引擎 / i18n / 输入路由
 // M0-M1 默认编译供 CI 类型检查,M2 起经 v3-engine feature 切换实际渲染路径。
 pub mod actions;
+pub mod approval_gate;
 pub mod approval_mode;
 pub mod chat_cards;
 pub mod chat_mode;

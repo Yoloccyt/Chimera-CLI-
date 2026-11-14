@@ -8,10 +8,7 @@
 #     GAP by editing this file without that review
 #   * consumer counting dialect + disclosed boundaries: see the gate header
 # Format: NAME  [# reason]
-AffinityMessage
 AffinityOverrides
-AffinityRequest
-AffinityResponse
 AgreementTrendPoint
 AppTokenUsage
 ApprovalDecision
@@ -32,14 +29,14 @@ ClaimPayload
 CommandValidationError
 Compressibility
 CompressionStrategy
-ContentBlock
-ContextAssemblyContract  # R9/ADR-290: hcw-window 装配内核已消费（1 个生产消费者）；第二消费者待接线，故仍登记
+# 合流裁决（2026-11-14）：ContentBlock / ContextAssemblyContract 在合流后的树上均已达
+# >=2 生产消费者（mca-gateway 侧接入），按 only-shrink 纪律删行（保留即 STALE 红）；
+# ContextCapabilityProfile 仍是单消费者，登记保留。
 ContextCapabilityProfile  # R9/ADR-291: L0 能力档案契约（蓝图 P0 核心交付）——gateway 写/hcw 读两消费方接线中
 ContractCheckOutcome
 ContractContext
 ContractExample
 ContractSpec
-CostEstimate
 Currency
 DeclaimPayload
 DispatchFuture  # ADR-238 D1: 对象安全派发 future 的类型别名；随 DispatchError 同族，第二个生产消费者待接线
@@ -59,7 +56,6 @@ ExtractionFormat
 FailureFixStatus
 FailureRecord
 FallbackStrategy
-FinishReason
 FormalProperty
 FormalResultProvider
 FusedItem
@@ -85,10 +81,8 @@ Lease
 MemPiAction
 MemoryManagementContract
 MemoryPyramidLevel
-MessageRole
 MetadataBridge
 ModalityKind
-ModelAffinitySpec
 ModelConfig
 ModelPrice
 MonthlyEvalReport
@@ -99,7 +93,6 @@ NormalizedThreeFactor
 OmniMessage
 OmniSparseMasks
 OutputBudget
-OutputFormat
 OutputProcessingContract
 PeakPeriod
 PersonaSummary
@@ -113,10 +106,7 @@ PricingTier  # R9/ADR-291: 条件计费面（上下文长度门槛→倍率，GP
 ProceduralBlueprint
 ProjectedMatrix
 PropertyCategory
-ProtocolDialect
-ProviderReceipt
 QuirkRule
-Quota
 QuotaLimits
 RLAction
 RLExperience
@@ -126,7 +116,6 @@ RecallQuota
 RecallQuotaPolicy
 Recoverable
 RecoveryStrategy
-RenewOutcome
 ReqId
 RetentionPolicy
 RetryPolicy
@@ -149,17 +138,17 @@ SkillLifecycleState
 SparseMask
 StopStrategyConfig
 TaskOrchestrationContract
-ThinkingPreference
 Thread
 ThreadSupport  # R9/ADR-291: 服务端线程支持三态（None/Beta{expiry}/Stable，蓝图 §5.5 P3 threads gating）——消费方随 P3 传输面接线增长
 ToolCallRecord
-ToolDecl
 ToolFailure
 ToolInteractionContract
 ToolDispatcher  # ADR-238 D1: 装饰器链每环实现的对象安全派发 trait；生产消费者为 gqep-executor，L8+ 消费方待接线后达 2
 ToolNode
 ToolOp
-UsageReport
+# 合流裁决（2026-11-14）：TurnId（nexus-app-server + session-store）与 UsageReport
+# （chimera-cli + mca-gateway）在合流后的树上均达 >=2 消费者；两侧各登记其一
+# （feat=TurnId / HEAD=UsageReport），并集后二者都已债清，故按 only-shrink 双双删除。
 ValidationRule
 VariantContract
 VectorBackend
