@@ -19,7 +19,11 @@
 //! - `relevance`(任务相关性):CLV 余弦相似度,clamp 到 [0.0, 1.0]
 //!
 //! # 设计决策(WHY)
-//! - **非语义压缩**:Week 3 阶段用重要性评分 Top-N,Week 6 NMC 后接入语义压缩
+//! - **评分语义化 + CLV 语义折叠**(R11 W4b/W4c 收口):重要性评分含任务相关性
+//!   项(task CLV × 条目 CLV 余弦,无 CLV 取中性 0.5);Top-K 内近重复 CLV 条目
+//!   (cos ≥ 0.92)向高分代表折叠,让出预算槽位(UD-2 判据,ADR-295 D7)。
+//!   原"Week 6 NMC 后接入语义压缩"的挂账自此收口(NMC 已在场,评分与折叠
+//!   均消费 CLV)
 //! - **至少保留 1 个条目**:即使所有条目都 > target_size,也保留最高分条目,
 //!   避免压缩后上下文为空(此时 compressed_size 可能 > target_size,触发窗口升级)
 //! - **compression_ratio = original/compressed**:压缩比(>1.0,越大压缩越多),
@@ -152,6 +156,29 @@ pub(crate) fn effective_source_weight(configured: f32) -> f32 {
     }
 }
 
+/// 语义折叠余弦阈值(UD-2 用户裁决,2026-11-14)
+///
+/// WHY 0.92:对齐 scc-cache `semantic_cache` 的相似命中先验(0.92)——同仓
+/// 两处「CLV 余弦判定语义等价」共用一档阈值,避免口径分叉。误折叠风险
+/// 由保守三前置压低(双 CLV 在场 + 高阈值 + 高分代表保留),且
+/// `CHIMERA_DEDUP_SEMANTIC=off` 可即时关断。
+pub(crate) const SEMANTIC_FOLD_THRESHOLD: f32 = 0.92;
+
+/// CHIMERA_DEDUP_SEMANTIC 的启动期缓存(W4b 回退开关)
+///
+/// WHY OnceLock:env 读取一次,压缩热路径零 env 开销(与 W4_DISABLED 同款);
+/// 设 "off" 时 semantic_fold_enabled() 恒 false,折叠块整体短路(逐位回旧行为)。
+static SEMANTIC_FOLD_DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// 语义折叠开关 — `CHIMERA_DEDUP_SEMANTIC=off` 关断(默认开启)
+pub(crate) fn semantic_fold_enabled() -> bool {
+    !*SEMANTIC_FOLD_DISABLED.get_or_init(|| {
+        std::env::var("CHIMERA_DEDUP_SEMANTIC")
+            .map(|v| v.eq_ignore_ascii_case("off"))
+            .unwrap_or(false)
+    })
+}
+
 impl ContextCompressor {
     /// 压缩上下文条目到目标大小
     ///
@@ -204,6 +231,7 @@ impl ContextCompressor {
                 original_count,
                 retained_count: original_count,
                 dropped_count: 0,
+                folded_semantic: 0,
                 retained_entries: Vec::new(),
                 algorithm: "none".into(),
             };
@@ -299,6 +327,41 @@ impl ContextCompressor {
         // 截断到 Top-K,丢弃评分较低的条目(不在贪心保留范围内)
         scored.truncate(estimated_k);
 
+        // === R11 W4b(ADR-295 D7,UD-2 用户裁决):CLV 余弦语义折叠 ===
+        //
+        // 判据(保守三前置,全部满足才折叠):
+        // 1. 双条目 CLV 均存在(None 恒不折叠——无嵌入不奖不罚更不删,
+        //    与评分面 DEFAULT_RELEVANCE 中性先验同哲学);
+        // 2. cosine ≥ [`SEMANTIC_FOLD_THRESHOLD`](0.92,对齐 scc-cache
+        //    semantic_cache 先验);
+        // 3. 折叠向评分更高者(评分降序序处理天然保证:先见者为代表)。
+        //
+        // WHY 折叠在贪心保留之前:语义重复条目会互相挤占预算槽位,折叠后
+        // 同预算装更多**不重复**信息(Ω₂「预算化注意力」的内容层落地)。
+        // WHY 只在 Top-K 内折叠:代表与重复双双进入 Top-K 才会互抢槽位,
+        // K 外条目本就被评分丢弃,折叠对其无可观测收益;同时保住
+        // SubTask 13.7 的 O(n + K log K) 复杂度纪律(不做全量排序)。
+        // 逃生:`CHIMERA_DEDUP_SEMANTIC=off` 回无折叠旧行为(启动期一次读取)。
+        let mut fold_flags = vec![true; scored.len()];
+        let mut folded_semantic = 0usize;
+        if semantic_fold_enabled() {
+            let mut kept_clvs: Vec<&CLV> = Vec::new();
+            for (index, (_, entry)) in scored.iter().enumerate() {
+                let Some(clv) = entry.clv.as_ref() else {
+                    continue; // 前置 1:无 CLV 恒保留
+                };
+                let is_dup = kept_clvs
+                    .iter()
+                    .any(|kept| kept.cosine_similarity(clv) >= SEMANTIC_FOLD_THRESHOLD);
+                if is_dup {
+                    fold_flags[index] = false;
+                    folded_semantic += 1;
+                } else {
+                    kept_clvs.push(clv);
+                }
+            }
+        }
+
         // 贪心保留 Top-N 使总大小 ≤ effective_target
         // 在贪心前保留最高分条目作为 fallback(避免压缩后上下文为空)
         // WHY:若所有条目 token_size > effective_target,retained 为空,
@@ -318,7 +381,12 @@ impl ContextCompressor {
         // 避免 `ContextEntry` 深拷贝(content String 被复制)。
         // 1000 条目保留 100 条时,从 100 次 String clone 降为 100 次 refcount inc。
         // token_size 等字段访问通过 Arc 的 Deref 自动解引用,无需修改。
+        // W4b:语义折叠条目在此让出预算槽位(fold_flags 与 scored 同序对齐)。
+        let mut fold_iter = fold_flags.iter();
         for (score, entry) in scored {
+            if !fold_iter.next().copied().unwrap_or(true) {
+                continue;
+            }
             if compressed_size + entry.token_size <= effective_target {
                 compressed_size += entry.token_size;
                 retained.push(Arc::clone(entry));
@@ -359,6 +427,7 @@ impl ContextCompressor {
             original_count,
             retained_count,
             dropped_count,
+            folded_semantic,
             retained_entries: retained,
             algorithm: "importance-top-n".into(),
         }

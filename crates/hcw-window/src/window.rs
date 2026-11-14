@@ -923,7 +923,10 @@ impl HcwWindow {
     /// Normal 观测面,发布失败随 `?` 上抛(与既有 publish_* 一致;
     /// 调用方 select_window_with_context 的失败语义=窗口操作失败,
     /// 与 ContextCompressed 发布失败同级别对待)。
-    async fn publish_window_plan_applied(&self, plan: &governor::WindowPlan) -> Result<(), HcwError> {
+    async fn publish_window_plan_applied(
+        &self,
+        plan: &governor::WindowPlan,
+    ) -> Result<(), HcwError> {
         let event = NexusEvent::WindowPlanApplied {
             metadata: EventMetadata::new("hcw-window"),
             resident_cap: plan.resident_cap,
@@ -1003,6 +1006,7 @@ async fn apply_sparse_mask_to_state(
         original_count,
         retained_count,
         dropped_count,
+        folded_semantic: 0, // 稀疏化路径无语义折叠(W4b 折叠只在 importance-top-n 面)
         retained_entries: Vec::new(), // 不克隆,避免内存开销
         algorithm: "sparse-mask".into(),
     };

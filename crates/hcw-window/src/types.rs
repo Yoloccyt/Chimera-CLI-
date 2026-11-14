@@ -635,6 +635,13 @@ pub struct CompressionReport {
     pub retained_count: usize,
     /// 丢弃条目数
     pub dropped_count: usize,
+    /// 其中经 CLV 余弦语义折叠的条目数(R11 W4b / ADR-295 D7,UD-2 判据)
+    ///
+    /// 折叠条目是 dropped_count 的子集(语义重复,向评分更高者折叠)。
+    /// `#[serde(default)]`:压缩报告经事件/序列化面透出,旧载荷反序列化
+    /// 兼容为防御性默认(append-only 字段扩展,ADR-292 D1 先例)。
+    #[serde(default)]
+    pub folded_semantic: usize,
     /// 保留的条目列表(用于调用方替换原始 entries)— Arc 共享,避免压缩路径深拷贝
     ///
     /// WHY(M-01/M-02):改为 `Vec<Arc<ContextEntry>>` 后,compressor 内部
