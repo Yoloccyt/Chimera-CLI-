@@ -2,7 +2,9 @@
 //!
 //! # 职责
 //! 为所有上下文入口提供**唯一**的去重与预算账本：
-//! - 精确重复去重（`role + source + content` 三元组逐字相同）；
+//! - 两档去重：精确档（`role + source + content` 三元组逐字相同）+ 规范化档
+//!   （空白折叠 + ASCII 大小写归一后相同，R11 W4a；`CHIMERA_DEDUP_NORMALIZE=off`
+//!   回精确档）；
 //! - 单一预算 = `min(contract.max_tokens, tier_capacity)`；
 //! - 确定性驱逐：可驱逐段 → 近期段 → 钉选段，同级按价值密度升序、`seq` 降序淘汰；
 //! - 输出保持输入相对顺序（`seq` 单调不减是调用方前置条件，装配不改写）。
@@ -12,8 +14,10 @@
 //! 公开面触发契约棘轮门（G-105/G-107/G-115/G-116 等），依赖方向 L2 → L0 合法。
 //!
 //! # 零差异保证
-//! 当输入不含精确重复且预算未成为约束时，输出 `items` 与输入**逐字段等价**
-//! （顺序与内容均不变）。这是「功能不削减」的硬约束，由单测与 property test 锁定。
+//! 当输入不含（精确或规范化）重复且预算未成为约束时，输出 `items` 与输入
+//! **逐字段等价**（顺序与内容均不变）。这是「功能不削减」的硬约束，由单测
+//! 与 property test 锁定。规范化档开启时，仅空白/ASCII 大小写差异的条目会
+//! 被折叠——属冗余治理语义（ADR-295 D7），非行为回归。
 //!
 //! # 不做的事
 //! - 不调用模型、不做摘要、不触发记忆合成（`on_demand_synthesis` 仅作为诊断字段透出）；
@@ -78,8 +82,14 @@ pub struct ContextItem {
 /// 装配诊断快照（有限取值域，无高基数标签）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AssemblyDiagnostics {
-    /// 被去重的条数
+    /// 被去重的条数（精确档 + 规范化档合计）
     pub deduped: usize,
+    /// 其中经规范化判据（空白折叠 + ASCII 大小写归一）折叠的条数（R11 W4a）
+    ///
+    /// 精确档计数 = `deduped - deduped_normalized`。`#[serde(default)]`：诊断
+    /// 快照非持久契约，旧载荷反序列化兼容为防御性默认。
+    #[serde(default)]
+    pub deduped_normalized: usize,
     /// 被预算驱逐的条数
     pub evicted: usize,
     /// 生效预算（token）
@@ -111,7 +121,9 @@ pub fn estimate_tokens(content: &str) -> usize {
 ///
 /// # 契约
 /// 1. 空输入 ⇒ 空输出，不 panic；
-/// 2. 去重键 = `(role, source, content)` 逐字相同；保留最先出现者；
+/// 2. 两档去重，均保留最先出现者：精确键 = `(role, source, content)` 逐字
+///    相同；规范化键 = 同三元组经空白折叠 + ASCII 大小写归一后相同
+///    （`CHIMERA_DEDUP_NORMALIZE=off` 关闭规范化档）；
 /// 3. 预算 = `min(contract.max_tokens, tier_capacity)`；`tier_capacity == 0` 视为未配置，
 ///    只用 `contract.max_tokens`；
 /// 4. 驱逐顺序：可驱逐段（非钉选且非末 [`RECENT_WINDOW_ITEMS`] 条）→ 近期段 → 钉选段；
@@ -131,6 +143,7 @@ pub fn assemble_context(
             items: Vec::new(),
             diagnostics: AssemblyDiagnostics {
                 deduped: 0,
+                deduped_normalized: 0,
                 evicted: 0,
                 budget_tokens: effective_budget(contract, tier_capacity),
                 used_tokens: 0,
@@ -164,6 +177,44 @@ pub fn assemble_context(
         .map(|(item, _)| item)
         .collect();
     let deduped_count = keep.iter().filter(|&&k| !k).count();
+
+    // ---- 1b) 规范化近重复去重（R11 W4a / ADR-295 D7）----
+    // 键 = (role, source, 规范化内容哈希)；复核 = 规范化逐词等价（空白折叠 +
+    // ASCII 大小写归一）。捕获面：工具输出/回显的空白与大小写漂移——真实
+    // 冗余的主要形态。保守方向：Unicode 大小写/变体**不折叠** ⇒ 少合并 =
+    // 不误删（宁漏勿错的审计纪律与精确档一致）。保留最先出现者（与精确档
+    // 同语义）。逃生：`CHIMERA_DEDUP_NORMALIZE=off` 回精确档（启动期一次读取，
+    // 禁热路径运行时开关红线）。
+    let (deduped, deduped_normalized) = if normalized_dedup_enabled() {
+        let mut nbuckets: HashMap<(u8, u8, u64), Vec<usize>> = HashMap::new();
+        let mut nkeep = vec![true; deduped.len()];
+        for (index, item) in deduped.iter().enumerate() {
+            let key = (
+                role_code(item.role),
+                source_code(item.source),
+                normalized_fnv1a_64(&item.content),
+            );
+            let bucket = nbuckets.entry(key).or_default();
+            if bucket
+                .iter()
+                .any(|&prev| normalized_eq(&deduped[prev].content, &item.content))
+            {
+                nkeep[index] = false;
+            }
+            bucket.push(index);
+        }
+        let folded = nkeep.iter().filter(|&&k| !k).count();
+        let filtered: Vec<ContextItem> = deduped
+            .into_iter()
+            .zip(nkeep.iter())
+            .filter(|(_, &k)| k)
+            .map(|(item, _)| item)
+            .collect();
+        (filtered, folded)
+    } else {
+        (deduped, 0)
+    };
+    let deduped_count = deduped_count + deduped_normalized;
 
     // ---- 2) 预算与驱逐 ----
     let budget = effective_budget(contract, tier_capacity);
@@ -219,6 +270,7 @@ pub fn assemble_context(
         items: assembled,
         diagnostics: AssemblyDiagnostics {
             deduped: deduped_count,
+            deduped_normalized,
             evicted,
             budget_tokens: budget,
             used_tokens: used,
@@ -311,4 +363,59 @@ fn fnv1a_64(bytes: &[u8]) -> u64 {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     hash
+}
+
+/// FNV 单字节推进（规范化哈希复用同一素数/偏移基）
+fn fnv_byte(hash: u64, byte: u8) -> u64 {
+    (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+}
+
+/// 规范化内容哈希（R11 W4a）：空白序列折叠为单空格 + ASCII 大小写归一后 FNV。
+///
+/// WHY 流式哈希而非先物化规范化字符串：省一次堆分配（装配面每条目一次，
+/// 预算驱逐前就要算）；词间分隔符显式哈希进流，保证 `"a  b"` 与 `"a b"` 同键。
+fn normalized_fnv1a_64(content: &str) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    let mut first_word = true;
+    for word in content.split_whitespace() {
+        if !first_word {
+            hash = fnv_byte(hash, b' ');
+        }
+        first_word = false;
+        for &byte in word.as_bytes() {
+            hash = fnv_byte(hash, byte.to_ascii_lowercase());
+        }
+    }
+    hash
+}
+
+/// 规范化逐词等价复核（与 [`normalized_fnv1a_64`] 同判据：空白折叠 + ASCII
+/// 大小写归一）——哈希碰撞兜底，与精确档「逐字复核」同纪律。
+fn normalized_eq(a: &str, b: &str) -> bool {
+    let mut aw = a.split_whitespace();
+    let mut bw = b.split_whitespace();
+    loop {
+        match (aw.next(), bw.next()) {
+            (None, None) => return true,
+            (Some(x), Some(y)) => {
+                if !x.eq_ignore_ascii_case(y) {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+}
+
+/// 规范化去重开关（启动期一次读取；`CHIMERA_DEDUP_NORMALIZE=off` 回精确档）
+///
+/// WHY OnceLock：禁热路径运行时开关红线（与 mlc `hnsw_tier_enabled_by_env`
+/// 同款）；默认开启（W4a 是冗余治理的主体交付）。
+fn normalized_dedup_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("CHIMERA_DEDUP_NORMALIZE")
+            .map(|v| !v.eq_ignore_ascii_case("off"))
+            .unwrap_or(true)
+    })
 }

@@ -266,3 +266,125 @@ proptest! {
         prop_assert_eq!(out.diagnostics.evicted, 0);
     }
 }
+
+// ===========================================================================
+// R11 W4a（ADR-295 D7）：规范化近重复去重（空白折叠 + ASCII 大小写归一）
+// ===========================================================================
+
+/// 规范化档：空白/大小写漂移的近重复被折叠，保留最先出现者，诊断分档计数
+#[test]
+fn normalized_dedup_folds_whitespace_and_case_variants() {
+    let items = vec![
+        item(
+            ContextRole::Tool,
+            ContextSource::Tool,
+            "build OK: 128 tests",
+            false,
+            0,
+        ),
+        item(
+            ContextRole::Tool,
+            ContextSource::Tool,
+            "build  OK:  128  TESTS",
+            false,
+            1,
+        ),
+        item(
+            ContextRole::Tool,
+            ContextSource::Tool,
+            "build\tOK: 128 tests",
+            false,
+            2,
+        ),
+        item(
+            ContextRole::Tool,
+            ContextSource::Tool,
+            "build OK: 128 tests passed",
+            false,
+            3,
+        ),
+    ];
+    let out = assemble_context(items, &contract(1_000_000), 0);
+    // 前三条规范化等价（最先出现者保留）；第四条内容不同必须保留
+    assert_eq!(out.items.len(), 2);
+    assert_eq!(out.items[0].seq, 0, "保留最先出现者");
+    assert_eq!(out.items[1].seq, 3);
+    assert_eq!(out.diagnostics.deduped, 2, "总去重 = 精确档 + 规范化档");
+    assert_eq!(out.diagnostics.deduped_normalized, 2, "本例全部为规范化档");
+}
+
+/// 规范化档不跨 role/source：同内容不同角色/来源不折叠（键三元组含二者）
+#[test]
+fn normalized_dedup_keeps_distinct_role_or_source() {
+    let items = vec![
+        item(
+            ContextRole::User,
+            ContextSource::User,
+            "Run the tests",
+            false,
+            0,
+        ),
+        item(
+            ContextRole::Assistant,
+            ContextSource::Assistant,
+            "run the TESTS",
+            false,
+            1,
+        ),
+    ];
+    let out = assemble_context(items, &contract(1_000_000), 0);
+    assert_eq!(out.items.len(), 2, "role 不同 ⇒ 不折叠");
+    let items2 = vec![
+        item(
+            ContextRole::Tool,
+            ContextSource::Tool,
+            "same content",
+            false,
+            0,
+        ),
+        item(
+            ContextRole::Tool,
+            ContextSource::Memory,
+            "same  CONTENT",
+            false,
+            1,
+        ),
+    ];
+    let out2 = assemble_context(items2, &contract(1_000_000), 0);
+    assert_eq!(out2.items.len(), 2, "source 不同 ⇒ 不折叠");
+}
+
+/// 计数口径分档：精确重复计入 deduped 但不计入 deduped_normalized
+#[test]
+fn deduped_normalized_counts_only_normalized_tier() {
+    let items = vec![
+        item(
+            ContextRole::Tool,
+            ContextSource::Tool,
+            "exact dup",
+            false,
+            0,
+        ),
+        item(
+            ContextRole::Tool,
+            ContextSource::Tool,
+            "exact dup",
+            false,
+            1,
+        ), // 精确档
+        item(
+            ContextRole::Tool,
+            ContextSource::Tool,
+            "exact  DUP",
+            false,
+            2,
+        ), // 规范化档
+    ];
+    let out = assemble_context(items, &contract(1_000_000), 0);
+    assert_eq!(out.items.len(), 1);
+    assert_eq!(out.diagnostics.deduped, 2);
+    assert_eq!(
+        out.diagnostics.deduped_normalized, 1,
+        "第三条经规范化折叠；第二条属精确档"
+    );
+}
