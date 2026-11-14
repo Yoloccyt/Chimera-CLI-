@@ -61,7 +61,7 @@ pub trait ToolExecutor: Send + Sync {
     /// WHY 真值源放在执行器而不是工具名前缀表（`streaming_dispatch::SideEffect::classify`）:
     /// 前缀表只认 `read:` / `query:` / `search:`，对 `text.echo` / `fs.read` / `fs.list`
     /// 一律判 Write ⇒ 接了等于没接；而**要执行该工具的对象**才知道它是否只读。
-    /// 计划里的显式声明优先级仍高于本方法（见 `layer_requires_serial`）。
+    /// 计划里的显式声明优先级仍高于本方法（见 `effective_side_effect`）。
     fn capability_of(&self, _tool_name: &str) -> Option<SideEffectDecl> {
         None
     }
@@ -221,7 +221,7 @@ impl PlanRunner {
         // 判据改用有效属性（声明 > 能力表 > 未知）而非只看 `Some(Write)`:
         // 旧判据下**省略 `side_effect` 字段即可绕过只读模式** —— 一个实际写文件的
         // 工具在 Plan 模式里照样被执行，与「投影拒绝写」的既定语义相悖（F-A21）。
-        // 未知按可能写处理，与 `layer_requires_serial` 同一保守口径。
+        // 未知按可能写处理，与 `effective_side_effect` 同一保守口径。
         if self.guards.readonly_only {
             for n in &plan.nodes {
                 if n.op == ToolOp::ToolCall
@@ -533,7 +533,7 @@ fn accumulate(
 /// WHY 这个优先级次序:显式声明是计划作者的意图，实现方不得推翻它
 /// （否则接入方可把写操作自报为只读来换取并发，层内写序不再由计划决定，
 /// 可复现性与审计链同时失效）；两者都不知道时返回 `None`，
-/// 由 `layer_requires_serial` 按「可能写」保守处理。
+/// 由调用方 `node_is_read_safe` 按「可能写」保守处理。
 fn effective_side_effect(
     node: &ToolNode,
     executor: &dyn ToolExecutor,

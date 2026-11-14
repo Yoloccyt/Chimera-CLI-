@@ -172,7 +172,7 @@ impl ToolExecutor for RuntimeToolExecutor {
 
     /// 能力视图必须逐层转发到 [`ToolRuntime`]
     ///
-    /// WHY 关键:`PlanRunner` 的 `layer_requires_serial` 拿到的是**装饰器链最外层**，
+    /// WHY 关键:`PlanRunner` 的 `effective_side_effect` 拿到的是**装饰器链最外层**，
     /// 任何一跳省略本方法都会让能力表在现网静默失效（而单测直接用 ProbeExecutor
     /// 仍然全绿 —— 即「测试证明不了生产接线」的经典形态）。
     fn capability_of(&self, tool_name: &str) -> Option<SideEffectDecl> {
