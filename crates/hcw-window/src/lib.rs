@@ -60,9 +60,9 @@ pub mod compressor;
 pub mod config;
 /// P4-W13.2.2: 密度学习器持有器 — S1 接缝策略异步下发 + 本地 fallback（C4 合规）
 pub mod density_learner;
+pub mod error;
 /// HCW v3 P1: WindowGovernor 每请求窗口装载计划（ADR-293，蓝图 §5.4——常驻层按有效窗口动态定容）
 pub mod governor;
-pub mod error;
 /// Phase 2 §7.4: HiLS-Attention 分层稀疏注意力（chunk-mass surrogate + 两级 softmax，ADR-049 内嵌）
 pub mod hils;
 /// P1-T14: 压缩评分 ComputeBridge 段间并行注入(env CHIMERA_NO_PARALLEL_HCW 回退)
@@ -95,7 +95,10 @@ pub use hils::{AttentionOutput, Chunk, HiLSAttention, HiLSWindowSelector};
 pub use probe::{mix_probe, probe_health, score_with_probe, ProbeHealth, ProbeWeights, ScoreCache};
 pub use selector::WindowSelector;
 // P4-W13.3.2: S4 接缝（HCW selector 权重系数）学习器持有器
-pub use governor::{AdaptiveGovernor, PlanContext, PlanSource, StaticGovernor, TierAlloc, WindowGovernor, WindowPlan};
+pub use governor::{
+    AdaptiveGovernor, PlanContext, PlanSource, StaticGovernor, TierAlloc, WindowGovernor,
+    WindowPlan,
+};
 pub use selector_learner::SelectorLearnerHolder;
 pub use types::{CompressionReport, ContextEntry, HcwConfig, HcwState, WindowTier};
 pub use window::HcwWindow;

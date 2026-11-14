@@ -133,7 +133,13 @@ impl CheckpointManager {
         let satellite_owned = satellite.cloned();
 
         tokio::task::spawn_blocking(move || {
-            Self::encode_and_save(&quest, checkpoint_id, &dir, max_keep, satellite_owned.as_ref())
+            Self::encode_and_save(
+                &quest,
+                checkpoint_id,
+                &dir,
+                max_keep,
+                satellite_owned.as_ref(),
+            )
         })
         .await
         .map_err(|e| QuestError::CheckpointSaveFailed(format!("spawn_blocking join: {e}")))?
@@ -1100,7 +1106,10 @@ mod tests {
             .join(format!("{}.sat", checkpoint.checkpoint_id));
         assert!(sat_path.exists(), "sidecar .sat 必须与主检查点同 id 落盘");
         assert!(
-            !cm.list_checkpoints("q-sat").unwrap().iter().any(|id| id.contains(".sat")),
+            !cm.list_checkpoints("q-sat")
+                .unwrap()
+                .iter()
+                .any(|id| id.contains(".sat")),
             "list_checkpoints 不得把 sidecar 当作检查点主文件枚举"
         );
 
@@ -1115,11 +1124,9 @@ mod tests {
 
         // 卫星态逐字段还原(from_bytes_with 注入重建)
         let satellite = restored_satellite.expect("卫星态必须存在");
-        let restored_tree = SearchTreeManager::from_bytes_with(
-            &satellite.tree,
-            Box::new(NoopMemorySyncHook),
-        )
-        .unwrap();
+        let restored_tree =
+            SearchTreeManager::from_bytes_with(&satellite.tree, Box::new(NoopMemorySyncHook))
+                .unwrap();
         let restored_map = LongTaskMap::from_bytes_with(
             &satellite.map,
             Box::new(crate::long_task_map::InMemoryExternalStorage::default()),
@@ -1192,10 +1199,7 @@ mod tests {
         std::fs::write(&sat_path, b"\x00garbage-not-msgpack\xff").unwrap();
 
         let (_cp, _registry_copy, restored_quest, satellite) =
-            cm.load_latest_full("q-corrupt-sat")
-                .await
-                .unwrap()
-                .unwrap();
+            cm.load_latest_full("q-corrupt-sat").await.unwrap().unwrap();
         assert!(satellite.is_none(), "损坏 sidecar 必须降级为 None");
         assert_eq!(restored_quest.quest_id, "q-corrupt-sat");
     }

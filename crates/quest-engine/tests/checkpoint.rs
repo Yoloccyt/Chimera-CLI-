@@ -704,11 +704,7 @@ async fn test_concurrent_save_load_correctness() {
 // ============================================================
 
 /// 构造卫星态测试用经验卡片(搜索树扩展节点)
-fn sat_card(
-    node_id: &str,
-    parent_id: Option<&str>,
-    score: f32,
-) -> nexus_contracts::ExperienceCard {
+fn sat_card(node_id: &str, parent_id: Option<&str>, score: f32) -> nexus_contracts::ExperienceCard {
     nexus_contracts::ExperienceCard {
         card_id: Box::from(format!("card_{node_id}")),
         task_id: Box::from("q-sat-e2e"),
@@ -792,11 +788,8 @@ async fn test_satellite_roundtrip_via_engine_restore() {
     let satellite = engine2
         .satellite_state(&quest_id)
         .expect("恢复后卫星态注册表必须回填");
-    let restored_tree = SearchTreeManager::from_bytes_with(
-        &satellite.tree,
-        Box::new(NoopMemorySyncHook),
-    )
-    .unwrap();
+    let restored_tree =
+        SearchTreeManager::from_bytes_with(&satellite.tree, Box::new(NoopMemorySyncHook)).unwrap();
     let restored_map = LongTaskMap::from_bytes_with(
         &satellite.map,
         Box::new(InMemoryExternalStorage::default()),

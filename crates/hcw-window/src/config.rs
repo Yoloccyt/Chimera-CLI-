@@ -199,7 +199,7 @@ impl Default for HcwConfig {
             compression_threshold: 0.9,                 // 容量利用率达 90% 触发压缩
             selector_policy: SelectorPolicy::default(), // P3-W10.3: Static(0.4, 0.3, 0.3) fallback
             parallel_compress: true,                    // P1-T14: 压缩评分段间并行默认开启
-            source_weight: 0.10,                        // WP-D/ADR-293: w4 来源维度默认开启(用户裁决)
+            source_weight: 0.10, // WP-D/ADR-293: w4 来源维度默认开启(用户裁决)
         }
     }
 }

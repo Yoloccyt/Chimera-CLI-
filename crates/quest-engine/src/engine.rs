@@ -309,7 +309,9 @@ impl QuestEngine {
             .ok_or_else(|| QuestError::QuestNotFound(quest_id.to_string()))?;
         // 卫星态注册表快照(无注册条目 → None,行为与历史等价)
         let satellite = self.satellite_state(quest_id);
-        let checkpoint = cm.save_with_satellite(Arc::new(quest), satellite.as_ref()).await?;
+        let checkpoint = cm
+            .save_with_satellite(Arc::new(quest), satellite.as_ref())
+            .await?;
 
         // 发布 CheckpointSaved 事件(Critical,EventBus 据此优先投递)
         let event = NexusEvent::CheckpointSaved {
