@@ -92,9 +92,19 @@ ADR-289「scc SqliteWal 批量化接线」正式裁决为**不做**:SccCache 是
 - **scc LRU 裁决(实测替代自辩)**:新增 `scc-cache/benches/lru_select_victim.rs`,criterion median **256 条目 = 13.22µs / 4096 条目 = 337.55µs**(自辩 1µs 修正为 13×,结论不变)。**维持现状**;重开条件:部署形态容量 ≥4096 且驱逐频繁。
 - **ShadowLog 环形窗口落地(替代原 W2d 无方案状态)**:裁决 = 环形窗口 `SHADOW_LOG_CAPACITY=4096`(影子期认领率 ≤60/分 ≈ 68 分钟窗口)+ `dropped_total` 挤出计数器 + `with_capacity` 构造;语义修订:「append-only 历史不可变」收窄为「**窗口内** append-only、顺序不可变」(真实审计链权威源 = session-store ADR-141,不受影响)。`ShadowScheduler` 当前零生产构造,本项是 R2 影子期接线的前置预案(与 recall_hybrid 的无计划面不同)。
 
+## W4/W5 执行期裁决(2026-11-14,证据驱动)
+
+- **D7 落地形态**:4a 规范化去重落装配面(assemble 第二档,`CHIMERA_DEDUP_NORMALIZE=off` 逃生);4b CLV 折叠落**压缩器面**——`ContextItem` 不携带 CLV,装配面折叠无数据源,压缩器条目自带 CLV(评分已消费)为唯一有数据面;Top-K 内折叠(代表与重复双双进 Top-K 才互抢槽位,保住 SubTask 13.7 O(n+K log K) 纪律)。
+- **4c 翻案**:None-CLV 中性先验(`DEFAULT_RELEVANCE=0.5`)已在场(compressor.rs),探索期「0 分吃亏」缺陷不存在——零工作登记;模块头"Week 6 NMC 后接入语义压缩"陈旧挂账随 W4b 收口。
+- **4d 不做**:`recall_hybrid` 零生产调用方(W2b 同款 U-10 裁决)。
+- **4e 机证**:配置层 A/B(30 工具+10 用户受控语料,元数据同质)——质量(用户保留)on=10/off=0、结构(工具保留)on=10/off=20、成本(装载 token)双跑 2000 贴预算;报告落 docs/reports/hcw-w4-ab-2026-11-14.md(本地)。方向断言适用边界 = fillers 语料,误伤场景走弃权通道(共同哲学 6)。
+- **D8 落地**:`DEFAULT_MAX_CONCURRENT_DELEGATION=8` + `CHIMERA_DELEGATION_MAX_CONCURRENT`(0/非法回默认);许可在任务体内获取(spawn 循环保持廉价);行为测试 = fanout 16 在飞峰值 ≤8 且 >1。
+- **D11 新增(ambient 批量化)**:看门狗 pause/resume 两循环 JoinSet 批量化(输入受 max_quests_per_batch=16 界定,天然并发上界);**checkpoint 循环裁决保持串行**——checkpoint_async=true 下 save_checkpoint 已是 fire-and-forget spawn(ADR-286 D1),批量化近零收益,不churn。
+- **D12 新增(M3 裁决)**:值漂移门实质闭合——断言级值自 ADR-278 D6 起由 perf_redline.yml 每夜实跑 + I11「声明必有执行面」;compare 模式接线被否(legacy heredoc = 第二真值源,元漂移风险);perf_thresholds.toml M3 注记已更新,重开条件登记。
+
 ## 验收与回滚
 
 - 每波:check → 组合回归(--no-fail-fast)→ criterion 红线零回退 → 门注册 → 逐文件 add + HEREDOC 提交。
-- 行为变化全带 env/config 逃生:`CHIMERA_DEDUP_SEMANTIC`/`CHIMERA_W4_DISABLED`(已在盘)/`CHIMERA_NO_HNSW_MLC`(已在盘)/cmt 配置节点/delegation 上限配置;后台建图无独立 env(回滚=revert 该 WP commit,同步/异步判别自身即安全面)。
+- 行为变化全带 env/config 逃生:`CHIMERA_DEDUP_NORMALIZE`/`CHIMERA_DEDUP_SEMANTIC`/`CHIMERA_W4_DISABLED`(已在盘)/`CHIMERA_NO_HNSW_MLC`(已在盘)/`CHIMERA_CMT_DECAY_DISABLED`+`CHIMERA_CMT_LSCT`+`CHIMERA_CMT_DIR`(W3c)/`CHIMERA_DELEGATION_MAX_CONCURRENT`(W5a);后台建图无独立 env(回滚=revert 该 WP commit,同步/异步判别自身即安全面)。
 - 波次=提交组,WP=原子 commit,单 WP revert 不影响他波;新事件变体(若有)走六锁同步,ordinal 尾号续增(ADR-197 惯例)。
 - 全量回归前置:target/debug 体积复检(R10 104GB 教训;W0 实测 13G/92G 可用,健康)。

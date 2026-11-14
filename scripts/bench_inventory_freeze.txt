@@ -107,3 +107,4 @@ sesa-router|router_benchmark|dev-only|SESA 路由整体基准
 sesa-router|three_layer_routing|dev-only|三层路由实验基准
 session-store|replay_bench|dev-only|会话回放开发基准(session_store 已注册主链)
 ssra-fusion|fusion_benchmark|dev-only|融合层整体基准
+scc-cache|lru_select_victim|dev-only|R11 W2e(ADR-295)LRU 规模标定产物——一次性裁决数据(256/4096 µs 级实测 13.22/337.55µs),非契约面;重开条件=容量≥4096 部署形态需门控时升格 run_bench
