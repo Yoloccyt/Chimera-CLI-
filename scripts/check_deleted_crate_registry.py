@@ -52,7 +52,17 @@ def git_deleted_crates(root):
         if m:
             names.add(m.group(1))
     if not names:
+        # 治理诊断（2026-11-14）: shallow clone（actions/checkout 默认 depth 1）
+        # 会让全历史 git log 返回空删除集。打印现场事实供 CI 排障——
+        # rev-count 与 shallow 标志直接区分「缺历史」vs「真无删除」两类。
+        diag = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"], cwd=root,
+            capture_output=True, text=True, errors="replace")
+        shallow = os.path.exists(os.path.join(root, ".git", "shallow"))
         print("[ENV-FAIL] git returned an empty deletion set -- cannot decide")
+        print("[ENV-FAIL] rev-count=%s shallow=%s "
+              "(shallow=1 时请给该 job 的 checkout 配 fetch-depth: 0)"
+              % (diag.stdout.strip() or "?", shallow))
         return None
     return names
 
