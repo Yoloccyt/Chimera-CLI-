@@ -22,6 +22,46 @@
 //! # 不做的事
 //! - 不调用模型、不做摘要、不触发记忆合成（`on_demand_synthesis` 仅作为诊断字段透出）；
 //! - 不修改调用方的 `seq`，不做隐式排序（避免改变既有输出字节）。
+//!
+//! # R12 W1-2：token 估算可注入（单一真值源）
+//!
+//! [`assemble_context`] 内部所有 token 计量（预算累计、驱逐扣减、`used_tokens`
+//! 统计）走的是**一个可注入的估算器**：精确入口
+//! [`assemble_context_with`] 接受 `&dyn Fn(&str) -> usize`，而 [`assemble_context`]
+//! 只是「以默认估算器 [`estimate_tokens`] 委托」的薄壳（签名与行为逐字不变）。
+//!
+//! ## WHY 用注入而不是把 `estimate_tokens` 改成调用方的公式
+//!
+//! 这是本波次最容易被"顺手优化"掉的一处，故把理由写死在这里：
+//!
+//! 1. **改常量 = 改内核语义**。`estimate_tokens`（字符数/4 向上取整、最小 1）不是
+//!    内核的私有细节，而是它与 TUI 策展器 `data::curator::estimate_tokens` 共享的
+//!    口径。把它换成"UTF-8 字节宽/4 floor"，会让既有 17 处 `assembly_contract`
+//!    断言（含 proptest 的 `no_duplicates ⇒ identity` 与驱逐条数断言）全部换一次
+//!    语义基座 —— 那不是修 bug，是**重新定标**，必须走独立裁决 + 影子期。
+//! 2. **改常量会反转依赖方向**。内核在 L2，`mca-gateway` 在 L10。若内核直接采用
+//!    mca 的计量（字节宽/4 floor），等于让 L2 的一处纯函数语义取决于 L10 的账本
+//!    偏好 —— 依赖铁律里最贵的那种耦合（下游口径向上渗透进内核默认值）。注入则
+//!    把选择权留在调用点：默认值仍属于 L2，L10 只是**自己**选择用哪把尺子。
+//! 3. **改常量无法容纳第三个调用方**。TUI 与 mca 的口径本就不必相同（前者对齐
+//!    字符/4，后者显式化字节宽并做 EWMA 校准）。一个常量只能服务一个口径，注入面
+//!    可服务 N 个；而"两个口径变成一份共享常量"正是双账本的来源。
+//!
+//! ## 「单一账本」如何被结构（而非约定）保证
+//!
+//! 函数体内**只有一个**估算调用点：`per_item_tokens: Vec<usize>`。预算累计
+//! （`total_tokens`）是它的求和，驱逐扣减读 `per_item_tokens[index]`，
+//! `used_tokens` 就是驱逐后的累计值。三者共用同一份向量、同一把尺子，
+//! 于是"预算用 A 口径、统计用 B 口径"的半统一**在本函数里不可表达**：
+//! 任何想把某处改回 [`estimate_tokens`] 的改动，要么让该处重新变成第二个调用点
+//! （`tests/estimator_injection.rs::all_estimations_use_injected` 立刻红），
+//! 要么就绕不开那条唯一的 `estimate` 引用。
+//!
+//! 已知边界（本波次**不**改变的事）：`effective_budget`（`min(max_tokens,
+//! tier_capacity)`）与 `density`（角色/来源权重 + 时近性 + 钉选加成）**都不做
+//! token 计量** —— 前者只做整数取小，后者是"价值"而非"价值/长度"密度。二者因此
+//! 不存在需要注入的估算点（`density` 的命名易被误读为 `tokens/长度`，实则不含
+//! token 项，见 `tests/estimator_injection.rs` 的口径固化断言）。
 
 use std::collections::HashMap;
 
@@ -109,15 +149,30 @@ pub struct AssembledContext {
     pub diagnostics: AssemblyDiagnostics,
 }
 
-/// token 估算：字符数 / 4 向上取整，最小 1
+/// 默认 token 估算器：字符数 / 4 向上取整，最小 1
 ///
 /// WHY 与 TUI 策展器 `data::curator::estimate_tokens` 同公式：统一预算账本要求
 /// 两处口径一致，否则同一消息在两个入口计费不同。
+///
+/// # 本函数的**值**是冻结的（R12 W1-2）
+/// 它是 [`assemble_context`] 的默认估算器，被既有 17 处 `assembly_contract`
+/// 断言（去重条数、驱逐条数、`budget_tokens`、proptest 的"无重复 ⇒ 逐字段等价"）
+/// 与 mca 侧接线对照测试一起按**具体数字**锁定。要换成别的口径（例如 mca 的
+/// 字节宽/4 floor）请走 [`assemble_context_with`] 在**调用点**注入 ——
+/// 不要改这里的公式，那会一次性重定标全部既有断言（理由详见模块文档
+/// 「R12 W1-2」节）。
 pub fn estimate_tokens(content: &str) -> usize {
     content.chars().count().div_ceil(4).max(1)
 }
 
-/// 装配上下文（纯函数，确定性）
+/// 装配上下文（纯函数，确定性）—— 默认估算器入口
+///
+/// **签名与行为完全不变**（R12 W1-2 的硬约束）：本函数是
+/// `assemble_context_with(items, contract, tier_capacity, &estimate_tokens)`
+/// 的薄壳，一字不差的委托 —— 不存在"新老两条实现"，故不存在二者漂移的可能。
+///
+/// 需要别的计量口径（如 `mca-gateway` 的 UTF-8 字节宽/4）请用
+/// [`assemble_context_with`]；本函数保留给"默认口径即可"的调用方。
 ///
 /// # 契约
 /// 1. 空输入 ⇒ 空输出，不 panic；
@@ -137,6 +192,40 @@ pub fn assemble_context(
     items: Vec<ContextItem>,
     contract: &ContextAssemblyContract,
     tier_capacity: usize,
+) -> AssembledContext {
+    assemble_context_with(items, contract, tier_capacity, &estimate_tokens)
+}
+
+/// 装配上下文（纯函数，确定性）—— **可注入估算器**入口（R12 W1-2）
+///
+/// 与 [`assemble_context`] 的唯一差别：token 计量用调用方给的 `estimate`，
+/// 而不是内核默认的 [`estimate_tokens`]。其余（去重、预算取小、驱逐顺序、
+/// 输出相对顺序、诊断字段语义）逐字相同 —— 两者共用一个函数体。
+///
+/// # 参数
+/// - `estimate`: `content -> token 数` 的纯函数。**内核内的唯一估算真值源**：
+///   预算累计、驱逐扣减、`used_tokens` 全部只经它（见"单一账本"小节）。
+/// - 其余参数同 [`assemble_context`]。
+///
+/// # 调用方须知的边界
+/// 估算器看到的是 [`ContextItem::content`] —— 即调用方交给内核的那份**字符串
+/// 表示**，不是它自己的领域对象（例如 `mca-gateway` 传的是去重键用的扁平化
+/// 文本）。故"同一把尺子"保证的是**计量函数一致**，不保证"和调用方按块算出的
+/// 总量逐 token 相等"。启用内核驱逐前必须把"表示层"也对齐（详见报告
+/// `docs/reports/r12-w1-2-estimator.md` 的已知边界）。
+///
+/// # 单一账本（结构保证，非约定）
+/// 函数体内只有一个估算调用点（`per_item_tokens`），预算累计与 `used_tokens`
+/// 都读它 ⇒ "预算用 A 口径、统计用 B 口径"在此不可表达。注入恒定值估算器时
+/// `used_tokens == 保留条数 × 值` 恒成立（`tests/estimator_injection.rs`）。
+///
+/// # 契约 / 诊断
+/// 与 [`assemble_context`] 完全一致（除计量口径由 `estimate` 决定外）。
+pub fn assemble_context_with(
+    items: Vec<ContextItem>,
+    contract: &ContextAssemblyContract,
+    tier_capacity: usize,
+    estimate: &dyn Fn(&str) -> usize,
 ) -> AssembledContext {
     if items.is_empty() {
         return AssembledContext {
@@ -218,7 +307,20 @@ pub fn assemble_context(
 
     // ---- 2) 预算与驱逐 ----
     let budget = effective_budget(contract, tier_capacity);
-    let total_tokens: usize = deduped.iter().map(|i| estimate_tokens(&i.content)).sum();
+    // **本函数唯一的估算调用点**（R12 W1-2 单一账本的结构支点）：
+    // 每条（去重后的）条目精确调用注入估算器一次；预算累计 `total_tokens`
+    // 是这份向量的求和，驱逐扣减读 `per_item_tokens[index]`，`used_tokens`
+    // 是驱逐后的累计值。三者共用同一份数字 ⇒ 不存在"第二个估算点"，
+    // 也就无法出现"预算用 A 口径、统计用 B 口径"的半统一。
+    //
+    // WHY 缓存进 `Vec` 而不是两处各自调用 `estimate(&content)`：
+    // ① 使调用次数与条目数解耦（驱逐循环里再估一次是 O(驱逐数) 次多余调用）；
+    // ② 让"某一处漏改"无法隐藏在同一份数字里（只有这一份可减，另一处若改回
+    //    默认估算器就会与它分叉 ⇒ 被 `tests/estimator_injection.rs` 的
+    //    `all_estimations_use_injected` 直接打红，而不是靠读者肉眼比对）。
+    // 代价:一次 O(n) 的 usize 分配（n = 去重后条目数，装配面本来就是 O(n)）。
+    let per_item_tokens: Vec<usize> = deduped.iter().map(|item| estimate(&item.content)).collect();
+    let total_tokens: usize = per_item_tokens.iter().copied().sum();
 
     let mut retained_flags = vec![true; deduped.len()];
     let mut used = total_tokens;
@@ -244,7 +346,8 @@ pub fn assemble_context(
             }
             if retained_flags[index] {
                 retained_flags[index] = false;
-                used = used.saturating_sub(estimate_tokens(&deduped[index].content));
+                // 读同一份 `per_item_tokens`：与预算累计同源同口径（见上）
+                used = used.saturating_sub(per_item_tokens[index]);
                 evicted += 1;
             }
         }

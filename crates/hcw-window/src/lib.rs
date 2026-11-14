@@ -83,8 +83,9 @@ pub mod window;
 // === 关键类型重导出,简化外部导入 ===
 pub use affinity::{FoldResult, WindowAffinity};
 pub use assemble::{
-    assemble_context, estimate_tokens as estimate_context_tokens, AssembledContext,
-    AssemblyDiagnostics, ContextItem, ContextRole, ContextSource, RECENT_WINDOW_ITEMS,
+    assemble_context, assemble_context_with, estimate_tokens as estimate_context_tokens,
+    AssembledContext, AssemblyDiagnostics, ContextItem, ContextRole, ContextSource,
+    RECENT_WINDOW_ITEMS,
 };
 pub use compressor::ContextCompressor;
 pub use density_learner::DensityLearnerHolder;
