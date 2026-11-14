@@ -658,7 +658,9 @@ pub fn build_mca_probe_stack(
     bus: EventBus,
     spec_dir: Option<&std::path::Path>,
 ) -> Result<McaProbeStack> {
-    use mca_gateway::{EffectiveWindowProbe, HealthRegistry, McaGateway, McaGatewayConfig, ProbeMode};
+    use mca_gateway::{
+        EffectiveWindowProbe, HealthRegistry, McaGateway, McaGatewayConfig, ProbeMode,
+    };
 
     let gateway = McaGateway::new(McaGatewayConfig::default());
     if let Some(dir) = spec_dir {
@@ -707,11 +709,9 @@ mod probe_stack_tests {
     fn build_mca_probe_stack_missing_dir_degrades_gracefully() {
         let bus = EventBus::new();
         // 目录不存在:降级空表(warn),绝不 panic
-        let stack = build_mca_probe_stack(
-            bus,
-            Some(std::path::Path::new("Z:/definitely/not/exist")),
-        )
-        .expect("目录不存在应优雅降级而非失败");
+        let stack =
+            build_mca_probe_stack(bus, Some(std::path::Path::new("Z:/definitely/not/exist")))
+                .expect("目录不存在应优雅降级而非失败");
         assert_eq!(stack.gateway.spec_count(), 0);
     }
 }

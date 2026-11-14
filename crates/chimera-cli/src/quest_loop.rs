@@ -104,7 +104,9 @@ pub fn spawn_quest_lifecycle_bridge(bus: EventBus, engine: Arc<QuestEngine>) -> 
                     // (引擎侧统一携带避免配对竞态,见 engine.rs save_checkpoint WHY)
                     match satellite {
                         Ok(sat) => engine.set_satellite_state(&quest_id, sat),
-                        Err(e) => debug!(quest_id, error = %e, "卫星态初始快照失败,引擎保留无卫星态"),
+                        Err(e) => {
+                            debug!(quest_id, error = %e, "卫星态初始快照失败,引擎保留无卫星态")
+                        }
                     }
                     debug!(quest_id, "Quest 组件桥已装配(任务地图+搜索树)");
                 }
@@ -343,7 +345,8 @@ fn rebuild_bridge_from_satellite(
         Box::new(InMemoryExternalStorage::default()),
         Box::new(NoopMemorySyncHook),
     )?;
-    let mut tree = SearchTreeManager::from_bytes_with(&satellite.tree, Box::new(NoopMemorySyncHook))?;
+    let mut tree =
+        SearchTreeManager::from_bytes_with(&satellite.tree, Box::new(NoopMemorySyncHook))?;
     // 地图引用重建:root_id 恒为 "root"(create_map 首节点约定);map_id 是 L2
     // hook 的会话级标识符(非持久身份),恢复会话重新生成。空地图(卫星态早于
     // create_map 的极端时序)回退 create_map 建根,对齐 QuestCreated 语义。
