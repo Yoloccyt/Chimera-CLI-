@@ -137,3 +137,8 @@ __pycache__/
 # 获取路径/SHA-256 清单见 assets/nmc/manifest.toml;
 # 下载/校验由 scripts/fetch_nmc_assets.{ps1,sh} 执行。
 assets/nmc/models/
+
+# === R12 重构方案产物（2026-11-14）：精确目录豁免，不放宽全局 *.md ===
+# WHY：R12 的 9 份设计文档须可被评审/复核读到；全局 *.md 仍忽略，只豁免本目录。
+!docs/architecture/_blueprints/toolchain-r12/
+!docs/architecture/_blueprints/toolchain-r12/*.md
