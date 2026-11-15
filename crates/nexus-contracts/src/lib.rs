@@ -38,7 +38,8 @@
 //!
 //! # 承载类型（按功能分组；ADR-222 拆分后的 7-crate 实测结构，下述文件数为 2026-10-20 现取）
 //!
-//! L0-A 共 **71 个 `src/*.rs`**（G-99 扫描面同值）= 本 umbrella **21** + 6 个 sibling **50**：
+//! L0-A `src/*.rs` 总扫描面以 G-99 实测为准（散文不登记数字；历史口径 71 vs 实测 72
+//! 的漂移已按此纪律收口）= 本 umbrella + 6 个 sibling：
 //!
 //! | crate | 保留组目录 | `src/*.rs` | 说明 |
 //! |---|---|---|---|
@@ -53,7 +54,7 @@
 //! 每个 sibling **保留原组目录名**（如 `nexus-contracts-core/src/core_domain/`），因此
 //! 消费方两条旧路径 `nexus_contracts::<leaf>::Type` 与 `nexus_contracts::<group>::<leaf>::Type`
 //! 逐字不变；旧口径「64 源文件 = 53 叶子模块 + 10 组 mod.rs + lib.rs」为拆分前单 crate 时点值，
-//! 现由上表取代（53 条根 re-export 计数未变，由 G-107 台账锁定）。（v3.5 W3 子模块化）
+//! 现由上表取代（根 re-export 计数以 G-107 台账实测为准，散文不登记数字）。（v3.5 W3 子模块化）
 //!
 //! ## 稀疏掩码体系
 //! | 类型 | 来源 | 消费层 |
@@ -649,7 +650,7 @@ pub use strategy::{MemoryStrategy, MemoryStrategyPolicy};
 pub use memory_strategy::{MemoryStrategyProvider, MemoryTaskPhase};
 // P3-W10.3: 选择器策略（SelectorPolicy + SelectorWeights，D1 修复）
 pub use policy::{SelectorPolicy, SelectorWeights};
-pub use quota::{NamespaceQuota, QuotaLimits};
+pub use quota::{NamespaceQuota, QuotaError, QuotaLimits};
 pub use temporal::{TemporalMeta, TransitionType};
 // polish-v2.7 P3-2: 变体契约(VariantId + VariantContract,ADR-051)
 pub use variant::{VariantContract, VariantId};
@@ -703,14 +704,14 @@ pub use rl_types::{MemPiAction, RLAction, RLExperience, RLState};
 // WHY 顶层导出: 与既有契约函数/类型对等路径,依赖方可直接
 // `use nexus_contracts::assert_archive_monotonicity` 或顶层 `ArchiveTier`
 pub use archive_monotonicity::{assert_archive_monotonicity, ArchiveTier, InvariantViolation};
-// 设计文档 §5.3.1: 六维控制面契约（MemoHarness D1-D6 融合）
-// WHY 顶层导出: 与既有契约类型对等路径,依赖方可直接
-// `use nexus_contracts::HarnessConfigContract` 或顶层 `ContextAssemblyContract`
+// 设计文档 §5.3.1: 六维控制面契约（MemoHarness D1-D6 融合）+ §5.6 扩展
+// （OperatorSelectionStrategy + StopStrategyConfig）。W1 合并（BC-4）：原根部分两处
+// 分批导出合并为单一 `pub use`，导出集合不变，消除两处清单靠人眼一致的漂移温床。
 pub use harness_dimensions::{
     CompressionStrategy, ContextAssemblyContract, EvictionStrategy, ExtractionFormat,
     FallbackStrategy, GenerationControlContract, HarnessConfigContract, MemoryManagementContract,
-    OutputProcessingContract, RetentionPolicy, TaskOrchestrationContract, ToolInteractionContract,
-    ValidationRule, WorkflowType,
+    OperatorSelectionStrategy, OutputProcessingContract, RetentionPolicy, StopStrategyConfig,
+    TaskOrchestrationContract, ToolInteractionContract, ValidationRule, WorkflowType,
 };
 // 设计文档 §5.3.2: OmniMessage 协议（PenguinHarness 模型-环境解耦）
 // WHY 顶层导出: 与既有契约类型对等路径,依赖方可直接
@@ -736,8 +737,6 @@ pub use skill_lifecycle::{SkillLifecycleContract, SkillLifecycleState};
 pub use rl_hooks::{
     PolicyFormat, RLActionVector, RLHook, RLStateVector, RLTrajectory, SerializedPolicy,
 };
-// v3.4.0 §5.6: 六维控制面扩展（OperatorSelectionStrategy + StopStrategyConfig）
-pub use harness_dimensions::{OperatorSelectionStrategy, StopStrategyConfig};
 // v4.0 A0/WI-04/WI-05/WI-21: 图身份 / MCSM 投影器 / 外部协议 / 事件双轨 / 统一错误
 // WHY 顶层导出: 与既有契约类型对等路径,依赖方可直接 `use nexus_contracts::GraphIdentity`
 pub use app::{
@@ -815,7 +814,7 @@ pub mod prelude {
     pub use crate::decay_profile::{DecayPolicy, DecayProfile};
     // P4-W14.2: 预取策略（S3 接缝）
     pub use crate::prefetch::{PrefetchPolicy, PrefetchStrategy};
-    pub use crate::quota::{NamespaceQuota, QuotaLimits};
+    pub use crate::quota::{NamespaceQuota, QuotaError, QuotaLimits};
     // P4-W14.1: 记忆策略（S2 接缝）
     pub use crate::strategy::{MemoryStrategy, MemoryStrategyPolicy};
     // Task 2: OSA memory 维度 S2 桥接契约
@@ -857,12 +856,13 @@ pub mod prelude {
     pub use crate::archive_monotonicity::{
         assert_archive_monotonicity, ArchiveTier, InvariantViolation,
     };
-    // 设计文档 §5.3.1: 六维控制面契约（与顶层导出同集）
+    // 设计文档 §5.3.1+§5.6: 六维控制面契约（与顶层导出同集；W1/BC-4 合并两处）
     pub use crate::harness_dimensions::{
         CompressionStrategy, ContextAssemblyContract, EvictionStrategy, ExtractionFormat,
         FallbackStrategy, GenerationControlContract, HarnessConfigContract,
-        MemoryManagementContract, OutputProcessingContract, RetentionPolicy,
-        TaskOrchestrationContract, ToolInteractionContract, ValidationRule, WorkflowType,
+        MemoryManagementContract, OperatorSelectionStrategy, OutputProcessingContract,
+        RetentionPolicy, StopStrategyConfig, TaskOrchestrationContract, ToolInteractionContract,
+        ValidationRule, WorkflowType,
     };
     // 设计文档 §5.3.2: OmniMessage 协议（与顶层导出同集）
     pub use crate::omni_message::{ModelConfig, OmniMessage, TokenUsage};
@@ -885,8 +885,6 @@ pub mod prelude {
     pub use crate::rl_hooks::{
         PolicyFormat, RLActionVector, RLHook, RLStateVector, RLTrajectory, SerializedPolicy,
     };
-    // v3.4.0 §5.6: 六维控制面扩展（与顶层导出同集）
-    pub use crate::harness_dimensions::{OperatorSelectionStrategy, StopStrategyConfig};
     // v4.0 A0/WI-04/WI-05/WI-21: 图身份 / MCSM / 外部协议 / 事件双轨 / 统一错误（与顶层导出同集）
     pub use crate::app::{
         AppEvent, AppOp, AppTokenUsage, ApprovalDecision, ApprovalRequest, Item, ItemId,
