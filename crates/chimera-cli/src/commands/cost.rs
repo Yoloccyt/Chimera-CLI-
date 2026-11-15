@@ -1,7 +1,8 @@
 //! `chimera cost` — 统一价格向量一期可见性（只读）
 //!
 //! 对应架构层：**L10 Interface**（消费 L0 `nexus_contracts::price_vector::PriceVector`
-//! 与 L1 `nexus_core::config::ProviderConfig`，L10→L0/L1 向下依赖，§2.2 合规）
+//! 与本地 `crate::config_types::ProviderConfig`（B3/ADR-313 自 nexus-core 迁回），
+//! L10→L0 向下依赖，§2.2 合规）
 //!
 //! 对应任务：v3.0 收敛 spec §(b.6)「价格向量一期=可见性」。
 //!

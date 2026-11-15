@@ -1,10 +1,10 @@
 //! Figment 多源配置加载 — 对齐 §10.2 omega.yaml 模板
 //!
-//! ## 架构说明(Phase IV F1 迁移后)
-//! - **配置类型定义**(27 个 struct + Default impl + 默认值函数)已迁移至 `nexus-core/src/config.rs`
-//! - 本模块通过 `pub use nexus_core::config::*;` re-export 全部类型,保持向后兼容
+//! ## 架构说明(B3/ADR-313 迁移后)
+//! - **配置类型定义**(27 个 struct + Default impl + 默认值函数)在 `config_types.rs`
+//!   （2026-11-15 自 nexus-core 迁回唯一真实消费者 chimera-cli,L2-L9 零消费）
+//! - 本模块通过 `pub use crate::config_types::*;` re-export 全部类型,调用面零 diff
 //! - **加载逻辑**(figment 合并 / omega.yaml 模板 / 文件初始化)保留在本模块
-//! - 这样 L10 chimera-cli 依赖 L1 nexus-core(向下依赖,符合 §2.2 铁律)
 //!
 //! ## 配置优先级(后者覆盖前者)
 //! 1. 内置默认值(`ChimeraConfig::default`)
@@ -17,9 +17,9 @@
 //! - `examples/config.sample.yaml` 是本模板的**派生物**(由 G-69 `check_config_sample_parity.py` 断言等值),勿手改;`.toml` 只是指向本文件的指针(加载器只注册 `Yaml`)
 //! - 完整模板(含全部 15 个顶层 section)由 `chimera config init` 生成
 
-// 类型定义 re-export:nexus-core 定义,L10 通过 re-export 保持向后兼容。
-// trait impl(Serialize/Deserialize)是全局的,re-export 后自动随类型传播。
-pub use nexus_core::config::*;
+// 类型定义 re-export:config_types.rs 定义,L10 内聚。trait impl(Serialize/
+// Deserialize)是全局的,re-export 后自动随类型传播。
+pub use crate::config_types::*;
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

@@ -115,7 +115,7 @@ fn u05_vote_remains_unpublished() {
     );
 }
 
-/// 锁 5（事件计数机器锁）：`VARIANT_COUNT_LOCK = 154` 不变——零新增事件
+/// 锁 5（事件计数机器锁）：`VARIANT_COUNT_LOCK` 与 event-bus 同值——零新增事件
 /// 变体的六锁同批纪律主锚（ADR-259 D9;P1~P4 全程零新增实证）。
 #[test]
 fn variant_count_lock_unchanged() {
@@ -123,8 +123,9 @@ fn variant_count_lock_unchanged() {
     // ADR-291（R9 WP-0）:+2 Normal 观测变体后 154→156；本锁继续锚定
     // 「变体新增必须同批同步全部锁面」的六锁纪律（本锁自身即当时的漏同步点，
     // 吸收验收 R9b 补齐——引以为戒：锁面清单以 grep VARIANT_COUNT_LOCK 全仓为准）
+    // B5/ADR-312:-TokenLedgerRecorded 后 156→155。
     assert!(
-        test.contains("VARIANT_COUNT_LOCK: usize = 156"),
-        "事件变体计数锁必须与 event-bus variant_count_test 同值（当前 156）"
+        test.contains("VARIANT_COUNT_LOCK: usize = 155"),
+        "事件变体计数锁必须与 event-bus variant_count_test 同值（当前 155）"
     );
 }

@@ -11,10 +11,10 @@
 
 use chimera_cli::composition::build;
 use chimera_cli::ChimeraConfig;
-use gqep_executor::tool_runtime::{DispatchError, DispatchRequest};
-use nexus_core::config::{
+use chimera_cli::config_types::{
     McpConfig, McpServerConfig, ToolPolicyAction, ToolPolicyConfig, ToolPolicyRuleDef,
 };
+use gqep_executor::tool_runtime::{DispatchError, DispatchRequest};
 
 /// 带 mcp server 注册的配置（TEST-NET-1 文档段地址——SSRF 白名单放行，
 /// 且 InProcessClient 默认传输下全程零 socket）。
@@ -363,7 +363,7 @@ fn probe_chain(readonly_names: Vec<String>) -> (OpTimeoutExecutor, Arc<AtomicUsi
 /// OpTimeoutExecutor」全链到达最外层；缺省配置恒空集（fail-closed 不放宽）。
 #[tokio::test]
 async fn declared_side_effects_flow_through_full_decorator_chain() {
-    use nexus_core::config::DeclaredSideEffectEntry;
+    use chimera_cli::config_types::DeclaredSideEffectEntry;
 
     let mut cfg = config_with_mcp_server("docsrv", "http://192.0.2.55:8080");
     cfg.mcp.declared_side_effects.push(DeclaredSideEffectEntry {

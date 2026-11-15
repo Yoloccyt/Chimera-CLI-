@@ -13,9 +13,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chimera_cli::config::ChimeraConfig;
+use chimera_cli::config_types::{default_mcp_servers, McpServerConfig};
 use chimera_cli::tool_plane::{assemble_mcp, FenceGate};
 use mcp_mesh::protocol::CommandGate;
-use nexus_core::config::{default_mcp_servers, McpServerConfig};
 
 mod common;
 

@@ -69,6 +69,8 @@ pub mod commands;
 pub mod composition;
 /// Figment 多源配置加载
 pub mod config;
+/// 配置类型定义(B3/ADR-313:自 nexus-core 迁回,经 config.rs re-export 保持旧路径)
+pub mod config_types;
 /// 同步 DB 打开的同一出口(Phase 6A/§4.4 红线 2:rusqlite open 必走 blocking 池)
 pub mod db_open;
 /// CLI 错误类型(结构化错误码,Task 0.2 将据此映射 ExitCode 矩阵)

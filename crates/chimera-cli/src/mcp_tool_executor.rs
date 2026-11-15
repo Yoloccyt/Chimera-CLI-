@@ -339,7 +339,7 @@ mod tests {
         config
             .mcp
             .declared_side_effects
-            .push(nexus_core::config::DeclaredSideEffectEntry {
+            .push(crate::config_types::DeclaredSideEffectEntry {
                 tool: "mcp.acme.search".into(),
                 effect: nexus_contracts::SideEffectDecl::ReadOnly,
             });

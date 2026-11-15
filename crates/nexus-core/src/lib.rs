@@ -44,7 +44,9 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod clv;
-pub mod config;
+// NOTE(B3/ADR-313): config(ChimeraConfig 等 30 个 CLI 域配置类型)已迁回唯一
+// 真实消费者 chimera-cli（L2-L9 生产代码零消费;`chimera_cli::config::X` 路径经
+// 其 config.rs re-export 保持零 diff）。
 pub mod decay;
 pub mod error;
 #[macro_use]
@@ -60,7 +62,6 @@ pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
 pub use clv::{cosine_similarity_slices, CLV};
-pub use config::ChimeraConfig;
 pub use error::NexusError;
 pub use ids::{AgentId, CapabilityId, IntentId, ModelId, OperationId, QuestId, TaskId};
 // P1-1 观察者接线:状态变更类型 + 监听器 trait(依赖倒置,适配层在 L9 quest-engine)
@@ -73,7 +74,7 @@ pub mod prelude {
     pub use crate::clv::{cosine_similarity_slices, CLV};
     // NOTE(B1/ADR-309): compute 面已随 W4-1 迁出为 nexus-compute；shim 退役后
     // prelude 不再承载 compute 导出，消费方直接 `use nexus_compute::…`。
-    pub use crate::config::ChimeraConfig;
+    // NOTE(B3/ADR-313): config 类型已迁回 chimera-cli，prelude 同步摘除。
     pub use crate::error::NexusError;
     pub use crate::ids::{AgentId, CapabilityId, IntentId, ModelId, OperationId, QuestId, TaskId};
     // P1-1:状态变更观察者类型加入 prelude

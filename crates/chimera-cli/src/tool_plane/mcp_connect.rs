@@ -24,7 +24,7 @@ use mcp_mesh::protocol::{
 };
 use mcp_mesh::McpError;
 use nexus_contracts::command_validation::CommandPolicy;
-use nexus_core::config::McpServerConfig;
+use crate::config_types::McpServerConfig;
 use seccore::os_backend::{ProcessFence, SandboxMode};
 
 /// 生产闸门：把 SecCore [`ProcessFence`] 适配成 `CommandGate`。

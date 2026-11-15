@@ -1,18 +1,20 @@
-﻿//! Chimera CLI 配置类型定义 — 15 个顶层 section 的纯数据结构
+//! Chimera CLI 配置类型定义 — 15 个顶层 section 的纯数据结构
 //!
-//! 对应架构层:L1 Core(类型定义);加载逻辑位于 L10 chimera-cli
+//! 对应架构层:L10 Interface(chimera-cli 自有模块);加载逻辑同在 chimera-cli
+//! (`config.rs` 的 figment 合并 / omega.yaml 模板)
 //!
 //! ## 设计决策
 //! - 子配置全部派生 `Default`,避免在 `ChimeraConfig::default` 中重复初始化
 //! - `providers` 的 `capabilities` 用 `Vec<String>` 而非枚举,保持向前兼容(新能力不需改代码)
 //! - `mcp.servers` 用统一 struct + `Option` 字段,兼容 stdio/http/db 三种传输
 //!
-//! ## 迁移说明(Phase IV F1)
-//! - 本模块从 `chimera-cli/src/config.rs` 迁移纯数据类型到 L1 Core 层
-//! - 加载逻辑(figment 合并 / omega.yaml 模板)保留在 chimera-cli,此处不含 figment 依赖
-//! - chimera-cli 通过 `pub use nexus_core::config::*;` re-export 保持向后兼容
-//! - `NexusConfig::default()` 的 `env!("CARGO_PKG_VERSION")` 取 nexus-core 版本,
-//!   与 workspace.package.version(1.0.0-omega)一致,迁移无 break
+//! ## 归属迁移史
+//! - Phase IV F1:曾自 `chimera-cli/src/config.rs` 迁出纯数据类型到 L1 nexus-core
+//! - B3/ADR-313(2026-11-15):迁回唯一真实消费者 chimera-cli——L2-L9 生产代码
+//!   对该 30 个类型零消费(全仓 grep 实证),L1 层不应承载 CLI 域配置;
+//!   `config.rs` 经 `pub use crate::config_types::*;` 保持旧路径,调用面零 diff
+//! - `NexusConfig::default()` 的 `env!("CARGO_PKG_VERSION")` 现取 chimera-cli 版本,
+//!   与 workspace.package.version 同值(workspace 继承),序列化输出无变化
 
 #![forbid(unsafe_code)]
 
@@ -571,10 +573,10 @@ impl Default for CapabilityDecayConfig {
 /// 零信任场景须显式声明 `default_action: deny`。装配期一次读取,**无热加载**
 /// (运行期切换策略属安全能力开关,ADR-242 §3.5 明确不提供)。
 ///
-/// WHY 类型名以 `Config` 结尾:全仓 section 命名惯例(nexus-core 各段均为
-/// `*Config`),且 `check_config_sample_parity.py` 以「类型名是否以 Config
-/// 结尾」区分段与标量——段漏写样例判红,标量漏写只 NOTE。以 `Section` 结尾
-/// 会被误判标量,门强度静默降级。
+/// WHY 类型名以 `Config` 结尾:全仓 section 命名惯例,且
+/// `check_config_sample_parity.py` 以「类型名是否以 Config 结尾」区分段与
+/// 标量——段漏写样例判红,标量漏写只 NOTE。以 `Section` 结尾会被误判标量,
+/// 门强度静默降级。
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(default)]
 pub struct ToolPolicyConfig {
@@ -596,8 +598,8 @@ impl Default for ToolPolicyConfig {
 
 /// 策略动作三态(镜像 `seccore::execpolicy::PolicyAction`)
 ///
-/// WHY 在 L1 独立定义而非直接复用 L4 类型:依赖铁律 L(N)→L(N-1) 禁止
-/// nexus-core(L1) 依赖 seccore(L4);映射到 seccore 侧的职责在 L10 组合根
+/// WHY 独立定义而非直接复用 L4 类型:依赖铁律 L(N)→L(N-1) 禁止 L10 组合根
+/// 之外的消费方反向耦合 seccore;映射到 seccore 侧的职责在 L10 组合根
 /// (`composition::tool_runtime_policy`)。serde `alias` 兼容首字母大写写法
 /// (`Allow`/`Ask`/`Deny`),YAML 与 env 覆盖同权;非法值在加载边界硬失败。
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -905,12 +907,12 @@ pub fn default_alerts() -> Vec<AlertConfig> {
 mod tests {
     use super::*;
 
-    /// 验证全部 15 个顶层 section + 嵌套子类型可从 nexus_core::config 导入,
+    /// 验证全部 15 个顶层 section + 嵌套子类型可从本模块导入,
     /// 且 Default impl 可用。(ADR-255:McpMeshConfig 已随死配置收口移除;
-    /// ADR-246:新增 tool_policy 段)
+    /// ADR-246:新增 tool_policy 段;B3/ADR-313:归属 chimera-cli)
     #[test]
-    fn test_config_types_in_nexus_core() {
-        use crate::config::{
+    fn test_config_types_in_chimera_cli() {
+        use crate::config_types::{
             AbTestConfig, AlertConfig, AutoThresholdsConfig, BudgetConfig, CapabilityDecayConfig,
             ChimeraConfig, EvolutionConfig, GqepConfig, GrafanaConfig, KvbsrConfig, McpConfig,
             McpServerConfig, ModelRouterConfig, MonitoringConfig, MtpeConfig, NexusConfig,
@@ -997,7 +999,7 @@ mod tests {
         );
     }
 
-    /// 验证默认配置非空(从 chimera-cli 迁移的原有测试)
+    /// 验证默认配置非空(Phase IV F1 迁移前的原有测试)
     #[test]
     fn test_default_config_non_empty() {
         let cfg = ChimeraConfig::default();

@@ -44,8 +44,31 @@ import tempfile
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPTS)
 CONFIG_RS = os.path.join(ROOT, "crates", "chimera-cli", "src", "config.rs")
-TYPES_RS = os.path.join(ROOT, "crates", "nexus-core", "src", "config.rs")
+# B3/ADR-313 (2026-11-15): ChimeraConfig 定义面自 nexus-core 迁回
+# chimera-cli/src/config_types.rs（唯一真实消费者）。定义文件按**有序候选**探测：
+#   ① chimera-cli/src/config_types.rs —— 真实树；
+#   ② nexus-core/src/config.rs —— --selftest 夹具（fixture 构造旧布局，零改动）；
+#   ③ chimera-cli/src/config.rs —— 兜底（单文件布局）。
+# 顺序关键：chimera-cli/src/config.rs 承载的是 omega_yaml_template() 模板而非
+# ChimeraConfig 定义，绝不能先于 ①② 被命中。
+_TYPES_CANDIDATES = (
+    os.path.join("crates", "chimera-cli", "src", "config_types.rs"),
+    os.path.join("crates", "nexus-core", "src", "config.rs"),
+    os.path.join("crates", "chimera-cli", "src", "config.rs"),
+)
 SAMPLE = os.path.join(ROOT, "examples", "config.sample.yaml")
+
+
+def _resolve_types_rs(root):
+    """First existing ChimeraConfig-definition candidate under `root`."""
+    for rel in _TYPES_CANDIDATES:
+        p = os.path.join(root, rel)
+        if os.path.exists(p):
+            return p
+    return os.path.join(root, "crates", "chimera-cli", "src", "config_types.rs")
+
+
+TYPES_RS = _resolve_types_rs(ROOT)
 
 # The template is a raw string: `r#"...."#`. Non-greedy DOTALL, anchored on the fn.
 TEMPLATE_RE = re.compile(
@@ -58,7 +81,7 @@ def set_root(path):
     global ROOT, CONFIG_RS, TYPES_RS, SAMPLE
     ROOT = path
     CONFIG_RS = os.path.join(path, "crates", "chimera-cli", "src", "config.rs")
-    TYPES_RS = os.path.join(path, "crates", "nexus-core", "src", "config.rs")
+    TYPES_RS = _resolve_types_rs(path)
     SAMPLE = os.path.join(path, "examples", "config.sample.yaml")
 
 

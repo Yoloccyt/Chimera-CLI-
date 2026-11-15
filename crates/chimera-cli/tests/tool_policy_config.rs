@@ -21,8 +21,8 @@
 
 use chimera_cli::composition::{build, tool_runtime_policy};
 use chimera_cli::ChimeraConfig;
+use chimera_cli::config_types::{ToolPolicyAction, ToolPolicyConfig, ToolPolicyRuleDef};
 use gqep_executor::tool_runtime::{DispatchError, DispatchRequest};
-use nexus_core::config::{ToolPolicyAction, ToolPolicyConfig, ToolPolicyRuleDef};
 
 /// 构造带指定策略段的配置（其余段取缺省）。
 fn config_with_policy(section: ToolPolicyConfig) -> ChimeraConfig {
