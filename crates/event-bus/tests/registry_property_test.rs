@@ -155,11 +155,7 @@ fn representative_events() -> Vec<NexusEvent> {
             metadata: meta(),
             cache_key: "k-1".into(),
         },
-        NexusEvent::TokenLedgerRecorded {
-            metadata: meta(),
-            evidence_id: "e-1".into(),
-            token_usage: 1,
-        },
+        // B5/ADR-312: TokenLedgerRecorded 样本已随 token_ledger 子系统退役。
         // ---- Agent ----
         NexusEvent::AgentTaskFailed {
             metadata: meta(),
@@ -268,11 +264,7 @@ fn test_representative_classification_pinned() {
             EventTopic::Knowledge,
         ),
         ("CacheHit", EventSeverity::Normal, EventTopic::Storage),
-        (
-            "TokenLedgerRecorded",
-            EventSeverity::Normal,
-            EventTopic::Storage,
-        ),
+        // B5/ADR-312: "TokenLedgerRecorded" 定级行已随变体退役。
         (
             "AgentTaskFailed",
             EventSeverity::Critical,

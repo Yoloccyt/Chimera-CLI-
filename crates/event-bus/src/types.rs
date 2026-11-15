@@ -2811,17 +2811,6 @@ pub enum NexusEvent {
         /// 命中的卡片 ID 列表
         matched_card_ids: Vec<String>,
     },
-    /// Token 证据记录 — L1 Core → L3 Storage(规范 §16.4,Normal)
-    ///
-    /// TokenLedger 追加条目后发布,通知 L3 持久化通道(铁律8 Token 证据全链路)。
-    TokenLedgerRecorded {
-        /// 事件元数据
-        metadata: EventMetadata,
-        /// 证据条目 ID
-        evidence_id: String,
-        /// Token 用量
-        token_usage: u64,
-    },
     /// 自我评估更新 — L10 Interface → L9(规范 §16.4,规范标 Low;
     /// EventSeverity 无 Low 变体,映射 Normal——丢失可由下周期报告补偿)
     ///

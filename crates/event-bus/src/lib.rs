@@ -13,7 +13,7 @@
 //!
 //! # 核心职责
 //! - 提供类型安全的发布订阅(typed broadcast bus)
-//! - 定义全部 156 类 NexusEvent 跨层事件变体(本行保留计数:它是
+//! - 定义全部 155 类 NexusEvent 跨层事件变体(本行保留计数:它是
 //!   `scripts/check_doc_drift.sh` DECLS「全部 N 类」锚点,数值由 G-37 门
 //!   与代码实测逐次对拍;改本行必须与 `tests/variant_count_test.rs` 的
 //!   `VARIANT_COUNT_LOCK` 和 `scripts/doc_count_freeze.txt` 同批,否则
@@ -30,12 +30,12 @@
 //! 下列子系统在仓内**无任何生产装配点**（反查方式：排除本 crate 自身 `src`、
 //! `tests`、`benches` 后全库检索构造点），不得被当作已生效能力引用：
 //!
-//! | 子系统 | 规模 | 当前唯一引用面 |
+//! | 子系统 | 规模 | 处置（B5/ADR-312，2026-11-15） |
 //! |---|---|---|
-//! | [`token_ledger`] | 约 0.6k 行 | 仅测试面：cmt-tiering 集成测类型消费（card_persistence_closed_loop_test）+ chimera-tui 漂移测仅事件名匹配（无类型/模块消费） |
-//! | [`segment_per`] | 约 0.4k 行 | 仅本 crate 测试 |
-//! | `membrane`（`MembraneFilter`） | 约 1k 行 | 仅本 crate bench |
-//! | `pattern_index`（`PatternIndex`） | 约 0.3k 行 | 仅本 crate bench |
+//! | [`token_ledger`] | 约 0.6k 行 | **已退役**：生产装配点为零，跨模块测试消费面（cmt-tiering 闭环 / experience_card_bus 证据链）随批退役，`TokenLedgerRecorded` 变体同步摘除（156→155） |
+//! | [`segment_per`] | 约 0.4k 行 | **已退役**：仅本 crate 测试消费 |
+//! | `membrane`（`MembraneFilter`） | 约 1k 行 | **已退役**：仅本 crate bench 消费（`publish_membrane` 方法对零生产调用方） |
+//! | `pattern_index`（`PatternIndex`） | 约 0.3k 行 | **已退役**：仅本 crate bench 消费 |
 //! | `dynamic_registry` | 404 行 | 引用方：nexus-hook/event_bridge.rs（轨二注册，P4-T3）+ chimera-cli 组合根生产构造点（ADR-258，2026-11-08 注记修正——原「零引用」为 nexus-hook 接线前旧态，与现势矛盾） |
 //!
 //! # 三个“看似同族、实则已接线”的模块（不得一并归入上表）
@@ -64,10 +64,11 @@
 //! WHY 不拆分为独立 crate：那会新增 workspace 成员，违 ADR-049“0 新增 crate”与
 //! v3.5 总账的 crate 总账冻结原则；本 crate 因此**保留代码但撤掉 L1 语义主张**。
 //!
-//! 同名概念易错点（引用前必读）：本 crate 的 `TokenLedger` ≠ L0 的
-//! `nexus_contracts::token_evidence::TokenLedgerEntry`（后者是 cmt-tiering 实际落盘的
-//! 证据行）；本 crate `segment_per::PerBuffer` 与 `omega_learner::per_buffer::PerBuffer`
-//! 是两套独立实现，同名不同物。
+//! 同名概念易错点（引用前必读）：L0 的
+//! `nexus_contracts::token_evidence::TokenLedgerEntry` 是 cmt-tiering 实际落盘的
+//! 证据行（本 crate 的同名 `TokenLedger` 账本已随 B5/ADR-312 退役，勿再混淆）；
+//! `omega_learner::per_buffer::PerBuffer` 与已退役的 `segment_per::PerBuffer`
+//! 同名不同物（退役后仅余 omega-learner 一套）。
 //!
 //! # 快速示例
 //! ```no_run
@@ -140,18 +141,9 @@ pub mod experience_card_bus;
 /// (FormalVerifierGate 7 验证器之一,经根 E2E 消费),非生产运行时路径;不退役。
 pub mod formal;
 pub mod logging;
-/// 膜渗透过滤器(P2-W6.1,ADR-033 后续膜深化)
-///
-/// 按"是否影响内环状态"分类事件语义类别(EventCategory),结合内环负载档位
-/// (InnerLoad)与膜厚度(MembraneThickness)三维度决策事件是否穿膜入内环。
-/// 详见 [`membrane::MembraneFilter`]。
-pub mod membrane;
-/// P2-T5: PatternIndex 事件订阅精确索引(v4.0 WI-15 阶段一)
-///
-/// 命名空间前缀树 + 字面量哈希精确匹配,语义与广播等价(结构性漏发率 = 0);
-/// Critical 强制广播(红线 1:永不近似)。阶段二 HNSW 近似路由仅在订阅者 > 500
-/// 且精确索引 P99 > 1ms 时评估,本模块不实现。详见 [`pattern_index::PatternIndex`]。
-pub mod pattern_index;
+// NOTE(B5/ADR-312): membrane / pattern_index / segment_per / token_ledger 四个
+// 撤主张面子系统已随 2026-11-15 破坏式重构物理退役（生产装配点为零，仅
+// 测试/bench/注释引用；决策与测试退役清单登记 ADR-312，git 历史可恢复）。
 /// 事件载荷与辅助类型 — NexusEvent 枚举依赖的结构化数据类型
 ///
 /// 将 `EventMetadata`、`BudgetMetricsPayload`、`ClvSummary` 等辅助类型
@@ -170,11 +162,6 @@ mod registry;
 // 消费(grep 实证),按 ADR-175 删除口径(验证零消费 → 删除+配套声明清理 →
 // grep 零残留 + check/test 回归)执行。设计意图与完整实现(含 16 项测试)保留于
 // git 基线 tag `baseline-2026-09-13`,未来内环需要 RCU 原语时从历史恢复。
-/// Segment-aware PER — 轨迹分段优先级经验回放（v3.4.0 §6.2）
-///
-/// 承载 SegmentAwarePER + PerBuffer（铁律9 分段身份共享 + prompt-equal
-/// denominator + TD 误差权重采样）。
-pub mod segment_per;
 /// P4-T4: 影子双跑 diff 采集（串行影子 vs 分片实投逐事件比对 + ≥7 天台账）
 ///
 /// 状态(ADR-181):EXPERIMENTAL-UNWIRED(运维工具态)—— 双跑观察经
@@ -198,11 +185,6 @@ pub mod subscriber;
 /// Turn Span 生命周期 + 延迟直方图（AtomicU64 无锁热路径,开销 <5% CPU）;
 /// 完整 OTLP 导出器留 Phase 3。与 L9 efficiency-monitor 分工:本模块=基础设施追踪。
 pub mod telemetry;
-/// Token 账本 — Dressage Token 级证据的 append-only 存储（v3.4.0 §6.1 + §5.3）
-///
-/// 承载 TokenLedger（有序账本 + 会话/实例双索引 + 完整性校验 + 导出通道），
-/// 保证"Token Ledger 不可丢失（训练证据完整性）"绝对红线。
-pub mod token_ledger;
 pub mod topic;
 pub mod types;
 
@@ -249,10 +231,6 @@ pub use shard::{
 pub use subscriber::{
     CriticalSubscribed, CriticalSubscriberBuilder, Subscribed, SubscriberBuilder, Unsubscribed,
 };
-// P2-W6.1: 膜渗透过滤器(内环/外环选择性渗透决策)
-pub use membrane::{
-    EventCategory, InnerLoad, MembraneFilter, MembraneThickness, PermeationDecision,
-};
 // P2-W7.2.1: 因果一致性(向量时钟,跨膜事件因果关系跟踪)
 pub use causal::{CausalRelation, VectorClock};
 pub use topic::{EventTopic, FilteredSubscriber};
@@ -263,10 +241,6 @@ pub use types::{
 };
 // v3.4.0 §6.1: 经验卡片总线（OpenMLE 双通道 + 四索引）
 pub use experience_card_bus::{ExperienceCardBus, GlobalCardStats};
-// v3.4.0 §6.1 + §5.3: Token 账本（Dressage 证据完整性）
-pub use token_ledger::{LedgerError, LedgerIntegrityReport, TokenLedger};
-// v3.4.0 §6.2: Segment-aware PER（铁律9 分段身份）
-pub use segment_per::{PerBuffer, PerEntry, PerStats, SegmentAwarePER};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {

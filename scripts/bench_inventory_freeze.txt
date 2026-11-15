@@ -69,7 +69,7 @@ decb-governor|budget_compute|dev-only|预算计算开发基准
 efficiency-monitor|monitor_benchmark|dev-only|监控器审计路径开发基准
 event-bus|bus_credit_bench|dev-only|信用记账路径开发基准
 event-bus|bus_shard_bench|dev-only|分片职责 benchmark,无 KPI 目标
-event-bus|pattern_index_bench|dev-only|模式索引路径开发基准
+# event-bus|pattern_index_bench 行已删除(2026-11-15 B5/ADR-312,随 pattern_index 子系统退役)
 event-bus|tui_action_dispatch_bench|dev-only|TUI 动作分发基准,功能层无性能契约
 # faae-router|faae_parallel_bench 行已删除(2026-10-04,静默窗口升格 registered):
 #   run_bench faae_parallel 两源登记(perf_thresholds.toml [[run_bench]] + bench_check.yml)

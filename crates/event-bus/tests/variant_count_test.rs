@@ -47,14 +47,16 @@ use nexus_contracts::reward::RewardSignal;
 /// C-13/M09:ShadowBreakerTripped Normal→Critical(定级升级,变体零新增)= 154,分布 21/11/122;
 /// C-64b: SandboxViolation Normal→Critical(同为定级升级、变体零新增)= 154,分布 22/11/121;
 /// ADR-290 R9:HCW v3 蓝图 +ContextCapabilityUpdated / WindowPlanApplied
-/// (均 Normal/System 观测面)= 156,分布 22/11/123
-const VARIANT_COUNT_LOCK: usize = 156;
+/// (均 Normal/System 观测面)= 156,分布 22/11/123;
+/// B5/ADR-312:-TokenLedgerRecorded(Normal/Storage,随 token_ledger 子系统退役,
+/// 序数 143 空洞合法——ADR-197"序数只增不改"惯例,互异即可)= 155,分布 22/11/122
+const VARIANT_COUNT_LOCK: usize = 155;
 /// severity 分布锁定值(Critical,与 bus.rs CRITICAL_TOTAL = 21 一致)
 const CRITICAL_LOCK: usize = 22;
 /// severity 分布锁定值(Info)
 const INFO_LOCK: usize = 11;
 /// severity 分布锁定值(Normal)
-const NORMAL_LOCK: usize = 123;
+const NORMAL_LOCK: usize = 122;
 
 /// 变体清单第 1 段（`NexusEvent::UserIntentEncoded` … `NexusEvent::ContextWindowSwitched`，声明序连续切片）
 ///
@@ -1060,11 +1062,7 @@ fn variant_samples_chunk_6() -> Vec<NexusEvent> {
             error_hash: "s".into(),
             matched_card_ids: vec![],
         },
-        NexusEvent::TokenLedgerRecorded {
-            metadata: EventMetadata::new("test"),
-            evidence_id: "s".into(),
-            token_usage: 1,
-        },
+        // B5/ADR-312: TokenLedgerRecorded 样本已随 token_ledger 子系统退役。
         NexusEvent::AssessmentUpdated {
             metadata: EventMetadata::new("test"),
             overall_score: 0.5,
@@ -1126,7 +1124,7 @@ fn variant_samples_chunk_6() -> Vec<NexusEvent> {
     ]
 }
 
-/// 构造全部 156 个 NexusEvent 变体的最小实例清单(enum 声明序)
+/// 构造全部 155 个 NexusEvent 变体的最小实例清单(enum 声明序)
 ///
 /// WHY 每变体一个构造器: 把"变体清单"变成编译期契约 —— 变体改名/删除立即
 /// 编译错误;新增变体未登记时,下方计数锁与序数表交叉断言失败。
@@ -1294,7 +1292,8 @@ fn variant_ordinals(event: &NexusEvent) -> u32 {
         NexusEvent::VariantApproved { .. } => 140,
         NexusEvent::ParentSelected { .. } => 141,
         NexusEvent::ErrorSignatureMatched { .. } => 142,
-        NexusEvent::TokenLedgerRecorded { .. } => 143,
+        // B5/ADR-312: TokenLedgerRecorded(原序数 143)已退役——序数空洞保留,
+        // 144+ 不回填(ADR-197"序数只增不改"惯例)。
         NexusEvent::AssessmentUpdated { .. } => 144,
         NexusEvent::BusThroughputReported { .. } => 145,
         NexusEvent::SecurityInterceptionReported { .. } => 146,

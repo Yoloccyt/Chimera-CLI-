@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use cmt_tiering::{CmtConfig, CmtCoordinator, ExperienceCardStorage};
-use event_bus::{EventBus, ExperienceCardBus, TokenLedger};
+use event_bus::{EventBus, ExperienceCardBus};
 use nexus_contracts::experience_card::{CardMetadata, ExecutionStatus, ThreeFactorScore};
 use nexus_contracts::token_evidence::TokenLedgerEntry;
 use nexus_contracts::{AtomicOperator, ExperienceCard};
@@ -149,15 +149,15 @@ async fn persisted_cards_queryable_by_three_factor() {
 }
 
 // ----------------------------------------------------------
-// TokenLedger 训练证据落盘闭环（补 Phase 1 WAL 遗留）
+// Token 证据落盘（B5/ADR-312 改造：原「TokenLedger 账本 → 导出 → 落盘」闭环的
+// 账本半边已随 token_ledger 子系统退役；本测试保留 L3 落盘半边覆盖——
+// 直接构造 L0 TokenLedgerEntry 数组，语义不变）
 // ----------------------------------------------------------
 
 #[tokio::test]
-async fn token_ledger_evidence_persistence_closed_loop() {
-    // L1 Token 账本
-    let ledger = TokenLedger::new();
-    ledger
-        .append(TokenLedgerEntry::new(
+async fn token_evidence_persistence_direct_entries() {
+    let entries = vec![
+        TokenLedgerEntry::new(
             "e1",
             0,
             "s1",
@@ -170,10 +170,8 @@ async fn token_ledger_evidence_persistence_closed_loop() {
             vec![],
             None,
             1_700_000_000_000,
-        ))
-        .expect("账本追加成功");
-    ledger
-        .append(TokenLedgerEntry::new(
+        ),
+        TokenLedgerEntry::new(
             "e2",
             1,
             "s1",
@@ -186,12 +184,10 @@ async fn token_ledger_evidence_persistence_closed_loop() {
             vec![],
             None,
             1_700_000_001_000,
-        ))
-        .expect("账本追加成功");
+        ),
+    ];
 
-    // 导出 → L3 落盘（闭环）
-    let entries = ledger.export_entries();
-    assert_eq!(entries.len(), 2);
+    // L3 落盘（原闭环的存续半边）
     let storage = ExperienceCardStorage::new_in_memory(16)
         .await
         .expect("创建成功");

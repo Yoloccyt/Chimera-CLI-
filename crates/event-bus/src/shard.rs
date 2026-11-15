@@ -7,8 +7,9 @@
 //! ——gsoe-evolution 实测零调用(第三轮审计 F-X5 漂移 #4),非"未接线"定性与本行无关。
 //!
 //! 对应架构层:L1 Core(event-bus)
-//! 对应任务:P1-T12(Phase 1 地基波次,手册 §8.5 ShardedEventBus 终版 +
-//! v4.0 WI-15 阶段一「PatternIndex 精确索引先行」 + E8-4 修正)
+//! 对应任务:P1-T12(Phase 1 地基波次,手册 §8.5 ShardedEventBus 终版 + E8-4 修正;
+//! v4.0 WI-15 阶段一「PatternIndex 精确索引先行」所指向的 pattern_index 模块已随
+//! B5/ADR-312 退役,精确索引接续点由本模块的 Lane 判定承担)
 //!
 //! # 为什么新建 shard.rs 而非扩展 backpressure.rs
 //! `backpressure.rs` 的职责是「背压策略判定 + 慢消费者检测」(`BackpressurePolicy`/

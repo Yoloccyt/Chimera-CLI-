@@ -283,7 +283,7 @@ pub fn classify(event: &NexusEvent) -> TuiEventClass {
         TelemetryCalibrationApplied { .. } => TuiEventClass::NotForTui,
         TelemetryReporterDegraded { .. } => TuiEventClass::NotForTui,
         ThinkingModeSwitched { .. } => TuiEventClass::Consumed,
-        TokenLedgerRecorded { .. } => TuiEventClass::NotForTui,
+        // B5/ADR-312: TokenLedgerRecorded 已随 token_ledger 子系统退役。
         ToolsRouted { .. } => TuiEventClass::NotForTui,
         TuiActionCompleted { .. } => TuiEventClass::Consumed,
         TuiActionFailed { .. } => TuiEventClass::Consumed,

@@ -22,9 +22,11 @@
 #   (docs still say "9 categories" in crates/event-bus), workspace 43 members.
 # =============================================================================
 
-nexus_event_variants = 156
+nexus_event_variants = 155
 event_topic_variants = 10
 workspace_crates = 47
+# B5/ADR-312 (2026-11-15): -TokenLedgerRecorded (token_ledger subsystem retired,
+# zero production publishers), 156 -> 155; ordinal 143 hole kept per ADR-197.
 # ADR-222 (2026-10-20): +nexus-telemetry (L0-B core foundation), 39 -> 40.
 # ADR-222 D2 (2026-10-20): +6 L0-A sibling contract crates (core/sparse/safety/
 # seams/mca/memory), 40 -> 46. The 1+6 split is a deliberate reversal of the

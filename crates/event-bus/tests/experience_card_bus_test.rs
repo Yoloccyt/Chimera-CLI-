@@ -7,8 +7,7 @@
 #![forbid(unsafe_code)]
 
 use chrono::{DateTime, Utc};
-use event_bus::{ExperienceCardBus, TokenLedger};
-use nexus_contracts::token_evidence::TokenLedgerEntry;
+use event_bus::ExperienceCardBus;
 use nexus_contracts::{
     AtomicOperator, ErrorSignature, ExecutionStatus, ExperienceCard, ThreeFactorScore,
 };
@@ -54,53 +53,12 @@ fn top_level_api_accessible() {
     let bus = ExperienceCardBus::new();
     bus.publish(card("c1", "t1", 0.9, ExecutionStatus::Success));
     assert_eq!(bus.get_global_stats().total_cards, 1);
-    // TokenLedger 顶层可达
-    let ledger = TokenLedger::new();
-    assert!(ledger.is_empty());
+    // NOTE(B5/ADR-312): 原「TokenLedger 顶层可达」断言已随 token_ledger 子系统退役。
 }
 
-// ----------------------------------------------------------
-// 证据链闭环: 卡片 ↔ Token 账本（Dressage 经验-证据闭环）
-// ----------------------------------------------------------
-
-#[test]
-fn card_evidence_chain_closure_with_ledger() {
-    // 1. 构建 Token 账本并追加证据
-    let ledger = TokenLedger::new();
-    let entry = TokenLedgerEntry::new(
-        "ledger-001",
-        0,
-        "session-1",
-        "instance-1",
-        vec![101, 102],
-        vec![201, 202],
-        vec![0.9, 0.8],
-        vec![true, true],
-        "v2.26.0-omega",
-        vec![],
-        None,
-        1_700_000_000_000,
-    );
-    ledger.append(entry).expect("账本追加成功");
-
-    // 2. 卡片携带证据链 ID 发布到总线
-    let bus = ExperienceCardBus::new();
-    let mut critical_rx = bus.subscribe_critical();
-    bus.publish(card_with_evidence("c-ev", "t1", "ledger-001"));
-
-    // 3. 闭环验证: 卡片 → 证据 ID → 账本条目
-    let received = critical_rx.try_recv().expect("高分卡片应达 Critical 通道");
-    assert_eq!(received.token_evidence_ids.len(), 1);
-    let resolved = ledger
-        .get(&received.token_evidence_ids[0])
-        .expect("证据 ID 必须可解析到账本条目");
-    assert_eq!(resolved.entry_id.as_ref(), "ledger-001");
-    assert_eq!(resolved.output_len(), 2);
-    // 账本完整性
-    let report = ledger.integrity_check();
-    assert_eq!(report.total_entries, 1);
-    assert_eq!(report.duplicate_ids, 0);
-}
+// NOTE(B5/ADR-312): card_evidence_chain_closure_with_ledger 测试已随 token_ledger
+// 子系统退役——其「卡片 ↔ Token 账本」闭环的账本半边不复存在；卡片携带
+// token_evidence_ids 的证据链语义仍由 L0 TokenLedgerEntry + cmt-tiering 落盘承载。
 
 // ----------------------------------------------------------
 // 四索引跨模块查询
@@ -188,42 +146,25 @@ async fn multiple_critical_subscribers_all_receive() {
 }
 
 // ----------------------------------------------------------
-// 全链路: 卡片发布 → 索引 → 统计 → 账本导出
+// 全链路: 卡片并发发布 → Critical 通道 → 索引 → 统计
+// （B5/ADR-312 改造: 原「→ 账本导出」半边随 token_ledger 子系统退役）
 // ----------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn end_to_end_card_pipeline() {
     let bus = ExperienceCardBus::new();
-    let ledger = TokenLedger::new();
     let mut critical_rx = bus.subscribe_critical();
 
-    // 并发生产: 8 任务 × 50 卡片，每卡附一条 Token 证据
+    // 并发生产: 8 任务 × 50 卡片，每卡附证据链 ID
     let mut handles = Vec::new();
     for w in 0..8 {
         let bus = bus.clone();
-        let ledger = ledger.clone();
         handles.push(tokio::spawn(async move {
             for i in 0..50 {
-                let ledger_id = format!("ledger-w{w}-c{i}");
-                let entry = TokenLedgerEntry::new(
-                    &ledger_id,
-                    i as u32,
-                    &format!("session-{w}"),
-                    "instance-main",
-                    vec![101],
-                    vec![201, 202],
-                    vec![0.9, 0.8],
-                    vec![true, true],
-                    "v2.26.0-omega",
-                    vec![],
-                    None,
-                    1_700_000_000_000 + i as u64,
-                );
-                ledger.append(entry).expect("账本追加成功");
                 bus.publish(card_with_evidence(
                     &format!("c-w{w}-i{i}"),
                     &format!("task-{w}"),
-                    &ledger_id,
+                    &format!("ledger-w{w}-c{i}"),
                 ));
             }
         }));
@@ -241,14 +182,8 @@ async fn end_to_end_card_pipeline() {
     }
     assert_eq!(received, 400, "Critical 通道无丢失");
 
-    // 统计一致性: 卡片总数 = 账本条目数 = 400
+    // 统计一致性: 卡片总数 = 400
     assert_eq!(bus.get_global_stats().total_cards, 400);
-    assert_eq!(ledger.len(), 400);
-    let ledger_report = ledger.integrity_check();
-    assert_eq!(ledger_report.total_entries, 400);
-    assert_eq!(ledger_report.unique_ids, 400);
-    // 会话索引分片
-    assert_eq!(ledger.session_entry_ids("session-3").len(), 50);
     // 卡片任务索引分片
     assert_eq!(bus.get_cards_by_task("task-7").len(), 50);
 }

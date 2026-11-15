@@ -30,10 +30,9 @@
 //!    - 0 个 Critical(TuiActionFailed 注释 types.rs:1547-1550 明确:失败是操作员
 //!      可感知交互结果,非系统安全事件)
 //!
-//! 4. **severity() 的 8 个使用点均不受影响**:
+//! 4. **severity() 的使用点均不受影响**(membrane.rs 使用点已随 B5/ADR-312 退役):
 //!    - bus.rs:210/281 Critical 无订阅者告警(TuiAction 不触发)
 //!    - backpressure.rs:127 Critical 不丢弃(TuiAction 可被丢弃)
-//!    - membrane.rs:324 Critical 穿膜优先(TuiAction 走分类逻辑)
 //!    - logging.rs / TUI 面板:Critical 高亮(TuiAction 不高亮)
 //!
 //! ### Consequences

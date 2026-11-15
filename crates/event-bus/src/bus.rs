@@ -13,7 +13,6 @@ use crate::credit_flow::{CreditFlow, CreditStats};
 use crate::critical_sink::{CriticalSink, LogCriticalSink};
 use crate::error::EventBusError;
 use crate::logging::BusLogger;
-use crate::membrane::{MembraneFilter, PermeationDecision};
 use crate::shard::{event_lane, Lane, ShadowStats, ShardedEventBus, SHARD_CAPACITY};
 use crate::types::{EventMetadata, EventSeverity, NexusEvent};
 // F-a(M0):ArcSwapOption 承载分片总线单一真值源(取代 Mutex<Option<Arc<_>>> +
@@ -1321,79 +1320,10 @@ impl EventBus {
     }
 
     // ============================================================
-    // P2-W7.1.1:膜感知发布(选择性渗透集成)
+    // NOTE(B5/ADR-312): publish_membrane / publish_membrane_blocking 方法对已随
+    // membrane 子系统退役（零生产调用方,仅 bench 自引用）;恢复路径 = git 历史
+    // 恢复 membrane.rs + 本方法对。
     // ============================================================
-
-    /// 膜感知异步发布 — 通过 MembraneFilter 决策事件是否穿膜入内环
-    ///
-    /// 将膜过滤集成到发布路径(spec.md L423 "膜深化:选择性渗透"):
-    /// - `PassToCore`:走正常发布路径(broadcast + Critical mpsc 旁路)
-    /// - `LocalConsume`:不发布到任何 channel,在膜边界直接消化
-    ///
-    /// 返回 [`PermeationDecision`] 让调用方知道事件是否穿膜,可用于指标统计
-    /// (如统计被膜拒绝的事件数、按 EventCategory 分类等)。
-    ///
-    /// # 零 BREAKING(spec.md L421)
-    /// 既有 [`publish`](Self::publish) / [`publish_critical`](Self::publish_critical)
-    /// 签名与行为不变。调用方显式选择 `publish_membrane` 才启用膜过滤。
-    /// `publish_critical()` 始终穿膜(Critical 事件在膜分类中恒为 `PassToCore`)。
-    ///
-    /// # 背压语义(两层协同)
-    /// - 第一层(膜):InnerLoad::Critical 档拒绝非 Critical 事件穿膜,
-    ///   减少 channel 投递量(入口过滤)
-    /// - 第二层(channel):P1-W2.1 有界 mpsc(4096 容量)防止 Critical 通道 OOM
-    ///   (出口背压);容量满时优先级采样丢弃并递增 `critical_dropped_count`
-    ///
-    /// # 使用示例
-    /// ```
-    /// use event_bus::{EventBus, EventMetadata, NexusEvent};
-    /// use event_bus::membrane::{InnerLoad, MembraneFilter};
-    ///
-    /// let bus = EventBus::new();
-    /// let membrane = MembraneFilter::with_load(InnerLoad::High);
-    ///
-    /// let cache_hit = NexusEvent::CacheHit {
-    ///     metadata: EventMetadata::new("scc-cache"),
-    ///     cache_key: "k1".into(),
-    /// };
-    /// // 同步版本:不需 tokio runtime
-    /// let decision = bus.publish_membrane_blocking(cache_hit, &membrane).unwrap();
-    /// assert!(decision.is_local_consume()); // CacheLocal 在 High 档被本地消化
-    /// ```
-    pub async fn publish_membrane(
-        &self,
-        event: NexusEvent,
-        membrane: &MembraneFilter,
-    ) -> Result<PermeationDecision, EventBusError> {
-        let decision = membrane.decide(&event);
-        if decision.is_local_consume() {
-            // 外环本地消化:不发布到任何 channel
-            // WHY 不记录 warn:LocalConsume 是预期行为(如 CacheHit/ReadMetric),
-            // 非异常丢弃;调用方可通过返回值统计
-            return Ok(decision);
-        }
-        // PassToCore:走正常发布路径(broadcast + Critical mpsc 旁路)
-        self.publish(event).await?;
-        Ok(decision)
-    }
-
-    /// 膜感知同步发布 — [`publish_membrane`](Self::publish_membrane) 的同步版本
-    ///
-    /// 供不便 await 的场景使用(如 Drop 实现、sync 方法内调用)。
-    /// 语义与异步版本完全一致:膜决策 → PassToCore 走 publish_blocking /
-    /// LocalConsume 跳过。
-    pub fn publish_membrane_blocking(
-        &self,
-        event: NexusEvent,
-        membrane: &MembraneFilter,
-    ) -> Result<PermeationDecision, EventBusError> {
-        let decision = membrane.decide(&event);
-        if decision.is_local_consume() {
-            return Ok(decision);
-        }
-        self.publish_blocking(event)?;
-        Ok(decision)
-    }
 
     /// 订阅 Critical 事件 mpsc 旁路通道
     ///

@@ -52,10 +52,7 @@ proptest = { workspace = true }
 name = "bus_bench"
 harness = false
 
-# P2-W7.1.2: 膜投递性能基准(跨膜事件投递 p95<10ms 验收)
-[[bench]]
-name = "membrane_delivery_bench"
-harness = false
+# NOTE(B5/ADR-312): membrane_delivery_bench 已随 membrane 子系统退役。
 
 # Task 3.1:TuiAction 协议分发延迟基准(8 变体 publish_blocking < 10µs 验收)
 # WHY 独立 bench:8 变体 payload 形态不同,参数化测量可识别偏高频次;
@@ -86,12 +83,7 @@ harness = false
 name = "bus_shard_bench"
 harness = false
 
-# P2-T5: PatternIndex 精确索引门禁基准(v4.0 WI-15 阶段一)
-# 1000 订阅者 × 10K 事件匹配 P99 < 1ms + 结构性漏发率 = 0
-# 复用 T8/T9 单行采样模式(iter_custom 零打印、固定 n 单次采样)
-[[bench]]
-name = "pattern_index_bench"
-harness = false
+# NOTE(B5/ADR-312): pattern_index_bench 已随 pattern_index 子系统退役。
 
 # E-5 lint ratchet opt-in (docs/reports/arch-quality-deep-review-2026-09-25.md)
 [lints]

@@ -361,8 +361,8 @@ define_event_registry! {
     ParentSelected => Normal, Knowledge;
     // [Critical·mpsc] §16.4:错误签名匹配丢失导致 Debug 算子无法检索同签名兄弟
     ErrorSignatureMatched => Critical, Security;
-    // §16.4(Phase 10 Wave 4):Token 证据记录(L1 → L3 持久化通知)
-    TokenLedgerRecorded => Normal, Storage;
+    // NOTE(B5/ADR-312): TokenLedgerRecorded 已随 token_ledger 子系统退役
+    // （零生产发布点；变体锁 156→155 同批）。
     // §16.4:自我评估更新(L10 RuntimeAuditor → L9)
     AssessmentUpdated => Normal, System;
     // §16.5 L1 吞吐量观测(Phase 10 Wave 6)

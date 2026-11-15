@@ -51,12 +51,7 @@ file = "crates/repo-wiki/tests/hnsw_p95_test.rs"
 func = "test_hnsw_100k_p95_below_50ms"
 threshold = "ENTRY_COUNT_100K"
 
-[[redline]]
-id = "RL-07"
-name = "membrane delivery p95<10ms"
-file = "crates/event-bus/benches/membrane_delivery_bench.rs"
-func = "membrane_e2e_delivery"
-threshold = "10ms"
+# NOTE(B5/ADR-312): [[redline]] RL-07 (membrane delivery) 已随 membrane 子系统退役。
 
 [[redline]]
 id = "RL-08"
@@ -227,13 +222,8 @@ crate = "repo-wiki"
 test = "test_hnsw_100k_p95_below_50ms"
 workflow = "slo.yml"
 
-[[redline_exec]]
-id = "RL-07"
-surface = "bench"
-crate = "event-bus"
-bench = "membrane_delivery_bench"
-filter = "membrane_e2e_delivery/publish_to_recv"
-assert_ns = 10000000
+# NOTE(B5/ADR-312): [[redline_exec]] RL-07 (membrane_delivery_bench) 已随
+# membrane 子系统退役（bench 文件同批删除）。
 
 [[redline_exec]]
 id = "RL-09"

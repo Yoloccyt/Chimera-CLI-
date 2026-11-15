@@ -1300,8 +1300,11 @@ mod tests {
     /// τ=1s:3s 后 decay_factor = e^-3 ≈ 0.05 < 0.1 阈值,条目必越降级线。
     #[tokio::test]
     async fn decay_cycle_loop_demotes_stale_entry() {
-        let mut cfg = CmtConfig::default();
-        cfg.decay_tau_seconds = 1;
+        // B5 订正: field-init 形态（clippy field_reassign_with_default）
+        let cfg = CmtConfig {
+            decay_tau_seconds: 1,
+            ..CmtConfig::default()
+        };
         let cmt =
             std::sync::Arc::new(CmtCoordinator::new_in_memory(cfg, EventBus::new()).expect("构造"));
         cmt.insert(make_entry("cap-loop")).await.expect("insert");
