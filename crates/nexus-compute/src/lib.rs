@@ -3,7 +3,7 @@
 //! ROLE:     NEXUS-OMEGA L0-B 核心基础面 — CPU 卸载计算面（ADR-309 自 nexus-core 迁出）
 //! BACKEND:  fs
 //! PRODUCERS: 1 ComputePoolSaturated
-//! CONSUMERS: 1 nexus-core
+//! CONSUMERS: 8 chimera-cli,decay-engine,faae-router,gsoe-evolution,hcw-window…
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! NEXUS-OMEGA L0-B 核心基础面 — CPU 卸载计算面（ADR-309 自 nexus-core 迁出）
@@ -11,11 +11,10 @@
 //! 对应架构层:L1 Core（机器层号 1；层名亚层 **L0-B 核心基础面**，与
 //! `nexus-core`/`event-bus`/`nexus-telemetry` 同亚层，ADR-222 D1 + ADR-309）
 //!
-//! # 迁出说明（ADR-309，W4-1）
+//! # 迁出与 shim 退役（ADR-309 W4-1 + ADR-311 B1）
 //! 本 crate 整体自 `nexus-core/src/compute/` 平移（`git mv`，模块声明与文件内容
-//! 除路径前缀外零变化）。`nexus-core` 保留 `pub mod compute { pub use nexus_compute::*; }`
-//! 兼容 shim 一个版本窗：`nexus_core::compute::*` 旧路径（含子模块路径）继续可用，
-//! 类型同一性由 `crates/nexus-core/tests/compute_shim.rs` 编译期锁定。
+//! 除路径前缀外零变化）。B1 批次已删除 nexus-core 的兼容 shim：
+//! 消费方一律直连 `nexus_compute::…`（8 生产 crate + example/test 归属随迁）。
 //! 本 crate **不得**依赖 `nexus-core`（反向即 crate 环，G-125 守护 L0-B 方向）。
 
 #![forbid(unsafe_code)]

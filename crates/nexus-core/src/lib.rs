@@ -3,7 +3,7 @@
 //! ROLE:     核心状态与领域类型 — 维护 NexusState、UserIntent、CLV 等全局领域模型
 //! BACKEND:  memory
 //! PRODUCERS: 1 ClvSnapshotReported
-//! CONSUMERS: 23 chimera-cli,chimera-mas,chimera-tui,chtc-bridge,cmt-tiering…
+//! CONSUMERS: 21 chimera-cli,chimera-mas,chimera-tui,chtc-bridge,cmt-tiering…
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! 核心状态与领域类型 — 维护 NexusState、UserIntent、CLV 等全局领域模型
@@ -44,15 +44,6 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod clv;
-/// ADR-309 (W4-1): CPU 卸载统一入口(ComputeBridge L-a 全局 rayon 池 + L-f 三态路由 +
-/// Ω₇ 缝合点,手册 §8.3/§8.4/§10.8/§11.1,Phase 1 地基波次关键路径,T9/T14 依赖本模块)
-/// 实现已迁出为独立 crate `nexus-compute`（L0-B，机器层号 1）；本模块为兼容 shim ——
-/// `nexus_core::compute::*` 旧路径（含 `compute::bridge` 等子模块路径，经 glob 再导出
-/// 可达）一个版本窗内继续可用，类型同一性由 tests/compute_shim.rs 编译期锁定。
-/// 消费方迁移完成后删本 shim（独立小批）。
-pub mod compute {
-    pub use nexus_compute::*;
-}
 pub mod config;
 pub mod decay;
 pub mod error;
@@ -95,17 +86,8 @@ pub use rl_client::{GrpcRLClient, RLClient, RLError, RulePolicyFallback};
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
     pub use crate::clv::{cosine_similarity_slices, CLV};
-    // P1-T8: 计算统一入口(与顶层导出同集)
-    pub use crate::compute::{bridge, ComputeBridge, ComputeError, DispatchPlan, TaskKind};
-    // P1-T9: HTS 动态阈值表 + 序贯检验(手册 §8.4 / ADR-103)
-    pub use crate::compute::hts::sequential_test::{
-        SequentialTest, SequentialTestConfig, TestDecision,
-    };
-    pub use crate::compute::hts::{HtsTable, ThresholdSource};
-    // P1-T10: DetReduce 双模式归约(手册 §10.2 / ADR-102/106)
-    pub use crate::compute::reduce::{
-        reduce, repro_reduce, tree_reduce_fixed, ReduceMode, DEFAULT_CHUNK,
-    };
+    // NOTE(B1/ADR-309): compute 面已随 W4-1 迁出为 nexus-compute；shim 退役后
+    // prelude 不再承载 compute 导出，消费方直接 `use nexus_compute::…`。
     pub use crate::config::ChimeraConfig;
     pub use crate::error::NexusError;
     pub use crate::ids::{AgentId, CapabilityId, IntentId, ModelId, OperationId, QuestId, TaskId};

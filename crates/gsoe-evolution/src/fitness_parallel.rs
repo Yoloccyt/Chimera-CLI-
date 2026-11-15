@@ -14,7 +14,7 @@
 //! 结果与串行逐元素一致（确定性断言，Ω₂）；保留串行回退
 //! （env CHIMERA_NO_PARALLEL_GSOE，OnceLock 启动期一次读取）。
 
-use nexus_core::compute::bridge;
+use nexus_compute::bridge;
 
 /// 适应度评分输入（变体快照——纯数据，无 IO）
 #[derive(Debug, Clone, PartialEq)]
@@ -54,7 +54,7 @@ fn parallel_enabled() -> bool {
 /// 长度与输入一一对应（调用方按下标索引，不得丢项）。
 #[must_use]
 fn merge_with_serial(
-    results: Vec<Result<f32, nexus_core::compute::ComputeError>>,
+    results: Vec<Result<f32, nexus_compute::ComputeError>>,
     samples: &[FitnessSample],
     serial: &[f32],
 ) -> Vec<f32> {
@@ -92,9 +92,9 @@ pub fn score_batch(samples: &[FitnessSample]) -> Vec<f32> {
         return scores;
     }
     // ComputeBridge 路由（GsoeEvaluate 阈值 500，Phase 1 已登记）→ 并行
-    let kind = nexus_core::compute::TaskKind::GsoeEvaluate;
+    let kind = nexus_compute::TaskKind::GsoeEvaluate;
     match bridge().route(kind, samples.len()) {
-        nexus_core::compute::DispatchPlan::Rayon => {
+        nexus_compute::DispatchPlan::Rayon => {
             // spawn_compute_batch 接受闭包迭代器（每 item 一闭包）
             // WHY cloned：闭包需 'static（rayon 池跨线程），样本为小值复制捕获
             let closures = samples
@@ -177,7 +177,7 @@ mod tests {
     /// A2/审计 S-3：并行失败必须回退串行同式值，不得折算成 0 分
     #[test]
     fn merge_falls_back_to_serial_not_zero() {
-        use nexus_core::compute::ComputeError;
+        use nexus_compute::ComputeError;
 
         let s = samples(3);
         let serial: Vec<f32> = s

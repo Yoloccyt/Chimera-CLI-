@@ -65,7 +65,7 @@ pub mod formal;
 pub mod learner_holder;
 /// P1-T14: 批量能力衰减的 ComputeBridge 并行注入（快照分离 + 串行提交 + 回退）
 ///
-/// 批量衰减热点（v4.0 §7.5.1 L-a）经 [`nexus_core::compute`] 全局计算池并行:
+/// 批量衰减热点（v4.0 §7.5.1 L-a）经 [`nexus_compute`] 全局计算池并行:
 /// 逐能力独立衰减 → 主线程快照 → rayon 闭包纯计算 → 串行提交;
 /// `CHIMERA_NO_PARALLEL_DECAY` env + [`DecayEngine::parallel_batch`] 双重回退。
 pub mod parallel;

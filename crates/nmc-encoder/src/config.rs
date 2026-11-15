@@ -72,7 +72,7 @@ pub struct NmcConfig {
     pub text_model: Option<String>,
     /// P1-T14: 批量编码并行开关(默认 true)
     ///
-    /// 经 `nexus_core::compute::ComputeBridge`(L-a 全局 rayon 池)并行批量编码
+    /// 经 `nexus_compute::ComputeBridge`(L-a 全局 rayon 池)并行批量编码
     /// (v4.0 §7.5.1 L-a: tract-onnx 推理 / CLV 批量编码 2-4×【待验证】)。
     /// 关闭方式(强制串行回退):配置 false 或环境变量 `CHIMERA_NO_PARALLEL_NMC`
     /// 设置为 "1"/"true"/"on"(启动期 OnceLock 一次读取,不在热路径)。

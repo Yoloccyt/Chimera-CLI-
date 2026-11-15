@@ -21,11 +21,9 @@ tokio = { workspace = true }
 # WHY 合规: §2.2 同层互引允许 L(N)→L(N);event-bus 不依赖 nexus-core(零环,
 # payloads.rs ClvSummary::from_clv_slice 已解耦),故 nexus-core→event-bus 无环。
 event-bus = { workspace = true }
-# ADR-309 (W4-1) L0-B 同层：CPU 卸载计算面已迁出为独立 crate nexus-compute。
-# WHY 单向 nexus-core → nexus-compute：本 crate 仅经兼容 shim 再导出旧路径
-# （pub mod compute { pub use nexus_compute::*; }），compute 对 nexus-core 零依赖
-# 已实证（grep 实测），反向依赖会形成 crate 环；G-125 守护该方向。
-nexus-compute = { workspace = true }
+# ADR-309 (W4-1) 迁出记录：CPU 卸载计算面已为独立 crate nexus-compute（L0-B 同层）。
+# B1/ADR-311 shim 退役：兼容 shim 已删，消费方直连 nexus_compute；本 crate 对其
+# 零依赖（G-125 方向守护不变），`nexus-core|nexus-compute` 内部边同批自 dep_edge_freeze 摘除。
 # L0-B 同层：计算面遥测契约与上报编排（ADR-222 D3）。
 # WHY 单向 nexus-core → nexus-telemetry：KindCounters 引用 TaskKind/hts，
 # 反向依赖会形成 crate 环；G-125 守护该方向。

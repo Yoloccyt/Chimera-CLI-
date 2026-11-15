@@ -7,6 +7,8 @@ license.workspace = true
 [dependencies]
 # L1 Core:使用 CLV(512-dim 潜在向量)作为多模态编码的统一输出
 nexus-core = { workspace = true }
+# L0-B（B1/ADR-311 shim 退役直连）：parallel.rs 批量编码挂 ComputeBridge
+nexus-compute = { workspace = true }
 # L1 Core:EventBus 跨层通信,发布 NmcEncoded 事件
 event-bus = { workspace = true }
 # 异步运行时:perceive_async(G-88 红线 facade)经 spawn_blocking 把同步阻塞推理

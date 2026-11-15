@@ -221,15 +221,18 @@ fn test_routing_scores_none_fallback_to_heuristic() {
 }
 
 // ============================================================
-// 测试 3:空评分向量边界(Some(vec![]) 安全处理,不 panic)
+// 测试 3:空评分向量边界(W1b 治理后:长度不匹配大声失败)
 // ============================================================
 
-/// 验证 Some(vec![]) + 非空候选集(k < total)时安全降级为空掩码(不 panic)
+/// 验证 Some(vec![]) + 非空候选集(k < total)时 select_top_k 大声失败(panic)
 ///
-/// WHY:scores.len() (0) != ids.len() (10),select_top_k 防御性返回空掩码。
-/// 注意:必须用 k < total 的场景(10 个工具,Simple 档位 k=8),
+/// WHY:W1b(SparseMask 静默失败治理)把 select_top_k 的 scores/ids 长度不匹配从
+/// "防御性返回空掩码"改为 assert panic——静默降级掩盖调用方 bug,新契约是
+/// fail-fast。本测试由"期望空掩码"翻转为"期望 panic"（W1b 漏同步的存量测试,
+/// B1 批次补齐）。注意:必须用 k < total 的场景(10 个工具,Simple 档位 k=8),
 /// 因为 select_top_k 在 k >= total 时会跳过 scores 长度检查直接返回全掩码
 #[test]
+#[should_panic(expected = "调用方长度不匹配")]
 fn test_empty_scores_vector_with_nonempty_candidates() {
     let bus = EventBus::new();
     let coord = OmniSparseCoordinator::new(bus);
@@ -246,13 +249,9 @@ fn test_empty_scores_vector_with_nonempty_candidates() {
         None,
     );
 
-    // 不应 panic,因 scores 长度不匹配返回空掩码
-    let mask = coord.compute_routing_mask(&profile);
-    assert_eq!(
-        mask.active_count(),
-        0,
-        "空评分向量 + 非空候选集(k<total)应降级为空掩码"
-    );
+    // W1b 新语义:长度不匹配必须 panic,不再静默返回空掩码
+    let _mask = coord.compute_routing_mask(&profile);
+    unreachable!("select_top_k 长度不匹配必须 panic(W1b 契约)");
 }
 
 /// 验证 Some(vec![]) + 候选集数量 ≤ k 时返回全掩码(不 panic)
@@ -326,12 +325,15 @@ fn test_none_scores_with_empty_candidates() {
     assert_eq!(mask.active_count(), 0, "空候选集应返回空掩码");
 }
 
-/// 验证评分长度与候选集长度不匹配时安全降级(不 panic)
+/// 验证评分长度与候选集长度不匹配时 select_top_k 大声失败(panic)
 ///
-/// WHY:scores.len() (3) != ids.len() (10),select_top_k 防御性返回空掩码。
-/// 注意:必须用 k < total 的场景(10 个工具,Simple 档位 k=8),
-/// 因为 select_top_k 在 k >= total 时会跳过 scores 长度检查直接返回全掩码
+/// WHY:W1b(SparseMask 静默失败治理)把 select_top_k 的 scores/ids 长度不匹配从
+/// "防御性返回空掩码"改为 assert panic;本测试由"期望空掩码"翻转为"期望 panic"
+/// （W1b 漏同步的存量测试,B1 批次补齐）。注意:必须用 k < total 的场景
+/// (10 个工具,Simple 档位 k=8),因为 select_top_k 在 k >= total 时会跳过
+/// scores 长度检查直接返回全掩码
 #[test]
+#[should_panic(expected = "调用方长度不匹配")]
 fn test_scores_length_mismatch() {
     let bus = EventBus::new();
     let coord = OmniSparseCoordinator::new(bus);
@@ -348,12 +350,9 @@ fn test_scores_length_mismatch() {
         None,
     );
 
-    let mask = coord.compute_routing_mask(&profile);
-    assert_eq!(
-        mask.active_count(),
-        0,
-        "评分长度与候选集不匹配(k<total)应降级为空掩码"
-    );
+    // W1b 新语义:长度不匹配必须 panic,不再静默返回空掩码
+    let _mask = coord.compute_routing_mask(&profile);
+    unreachable!("select_top_k 长度不匹配必须 panic(W1b 契约)");
 }
 
 // ============================================================

@@ -10,7 +10,10 @@ license.workspace = true
 # 本 crate 改为 re-export,消除星型耦合(Insight 2 消解)
 nexus-contracts = { workspace = true }
 # L1 Core:基础类型(如 CLV,本 crate 暂未直接使用,保留以备扩展)
-nexus-core = { workspace = true }
+# B1/ADR-311 shim 退役：生产码不再消费 nexus-core（parallel.rs 改挂 nexus-compute），
+# 本依赖降级为 dev-dependencies（tests/e2e.rs 仍用 nexus_core::CLV；dev 面不入装配图）
+# L0-B（B1/ADR-311 shim 退役直连）：parallel.rs 掩码批量计算挂 ComputeBridge
+nexus-compute = { workspace = true }
 # L1 Core:EventBus 跨层通信，发布 OmniSparseMasksComputed 事件 (修正 V1 违规)
 event-bus = { workspace = true }
 # 序列化:mask_hash 计算需将五维度掩码序列化为 JSON
@@ -27,6 +30,8 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]
+# B1/ADR-311: nexus-core 自生产边降级（tests/e2e.rs 的 nexus_core::CLV）
+nexus-core = { workspace = true }
 # 异步测试运行器(coordinator.rs 集成测试使用 #[tokio::test])
 tokio = { workspace = true }
 # 端到端测试(e2e.rs)需同时依赖 L2/L3/L6 多个 crate,验证完整数据流:

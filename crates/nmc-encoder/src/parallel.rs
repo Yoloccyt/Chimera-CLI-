@@ -26,9 +26,9 @@
 //! - **快照分离**:计算核心 [`NmcEncoder::perceive_core`](crate::fusion::NmcEncoder::perceive_core)
 //!   为无副作用纯计算(无 IO/await/持锁);事件发布(`publish_encoded_event`,
 //!   tokio broadcast,IO 侧)留主线程按序执行,禁入 rayon 闭包。
-//! - **挂 ComputeBridge**:[`ComputeBridge::route`](nexus_core::compute::ComputeBridge::route)
+//! - **挂 ComputeBridge**:[`ComputeBridge::route`](nexus_compute::ComputeBridge::route)
 //!   按 `TaskKind::NmcEncode` 三态判定 → `Inline`(n 小于阈值,串行)或 `Rayon`
-//!   ([`spawn_compute_batch`](nexus_core::compute::ComputeBridge::spawn_compute_batch)
+//!   ([`spawn_compute_batch`](nexus_compute::ComputeBridge::spawn_compute_batch)
 //!   批量并行,结果序 = 输入序)。
 //! - **保留回退**:`NmcConfig::parallel_encode` 配置开关 + `CHIMERA_NO_PARALLEL_NMC`
 //!   环境变量(启动期 OnceLock 读取一次,不在热路径)双重关闭 → 强制串行。
@@ -58,7 +58,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use nexus_core::compute::{bridge, DispatchPlan, TaskKind};
+use nexus_compute::{bridge, DispatchPlan, TaskKind};
 
 use crate::error::NmcError;
 use crate::fusion::NmcEncoder;

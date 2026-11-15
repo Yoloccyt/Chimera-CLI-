@@ -33,7 +33,7 @@ use hcw_window::recall::types::BlockScore;
 use kvbsr_router::blocks::BlockBuilder;
 use kvbsr_router::config::KvbsrConfig;
 use kvbsr_router::types::{CoOccurrenceMatrix, ToolVector};
-use nexus_core::compute::{bridge, ComputeError, DispatchPlan, TaskKind};
+use nexus_compute::{bridge, ComputeError, DispatchPlan, TaskKind};
 use nexus_core::CLV;
 use repo_wiki::search::{hybrid_search, HybridSearchConfig};
 

@@ -10,6 +10,8 @@ license.workspace = true
 nexus-contracts = { workspace = true }
 # L1 Core:CLV 余弦相似度计算 + id_newtype! 宏
 nexus-core = { workspace = true }
+# L0-B（B1/ADR-311 shim 退役直连）：parallel.rs 专家评分挂 ComputeBridge
+nexus-compute = { workspace = true }
 # L1 Core:EventBus 跨层通信,发布 ExpertRouted/EntropyBalanced 等事件
 event-bus = { workspace = true }
 # 异步运行时(RwLock/tokio::spawn 用于并发路由与后台衰减循环)

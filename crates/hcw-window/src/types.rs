@@ -700,7 +700,7 @@ pub struct HcwConfig {
     pub selector_policy: SelectorPolicy,
     /// P1-T14: 压缩并行开关(默认 true)
     ///
-    /// 经 `nexus_core::compute::ComputeBridge`(L-a 全局 rayon 池)在压缩评分阶段
+    /// 经 `nexus_compute::ComputeBridge`(L-a 全局 rayon 池)在压缩评分阶段
     /// **段间并行**(段内保序,段间按序拼接,结果与串行逐元素一致)
     /// (v4.0 §7.5.1 L-a: 四层级窗口选择 / 压缩段间 2-3×【待验证】)。
     /// 关闭方式(强制串行回退):配置 false 或环境变量 `CHIMERA_NO_PARALLEL_HCW`

@@ -124,9 +124,9 @@ pub async fn execute_with_ctx(ctx: AppContext, config: &ChimeraConfig) -> Result
     );
     // A1/ADR-197 覆盖扩展（2026-10-04）:协议宿主路径同启 L1 计算池饱和观测报告器
     // ——此前仅 experience_loop（TUI）启动,acp 宿主无饱和可见性。WHY 在本层:
-    // nexus-core 拥有池统计但不持 EventBus,组合根同时持有二者（同款接线先例
+    // 计算面(nexus-compute)拥有池统计但不持 EventBus,组合根同时持有二者（同款接线先例
     // 见 experience_loop.rs）;句柄命名绑定保活至进程退出（随 runtime 释放）。
-    let _saturation_reporter = nexus_core::compute::spawn_saturation_reporter(ctx.bus.clone(), 60);
+    let _saturation_reporter = nexus_compute::spawn_saturation_reporter(ctx.bus.clone(), 60);
     let server = crate::composition::build_app_server(ctx).await;
     let transport = StdinTransport::new();
 

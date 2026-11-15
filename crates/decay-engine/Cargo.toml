@@ -19,6 +19,8 @@ nexus-contracts = { workspace = true }
 # nexus-core: L1 Core（P1-4 衰减模型统一：共享指数衰减公式）
 # WHY L4 → L1 依赖铁律合规：向下依赖，仅使用纯数学函数
 nexus-core = { workspace = true }
+# nexus-compute: L0-B（B1/ADR-311 shim 退役直连：parallel.rs 批量衰减挂 ComputeBridge）
+nexus-compute = { workspace = true }
 # event-bus: L1 Core 跨层通信(L4 深度优化 P1-1:ShadowBreakerTripped 事件发布)
 # WHY L4 → L1 依赖铁律合规:向下依赖;ShadowModeCircuitBreaker 跳闸时经
 # publish_blocking 发布熔断事件,替代原全局函数占位(Ω₄-Event 红线)

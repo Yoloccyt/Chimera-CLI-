@@ -38,6 +38,9 @@ use nexus_compute::{bridge, ComputeBridge, TaskKind};
 /// 随 compute/ 迁入 nexus-compute 后对 nexus-core 零依赖是红线，不得以 dev-dep
 /// 借 `CLV` 成环；内核形状等价声明见 `overwindow_dense_knee` 头注（非逐位对拍），
 /// serial/offload 两组共用同一内核，膝点对比自洽。
+/// B1 订正：补 `#[derive(Clone)]`（`query.clone()` 需要；W4-1 迁移后 bench 未过
+/// `--all-targets` 编译，此缺口由 B1 clippy 首跑暴露）。
+#[derive(Clone)]
 struct BenchClv(Vec<f32>);
 
 impl BenchClv {

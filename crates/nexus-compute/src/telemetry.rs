@@ -23,8 +23,8 @@ use super::bridge;
 use super::calibration;
 use super::utilization::UtilizationSampler;
 
-// 兼容 re-export：`nexus_core::compute::{SaturationMode, saturation_ratio_bp, ...}`
-// 与 `nexus_core::compute::telemetry::*` 旧路径逐字不变（拆分只是搬家，不是改 API）。
+// 兼容 re-export：B1/ADR-311 shim 退役前 `nexus_core::compute::telemetry::*` 旧路径
+// 即经本模块转发（拆分只是搬家，不是改 API）；shim 删除后消费方直连 `nexus_compute::…`。
 pub use super::counters::{KindCounters, KindStat};
 pub use nexus_telemetry::{
     clamped_period, parse_saturation_mode, parse_threshold_bp, report_needed, reporter_tick,

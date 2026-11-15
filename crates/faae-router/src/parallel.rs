@@ -23,9 +23,9 @@
 //!   主线程异步读锁收集评分输入快照,释放锁后在纯数据上做批量评分
 //!   （并行或串行）。快照本身的成本随后又按下述"预计算"收口为零深拷贝。
 //! - **挂 ComputeBridge**:
-//!   [`ComputeBridge::route`](nexus_core::compute::ComputeBridge::route) 按
+//!   [`ComputeBridge::route`](nexus_compute::ComputeBridge::route) 按
 //!   `TaskKind::ExpertScore` 三态判定 → `Inline`（n 小于阈值,串行路径）或 `Rayon`
-//!   （[`spawn_compute_batch`](nexus_core::compute::ComputeBridge::spawn_compute_batch)
+//!   （[`spawn_compute_batch`](nexus_compute::ComputeBridge::spawn_compute_batch)
 //!   批量并行,结果序 = 输入序）。
 //! - **保留回退**:`FaaeConfig::parallel_expert_scoring` 配置开关 +
 //!   `CHIMERA_NO_PARALLEL_FAAE` 环境变量（启动期 OnceLock 读取一次,不在热路径）
@@ -59,7 +59,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use nexus_core::compute::{bridge, ComputeError, DispatchPlan, TaskKind};
+use nexus_compute::{bridge, ComputeError, DispatchPlan, TaskKind};
 
 use crate::error::FaaeError;
 use crate::types::{ExpertScoring, ToolId};
@@ -258,7 +258,7 @@ pub fn score_experts_batch(
 /// 期间该 worker 无法 poll 其它 task / 驱动 IO。多线程 runtime 上用
 /// `block_in_place` 让出 worker;**计算本体仍在 ComputeBridge 专用 rayon 池内
 /// 执行**,不新建 CPU 预算(§7.5.3 纪律④「桥接唯一」—— 池线程数是全局资源预算,
-/// 见 `nexus_core::compute::bridge` 的单例说明与 `pool.scope` 注释)—— 故不用
+/// 见 `nexus_compute::bridge` 的单例说明与 `pool.scope` 注释)—— 故不用
 /// `spawn_blocking`。
 ///
 /// # 澄清:blocking 池参与「交接」,不参与「计算」
@@ -460,7 +460,7 @@ mod tests {
     use proptest::prelude::*;
 
     /// `TaskKind::ExpertScore` 的**文档化**并行阈值（与 `parallel.rs` 模块文档
-    /// 「阈值 10000」及 `nexus_core::compute::bridge` 的 `decide_three_way` 一致）
+    /// 「阈值 10000」及 `nexus_compute::bridge` 的 `decide_three_way` 一致）
     ///
     /// 用途**仅限**回答"本用例是否**本应**落在 rayon 侧",供 `assert_rayon_branch`
     /// 的前置条件使用;不作为行为锁定 —— 阈值若被标定下移（ADR-198）,小 n 用例

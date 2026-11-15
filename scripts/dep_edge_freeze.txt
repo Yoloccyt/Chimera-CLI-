@@ -44,6 +44,7 @@ chimera-cli|mca-gateway
 chimera-cli|mcp-mesh
 chimera-cli|mlc-engine
 chimera-cli|nexus-app-server
+chimera-cli|nexus-compute      # B1/ADR-311 (2026-11-15): shim-retirement direct connect (overwindow_bridge/experience_loop/commands)
 chimera-cli|nexus-contracts
 chimera-cli|nexus-core
 chimera-cli|omega-learner
@@ -79,6 +80,7 @@ csn-substitutor|nexus-contracts
 csn-substitutor|nexus-core
 decay-engine|event-bus
 decay-engine|nexus-contracts
+decay-engine|nexus-compute     # B1/ADR-311 (2026-11-15): shim-retirement direct connect (parallel.rs decay batch)
 decay-engine|nexus-core
 decb-governor|event-bus
 decb-governor|nexus-contracts
@@ -88,6 +90,7 @@ event-bus|nexus-contracts
 faae-router|event-bus
 faae-router|gsoe-evolution
 faae-router|nexus-contracts
+faae-router|nexus-compute      # B1/ADR-311 (2026-11-15): shim-retirement direct connect (parallel.rs expert scoring)
 faae-router|nexus-core
 gea-activator|event-bus
 gea-activator|nexus-contracts
@@ -99,9 +102,13 @@ gqep-executor|qeep-protocol
 gqep-executor|seccore
 gsoe-evolution|event-bus
 gsoe-evolution|nexus-contracts
-gsoe-evolution|nexus-core
+# B1/ADR-311 (2026-11-15) retired: gsoe-evolution consumed nexus-core ONLY via the
+# compute shim (fitness_parallel.rs); after shim retirement it直连 nexus-compute
+# (edge below added same batch). src/tests/benches grep = 0 hits.
+gsoe-evolution|nexus-compute   # B1/ADR-311 (2026-11-15): shim-retirement direct connect (fitness_parallel.rs)
 hcw-window|event-bus
 hcw-window|nexus-contracts
+hcw-window|nexus-compute       # B1/ADR-311 (2026-11-15): shim-retirement direct connect (parallel.rs compress scoring)
 hcw-window|nexus-core
 kvbsr-router|event-bus
 kvbsr-router|nexus-contracts
@@ -131,12 +138,17 @@ nexus-hook|nexus-contracts
 nexus-hook|seccore
 nexus-subagent|nexus-contracts
 nmc-encoder|event-bus
+nmc-encoder|nexus-compute      # B1/ADR-311 (2026-11-15): shim-retirement direct connect (parallel.rs batch encode)
 nmc-encoder|nexus-core
 omega-learner|event-bus
 omega-learner|nexus-contracts
 osa-coordinator|event-bus
 osa-coordinator|nexus-contracts
-osa-coordinator|nexus-core
+# B1/ADR-311 (2026-11-15) retired: osa-coordinator consumed nexus-core ONLY via the
+# compute shim (parallel.rs); after shim retirement it直连 nexus-compute
+# (edge below added same batch). Production grep = 0 hits;
+# tests/e2e.rs still uses nexus_core::CLV via [dev-dependencies] (dev face, not assembled).
+osa-coordinator|nexus-compute  # B1/ADR-311 (2026-11-15): shim-retirement direct connect (parallel.rs mask batch)
 parliament|event-bus
 parliament|nexus-contracts
 parliament|nexus-core
@@ -147,6 +159,7 @@ quest-engine|event-bus
 quest-engine|nexus-core
 repo-wiki|event-bus
 repo-wiki|nexus-contracts
+repo-wiki|nexus-compute        # B1/ADR-311 (2026-11-15): shim-retirement direct connect (vector/parallel.rs KNN batch)
 repo-wiki|nexus-core
 repo-wiki|nmc-encoder
 scc-cache|event-bus
@@ -214,7 +227,10 @@ nexus-contracts-memory|nexus-contracts-seams # L0-A -> L0-A; memory/memory_pyram
 pvl-layer|nexus-contracts      # L7->L0 down; production edge since Phase 7 s12.1 (pvl-layer/Cargo.toml [dependencies]); src refs: card_generator.rs / dynamic_depth.rs / segment_validation.rs / trajectory_score.rs (ExperienceCard / ExecutionStatus / ErrorSignature contract types)
 quest-engine|nexus-contracts   # L9->L0 down; BudgetTier type source after the ADR-054 decision-3 lift (quest-engine/Cargo.toml [dependencies]); src refs: ttg.rs / arbitration.rs / checkpoint.rs / engine.rs / long_task_map.rs / long_term_credit.rs / search_tree.rs
 # --- registered 2026-11-15: ADR-309 W4-1 compute/ extraction (nexus-core -> nexus-compute, L0-B) ---
-nexus-core|nexus-compute        # L0-B -> L0-B, same machine layer 1; ADR-309 dependency shape -- nexus-compute hosts the extracted compute/ tree, nexus-core keeps ONLY the compat shim re-export (pub mod compute { pub use nexus_compute::*; }). Reverse edge would close a crate cycle and is rejected outright.
+# B1/ADR-311 (2026-11-15) retired: nexus-core|nexus-compute existed ONLY to feed the
+# compat shim (pub mod compute { pub use nexus_compute::*; }). Shim removed same batch;
+# consumers直连 nexus-compute, nexus-core depends on it no longer. Reverse direction
+# (nexus-compute -> nexus-core) remains rejected outright -- would close a crate cycle.
 nexus-compute|event-bus         # L0-B -> L0-B, same machine layer 1; the extracted telemetry adapter publishes ComputePoolSaturated over the existing bus channel (edge moved verbatim with crates/nexus-core/src/compute/, zero new event variants).
 nexus-compute|nexus-telemetry   # L0-B -> L0-B, same machine layer 1; ADR-222 D3 dependency inversion kept -- nexus-compute implements SaturationSource (ComputeTelemetry adapter, moved verbatim from nexus-core/src/compute/telemetry.rs). Reverse edge would close a cycle through KindCounters/TaskKind.
 

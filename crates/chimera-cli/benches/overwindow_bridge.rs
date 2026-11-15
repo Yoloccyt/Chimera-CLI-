@@ -84,7 +84,7 @@ fn bench_provider_select_24k(c: &mut Criterion) {
 /// （`threshold=1000, chunk=64, OfflineMeasured{measured_at: 0}`，与 `dispatch.rs` 一致），
 /// 不恢复会静默改掉同进程后续基准的派发条件。
 fn bench_e2e_dense_ab(c: &mut Criterion) {
-    use nexus_core::compute::{bridge as compute_bridge, TaskKind, ThresholdSource};
+    use nexus_compute::{bridge as compute_bridge, TaskKind, ThresholdSource};
 
     /// 生产档阈值（`dispatch.rs` 的 `ClvSimilarity`）与分段大小。
     const PROD_THRESHOLD: usize = 1_000;

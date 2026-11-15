@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use faae_router::parallel::{dispatch_plan, score_experts_batch, ScoreInput};
 use faae_router::ToolId;
-use nexus_core::compute::DispatchPlan;
+use nexus_compute::DispatchPlan;
 
 /// 运维侧 env 开关名 —— **故意写死字面量**(不去引用生产常量):
 /// 该名字本身是对运维的公开契约,改名应当被本测试当场抓住,而不是跟着改测试。

@@ -16,10 +16,10 @@
 //! - **结果保序**:查询 i 的结果必须对应输入 i —— `spawn_compute_batch` 槽位写入
 //!   保证结果序 = 输入序,chunk 内保序 + chunk 间按段序拼接,双重保序;
 //!   测试用顺序断言（结果[0] ↔ queries[0]）锁定。
-//! - **挂 ComputeBridge**:[`ComputeBridge::route`](nexus_core::compute::ComputeBridge::route)
+//! - **挂 ComputeBridge**:[`ComputeBridge::route`](nexus_compute::ComputeBridge::route)
 //!   按 `TaskKind::KnnSearch`（阈值 5,000,已登记）三态判定,`n_items = q × v`
 //!   （总相似度计算数）→ `Inline`（低于阈值,串行）或 `Rayon`
-//!   （[`spawn_compute_batch`](nexus_core::compute::ComputeBridge::spawn_compute_batch)
+//!   （[`spawn_compute_batch`](nexus_compute::ComputeBridge::spawn_compute_batch)
 //!   批量并行）。
 //! - **保留回退**:`VectorIndex::parallel_search` 配置开关 + `CHIMERA_NO_PARALLEL_WIKI`
 //!   环境变量（启动期 OnceLock 读取一次,不在热路径）双重关闭 → 强制串行;
@@ -45,7 +45,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use nexus_core::compute::{bridge, DispatchPlan, TaskKind};
+use nexus_compute::{bridge, DispatchPlan, TaskKind};
 
 /// 环境变量关闭开关名（纪律⑤;仅测试/运维使用）
 const ENV_NO_PARALLEL: &str = "CHIMERA_NO_PARALLEL_WIKI";

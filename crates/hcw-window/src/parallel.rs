@@ -13,9 +13,9 @@
 //!   一段内的**逐条目评分**(段内保序,返回 `Vec<f32>`),结果按段序拼接
 //!   (**段间保序**)→ 全局评分序列与串行路径**逐元素一致**。
 //!   Top-K 选择 + 贪心保留(依赖全局排序)仍串行执行,与注入前逐位一致。
-//! - **挂 ComputeBridge**:[`ComputeBridge::route`](nexus_core::compute::ComputeBridge::route)
+//! - **挂 ComputeBridge**:[`ComputeBridge::route`](nexus_compute::ComputeBridge::route)
 //!   按 `TaskKind::HcwEntryScore` 三态判定 → `Inline`(n 小于阈值,串行)或 `Rayon`
-//!   ([`spawn_compute_batch`](nexus_core::compute::ComputeBridge::spawn_compute_batch)
+//!   ([`spawn_compute_batch`](nexus_compute::ComputeBridge::spawn_compute_batch)
 //!   批量并行,结果序 = 输入序)。
 //! - **保留回退**:`HcwConfig::parallel_compress` 配置开关 + `CHIMERA_NO_PARALLEL_HCW`
 //!   环境变量(启动期 OnceLock 读取一次,不在热路径)双重关闭 → 强制串行;
@@ -37,7 +37,7 @@ use std::sync::{Arc, OnceLock};
 
 use chrono::{DateTime, Utc};
 use nexus_contracts::SelectorWeights;
-use nexus_core::compute::{bridge, DispatchPlan, TaskKind};
+use nexus_compute::{bridge, DispatchPlan, TaskKind};
 use nexus_core::CLV;
 
 use crate::compressor::compute_importance_score;

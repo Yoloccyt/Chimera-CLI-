@@ -20,9 +20,9 @@
 //!   的五维度掩码批量计算 —— 纯 CPU（启发式评分 + `SparseMask::select_top_k`），
 //!   无 IO / 无 .await / 无锁（rayon 闭包契约前提）。
 //! - **挂 ComputeBridge**:
-//!   [`ComputeBridge::route`](nexus_core::compute::ComputeBridge::route) 按
+//!   [`ComputeBridge::route`](nexus_compute::ComputeBridge::route) 按
 //!   `TaskKind::OsaMask` 三态判定 → `Inline`（n 小于阈值,串行路径）或 `Rayon`
-//!   （[`spawn_compute_batch`](nexus_core::compute::ComputeBridge::spawn_compute_batch)
+//!   （[`spawn_compute_batch`](nexus_compute::ComputeBridge::spawn_compute_batch)
 //!   批量并行,结果序 = 输入序）。
 //! - **保留回退**:`OsaConfig::parallel_masks` 配置开关 + `CHIMERA_NO_PARALLEL_OSA`
 //!   环境变量（启动期 OnceLock 读取一次,不在热路径）双重关闭 → 强制串行。
@@ -41,7 +41,7 @@
 use std::sync::{Arc, OnceLock};
 
 use nexus_contracts::{MemoryStrategy, MemoryStrategyProvider, OmniSparseMasks};
-use nexus_core::compute::{bridge, ComputeError, DispatchPlan, TaskKind};
+use nexus_compute::{bridge, ComputeError, DispatchPlan, TaskKind};
 
 use crate::config::OsaConfig;
 use crate::coordinator::compute_omni_mask_hash;
