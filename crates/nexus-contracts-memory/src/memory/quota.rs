@@ -138,6 +138,34 @@ impl Default for NamespaceQuota {
     }
 }
 
+/// 配额校验错误 — `NamespaceQuota::validate` 的错误载体（W1/ADR-305）
+///
+/// WHY: 替代旧 `Result<(), String>`——L0 错误模型统一规范要求有错误语义的通道
+/// 一律结构化（可 match、可观测、可计数）；消息文本经 thiserror Display 保留可读性。
+/// 变体与 `validate` 的六个校验分支一一对应。
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum QuotaError {
+    /// 命名空间标识为空
+    #[error("namespace_id 不能为空")]
+    EmptyNamespaceId,
+    /// 内存预算为 0（INV-7 要求有效上限为正）
+    #[error("memory_budget_mb 不能为 0")]
+    ZeroMemoryBudget,
+    /// 利用率超出 [0.0, 1.0]
+    #[error("memory_budget_utilization 必须在 [0.0, 1.0] 范围内，当前: {0}")]
+    UtilizationOutOfRange(f32),
+    /// 最大委托深度为 0（INV-9 至少允许根 Agent）
+    #[error("max_agent_depth 不能为 0(至少允许根 Agent)")]
+    ZeroMaxAgentDepth,
+    /// 最大并发任务数为 0
+    #[error("max_concurrent_tasks 不能为 0")]
+    ZeroMaxConcurrentTasks,
+    /// 最大任务队列长度为 0
+    #[error("max_task_queue_length 不能为 0")]
+    ZeroMaxTaskQueueLength,
+}
+
 impl NamespaceQuota {
     /// 创建指定命名空间的配额(使用默认限制)
     ///
@@ -172,28 +200,28 @@ impl NamespaceQuota {
     /// # 返回
     ///
     /// - `Ok(())`: 配额合法
-    /// - `Err(String)`: 配额非法，含错误描述
-    pub fn validate(&self) -> Result<(), String> {
+    /// - `Err(QuotaError)`: 配额非法，结构化错误可 match 可观测（W1/ADR-305，
+    ///   替代旧 `Result<(), String>`；消息文本经 Display 保留可读性）
+    pub fn validate(&self) -> Result<(), QuotaError> {
         if self.namespace_id.is_empty() {
-            return Err("namespace_id 不能为空".to_string());
+            return Err(QuotaError::EmptyNamespaceId);
         }
         if self.memory_budget_mb == 0 {
-            return Err("memory_budget_mb 不能为 0".to_string());
+            return Err(QuotaError::ZeroMemoryBudget);
         }
         if !(0.0..=1.0).contains(&self.memory_budget_utilization) {
-            return Err(format!(
-                "memory_budget_utilization 必须在 [0.0, 1.0] 范围内，当前: {}",
-                self.memory_budget_utilization
+            return Err(QuotaError::UtilizationOutOfRange(
+                self.memory_budget_utilization,
             ));
         }
         if self.max_agent_depth == 0 {
-            return Err("max_agent_depth 不能为 0(至少允许根 Agent)".to_string());
+            return Err(QuotaError::ZeroMaxAgentDepth);
         }
         if self.max_concurrent_tasks == 0 {
-            return Err("max_concurrent_tasks 不能为 0".to_string());
+            return Err(QuotaError::ZeroMaxConcurrentTasks);
         }
         if self.max_task_queue_length == 0 {
-            return Err("max_task_queue_length 不能为 0".to_string());
+            return Err(QuotaError::ZeroMaxTaskQueueLength);
         }
         Ok(())
     }

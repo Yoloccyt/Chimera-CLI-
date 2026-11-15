@@ -76,6 +76,7 @@ ImmutableSurface
 ImportanceScore
 InvariantSpec
 InvariantViolation
+QuotaError  # W1/ADR-305: validate 结构化错误载体（替代 Result<(), String>），零直接命名消费（经 validate 返回类型间接使用）
 JudgeTier
 Lease
 MemPiAction

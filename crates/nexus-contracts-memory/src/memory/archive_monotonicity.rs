@@ -44,8 +44,6 @@
 //! | Cold(2)        | Cold              | L2Semantic             |
 //! | Ice(3)         | Ice               | L3Procedural           |
 
-use std::fmt;
-
 use serde::{Deserialize, Serialize};
 
 /// 归档层级 — 四级归档的层级标识
@@ -99,7 +97,10 @@ impl ArchiveTier {
 /// 不变量违反 — INV-8 判定失败的错误载体
 ///
 /// 携带人类可读的 `msg` 字段,调用方可直接记录日志、向上传播或展示。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// W1/ADR-305：Display/Error 由 thiserror 派生（`{msg}` 格式不变），
+/// 替代手写 impl，与 L0 错误模型统一规范一致。
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{msg}")]
 #[non_exhaustive]
 pub struct InvariantViolation {
     /// 违反描述(含源层级与目标层级名称)
@@ -120,14 +121,6 @@ impl InvariantViolation {
         Self { msg: msg.into() }
     }
 }
-
-impl fmt::Display for InvariantViolation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.msg)
-    }
-}
-
-impl std::error::Error for InvariantViolation {}
 
 /// INV-8 — 归档单调性断言(独立公共 API)
 ///

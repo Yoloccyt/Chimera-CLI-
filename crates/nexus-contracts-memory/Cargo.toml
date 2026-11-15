@@ -11,6 +11,8 @@ description = "NEXUS-OMEGA L0-A 契约域 — memory 记忆与经验契约（经
 # 分区 DAG 的向下方（sibling -> sibling 允许，回指 umbrella 由 G-99 直接判红）。
 serde = { workspace = true, features = ["derive"] }
 chrono = { workspace = true }
+# W1/ADR-305 错误模型统一：QuotaError 结构化错误载体（G-99 白名单成员）。
+thiserror = { workspace = true }
 # ADR-222 D2：组内源码沿用拆分前的 `crate::<leaf>` 路径。
 nexus-contracts-core = { workspace = true }
 # ADR-222 D2：组内源码沿用拆分前的 `crate::<leaf>` 路径。

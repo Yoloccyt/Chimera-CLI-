@@ -22,7 +22,7 @@
 # Why there is no minimum: `zero` is the debt -- wiring types up drives it to
 # 0, and a floor there would make this gate's green depend on the defect.
 #
-# CLAIM defs=246 zero=73 one=70 ge2=103 gap=143 baseline=143 rows=73 sum=OK
+# CLAIM defs=247 zero=74 one=70 ge2=103 gap=144 baseline=144 rows=74 sum=OK
 AgreementTrendPoint | consumers=0 | declared_in=safety/calibration
 BadCaseConversion | consumers=0 | declared_in=safety/calibration
 CalibrationSample | consumers=0 | declared_in=safety/calibration
@@ -73,6 +73,7 @@ PlanEdge | consumers=0 | declared_in=spec/tool_plan
 PlanViolation | consumers=0 | declared_in=spec/blueprint
 PricingTier | consumers=0 | declared_in=mca/context_capability
 ProjectedMatrix | consumers=0 | declared_in=vector_math/mcsm
+QuotaError | consumers=0 | declared_in=memory/quota
 QuotaLimits | consumers=0 | declared_in=memory/quota
 RLAction | consumers=0 | declared_in=seams/rl_types
 RLHook | consumers=0 | declared_in=seams/rl_hooks
