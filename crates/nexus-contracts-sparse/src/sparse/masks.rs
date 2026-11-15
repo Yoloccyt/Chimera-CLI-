@@ -133,6 +133,9 @@ impl<T: Clone + PartialEq + Eq + Hash> SparseMask<T> {
     /// - 若 `ids` 为空或 `k == 0`: 返回空掩码(sparsity = 1.0)
     /// - 若 `k >= ids.len()`: 返回全掩码(sparsity = 0.0)
     /// - 若 `scores.len() != ids.len()`: 返回空掩码(调用方错误，防御性处理)
+    ///   ⚠ W1/ADR-306 第一步：该分支在 debug 构建触发 `debug_assert!`——静默空掩码
+    ///   与「全部稀疏」语义混同属于契约缺陷，调用方 bug 应在开发期暴露；
+    ///   Release 保持既有防御行为（不 panic）。错误通道彻底 Result 化属 W5-2。
     /// - 否则: sparsity = 1.0 - (k / ids.len())
     ///
     /// # 实现细节
@@ -148,7 +151,15 @@ impl<T: Clone + PartialEq + Eq + Hash> SparseMask<T> {
             return Self::full(ids.to_vec());
         }
         // 防御性校验: scores 长度必须与 ids 一致
+        // W1/ADR-306 第一步:debug 构建触发 debug_assert 暴露调用方 bug
+        // (静默空掩码与「全部稀疏」语义混同 = 契约缺陷);Release 保持防御行为。
         if scores.len() != total {
+            debug_assert!(
+                false,
+                "select_top_k: scores.len()({}) != ids.len()({}) —— 调用方长度不匹配",
+                scores.len(),
+                total
+            );
             return Self::empty();
         }
 
@@ -288,8 +299,12 @@ mod tests {
     }
 
     #[test]
+    // W1/ADR-306 第一步：debug 构建下 select_top_k 以 debug_assert! 暴露调用方
+    // bug（命中即 panic，should_panic 视为通过）；release 下断言不生成，走防御性
+    // 空掩码分支，由下方两个断言钉住既有 Release 语义。
+    #[cfg_attr(debug_assertions, should_panic(expected = "scores.len()"))]
     fn test_select_top_k_scores_length_mismatch() {
-        // scores 长度与 ids 不一致应返回空掩码(防御性处理)
+        // scores 长度与 ids 不一致应返回空掩码(防御性处理；debug 下先触发 debug_assert)
         let ids = vec!["a".to_string(), "b".to_string()];
         let scores = vec![0.5]; // 长度不匹配
         let mask = SparseMask::select_top_k(&ids, &scores, 1);
