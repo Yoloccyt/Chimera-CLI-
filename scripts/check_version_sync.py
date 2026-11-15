@@ -36,9 +36,7 @@ Output is pure ASCII (project script convention).
 
 import os
 import re
-import shutil
 import sys
-import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
