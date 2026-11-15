@@ -21,6 +21,11 @@ tokio = { workspace = true }
 # WHY 合规: §2.2 同层互引允许 L(N)→L(N);event-bus 不依赖 nexus-core(零环,
 # payloads.rs ClvSummary::from_clv_slice 已解耦),故 nexus-core→event-bus 无环。
 event-bus = { workspace = true }
+# ADR-309 (W4-1) L0-B 同层：CPU 卸载计算面已迁出为独立 crate nexus-compute。
+# WHY 单向 nexus-core → nexus-compute：本 crate 仅经兼容 shim 再导出旧路径
+# （pub mod compute { pub use nexus_compute::*; }），compute 对 nexus-core 零依赖
+# 已实证（grep 实测），反向依赖会形成 crate 环；G-125 守护该方向。
+nexus-compute = { workspace = true }
 # L0-B 同层：计算面遥测契约与上报编排（ADR-222 D3）。
 # WHY 单向 nexus-core → nexus-telemetry：KindCounters 引用 TaskKind/hts，
 # 反向依赖会形成 crate 环；G-125 守护该方向。
@@ -59,21 +64,7 @@ harness = false
 name = "clv_cosine"
 harness = false
 
-# P1-T8: ComputeBridge roundtrip 门禁基准(W3: bridge roundtrip P99 < 20μs,手册 §13.2)
-[[bench]]
-name = "bridge_bench"
-harness = false
-
-# P1-T9: HTS route() 决策门禁基准(W4: route 决策 P99 < 1μs,手册 §8.4 / ADR-127)
-[[bench]]
-name = "hts_bench"
-harness = false
-
-# P1-T10: DetReduce 双模式归约基准(W5:审计开销 ≤ 30%,手册 §10.2 / ADR-102/106)
-# WHY 门禁口径:bench 末尾固定 n 单次采样打印 audit_overhead_pct(T8 单行采样模式)
-[[bench]]
-name = "reduce_bench"
-harness = false
+# ADR-309 (W4-1): bridge_bench / hts_bench / reduce_bench 已随迁至 crates/nexus-compute/Cargo.toml [[bench]]
 
 # E-5 opt-in: production code expects rewritten to documented defensive
 # branches (pop-if-let / iterator let-else); rest are test/bench idioms.

@@ -1,0 +1,611 @@
+{
+ "_comment": "L0-A 基线：重构前 lib.rs 值级面与 prelude 面（区域解析，含单符号形）。由一次性脚本生成，tests/prelude_surface_test.rs 的 surface_matches_baseline 锁等价。",
+ "top": {
+  "capability_token": [
+   "CapabilityToken",
+   "CapabilityTokenStatus",
+   "SeamId"
+  ],
+  "behavior_contract": [
+   "BehaviorContract",
+   "ContractCheckOutcome",
+   "ContractContext",
+   "ContractExample"
+  ],
+  "density": [
+   "DensityPolicy",
+   "DensityTier"
+  ],
+  "recall_quota": [
+   "RecallQuota",
+   "RecallQuotaPolicy"
+  ],
+  "harness_spec": [
+   "ContractSpec",
+   "HarnessMeta",
+   "HarnessSpec",
+   "HarnessSpecError",
+   "HopSpec",
+   "ImmutableSurface",
+   "RetryPolicy",
+   "REQUIRED_ACCEPTANCE_GATES"
+  ],
+  "ids": [
+   "FileId",
+   "MemoryId",
+   "OperationId",
+   "TaskId",
+   "ToolId"
+  ],
+  "masks": [
+   "SparseMask"
+  ],
+  "omni_masks": [
+   "OmniSparseMasks"
+  ],
+  "parliament_policy": [
+   "ActivationStrategy",
+   "ParliamentPolicy"
+  ],
+  "decay_profile": [
+   "DecayPolicy",
+   "DecayProfile"
+  ],
+  "prefetch": [
+   "PrefetchPolicy",
+   "PrefetchStrategy"
+  ],
+  "strategy": [
+   "MemoryStrategy",
+   "MemoryStrategyPolicy"
+  ],
+  "memory_strategy": [
+   "MemoryStrategyProvider",
+   "MemoryTaskPhase"
+  ],
+  "policy": [
+   "SelectorPolicy",
+   "SelectorWeights"
+  ],
+  "quota": [
+   "NamespaceQuota",
+   "QuotaError",
+   "QuotaLimits"
+  ],
+  "temporal": [
+   "TemporalMeta",
+   "TransitionType"
+  ],
+  "variant": [
+   "VariantContract",
+   "VariantId"
+  ],
+  "blueprint": [
+   "BlueprintSource",
+   "BlueprintStep",
+   "PlanViolation",
+   "ProceduralBlueprint"
+  ],
+  "vector": [
+   "VectorBackend",
+   "VectorHit",
+   "VectorStore",
+   "VectorStoreExt",
+   "VectorStoreStats"
+  ],
+  "formal_props": [
+   "EmptyFormalProvider",
+   "FormalProperty",
+   "FormalResultProvider",
+   "InvariantSpec",
+   "PropertyCategory",
+   "VerificationMethod",
+   "VerificationResult",
+   "VerifiedWithStrength"
+  ],
+  "tool_plan": [
+   "guards",
+   "PlanEdge",
+   "PlanError",
+   "SideEffectDecl",
+   "ToolNode",
+   "ToolOp",
+   "ToolPlan"
+  ],
+  "scheduler_contract": [
+   "ClaimOutcome",
+   "DenyReason",
+   "Lease",
+   "Priority",
+   "Quota",
+   "RenewOutcome",
+   "ShouldRunVerdict",
+   "TodoClaim",
+   "HANDOFF"
+  ],
+  "checkpoint": [
+   "Checkpoint"
+  ],
+  "event_metadata": [
+   "EventMetadata"
+  ],
+  "task": [
+   "TaskStatus"
+  ],
+  "budget_tier": [
+   "BudgetTier"
+  ],
+  "affinity": [
+   "sampling_bucket",
+   "AffinityRequest",
+   "AffinityResponse",
+   "CapabilitySet",
+   "ContentBlock",
+   "ModelAffinitySpec",
+   "NegotiationFidelity",
+   "OutputBudget",
+   "OutputFormat",
+   "ProtocolDialect",
+   "ProviderId",
+   "SamplingParams",
+   "ThinkingPreference",
+   "TokenCacheKey",
+   "UsageReport"
+  ],
+  "command_validation": [
+   "AttackType",
+   "BlockedPattern",
+   "Command",
+   "CommandPolicy",
+   "CommandValidationError",
+   "CommandValidator"
+  ],
+  "domain": [
+   "MultimodalInput",
+   "Quest",
+   "Task",
+   "ThinkingMode",
+   "UserIntent"
+  ],
+  "event_payload": [
+   "AgentStatus",
+   "EventSeverity",
+   "TaskPriority"
+  ],
+  "rl_types": [
+   "MemPiAction",
+   "RLAction",
+   "RLExperience",
+   "RLState"
+  ],
+  "archive_monotonicity": [
+   "assert_archive_monotonicity",
+   "ArchiveTier",
+   "InvariantViolation"
+  ],
+  "harness_dimensions": [
+   "CompressionStrategy",
+   "ContextAssemblyContract",
+   "EvictionStrategy",
+   "ExtractionFormat",
+   "FallbackStrategy",
+   "GenerationControlContract",
+   "HarnessConfigContract",
+   "MemoryManagementContract",
+   "OperatorSelectionStrategy",
+   "OutputProcessingContract",
+   "RetentionPolicy",
+   "StopStrategyConfig",
+   "TaskOrchestrationContract",
+   "ToolInteractionContract",
+   "ValidationRule",
+   "WorkflowType"
+  ],
+  "omni_message": [
+   "ModelConfig",
+   "OmniMessage",
+   "TokenUsage"
+  ],
+  "experience_card": [
+   "AtomicOperator",
+   "CardMetadata",
+   "EnvironmentInfo",
+   "ErrorSignature",
+   "ExecutionStatus",
+   "ExperienceCard",
+   "NormalizedThreeFactor",
+   "ThreeFactorScore"
+  ],
+  "token_evidence": [
+   "SegmentCreationReason",
+   "SegmentMetadata",
+   "TokenLedgerEntry",
+   "ToolCallRecord"
+  ],
+  "memory_pyramid": [
+   "AtomicCardType",
+   "AtomicMemoryCard",
+   "MemoryPyramidLevel",
+   "PersonaSummary",
+   "SceneBlock"
+  ],
+  "skill_lifecycle": [
+   "SkillLifecycleContract",
+   "SkillLifecycleState"
+  ],
+  "rl_hooks": [
+   "PolicyFormat",
+   "RLActionVector",
+   "RLHook",
+   "RLStateVector",
+   "RLTrajectory",
+   "SerializedPolicy"
+  ],
+  "app": [
+   "AppEvent",
+   "AppOp",
+   "AppTokenUsage",
+   "ApprovalDecision",
+   "ApprovalRequest",
+   "Item",
+   "ItemId",
+   "ItemStatus",
+   "PermissionMode",
+   "ReqId",
+   "Thread",
+   "ThreadId",
+   "ThreadStartParams",
+   "TurnId",
+   "UserInput"
+  ],
+  "errors": [
+   "ErrorLayer",
+   "EventFailure",
+   "NexusError",
+   "Recoverable",
+   "RecoveryStrategy",
+   "ToolFailure"
+  ],
+  "adjudication": [
+   "CertifyPayload",
+   "CertifyVerdict",
+   "ClaimPayload",
+   "DeclaimPayload",
+   "EpistemicType",
+   "FailureFixStatus",
+   "FailureRecord",
+   "VerifierKind"
+  ],
+  "sensitive": [
+   "redact",
+   "scan",
+   "ScanHit",
+   "ScanPolicy",
+   "ScanVerdict",
+   "SensitiveDisposition",
+   "SensitiveKind"
+  ],
+  "event_v2": [
+   "Compressibility",
+   "DynamicEvent",
+   "EventMetadataV2",
+   "EventNamespace",
+   "EventPattern",
+   "EventTypeId",
+   "ImportanceScore",
+   "MetadataBridge",
+   "NamespaceQuotaV2"
+  ],
+  "graph_identity": [
+   "GraphIdentity"
+  ],
+  "mcsm": [
+   "identity",
+   "project_weights",
+   "sinkhorn_project",
+   "ProjectedMatrix",
+   "SinkhornParams"
+  ],
+  "price_vector": [
+   "ModelPrice",
+   "PriceVector"
+  ],
+  "calibration": [
+   "agreement_rate_milli",
+   "certifiable",
+   "CalibrationSample",
+   "GateVerdict",
+   "HumanLabel",
+   "DEFAULT_AGREEMENT_THRESHOLD_MILLI"
+  ]
+ },
+ "prelude": {
+  "behavior_contract": [
+   "BehaviorContract",
+   "ContractCheckOutcome",
+   "ContractContext",
+   "ContractExample"
+  ],
+  "capability_token": [
+   "CapabilityToken",
+   "CapabilityTokenStatus",
+   "SeamId"
+  ],
+  "density": [
+   "DensityPolicy",
+   "DensityTier"
+  ],
+  "recall_quota": [
+   "RecallQuota",
+   "RecallQuotaPolicy"
+  ],
+  "harness_spec": [
+   "ContractSpec",
+   "HarnessMeta",
+   "HarnessSpec",
+   "HarnessSpecError",
+   "HopSpec",
+   "ImmutableSurface",
+   "RetryPolicy",
+   "REQUIRED_ACCEPTANCE_GATES"
+  ],
+  "ids": [
+   "FileId",
+   "MemoryId",
+   "OperationId",
+   "TaskId",
+   "ToolId"
+  ],
+  "masks": [
+   "SparseMask"
+  ],
+  "omni_masks": [
+   "OmniSparseMasks"
+  ],
+  "policy": [
+   "SelectorPolicy",
+   "SelectorWeights"
+  ],
+  "parliament_policy": [
+   "ActivationStrategy",
+   "ParliamentPolicy"
+  ],
+  "decay_profile": [
+   "DecayPolicy",
+   "DecayProfile"
+  ],
+  "prefetch": [
+   "PrefetchPolicy",
+   "PrefetchStrategy"
+  ],
+  "quota": [
+   "NamespaceQuota",
+   "QuotaError",
+   "QuotaLimits"
+  ],
+  "strategy": [
+   "MemoryStrategy",
+   "MemoryStrategyPolicy"
+  ],
+  "memory_strategy": [
+   "MemoryStrategyProvider",
+   "MemoryTaskPhase"
+  ],
+  "temporal": [
+   "TemporalMeta",
+   "TransitionType"
+  ],
+  "vector": [
+   "VectorBackend",
+   "VectorHit",
+   "VectorStore",
+   "VectorStoreExt",
+   "VectorStoreStats"
+  ],
+  "formal_props": [
+   "EmptyFormalProvider",
+   "FormalProperty",
+   "FormalResultProvider",
+   "InvariantSpec",
+   "PropertyCategory",
+   "VerificationMethod",
+   "VerificationResult",
+   "VerifiedWithStrength"
+  ],
+  "checkpoint": [
+   "Checkpoint"
+  ],
+  "event_metadata": [
+   "EventMetadata"
+  ],
+  "task": [
+   "TaskStatus"
+  ],
+  "budget_tier": [
+   "BudgetTier"
+  ],
+  "affinity": [
+   "sampling_bucket",
+   "AffinityRequest",
+   "AffinityResponse",
+   "CapabilitySet",
+   "ContentBlock",
+   "ModelAffinitySpec",
+   "NegotiationFidelity",
+   "OutputBudget",
+   "OutputFormat",
+   "ProtocolDialect",
+   "ProviderId",
+   "SamplingParams",
+   "ThinkingPreference",
+   "TokenCacheKey",
+   "UsageReport"
+  ],
+  "command_validation": [
+   "AttackType",
+   "BlockedPattern",
+   "Command",
+   "CommandPolicy",
+   "CommandValidationError",
+   "CommandValidator"
+  ],
+  "domain": [
+   "MultimodalInput",
+   "Quest",
+   "Task",
+   "ThinkingMode",
+   "UserIntent"
+  ],
+  "event_payload": [
+   "AgentStatus",
+   "EventSeverity",
+   "TaskPriority"
+  ],
+  "rl_types": [
+   "MemPiAction",
+   "RLAction",
+   "RLExperience",
+   "RLState"
+  ],
+  "archive_monotonicity": [
+   "assert_archive_monotonicity",
+   "ArchiveTier",
+   "InvariantViolation"
+  ],
+  "harness_dimensions": [
+   "CompressionStrategy",
+   "ContextAssemblyContract",
+   "EvictionStrategy",
+   "ExtractionFormat",
+   "FallbackStrategy",
+   "GenerationControlContract",
+   "HarnessConfigContract",
+   "MemoryManagementContract",
+   "OperatorSelectionStrategy",
+   "OutputProcessingContract",
+   "RetentionPolicy",
+   "StopStrategyConfig",
+   "TaskOrchestrationContract",
+   "ToolInteractionContract",
+   "ValidationRule",
+   "WorkflowType"
+  ],
+  "omni_message": [
+   "ModelConfig",
+   "OmniMessage",
+   "TokenUsage"
+  ],
+  "experience_card": [
+   "AtomicOperator",
+   "CardMetadata",
+   "EnvironmentInfo",
+   "ErrorSignature",
+   "ExecutionStatus",
+   "ExperienceCard",
+   "NormalizedThreeFactor",
+   "ThreeFactorScore"
+  ],
+  "token_evidence": [
+   "SegmentCreationReason",
+   "SegmentMetadata",
+   "TokenLedgerEntry",
+   "ToolCallRecord"
+  ],
+  "memory_pyramid": [
+   "AtomicCardType",
+   "AtomicMemoryCard",
+   "MemoryPyramidLevel",
+   "PersonaSummary",
+   "SceneBlock"
+  ],
+  "skill_lifecycle": [
+   "SkillLifecycleContract",
+   "SkillLifecycleState"
+  ],
+  "rl_hooks": [
+   "PolicyFormat",
+   "RLActionVector",
+   "RLHook",
+   "RLStateVector",
+   "RLTrajectory",
+   "SerializedPolicy"
+  ],
+  "app": [
+   "AppEvent",
+   "AppOp",
+   "AppTokenUsage",
+   "ApprovalDecision",
+   "ApprovalRequest",
+   "Item",
+   "ItemId",
+   "ItemStatus",
+   "PermissionMode",
+   "ReqId",
+   "Thread",
+   "ThreadId",
+   "ThreadStartParams",
+   "TurnId",
+   "UserInput"
+  ],
+  "errors": [
+   "ErrorLayer",
+   "EventFailure",
+   "NexusError",
+   "Recoverable",
+   "RecoveryStrategy",
+   "ToolFailure"
+  ],
+  "adjudication": [
+   "CertifyPayload",
+   "CertifyVerdict",
+   "ClaimPayload",
+   "DeclaimPayload",
+   "EpistemicType",
+   "FailureFixStatus",
+   "FailureRecord",
+   "VerifierKind"
+  ],
+  "sensitive": [
+   "redact",
+   "scan",
+   "ScanHit",
+   "ScanPolicy",
+   "ScanVerdict",
+   "SensitiveDisposition",
+   "SensitiveKind"
+  ],
+  "event_v2": [
+   "Compressibility",
+   "DynamicEvent",
+   "EventMetadataV2",
+   "EventNamespace",
+   "EventPattern",
+   "EventTypeId",
+   "ImportanceScore",
+   "MetadataBridge",
+   "NamespaceQuotaV2"
+  ],
+  "graph_identity": [
+   "GraphIdentity"
+  ],
+  "mcsm": [
+   "identity",
+   "project_weights",
+   "sinkhorn_project",
+   "ProjectedMatrix",
+   "SinkhornParams"
+  ],
+  "price_vector": [
+   "ModelPrice",
+   "PriceVector"
+  ],
+  "calibration": [
+   "agreement_rate_milli",
+   "certifiable",
+   "CalibrationSample",
+   "GateVerdict",
+   "HumanLabel",
+   "DEFAULT_AGREEMENT_THRESHOLD_MILLI"
+  ]
+ }
+}

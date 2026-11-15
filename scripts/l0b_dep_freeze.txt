@@ -1,6 +1,6 @@
-# L0-B external dependency surface (G-131, ADR-223 D1). Only-decrease key set
+# L0-B external dependency surface (G-131, ADR-223 D1 + ADR-309 W4-1). Only-decrease key set
 # of <crate>::<dep> from [dependencies] + [build-dependencies] + target-specific
-# tables of nexus-core / event-bus / nexus-telemetry. Workspace internal edges are
+# tables of nexus-compute / nexus-core / event-bus / nexus-telemetry. Workspace internal edges are
 # owned by G-125 and excluded here; dev-dependencies are excluded. Refresh with --emit.
 event-bus::arc-swap
 event-bus::chrono
@@ -14,6 +14,12 @@ event-bus::thiserror
 event-bus::tokio
 event-bus::tracing
 event-bus::uuid
+nexus-compute::arc-swap
+nexus-compute::rand
+nexus-compute::rayon
+nexus-compute::thiserror
+nexus-compute::tokio
+nexus-compute::tracing
 nexus-core::arc-swap
 nexus-core::async-trait
 nexus-core::chrono

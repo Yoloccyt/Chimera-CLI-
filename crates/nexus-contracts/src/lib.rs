@@ -31,7 +31,7 @@
 //! - **workspace 内部依赖受控**（ADR-222 D2/D4 订正，原口径为「零 workspace 内部依赖」）:
 //!   本 umbrella 仅允许依赖 6 个 L0-A sibling（`nexus-contracts-{core,sparse,safety,seams,mca,memory}`），
 //!   且**方向单向**：sibling 不得反向依赖本 crate（否则即 crate 环，G-99 已按此判红）；
-//!   两者都**禁止**依赖 `nexus-core` / `event-bus` 或任何层号 ≥ 2 的 crate（G-125 [PURITY-LEAK]/[UPWARD]）
+//!   两者都**禁止**依赖 `nexus-core` / `event-bus` 或任何层号 ≥ 2 的 crate（G-125 `[PURITY-LEAK]`/`[UPWARD]`）
 //! - **外部依赖白名单**: `serde`(derive) + `chrono` + `uuid` + `thiserror`（均无运行时业务
 //!   逻辑的基础类型/派生库，ADR-033 例外；G-99 `check_l0_purity.py` 机器锁）
 //! - **依赖铁律扩展**: `L(N) → L(0)` 恒允许（任何层均可依赖 L0）
@@ -39,16 +39,16 @@
 //! # 承载类型（按功能分组；ADR-222 拆分后的 7-crate 实测结构，下述文件数为 2026-10-20 现取）
 //!
 //! L0-A `src/*.rs` 总扫描面以 G-99 实测为准（散文不登记数字；历史口径 71 vs 实测 72
-//! 的漂移已按此纪律收口）= 本 umbrella + 6 个 sibling：
+//! 的漂移已按此纪律收口；2026-11 现取 74 = 本 umbrella 23 + 6 sibling 51）= 本 umbrella + 6 个 sibling：
 //!
 //! | crate | 保留组目录 | `src/*.rs` | 说明 |
 //! |---|---|---|---|
-//! | `nexus-contracts`（本 crate，facade） | `spec/` `vector_math/` `protocol/` `testutil/` | 21 | 4 组未拆 + facade 重导出 |
+//! | `nexus-contracts`（本 crate，facade） | `spec/` `vector_math/` `protocol/` `testutil/` | 23 | 4 组未拆 + facade_surface.rs（L0-A 值级面单源宏）+ faces.rs（L0-C 域聚合面）+ re-export |
 //! | `nexus-contracts-core` | `core_domain/` | 10 | W3.1 首批，含 `is_schema_version_unset` 升 `pub` |
 //! | `nexus-contracts-sparse` | `sparse/` | 5 | W3.2 |
 //! | `nexus-contracts-safety` | `safety/` | 8 | W3.4 |
 //! | `nexus-contracts-seams` | `seams/` | 14 | W3.5（MATURITY=NOT-IMPL-CN 台账行随代码迁至本 crate） |
-//! | `nexus-contracts-mca` | `mca/` | 5 | W3.3 |
+//! | `nexus-contracts-mca` | `mca/` | 6 | W3.3（旧表 5 为笔误：lib.rs + 4 leaf + mod.rs；L0-B 修正） |
 //! | `nexus-contracts-memory` | `memory/` | 8 | W3.6（依赖 core + mca + seams） |
 //!
 //! 每个 sibling **保留原组目录名**（如 `nexus-contracts-core/src/core_domain/`），因此
@@ -209,6 +209,15 @@ pub mod spec;
 pub mod testutil;
 pub mod vector_math;
 
+// L0-C（ADR-新-1 同批）：域导向聚合面 —— additive 便捷再导出，
+// 不改变既有 `<leaf>` / `<group>::<leaf>` 路径（详见 faces.rs 文件头）。
+pub mod faces;
+
+// L0-A（ADR-新-1）：值级 facade 单源声明宏（crate-private，仅下方调用一次）。
+// WHY 单独成文件而非 lib.rs 内嵌：宏体含 prelude 模块文档与示例 doctest，
+// 独立文件让 lib.rs 聚焦声明数据本身。
+mod facade_surface;
+
 /// ID newtype 类型 — 五维度稀疏化的统一标识
 pub use sparse::ids;
 
@@ -240,9 +249,6 @@ pub use seams::density;
 pub use seams::strategy;
 
 /// OSA memory 维度自适应记忆策略契约 — S2 桥接层（Task 2）
-///
-/// 承载 `MemoryTaskPhase` 任务阶段枚举与 `MemoryStrategyProvider` trait，
-/// 供 OSA memory 维度通过 L0 trait 调用 omega-learner S2（依赖铁律 §2.2 合规）。
 pub use seams::memory_strategy;
 
 /// 预取策略契约 — S3 接缝（scc-cache 预取策略选择，P4-W14.2）
@@ -255,221 +261,96 @@ pub use seams::parliament_policy;
 pub use seams::decay_profile;
 
 /// 能力场令牌契约 — 学习策略灰度授权载体（P4-W14.5 C4 合规）
-///
-/// 承载 CapabilityToken 类型，使编排器在注入 Learned 策略前查询授权等级，
-/// 实现 C4 合规要求的"运行时灰度走能力场，而非散落运行时布尔旗"。
-/// ADR-033"纯类型 + 零逻辑"的第三个明确例外（EWMA 算法 + 灰度状态机），
-/// 详见模块级文档。
 pub use seams::capability_token;
 
 /// 召回配额策略契约 — S7 接缝（R1 离线 RL，P4-W16.2.2）
-///
-/// 承载 R1（召回配额 CQL/IQL）接缝的离散动作空间 `RecallQuota`
-/// 与灰度授权载体 `RecallQuotaPolicy`，供 L6 omega-learner 与 L9 编排器共享。
 pub use seams::recall_quota;
 
 /// 行为契约 — 类型使用规范契约(polish-v2.7 P1-3,ADR-049)
-///
-/// 承载 BehaviorContract(前置/后置/不变量断言)与 ContractExample,
-/// 供 L9 RuntimeAuditor 审计与 L5 AEGIS Evolver 约束输入。
 pub use spec::behavior_contract;
 
 /// 变体契约 — Harness 变体标识与性能契约(polish-v2.7 P3-2,ADR-051)
-///
-/// 承载 VariantId(spec 主键复用)与 VariantContract(任务类型适用域 +
-/// 性能承诺),供 L8 parliament 变体池与 L5 AEGIS 变体登记共享。
 pub use spec::variant;
 
 /// 流程蓝图契约 — 隐性流程经验载体(polish-v2.7 P4-7,ADR-049)
-///
-/// 承载 ProceduralBlueprint(步骤/前置/成功率)与纯函数计划校验,
-/// 供 L5 repo-wiki 轨迹提取与 L9 quest-engine 计划预检共享。
 pub use spec::blueprint;
 
 /// 形式化属性定义框架 — FormalVerifier L4 骨架基础类型(T6-2)
-///
-/// 承载 PropertyCategory / VerificationResult / InvariantSpec / FormalProperty,
-/// 供各 owner crate 的 formal 验证器实现(7 个,聚合门 gsoe-evolution formal_gate)
-/// 与 L8 parliament 审议时查询属性满足状态共享。
 pub use spec::formal_props;
 
 /// 工具计划契约 — 声明式 ToolPlan DSL + 校验 + 守卫常量（P3-T8,WI-16）
-///
-/// 承载 ToolPlan / ToolNode / ToolOp / PlanEdge / PlanError / guards,
-/// 供 gqep-executor PlanRunner 解释执行（L0 纯类型契约层,零依赖）。
 pub use spec::tool_plan;
 
 /// 工具派发契约 — 执行面最小类型集（T1-1，ADR-033 上提）
-///
-/// 承载 DispatchRequest / DispatchOutcome / DispatchError / DispatchFuture /
-/// ToolDispatcher（对象安全的装饰器链接口）,自 L7 `gqep-executor` 的
-/// `tool_runtime::dispatch` 逐字上提;后者改为 re-export 保旧路径不变。
-/// 仅依赖 std（不引入 `futures`,G-99 外部依赖白名单）。
 pub use spec::tool_dispatch;
 
+/// 批派发准入契约 — BatchPlan/BatchReport 四段守恒（P-A，ADR-新-3）
+pub use spec::tool_admission;
+
 /// 调度契约 — mas-sched 控制面类型先移 L0（P3-T2 补,ADR-033 先例）
-///
-/// 承载 TodoClaim / Lease / Quota / Priority / DenyReason / RenewOutcome /
-/// ShouldRunVerdict / TaskId / HANDOFF,供 mas-sched PeerScheduler 与后续
-/// chimera-mas 拆出依赖时经本契约承接（strangler:类型先移、接口后接）。
 pub use spec::scheduler_contract;
 
 /// 事件元数据契约 — L0 共享的事件追踪元信息(Task 3.10,ADR-033 扩展)
-///
-/// 承载 `EventMetadata`(event_id / timestamp / source),从 L1 `event-bus/src/payloads.rs`
-/// 上提至 L0,缓解 L1 上帝 crate 病理(被 100+ 文件依赖)。
-/// 依赖: chrono + uuid(ADR-033 Task 3.10 新增例外,基础类型库)。
 pub use core_domain::event_metadata;
 
 /// 任务状态契约 — L0 共享的 Task 生命周期枚举(Task 3.10,ADR-033 扩展)
-///
-/// 承载 `TaskStatus`(Pending/Running/Completed/Failed),从 L1 `nexus-core/src/types.rs`
-/// 上提至 L0,缓解 L1 上帝 crate 病理(被 65+ 文件依赖)。纯 enum,仅 serde derive 依赖。
 pub use core_domain::task;
 
 /// 检查点契约 — L0 共享的 Quest 断点恢复快照(Task 3.10,ADR-033 扩展)
-///
-/// 承载 `Checkpoint`(quest_id / checkpoint_id / memory_snapshot_hash / serialized_state / created_at),
-/// 从 L1 `nexus-core/src/types.rs` 上提至 L0,缓解 L1 上帝 crate 病理(被 42+ 文件依赖)。
-/// 依赖: chrono(ADR-033 Task 3.10 新增例外,基础类型库)。
 pub use core_domain::checkpoint;
 
 /// 预算档位契约 — DECB 三档枚举上提(ADR-054 决策 3,P9-T3)
-///
-/// 承载 `BudgetTier`(HighTier/LowTier/Degraded),从 L8 `decb-governor` 上提至 L0,
-/// 消除 L9 `quest-engine` 对 L8 的生产依赖边(L9→L8 违规方向,ADR-054 裁决)。
-/// decb-governor 保留 re-export 保兼容;纯枚举,仅 serde derive 依赖(ADR-033)。
 pub use safety::budget_tier;
 
 /// 模型亲和契约 — MCA 体系 L0 类型(ADR-065,PANTHEON 计划)
-///
-/// 承载 ProviderId / ProtocolDialect / CapabilitySet / ModelAffinitySpec /
-/// AffinityRequest / AffinityResponse 等"能力协商取代名字嗅探"（原则 P1）
-/// 契约类型,供 L10 mca-gateway / L6 omega-learner 共享。
 pub use mca::affinity;
 
 /// 模型上下文能力档案 — HCW v3 P0（ADR-291）的 L0 契约面
-///
-/// 承载 `ContextCapabilityProfile` / `CalibrationTier` / `ThreadSupport` 等
-/// "按有效窗口定容"的能力数据，供 mca-gateway（L10 写入）与 hcw-window（L2 只读）共享。
-///
-/// WHY 必须在 crate 根再导出一层（R12 W0 / ADR-296 订正）：模块真实落点是 sibling crate
-/// `nexus-contracts-mca/src/mca/context_capability.rs`，而 `ADR_033_EXCEPTION_MODULES`
-/// 已把它登记为受控纯逻辑例外。`l0_exception_registry` 的不变量 1 要求"每个登记名都在
-/// crate 根有 `pub use <group>::<name>;` 声明"——缺了声明，登记表与实况就漂移，两条断言
-/// 会长期红；而摘掉登记又会让 G-119 判 REGISTRY-GAP。补这一行是唯一同时满足两门的解。
 pub use mca::context_capability;
 
 /// 命令验证契约 — 攻击类型/命令/策略/trait 上提(ADR-054 决策 3,P9-T4)
-///
-/// 承载 `AttackType` / `Command` / `BlockedPattern` / `CommandPolicy` /
-/// `CommandValidationError` / `CommandValidator` trait,从 L4 `seccore` 上提至 L0,
-/// 消除 L8 `parliament` 对 L4 `seccore` 的生产依赖违规边(ADR-054 裁决)。
-/// seccore 保留 re-export 保兼容 + 实现 `CommandValidator`;parliament 改 L0 trait
-/// 注入 + 未注入优雅降级(MemoryStrategyProvider 先例)。默认策略语义冻结迁移。
 pub use safety::command_validation;
 
 /// 纯领域类型契约 — 用户意图/长期任务/思考模式上提(ADR-054 决策 6,P9-T7)
-///
-/// 承载 `ThinkingMode` / `MultimodalInput` / `UserIntent` / `Quest` / `Task`,
-/// 从 L1 `nexus-core` 上提至 L0,缓解 D1 上帝 crate 病理(nexus-core 被 30 依赖方引用)。
-/// nexus-core 保留 re-export 保兼容;纯类型,仅 serde derive 依赖(ADR-033)。
 pub use core_domain::domain;
 
 /// 事件载荷契约 — 纯载荷枚举下沉(ADR-054 决策 6,P9-T7 Task 2)
-///
-/// 承载 `EventSeverity` / `TaskPriority` / `AgentStatus` 三个高价值纯载荷枚举,
-/// 从 L1 `event-bus/src/payloads.rs` 下沉至 L0,缓解 L1 超级节点(34 依赖方)负担。
-/// **severity() 判定逻辑不迁移**(架构红线:Critical 事件 mpsc 保障,判定逻辑留在
-/// L1 event-bus);本模块仅承载纯枚举类型(变体/derive 与 L1 原定义逐字一致)。
 pub use core_domain::event_payload;
 
 /// P9-T2 测试等待缩放工具 — CHIMERA_TEST_TIMEOUT_SCALE 协议
-///
-/// 提供 `scale_timeout` / `scaled_timeout!` 宏,允许 PR fast 档通过环境变量
-/// 收敛硬编码 2s+ 等待。是 nexus-contracts "纯类型 + 零逻辑" 约束的**第一个例外**
-/// （后续例外逐条见本文件 `pub mod` 注释与顶部例外登记表，1-5）:
-/// 工具仅读 env,不引入任何领域逻辑;详见 module-level 文档。
-/// （2026-10-09 v3.5 订正:旧措辞“唯一例外”与 `archive_monotonicity` 行的“第二个
-/// 明确例外”自相矛盾，已列于 WI-G1 审计报告 §6.1 建议但未落，本轮闭合。）
 pub use testutil::test_scale;
 
 /// RL 共享类型契约 — RLState/RLAction/RLExperience（ADR-049 修订补齐）
-///
-/// 承载跨接缝 RL 训练共享类型: RLAction（S1-S9 接缝动作封闭枚举）/ RLState
-/// （上下文状态快照）/ RLExperience（经验四元组）。纯类型零逻辑（ADR-033）,
-/// 不含训练逻辑（R2 冻结面外,ADR-042）;接缝映射 = 枚举变体包装既有契约类型。
 pub use seams::rl_types;
 
 /// 平台接地契约 — PlatformGroundingSpec（Milestone B-4，北大 NL2Pipeline gap 解）
-///
-/// 承载平台/环境约束的可审计契约（Env/Toolchain/Path/Permission/Config 五类），
-/// 供 L9 efficiency-monitor RuntimeAuditor 第 0 维度（契约遵守）消费。纯类型零逻辑。
 pub use spec::platform_grounding;
 
 /// 奖励函数统一框架契约（Milestone C-1）— RewardSpec/RewardSignal/SecuritySeverity
-///
-/// 承载设计 §17 八维度权重表的 L0 契约：层权重 + 维度组件 + 奖励信号流载荷，
-/// R1 数据面先接入，R2 训练面解冻后激活（ADR-042）；L4 安全奖励仅观测。
 pub use seams::reward;
 
 /// 归档单调性契约 — INV-8 独立公共 API（P0-2 审计修复）
-///
-/// 承载 `ArchiveTier`（Hot/Warm/Cold/Ice 四级）与 `assert_archive_monotonicity`
-/// 判定函数（降级 + 同层保持合法，回升拒绝）。INV-8 判定此前仅存在于
-/// L9 `chimera-mas`，本模块将其下沉至 L0，使 mlc-engine（L2）/ cmt-tiering（L3）
-/// 的归档入口可独立执行单调性断言（依赖铁律 §2.2：L(N) → L(0) 恒允许）。
-/// ADR-033"纯类型 + 受控纯逻辑"口径下的受控例外之一（旧口径"零逻辑"已由 ADR-033
-/// 2026-10-09 追加节量体订正；完整登记表见本文件 `ADR_033_EXCEPTION_MODULES`）。
 pub use memory::archive_monotonicity;
 
 /// 六维控制面契约 — MemoHarness D1-D6 融合（设计文档 §5.3.1）
-///
-/// 承载 MemoHarness 六维控制面的跨层契约定义（D1 上下文组装 / D2 工具交互 /
-/// D3 生成控制 / D4 任务编排 / D5 Memory 管理 / D6 输出处理），
-/// 供 L6 Router / L9 Quest / L10 Interface 按统一契约调整 Harness 行为。
-/// 纯类型零逻辑（ADR-033）；RetryPolicy 复用 harness_spec（L0 同层引用）。
 pub use spec::harness_dimensions;
 
 /// OmniMessage 协议 — 模型-环境解耦统一消息协议（设计文档 §5.3.2）
-///
-/// 承载 PenguinHarness OmniMessage 协议的 6 变体枚举（ModelRequest / ModelResponse /
-/// ToolRequest / ToolResult / StateUpdate / TraceRecord），解耦 LLM 调用与环境执行。
-/// 纯类型零逻辑（ADR-033）；JSON 字段用 `Box<str>`（遵循 affinity.rs 先例，
-/// 保持 L0 零 crate 依赖铁律）。
 pub use mca::omni_message;
 
 /// 经验卡片契约 — OpenMLE 核心数据结构（v3.4.0 §5.2）
-///
-/// 承载 ExperienceCard / AtomicOperator / ThreeFactorScore / ErrorSignature /
-/// ExecutionStatus / CardMetadata。不可变契约（铁律3）+ 纯函数（铁律4）,
-/// ADR-033"纯类型 + 零逻辑"的第四个明确例外,详见模块级文档。
 pub use memory::experience_card;
 
 /// Token 级证据契约 — Dressage 融合（v3.4.0 §5.3）
-///
-/// 承载 TokenLedgerEntry / ToolCallRecord / SegmentMetadata /
-/// SegmentCreationReason。纯类型零逻辑（ADR-033）;铁律9 分段身份
-/// 不可篡改（parent_traj_id 共享 + anchor 承载终局 reward）。
 pub use memory::token_evidence;
 
 /// 记忆金字塔契约 — MSCE + TencentDB 融合（v3.4.0 §5.4）
-///
-/// 承载 MemoryPyramidLevel / AtomicMemoryCard / SceneBlock / PersonaSummary。
-/// 纯类型 + 层级映射纯函数（ADR-033 先例）;同层引用 rl_hooks 向量类型。
 pub use memory::memory_pyramid;
 
 /// Skill 生命周期契约 — MSCE 融合（v3.4.0 §5.5）
-///
-/// 承载 SkillLifecycleState / SkillLifecycleContract 三态状态机。
-/// 纯类型 + 状态转移纯函数（ADR-033 先例）。
 pub use memory::skill_lifecycle;
 
 /// RL 预留钩子契约 — v4.0 升级路径（v3.4.0 §5.7 + §17）
-///
-/// 承载 RLHook trait / SerializedPolicy / RLTrajectory / RLStateVector /
-/// RLActionVector。同步 trait（L0 零依赖铁律，不引入 async-trait）;
-/// 铁律6: 所有统计学习机制可导出为 RLTrajectory。
 pub use seams::rl_hooks;
 
 // ============================================================
@@ -477,72 +358,36 @@ pub use seams::rl_hooks;
 // ============================================================
 
 /// 图身份契约 — GIP 跨层成本归因三元组（WI-04）
-///
-/// 承载 GraphIdentity（goal_id/run_id/node_id），经 EventMetadata 可选字段
-/// 渐进铺开；152 事件枚举本体不动（v4.0 §17 治理红线）。
 pub use core_domain::graph_identity;
 
 /// MCSM 流形约束信号守恒聚合 — Sinkhorn 双随机投影器（WI-05）
-///
-/// 纯函数投影器（ADR-033 纯函数先例）：聚合权重矩阵行列归一化，
-/// 防单源 100× 音量淹没他源；含 identity() 直通回滚路径。
 pub use vector_math::mcsm;
 
 /// 外部协议契约 — AppOp/AppEvent 与 Thread/Turn/Item 三原语（WI-01）
-///
-/// 内闭外开（T6）：NexusEvent 永不进外部协议；本模块为转译层协议面类型。
 pub use protocol::app;
 
 /// 事件双轨契约 — DynamicEvent 注册表与 EventMetadataV2（WI-21）
-///
-/// 轨一（内置 152 枚举）不动；轨二（动态注册）供 MCP/SubAgent/Hook 外部源。
 pub use core_domain::event_v2;
 
 /// 公共 Top-K 收敛工具 — 红线 #8(WS-2 C1)
-///
-/// 承载 `xts_top_k` / `xts_top_k_by`,以 O(n) `select_nth_unstable_by` +
-/// O(k log k) 局部排序取代"全排后截断"的 `sort_by` 全排序。
-/// ADR-033"纯类型 + 受控纯逻辑"下的纯函数工具先例（旧口径"零逻辑"已于 2026-10-09
-/// 订正；与 test_scale / archive_monotonicity / mcsm 同级）。
 pub use vector_math::util;
 
 /// 统一错误层级契约 — NexusError 与 Recoverable（A0/WI-01 §6.6）
-///
-/// 跨层边界结构化错误枚举 + 恢复策略五档；应用层 anyhow 包装。
 pub use safety::errors;
 
 /// 裁决权与认识类型契约 — Claim/Certify/Declaim 语义分离 + MLC 二维认识标签
-///
-/// 承载 `EpistemicType` / `VerifierKind` / `CertifyVerdict` / `ClaimPayload` /
-/// `CertifyPayload` / `DeclaimPayload` / `FailureFixStatus` / `FailureRecord`，
-/// 供 L1 event-bus 新增 Claim/Certify/Declaim/FailureRegistry 变体消费
-/// （两段式落点：payload 在 L0，枚举本体在 L1，v2.3 §(b.1)）。纯类型零逻辑（ADR-033）。
 pub use safety::adjudication;
 
 /// 写入敏感信息扫描引擎 — 记忆/上下文/会话持久化前的敏感载荷拦截（v2.3 §(b.5)）
-///
-/// 承载 `scan`（纯函数扫描）/ `ScanPolicy` / `ScanVerdict` / `ScanHit` /
-/// `SensitiveKind` / `SensitiveDisposition`（`looks_high_entropy` 经 ADR-215 D-24
-/// 收窄为模块私有、不在承载面）。零 crate 依赖
-/// （不用 `regex`，靠固定前缀/字面标记 + 熵启发式），供跨 L2–L10 写入口向下依赖（L0）。
 pub use safety::sensitive;
 
 /// 统一价格向量契约 — 聚合分散模型单价为可路由消费向量（v2.3 §(b.6)/(c)）
-///
-/// 承载 `PriceVector` / `ModelPrice`；价格数据已在（config / mca capability / cost.rs），
-/// 本模块补上"统一价格向量"聚合契约，供 `/bench` 可见性与成本感知路由（二期）消费。
 pub use mca::price_vector;
 
 /// 人机一致率校准契约 — 评测层「一致率锤点」（v2.3 §(b.6)）
-///
-/// 承载 `CalibrationSample` / `GateVerdict` / `HumanLabel` / `agreement_rate_milli` /
-/// `certifiable`：机评与人审对照的一致率与阈值（低于阈→自动化结果降级为 Claim）。
 pub use safety::calibration;
 
 /// 多路召回 RRF 融合原语 — 二期四路召回入口的 L0 共享算法（v2.3 §(b.3)/§(d)⑨）
-///
-/// `fuse_ranked_lists`/`WeightedList`/`FusedItem`：与 repo-wiki `rrf_fuse` 同参
-/// （k=60、rank 1-based、f32）的泛化 N 路版；供 mlc-engine 四路召回融合启动。
 pub use vector_math::recall_fusion;
 
 // ============================================================
@@ -615,306 +460,112 @@ pub const ADR_033_EXCEPTION_MODULES: &[&str] = &[
     // 又要求"有派生逻辑必须登记"——两门互斥。订正方式 = 补根声明 + 补测试期望集，
     // 而不是摘掉本行（摘掉会让 G-119 报 REGISTRY-GAP，把真模块藏起来）。
     "context_capability", // external_prior_profile 七模型先验表查选 + CalibrationTier::as_str 映射 + ThreadSupport::is_supported 判定（确定性，无 IO/随机）
+    // P-A（ADR-新-3）：批派发准入契约纯判定函数族（is_conserved 四段守恒计数 /
+    // segment_counts / is_read_safe）达 G-119 派生逻辑检阈；与
+    // tests/l0_exception_registry.rs 的 SUBSTANTIVE_LOGIC_MODULES 同批加入。
+    "tool_admission",
 ];
 
 // ============================================================
-// 公开 API 导出
+// 公开 API 导出 —— L0-A（ADR-新-1）：值级面单源声明
 // ============================================================
+//
+// 顶层 `pub use <leaf>::{…}` 与 `pub mod prelude` 由下方 `l0_surface!` 宏
+// 从**同一份符号声明**生成（各条目尾标记 `prelude` = 进 glob 面 / `top` =
+// 只进顶层）。重构前二者是手工镜像清单，漂移实证见
+// tests/prelude_surface_test.rs 文件头；"无孤儿 / 同族完备"两条不变量
+// 现由构造保证，测试保留 planted-defect 自检与基线等价锁
+// （tests/fixtures/l0_surface_baseline.json）。
+//
+// 声明顺序与重构前逐字一致（rustdoc 渲染序稳定）；新增契约类型的接线点
+// 从 3-4 处收敛为本声明一处 + 上方模块级 `pub use <group>::<leaf>;` 一处。
 
-pub use capability_token::{CapabilityToken, CapabilityTokenStatus, SeamId};
-// polish-v2.7 P1-3: 行为契约(BehaviorContract + ContractContext + ContractExample,ADR-049)
-// Milestone B-3c: 强制层校验结果（ContractCheckOutcome）
-pub use behavior_contract::{
-    BehaviorContract, ContractCheckOutcome, ContractContext, ContractExample,
-};
-// P4-W16.2.2: R1 召回配额（RecallQuota + RecallQuotaPolicy，S7 接缝）
-pub use density::{DensityPolicy, DensityTier};
-pub use recall_quota::{RecallQuota, RecallQuotaPolicy};
-// P4-W14.1: 记忆策略（MemoryStrategy + MemoryStrategyPolicy，S2 接缝）
-// P4-W15.1.1: HarnessSpec 扩展（ImmutableSurface 不可进化面清单 + HarnessSpecError 校验错误）
-pub use harness_spec::{
-    ContractSpec, HarnessMeta, HarnessSpec, HarnessSpecError, HopSpec, ImmutableSurface,
-    RetryPolicy, REQUIRED_ACCEPTANCE_GATES,
-};
-pub use ids::{FileId, MemoryId, OperationId, TaskId, ToolId};
-pub use masks::SparseMask;
-pub use omni_masks::OmniSparseMasks;
-// P4-W14.3: Parliament 激活策略（ActivationStrategy + ParliamentPolicy，S5 接缝）
-pub use parliament_policy::{ActivationStrategy, ParliamentPolicy};
-// P4-W14.4: 衰减参数策略（DecayProfile + DecayPolicy，S6 接缝）
-pub use decay_profile::{DecayPolicy, DecayProfile};
-// P4-W14.2: 预取策略（PrefetchStrategy + PrefetchPolicy，S3 接缝）
-pub use prefetch::{PrefetchPolicy, PrefetchStrategy};
-pub use strategy::{MemoryStrategy, MemoryStrategyPolicy};
-// Task 2: OSA memory 维度 S2 桥接契约（MemoryTaskPhase + MemoryStrategyProvider trait）
-pub use memory_strategy::{MemoryStrategyProvider, MemoryTaskPhase};
-// P3-W10.3: 选择器策略（SelectorPolicy + SelectorWeights，D1 修复）
-pub use policy::{SelectorPolicy, SelectorWeights};
-pub use quota::{NamespaceQuota, QuotaError, QuotaLimits};
-pub use temporal::{TemporalMeta, TransitionType};
-// polish-v2.7 P3-2: 变体契约(VariantId + VariantContract,ADR-051)
-pub use variant::{VariantContract, VariantId};
-// polish-v2.7 P4-7: 流程蓝图(ProceduralBlueprint + 计划校验,ADR-049)
-pub use blueprint::{BlueprintSource, BlueprintStep, PlanViolation, ProceduralBlueprint};
-// P2-W7.3: 向量存储契约（VectorStore trait + VectorHit + 扩展 trait）
-pub use vector::{VectorBackend, VectorHit, VectorStore, VectorStoreExt, VectorStoreStats};
-// T6-2: 形式化属性定义框架（FormalVerifier L4 骨架基础类型）
-pub use formal_props::{
-    EmptyFormalProvider, FormalProperty, FormalResultProvider, InvariantSpec, PropertyCategory,
-    VerificationMethod, VerificationResult, VerifiedWithStrength,
-};
-// P3-T8: 工具计划契约（WI-16 ToolPlan DSL）
-pub use tool_plan::{guards, PlanEdge, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan};
-// P3-T2 补: 调度契约（WI-29 mas-sched 类型先移 L0,ADR-033 先例）
-// TaskId 已由 ids.rs 导出,此处不重复导出
-pub use scheduler_contract::{
-    ClaimOutcome, DenyReason, Lease, Priority, Quota, RenewOutcome, ShouldRunVerdict, TodoClaim,
-    HANDOFF,
-};
-// Task 3.10: L0 共享类型扩展(EventMetadata / TaskStatus / Checkpoint)
-// 从 L1 nexus-core / event-bus 下沉,缓解 L1 上帝 crate 病理(100+/65+/42+ 文件依赖)
-pub use checkpoint::Checkpoint;
-pub use event_metadata::EventMetadata;
-pub use task::TaskStatus;
-// ADR-054 决策 3: DECB 预算档位(BudgetTier 从 L8 decb-governor 上提,P9-T3)
-pub use budget_tier::BudgetTier;
-// ADR-065: MCA 模型亲和契约(能力协商唯一事实源 + 统一请求/响应)
-// WHY 不导出全部子类型: PricingSpec/EndpointSpec/QuirkRule 等仅 spec 装配方
-// (L10 spec_loader)使用,走 affinity:: 路径引用,避免顶层命名空间膨胀。
-pub use affinity::{
-    sampling_bucket, AffinityRequest, AffinityResponse, CapabilitySet, ContentBlock,
-    ModelAffinitySpec, NegotiationFidelity, OutputBudget, OutputFormat, ProtocolDialect,
-    ProviderId, SamplingParams, ThinkingPreference, TokenCacheKey, UsageReport,
-};
-// ADR-054 决策 3:命令验证契约(AttackType/Command/CommandPolicy/CommandValidator 上提,P9-T4)
-pub use command_validation::{
-    AttackType, BlockedPattern, Command, CommandPolicy, CommandValidationError, CommandValidator,
-};
-// ADR-054 决策 6:纯领域类型(ThinkingMode/MultimodalInput/UserIntent/Quest/Task 上提,P9-T7)
-// WHY 顶层导出: 与 nexus-core re-export 形成对等路径,依赖方可直接 `use nexus_contracts::Quest`
-pub use domain::{MultimodalInput, Quest, Task, ThinkingMode, UserIntent};
-// ADR-054 决策 6:事件载荷契约(EventSeverity/TaskPriority/AgentStatus 下沉,P9-T7 Task 2)
-// severity() 判定逻辑留在 L1 event-bus(架构红线:Critical 事件 mpsc 保障)
-pub use event_payload::{AgentStatus, EventSeverity, TaskPriority};
-// ADR-049 修订: RL 共享类型补齐（RLState/RLAction/RLExperience,v3.0.x）
-// WHY 顶层导出: 与既有接缝契约类型（DensityTier/RecallQuota 等）对等路径,
-// 依赖方可直接 `use nexus_contracts::rl_types::RLAction` 或顶层 `RLAction`
-pub use rl_types::{MemPiAction, RLAction, RLExperience, RLState};
-// P0-2 修复: INV-8 归档单调性独立公共 API（ArchiveTier + 判定函数 + 错误类型）
-// WHY 顶层导出: 与既有契约函数/类型对等路径,依赖方可直接
-// `use nexus_contracts::assert_archive_monotonicity` 或顶层 `ArchiveTier`
-pub use archive_monotonicity::{assert_archive_monotonicity, ArchiveTier, InvariantViolation};
-// 设计文档 §5.3.1: 六维控制面契约（MemoHarness D1-D6 融合）+ §5.6 扩展
-// （OperatorSelectionStrategy + StopStrategyConfig）。W1 合并（BC-4）：原根部分两处
-// 分批导出合并为单一 `pub use`，导出集合不变，消除两处清单靠人眼一致的漂移温床。
-pub use harness_dimensions::{
-    CompressionStrategy, ContextAssemblyContract, EvictionStrategy, ExtractionFormat,
-    FallbackStrategy, GenerationControlContract, HarnessConfigContract, MemoryManagementContract,
-    OperatorSelectionStrategy, OutputProcessingContract, RetentionPolicy, StopStrategyConfig,
-    TaskOrchestrationContract, ToolInteractionContract, ValidationRule, WorkflowType,
-};
-// 设计文档 §5.3.2: OmniMessage 协议（PenguinHarness 模型-环境解耦）
-// WHY 顶层导出: 与既有契约类型对等路径,依赖方可直接
-// `use nexus_contracts::OmniMessage` 或顶层 `ModelConfig`
-pub use omni_message::{ModelConfig, OmniMessage, TokenUsage};
-// v3.4.0 §5.2: 经验卡片契约（OpenMLE）
-// WHY 顶层导出: 与既有契约类型对等路径,依赖方可直接 `use nexus_contracts::ExperienceCard`
-pub use experience_card::{
-    AtomicOperator, CardMetadata, EnvironmentInfo, ErrorSignature, ExecutionStatus, ExperienceCard,
-    NormalizedThreeFactor, ThreeFactorScore,
-};
-// v3.4.0 §5.3: Token 证据契约（Dressage）
-pub use token_evidence::{
-    SegmentCreationReason, SegmentMetadata, TokenLedgerEntry, ToolCallRecord,
-};
-// v3.4.0 §5.4: 记忆金字塔契约（MSCE + TencentDB）
-pub use memory_pyramid::{
-    AtomicCardType, AtomicMemoryCard, MemoryPyramidLevel, PersonaSummary, SceneBlock,
-};
-// v3.4.0 §5.5: Skill 生命周期契约（MSCE）
-pub use skill_lifecycle::{SkillLifecycleContract, SkillLifecycleState};
-// v3.4.0 §5.7: RL 预留钩子契约
-pub use rl_hooks::{
-    PolicyFormat, RLActionVector, RLHook, RLStateVector, RLTrajectory, SerializedPolicy,
-};
-// v4.0 A0/WI-04/WI-05/WI-21: 图身份 / MCSM 投影器 / 外部协议 / 事件双轨 / 统一错误
-// WHY 顶层导出: 与既有契约类型对等路径,依赖方可直接 `use nexus_contracts::GraphIdentity`
-pub use app::{
-    AppEvent, AppOp, AppTokenUsage, ApprovalDecision, ApprovalRequest, Item, ItemId, ItemStatus,
-    PermissionMode, ReqId, Thread, ThreadId, ThreadStartParams, TurnId, UserInput,
-};
-pub use errors::{
-    ErrorLayer, EventFailure, NexusError, Recoverable, RecoveryStrategy, ToolFailure,
-};
-// v2.3 (b.1)/(b.3): 裁决权与认识类型契约（Claim/Certify/Declaim payload + EpistemicType）
-pub use adjudication::{
-    CertifyPayload, CertifyVerdict, ClaimPayload, DeclaimPayload, EpistemicType, FailureFixStatus,
-    FailureRecord, VerifierKind,
-};
-// v2.3 (b.5): 写入敏感信息扫描引擎（纯函数，零依赖，L0）
-// （looks_high_entropy 经 ADR-215 D-24 收窄为模块私有，不再进入根 re-export）
-pub use sensitive::{
-    redact, scan, ScanHit, ScanPolicy, ScanVerdict, SensitiveDisposition, SensitiveKind,
-};
-// v2.3 (b.6): 统一价格向量聚合契约（纯类型 + 整数估算，L0）
-pub use event_v2::{
-    Compressibility, DynamicEvent, EventMetadataV2, EventNamespace, EventPattern, EventTypeId,
-    ImportanceScore, MetadataBridge, NamespaceQuotaV2,
-};
-pub use graph_identity::GraphIdentity;
-pub use mcsm::{identity, project_weights, sinkhorn_project, ProjectedMatrix, SinkhornParams};
-pub use price_vector::{ModelPrice, PriceVector};
-// v2.3 (b.6): 人机一致率校准契约（纯函数，零依赖，L0）
-pub use calibration::{
-    agreement_rate_milli, certifiable, CalibrationSample, GateVerdict, HumanLabel,
-    DEFAULT_AGREEMENT_THRESHOLD_MILLI,
-};
-
-/// 预导出模块 — 常用类型的便捷导入
-///
-/// # 与顶层的关系（口径，ADR-217 D-35）
-/// prelude = **顶层值级导出的高频子集**，两侧关系由 `tests/prelude_surface_test.rs`
-/// 锁成两条不变量：① **无孤儿**（prelude 的每个值名都必须在顶层出现）；② **同族完备**
-/// （某 leaf 模块只要在 prelude 有任一成员，该模块在两侧的成员集合必须相等）。
-/// 整族缺席（`tool_plan`/`blueprint`/`scheduler_contract`/`variant` 共 22 项）是**有意取舍**
-/// 而非漂移——这些模块含 `Quota`/`Priority`/`ToolOp` 等泛用名，进 glob 会扩大 36 个消费
-/// crate 的名字冲突面；需要者走两段式路径 `nexus_contracts::tool_plan::*`。
-/// 下面各分组注释里的"与顶层导出同集"是**分组级**陈述（受不变量②约束），不是全集陈述。
-///
-/// # 示例
-/// ```
-/// use nexus_contracts::prelude::*;
-///
-/// let id = ToolId::new("tool-1");
-/// let mask: SparseMask<ToolId> = SparseMask::empty();
-/// ```
-pub mod prelude {
-    // Milestone B-3c: 强制层校验结果（同族四类型齐，缺项由
-    // tests/prelude_surface_test.rs 的「同族完备」不变量锁住）
-    pub use crate::behavior_contract::{
-        BehaviorContract, ContractCheckOutcome, ContractContext, ContractExample,
-    };
-    pub use crate::capability_token::{CapabilityToken, CapabilityTokenStatus, SeamId};
-    // P4-W16.2.2: R1 召回配额（S7 接缝）
-    pub use crate::density::{DensityPolicy, DensityTier};
-    pub use crate::recall_quota::{RecallQuota, RecallQuotaPolicy};
-    // P4-W15.1.1: HarnessSpec 扩展（ImmutableSurface + HarnessSpecError）
-    pub use crate::harness_spec::{
-        ContractSpec, HarnessMeta, HarnessSpec, HarnessSpecError, HopSpec, ImmutableSurface,
-        RetryPolicy, REQUIRED_ACCEPTANCE_GATES,
-    };
-    pub use crate::ids::{FileId, MemoryId, OperationId, TaskId, ToolId};
-    pub use crate::masks::SparseMask;
-    pub use crate::omni_masks::OmniSparseMasks;
-    // P3-W10.3: 选择器策略（D1 修复）
-    pub use crate::policy::{SelectorPolicy, SelectorWeights};
-    // P4-W14.3: Parliament 激活策略（S5 接缝）
-    pub use crate::parliament_policy::{ActivationStrategy, ParliamentPolicy};
-    // P4-W14.4: 衰减参数策略（S6 接缝）
-    pub use crate::decay_profile::{DecayPolicy, DecayProfile};
-    // P4-W14.2: 预取策略（S3 接缝）
-    pub use crate::prefetch::{PrefetchPolicy, PrefetchStrategy};
-    pub use crate::quota::{NamespaceQuota, QuotaError, QuotaLimits};
-    // P4-W14.1: 记忆策略（S2 接缝）
-    pub use crate::strategy::{MemoryStrategy, MemoryStrategyPolicy};
-    // Task 2: OSA memory 维度 S2 桥接契约
-    pub use crate::memory_strategy::{MemoryStrategyProvider, MemoryTaskPhase};
-    pub use crate::temporal::{TemporalMeta, TransitionType};
-    pub use crate::vector::{
-        VectorBackend, VectorHit, VectorStore, VectorStoreExt, VectorStoreStats,
-    };
-    // T6-2: 形式化属性定义框架（与顶层 8 项同族齐，缺项由 prelude_surface_test 锁）
-    pub use crate::formal_props::{
-        EmptyFormalProvider, FormalProperty, FormalResultProvider, InvariantSpec, PropertyCategory,
-        VerificationMethod, VerificationResult, VerifiedWithStrength,
-    };
+crate::facade_surface::l0_surface! {
+    capability_token prelude { CapabilityToken, CapabilityTokenStatus, SeamId }
+    // polish-v2.7 P1-3: 行为契约(BehaviorContract + ContractContext + ContractExample,ADR-049)
+    // Milestone B-3c: 强制层校验结果（ContractCheckOutcome）
+    behavior_contract prelude { BehaviorContract, ContractCheckOutcome, ContractContext, ContractExample }
+    // P4-W16.2.2: R1 召回配额（RecallQuota + RecallQuotaPolicy，S7 接缝）
+    density prelude { DensityPolicy, DensityTier }
+    recall_quota prelude { RecallQuota, RecallQuotaPolicy }
+    // P4-W15.1.1: HarnessSpec 扩展（ImmutableSurface 不可进化面清单 + HarnessSpecError 校验错误）
+    harness_spec prelude { ContractSpec, HarnessMeta, HarnessSpec, HarnessSpecError, HopSpec, ImmutableSurface, RetryPolicy, REQUIRED_ACCEPTANCE_GATES }
+    ids prelude { FileId, MemoryId, OperationId, TaskId, ToolId }
+    masks prelude { SparseMask }
+    omni_masks prelude { OmniSparseMasks }
+    // P4-W14.3: Parliament 激活策略（ActivationStrategy + ParliamentPolicy，S5 接缝）
+    parliament_policy prelude { ActivationStrategy, ParliamentPolicy }
+    // P4-W14.4: 衰减参数策略（DecayProfile + DecayPolicy，S6 接缝）
+    decay_profile prelude { DecayPolicy, DecayProfile }
+    // P4-W14.2: 预取策略（PrefetchStrategy + PrefetchPolicy，S3 接缝）
+    prefetch prelude { PrefetchPolicy, PrefetchStrategy }
+    strategy prelude { MemoryStrategy, MemoryStrategyPolicy }
+    // Task 2: OSA memory 维度 S2 桥接契约（MemoryTaskPhase + MemoryStrategyProvider trait）
+    memory_strategy prelude { MemoryStrategyProvider, MemoryTaskPhase }
+    // P3-W10.3: 选择器策略（SelectorPolicy + SelectorWeights，D1 修复）
+    policy prelude { SelectorPolicy, SelectorWeights }
+    quota prelude { NamespaceQuota, QuotaError, QuotaLimits }
+    temporal prelude { TemporalMeta, TransitionType }
+    // polish-v2.7 P3-2: 变体契约(VariantId + VariantContract,ADR-051)
+    // 有意取舍：泛用名进 glob 扩大冲突面 → 只进顶层（ADR-217 D-35）
+    variant top { VariantContract, VariantId }
+    // polish-v2.7 P4-7: 流程蓝图(ProceduralBlueprint + 计划校验,ADR-049) — 同上有意取舍
+    blueprint top { BlueprintSource, BlueprintStep, PlanViolation, ProceduralBlueprint }
+    // P2-W7.3: 向量存储契约（VectorStore trait + VectorHit + 扩展 trait）
+    vector prelude { VectorBackend, VectorHit, VectorStore, VectorStoreExt, VectorStoreStats }
+    // T6-2: 形式化属性定义框架（FormalVerifier L4 骨架基础类型）
+    formal_props prelude { EmptyFormalProvider, FormalProperty, FormalResultProvider, InvariantSpec, PropertyCategory, VerificationMethod, VerificationResult, VerifiedWithStrength }
+    // P3-T8: 工具计划契约（WI-16 ToolPlan DSL）— 有意取舍：ToolOp/PlanEdge 等泛用名只进顶层
+    tool_plan top { guards, PlanEdge, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan }
+    // P3-T2 补: 调度契约（WI-29 mas-sched 类型先移 L0）— Quota/Priority 泛用名只进顶层
+    scheduler_contract top { ClaimOutcome, DenyReason, Lease, Priority, Quota, RenewOutcome, ShouldRunVerdict, TodoClaim, HANDOFF }
     // Task 3.10: L0 共享类型扩展(EventMetadata / TaskStatus / Checkpoint)
-    pub use crate::checkpoint::Checkpoint;
-    pub use crate::event_metadata::EventMetadata;
-    pub use crate::task::TaskStatus;
-    // ADR-054 决策 3: DECB 预算档位(BudgetTier 上提,P9-T3)
-    pub use crate::budget_tier::BudgetTier;
-    // ADR-065: MCA 模型亲和契约(与顶层导出同集)
-    pub use crate::affinity::{
-        sampling_bucket, AffinityRequest, AffinityResponse, CapabilitySet, ContentBlock,
-        ModelAffinitySpec, NegotiationFidelity, OutputBudget, OutputFormat, ProtocolDialect,
-        ProviderId, SamplingParams, ThinkingPreference, TokenCacheKey, UsageReport,
-    };
+    checkpoint prelude { Checkpoint }
+    event_metadata prelude { EventMetadata }
+    task prelude { TaskStatus }
+    // ADR-054 决策 3: DECB 预算档位(BudgetTier 从 L8 decb-governor 上提,P9-T3)
+    budget_tier prelude { BudgetTier }
+    // ADR-065: MCA 模型亲和契约(能力协商唯一事实源 + 统一请求/响应)
+    // WHY 不导出全部子类型: PricingSpec/EndpointSpec/QuirkRule 等仅 spec 装配方使用,
+    // 走 affinity:: 路径引用,避免顶层命名空间膨胀。
+    affinity prelude { sampling_bucket, AffinityRequest, AffinityResponse, CapabilitySet, ContentBlock, ModelAffinitySpec, NegotiationFidelity, OutputBudget, OutputFormat, ProtocolDialect, ProviderId, SamplingParams, ThinkingPreference, TokenCacheKey, UsageReport }
     // ADR-054 决策 3:命令验证契约(AttackType/Command/CommandPolicy/CommandValidator 上提,P9-T4)
-    pub use crate::command_validation::{
-        AttackType, BlockedPattern, Command, CommandPolicy, CommandValidationError,
-        CommandValidator,
-    };
-    // ADR-054 决策 6:纯领域类型(与顶层导出同集)
-    pub use crate::domain::{MultimodalInput, Quest, Task, ThinkingMode, UserIntent};
+    command_validation prelude { AttackType, BlockedPattern, Command, CommandPolicy, CommandValidationError, CommandValidator }
+    // ADR-054 决策 6:纯领域类型(ThinkingMode/MultimodalInput/UserIntent/Quest/Task 上提,P9-T7)
+    domain prelude { MultimodalInput, Quest, Task, ThinkingMode, UserIntent }
     // ADR-054 决策 6:事件载荷契约(EventSeverity/TaskPriority/AgentStatus 下沉,P9-T7 Task 2)
-    // severity() 判定逻辑留在 L1 event-bus(架构红线:Critical 事件 mpsc 保障)
-    pub use crate::event_payload::{AgentStatus, EventSeverity, TaskPriority};
-    // ADR-049 修订: RL 共享类型（与顶层导出同集）
-    pub use crate::rl_types::{MemPiAction, RLAction, RLExperience, RLState};
-    // P0-2 修复: INV-8 归档单调性契约（与顶层导出同集）
-    pub use crate::archive_monotonicity::{
-        assert_archive_monotonicity, ArchiveTier, InvariantViolation,
-    };
-    // 设计文档 §5.3.1+§5.6: 六维控制面契约（与顶层导出同集；W1/BC-4 合并两处）
-    pub use crate::harness_dimensions::{
-        CompressionStrategy, ContextAssemblyContract, EvictionStrategy, ExtractionFormat,
-        FallbackStrategy, GenerationControlContract, HarnessConfigContract,
-        MemoryManagementContract, OperatorSelectionStrategy, OutputProcessingContract,
-        RetentionPolicy, StopStrategyConfig, TaskOrchestrationContract, ToolInteractionContract,
-        ValidationRule, WorkflowType,
-    };
-    // 设计文档 §5.3.2: OmniMessage 协议（与顶层导出同集）
-    pub use crate::omni_message::{ModelConfig, OmniMessage, TokenUsage};
-    // v3.4.0 §5.2: 经验卡片契约（与顶层导出同集）
-    pub use crate::experience_card::{
-        AtomicOperator, CardMetadata, EnvironmentInfo, ErrorSignature, ExecutionStatus,
-        ExperienceCard, NormalizedThreeFactor, ThreeFactorScore,
-    };
-    // v3.4.0 §5.3: Token 证据契约（与顶层导出同集）
-    pub use crate::token_evidence::{
-        SegmentCreationReason, SegmentMetadata, TokenLedgerEntry, ToolCallRecord,
-    };
-    // v3.4.0 §5.4: 记忆金字塔契约（与顶层导出同集）
-    pub use crate::memory_pyramid::{
-        AtomicCardType, AtomicMemoryCard, MemoryPyramidLevel, PersonaSummary, SceneBlock,
-    };
-    // v3.4.0 §5.5: Skill 生命周期契约（与顶层导出同集）
-    pub use crate::skill_lifecycle::{SkillLifecycleContract, SkillLifecycleState};
-    // v3.4.0 §5.7: RL 预留钩子契约（与顶层导出同集）
-    pub use crate::rl_hooks::{
-        PolicyFormat, RLActionVector, RLHook, RLStateVector, RLTrajectory, SerializedPolicy,
-    };
-    // v4.0 A0/WI-04/WI-05/WI-21: 图身份 / MCSM / 外部协议 / 事件双轨 / 统一错误（与顶层导出同集）
-    pub use crate::app::{
-        AppEvent, AppOp, AppTokenUsage, ApprovalDecision, ApprovalRequest, Item, ItemId,
-        ItemStatus, PermissionMode, ReqId, Thread, ThreadId, ThreadStartParams, TurnId, UserInput,
-    };
-    pub use crate::errors::{
-        ErrorLayer, EventFailure, NexusError, Recoverable, RecoveryStrategy, ToolFailure,
-    };
-    // v2.3 (b.1)/(b.3): 裁决权与认识类型契约（与顶层导出同集）
-    pub use crate::adjudication::{
-        CertifyPayload, CertifyVerdict, ClaimPayload, DeclaimPayload, EpistemicType,
-        FailureFixStatus, FailureRecord, VerifierKind,
-    };
-    // v2.3 (b.5): 写入敏感信息扫描引擎（与顶层导出同集）
-    pub use crate::sensitive::{
-        redact, scan, ScanHit, ScanPolicy, ScanVerdict, SensitiveDisposition, SensitiveKind,
-    };
-    // v2.3 (b.6): 统一价格向量（与顶层导出同集）
-    pub use crate::event_v2::{
-        Compressibility, DynamicEvent, EventMetadataV2, EventNamespace, EventPattern, EventTypeId,
-        ImportanceScore, MetadataBridge, NamespaceQuotaV2,
-    };
-    pub use crate::graph_identity::GraphIdentity;
-    pub use crate::mcsm::{
-        identity, project_weights, sinkhorn_project, ProjectedMatrix, SinkhornParams,
-    };
-    pub use crate::price_vector::{ModelPrice, PriceVector};
-    // v2.3 (b.6): 人机一致率校准（与顶层导出同集）
-    pub use crate::calibration::{
-        agreement_rate_milli, certifiable, CalibrationSample, GateVerdict, HumanLabel,
-        DEFAULT_AGREEMENT_THRESHOLD_MILLI,
-    };
+    event_payload prelude { AgentStatus, EventSeverity, TaskPriority }
+    // ADR-049 修订: RL 共享类型补齐（RLState/RLAction/RLExperience）
+    rl_types prelude { MemPiAction, RLAction, RLExperience, RLState }
+    // P0-2 修复: INV-8 归档单调性独立公共 API（ArchiveTier + 判定函数 + 错误类型）
+    archive_monotonicity prelude { assert_archive_monotonicity, ArchiveTier, InvariantViolation }
+    // 设计文档 §5.3.1: 六维控制面契约（MemoHarness D1-D6 融合）+ §5.6 扩展
+    harness_dimensions prelude { CompressionStrategy, ContextAssemblyContract, EvictionStrategy, ExtractionFormat, FallbackStrategy, GenerationControlContract, HarnessConfigContract, MemoryManagementContract, OperatorSelectionStrategy, OutputProcessingContract, RetentionPolicy, StopStrategyConfig, TaskOrchestrationContract, ToolInteractionContract, ValidationRule, WorkflowType }
+    // 设计文档 §5.3.2: OmniMessage 协议（PenguinHarness 模型-环境解耦）
+    omni_message prelude { ModelConfig, OmniMessage, TokenUsage }
+    // v3.4.0 §5.2: 经验卡片契约（OpenMLE）
+    experience_card prelude { AtomicOperator, CardMetadata, EnvironmentInfo, ErrorSignature, ExecutionStatus, ExperienceCard, NormalizedThreeFactor, ThreeFactorScore }
+    // v3.4.0 §5.3: Token 证据契约（Dressage）
+    token_evidence prelude { SegmentCreationReason, SegmentMetadata, TokenLedgerEntry, ToolCallRecord }
+    // v3.4.0 §5.4: 记忆金字塔契约（MSCE + TencentDB）
+    memory_pyramid prelude { AtomicCardType, AtomicMemoryCard, MemoryPyramidLevel, PersonaSummary, SceneBlock }
+    // v3.4.0 §5.5: Skill 生命周期契约（MSCE）
+    skill_lifecycle prelude { SkillLifecycleContract, SkillLifecycleState }
+    // v3.4.0 §5.7: RL 预留钩子契约
+    rl_hooks prelude { PolicyFormat, RLActionVector, RLHook, RLStateVector, RLTrajectory, SerializedPolicy }
+    // v4.0 A0/WI-04/WI-05/WI-21: 外部协议面（AppOp/AppEvent 与 Thread/Turn/Item 三原语）
+    app prelude { AppEvent, AppOp, AppTokenUsage, ApprovalDecision, ApprovalRequest, Item, ItemId, ItemStatus, PermissionMode, ReqId, Thread, ThreadId, ThreadStartParams, TurnId, UserInput }
+    // A0/WI-01 §6.6: 统一错误层级契约（NexusError 与 Recoverable）
+    errors prelude { ErrorLayer, EventFailure, NexusError, Recoverable, RecoveryStrategy, ToolFailure }
+    // v2.3 (b.1)/(b.3): 裁决权与认识类型契约（Claim/Certify/Declaim payload + EpistemicType）
+    adjudication prelude { CertifyPayload, CertifyVerdict, ClaimPayload, DeclaimPayload, EpistemicType, FailureFixStatus, FailureRecord, VerifierKind }
+    // v2.3 (b.5): 写入敏感信息扫描引擎（纯函数，零依赖，L0）
+    sensitive prelude { redact, scan, ScanHit, ScanPolicy, ScanVerdict, SensitiveDisposition, SensitiveKind }
+    // v4.0 WI-21: 事件双轨契约（DynamicEvent 注册表与 EventMetadataV2）
+    event_v2 prelude { Compressibility, DynamicEvent, EventMetadataV2, EventNamespace, EventPattern, EventTypeId, ImportanceScore, MetadataBridge, NamespaceQuotaV2 }
+    graph_identity prelude { GraphIdentity }
+    mcsm prelude { identity, project_weights, sinkhorn_project, ProjectedMatrix, SinkhornParams }
+    price_vector prelude { ModelPrice, PriceVector }
+    // v2.3 (b.6): 人机一致率校准契约（纯函数，零依赖，L0）
+    calibration prelude { agreement_rate_milli, certifiable, CalibrationSample, GateVerdict, HumanLabel, DEFAULT_AGREEMENT_THRESHOLD_MILLI }
 }

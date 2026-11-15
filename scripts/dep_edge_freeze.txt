@@ -1,4 +1,4 @@
-﻿# dep_edge_freeze.txt - internal dependency-edge freeze baseline (arch dir G')
+# dep_edge_freeze.txt - internal dependency-edge freeze baseline (arch dir G')
 # =============================================================================
 # Format: <crate-dir>|<dep>   (one internal [dependencies] edge per line)
 #
@@ -213,4 +213,9 @@ nexus-contracts-memory|nexus-contracts-seams # L0-A -> L0-A; memory/memory_pyram
 # bought nothing because tests/benches already see [dependencies].
 pvl-layer|nexus-contracts      # L7->L0 down; production edge since Phase 7 s12.1 (pvl-layer/Cargo.toml [dependencies]); src refs: card_generator.rs / dynamic_depth.rs / segment_validation.rs / trajectory_score.rs (ExperienceCard / ExecutionStatus / ErrorSignature contract types)
 quest-engine|nexus-contracts   # L9->L0 down; BudgetTier type source after the ADR-054 decision-3 lift (quest-engine/Cargo.toml [dependencies]); src refs: ttg.rs / arbitration.rs / checkpoint.rs / engine.rs / long_task_map.rs / long_term_credit.rs / search_tree.rs
+# --- registered 2026-11-15: ADR-309 W4-1 compute/ extraction (nexus-core -> nexus-compute, L0-B) ---
+nexus-core|nexus-compute        # L0-B -> L0-B, same machine layer 1; ADR-309 dependency shape -- nexus-compute hosts the extracted compute/ tree, nexus-core keeps ONLY the compat shim re-export (pub mod compute { pub use nexus_compute::*; }). Reverse edge would close a crate cycle and is rejected outright.
+nexus-compute|event-bus         # L0-B -> L0-B, same machine layer 1; the extracted telemetry adapter publishes ComputePoolSaturated over the existing bus channel (edge moved verbatim with crates/nexus-core/src/compute/, zero new event variants).
+nexus-compute|nexus-telemetry   # L0-B -> L0-B, same machine layer 1; ADR-222 D3 dependency inversion kept -- nexus-compute implements SaturationSource (ComputeTelemetry adapter, moved verbatim from nexus-core/src/compute/telemetry.rs). Reverse edge would close a cycle through KindCounters/TaskKind.
+
 

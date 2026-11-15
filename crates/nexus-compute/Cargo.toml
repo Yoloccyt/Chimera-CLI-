@@ -1,0 +1,51 @@
+[package]
+name = "nexus-compute"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "NEXUS-OMEGA L0-B 核心基础面 — CPU 卸载计算面（ComputeBridge/HTS/DetReduce/利用率/遥测适配，ADR-309 自 nexus-core 迁出）"
+
+[dependencies]
+# L0-B 同层依赖：事件总线是遥测上报通道（同层互引允许，§2.2）。
+event-bus = { workspace = true }
+# L0-B 同层：饱和判定纯函数 + SaturationSource 契约 + 上报循环（ADR-222 D3 上提），
+# 本 crate 实现该 trait（ComputeTelemetry 适配器）。单向 nexus-compute -> nexus-telemetry，
+# 反向会成 crate 环；G-125 守护 L0-B 方向。
+nexus-telemetry = { workspace = true }
+# HTS route() 热路径读无锁（RCU 快照，ADR-128）。
+arc-swap = { workspace = true }
+# ComputeBridge L-a 全局 rayon 池（bridge.rs ThreadPool 全路径引用，WI-34）。
+# WHY 红线纪律: rayon 闭包内禁 .await/IO/持锁跨边界(§7.5.3 纪律④⑥)
+rayon = { workspace = true }
+# ComputePoolSaturated 发布失败告警日志（utilization.rs tracing::warn! 宏路径引用）。
+tracing = { workspace = true }
+# 缝合点 ChaCha8Rng（seam.rs，Ω₇ 可测试性根基）与 reduce 确定性分桶。
+rand = { workspace = true }
+thiserror = { workspace = true }
+# spawn_saturation_reporter 返回 JoinHandle + #[tokio::test] 单测形态。
+tokio = { workspace = true }
+
+[dev-dependencies]
+criterion = { workspace = true }
+proptest = { workspace = true }
+
+# P1-T8: ComputeBridge roundtrip 门禁基准(W3: bridge roundtrip P99 < 20μs,手册 §13.2)
+# ADR-309: 随 compute/ 自 nexus-core 随迁(bench 名不变,阈值键不断)
+[[bench]]
+name = "bridge_bench"
+harness = false
+
+# P1-T9: HTS route() 决策门禁基准(W4: route 决策 P99 < 1μs,手册 §8.4 / ADR-127)
+[[bench]]
+name = "hts_bench"
+harness = false
+
+# P1-T10: DetReduce 双模式归约基准(W5:审计开销 ≤ 30%,手册 §10.2 / ADR-102/106)
+# WHY 门禁口径:bench 末尾固定 n 单次采样打印 audit_overhead_pct(T8 单行采样模式)
+[[bench]]
+name = "reduce_bench"
+harness = false
+
+[lints]
+workspace = true

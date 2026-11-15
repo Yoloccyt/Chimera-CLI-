@@ -171,13 +171,19 @@ async fn scenario_04_corrupt_index_rebuilds_from_segments() {
     assert!(index.exists(), "前提：树索引文件必须已生成");
     std::fs::remove_file(&index).expect("删除索引模拟损坏");
 
-    // 重启期自愈：树索引重建（段文件为权威源）+ 内容指纹探针
+    // 重启期自愈：从段文件权威源重建索引（`rebuild_index` 按会话枚举段文件）
+    //
+    // WHY 不用 `probe_content_consistency`：内容探针按**索引中已登记的会话**
+    // 枚举，索引被删除后它没有任何会话可检，`rebuilt` 恒 0；恢复入口是
+    // `rebuild_index(data_dir, session_id)`。
     let tree = TreeIndex::open(&index).expect("重建树索引");
-    let report = tree.probe_content_consistency(dir.path()).expect("内容探针");
-    assert!(
-        report.rebuilt_count() >= 1,
-        "索引损坏必须触发重建，实际 rebuilt={}",
-        report.rebuilt_count()
+    let stats = tree
+        .rebuild_index(dir.path(), &sid)
+        .expect("从段文件重建索引");
+    assert!(stats.segments_scanned >= 1, "必须扫描到至少一个段文件");
+    assert_eq!(
+        stats.rows_inserted, 6,
+        "6 条已确认事件必须全部补回索引：{stats:?}"
     );
 
     let writer = open(dir.path()).await;

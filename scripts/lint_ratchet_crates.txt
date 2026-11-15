@@ -25,6 +25,7 @@ mcp-mesh  # opted in, measured clean at registration time
 mlc-engine  # opted in, measured clean at registration time
 mtpe-executor  # opted in, measured clean at registration time
 nexus-app-server  # opted in, measured clean at registration time
+nexus-compute  # ADR-309 extraction; inherits nexus-core's opt-in (same production code, moved not written)
 nexus-contracts  # opted in, measured clean at registration time
 nexus-contracts-core  # ADR-222 D2 split; inherits the umbrella's opt-in (same production code, moved not written)
 nexus-contracts-mca  # ADR-222 D2 split; inherits the umbrella's opt-in (same production code, moved not written)

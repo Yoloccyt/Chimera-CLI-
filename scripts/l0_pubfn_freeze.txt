@@ -5,6 +5,9 @@
 # per definition site (multiset: two `impl`s in one module may both define `new`).
 # Format: MODULE::FN  [# optional reason]
 # Bootstrap: full-exemption state, emitted 2026-10-13 from the live surface.
+# ADR-241 D2: 借用化派发视图的显式升级入口（借用 → 拥有）
+# ADR-222 D2: pub(crate) -> pub for the cross-crate serde predicate
+core_domain/checkpoint::is_schema_version_unset
 core_domain/checkpoint::new
 core_domain/checkpoint::with_description
 core_domain/event_metadata::child_of
@@ -238,7 +241,14 @@ spec/platform_grounding::check
 spec/platform_grounding::from_doc
 spec/platform_grounding::from_marker
 spec/scheduler_contract::new
-# ADR-241 D2: 借用化派发视图的显式升级入口（借用 → 拥有）
+spec/tool_admission::is_conserved
+spec/tool_admission::is_read_safe
+spec/tool_admission::new
+spec/tool_admission::new
+spec/tool_admission::new
+spec/tool_admission::new
+spec/tool_admission::read_safe_count
+spec/tool_admission::segment_counts
 spec/tool_dispatch::to_owned_request
 spec/tool_plan::validate
 spec/variant::matches_task_type
@@ -265,5 +275,3 @@ vector_math/vector::is_empty
 vector_math/vector::is_near_capacity
 vector_math/vector::new
 vector_math/vector::new
-# ADR-222 D2: pub(crate) -> pub for the cross-crate serde predicate
-core_domain/checkpoint::is_schema_version_unset

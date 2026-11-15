@@ -5,6 +5,7 @@
 //! L7 `gqep-executor` 的 `tool_runtime::dispatch` 仅作 re-export（旧路径不变）。
 //! 上提动机：执行面契约需被 L8 及以上层（parliament 审议、quest 编排）按依赖
 //! 铁律 §2.2 以 `L(N) → L(0)` 方式消费，而不必向上依赖 L7。
+//! 批级准入语义（BatchPlan/BatchReport 四段守恒）见姊妹模块 `tool_admission`（P-A，ADR-新-3）。
 //!
 //! 纯度约束（G-99）：仅依赖 `std`（`fmt` / `future::Future` / `pin::Pin`），
 //! **不引入 `futures`**——L0 外部依赖白名单只有 serde / chrono / uuid / thiserror。
@@ -120,6 +121,16 @@ pub type DispatchFuture<'a> =
 pub trait ToolDispatcher: Send + Sync {
     /// 派发一次请求
     fn dispatch<'a>(&'a self, req: &'a DispatchRequest) -> DispatchFuture<'a>;
+
+    /// 批派发 —— 每个请求一个 future，调用方驱动并发（additive 默认实现）。
+    ///
+    /// WHY 默认实现顺序逐发：加性硬要求——既有实现方（含测试夹具）零改动即
+    /// 保持单发语义；真并发批派发由消费方（L7/L10）用 `tool_admission::BatchPlan`
+    /// 编排（P-A，ADR-新-3）。返回 Vec 而非 Stream：对象安全 + 调用方需要
+    /// FuturesUnordered/JoinSet 的自由度。
+    fn dispatch_batch<'a>(&'a self, reqs: &'a [DispatchRequest]) -> Vec<DispatchFuture<'a>> {
+        reqs.iter().map(|req| self.dispatch(req)).collect()
+    }
 }
 
 #[cfg(test)]

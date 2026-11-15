@@ -59,8 +59,11 @@ CRATES_DIR = os.path.join(ROOT, "crates")
 L0A = "0A"
 L0B = "0B"
 
-# Measured 2026-11-15 (W1 drift sweep): L0-A=7, L0-B=3, internal L0 edges=14.
+# Measured 2026-11-15 (W4-1 compute extraction): L0-A=7, L0-B=4, internal L0 edges=17.
 # Historical chain: 2026-10-19 was 0A=1/0B=2/edges=3 (pre-ADR-222 1+6 split);
+# 2026-11-15 W1 drift sweep was 0A=7/0B=3/edges=14 (pre-ADR-309); ADR-309 (2026-11-15)
+# extracted nexus-compute from nexus-core: +1 L0-B crate, +3 internal edges
+# (nexus-core->nexus-compute, nexus-compute->event-bus, nexus-compute->nexus-telemetry).
 # sibling assembly edges are frozen by G-129 (l0a_sibling_assembly.txt).
 # Floors are deliberately low: they exist to catch a blind parser, not to pin the expected size.
 CRATE_FLOOR = 2

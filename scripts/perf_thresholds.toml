@@ -506,7 +506,8 @@ bench = "v3_pipeline_bench"
 
 [[run_bench]]
 alias = "reduce_bench"
-crate = "nexus-core"
+# ADR-309 (W4-1): reduce_bench 随 compute/ 随迁至 nexus-compute（bench 名不变）
+crate = "nexus-compute"
 bench = "reduce_bench"
 
 [[run_bench]]

@@ -1098,7 +1098,7 @@ note = "对账门有牙（夹具数由 --selftest 末行自报，不在此登记
 [[gate]]
 id = "G-99"
 spec_ref = "ADR-033 追加节 2026-10-09 自陈缺口的收口 / ADR-212（本轮 L0 重构波）"
-cmd = "{python} scripts/check_l0_purity.py"
+cmd = "{python} scripts/check_l0_surface.py purity"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1107,7 +1107,7 @@ note = "L0 nexus-contracts 纯度门（真实扫描）：① [dependencies] 必�
 [[gate]]
 id = "G-100"
 spec_ref = "G-99 配套（门自身有牙，沿 G-20/G-22/G-26/G-92/G-94/G-96/G-98 先例）"
-cmd = "{python} scripts/check_l0_purity.py --selftest"
+cmd = "{python} scripts/check_l0_surface.py purity --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1152,7 +1152,7 @@ note = "G-103 的双向夹具：合成「清单引用不存在的脚本」与「
 [[gate]]
 id = "G-105"
 spec_ref = "ADR-213 决策 R4（L0 公共函数面零治理的收口）"
-cmd = "{python} scripts/check_l0_pubfn_ratchet.py"
+cmd = "{python} scripts/check_l0_surface.py pubfn-ratchet"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1161,7 +1161,7 @@ note = "L0 `pub fn` 面只减不增棘轮。补的缺口是量纲级的：G-91 �
 [[gate]]
 id = "G-106"
 spec_ref = "G-105 配套（门自身有牙）"
-cmd = "{python} scripts/check_l0_pubfn_ratchet.py --selftest"
+cmd = "{python} scripts/check_l0_surface.py pubfn-ratchet --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1170,7 +1170,7 @@ note = "G-105 夹具（真实 tempdir 路径，走与生产同一个 extract_def
 [[gate]]
 id = "G-107"
 spec_ref = "ADR-213 决策 R5（W3 双路径面只冻结不增殖）"
-cmd = "{python} scripts/check_l0_root_surface.py"
+cmd = "{python} scripts/check_l0_surface.py root-surface"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1179,7 +1179,7 @@ note = "L0 根 re-export 面只减不增棘轮。W3（ADR-212 决策 5）把 53 
 [[gate]]
 id = "G-108"
 spec_ref = "G-107 配套（门自身有牙，沿 G-20/G-92/G-99/G-105 先例）"
-cmd = "{python} scripts/check_l0_root_surface.py --selftest"
+cmd = "{python} scripts/check_l0_surface.py root-surface --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1266,7 +1266,7 @@ note = "27 条断言，全部在 tempdir 真树上走**生产同一组抽取函�
 [[gate]]
 id = "G-115"
 spec_ref = "ADR-214 决策 3（D-22：`#[non_exhaustive]` 与 wire 字段序正交；per-type 开放/封闭政策须变机器锁）"
-cmd = "{python} scripts/check_l0_extensibility_class.py"
+cmd = "{python} scripts/check_l0_surface.py extensibility"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1275,7 +1275,7 @@ note = "L0 公共类型可扩展性分级台账。补的洞有量纲性：实测
 [[gate]]
 id = "G-116"
 spec_ref = "G-115 配套（门自身有牙，沿 G-20/G-92/G-99/G-105/G-107/G-109/G-111/G-114 先例）"
-cmd = "{python} scripts/check_l0_extensibility_class.py --selftest"
+cmd = "{python} scripts/check_l0_surface.py extensibility --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1314,7 +1314,7 @@ note = "11 条断言走生产同一组抽取/比较函数（fixture 与真树同
 [[gate]]
 id = "G-119"
 spec_ref = "ADR-218 决策 1（『受控纯逻辑』的逻辑量判据）+ ADR-033 追加节 2026-10-09 自陈缺口 + ADR-212 决策 3 半闭 + ADR-213 D-7"
-cmd = "{python} scripts/check_l0_logic_ledger.py"
+cmd = "{python} scripts/check_l0_surface.py logic-ledger"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1323,7 +1323,7 @@ note = "L0 受控逻辑台账，判据形态是完备性对拍而非体量棘轮
 [[gate]]
 id = "G-120"
 spec_ref = "G-119 配套（门自身有牙，沿 G-20/G-92/G-99/G-105/G-107/G-109/G-111/G-114/G-116/G-118 先例）"
-cmd = "{python} scripts/check_l0_logic_ledger.py --selftest"
+cmd = "{python} scripts/check_l0_surface.py logic-ledger --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1388,7 +1388,7 @@ note = "断言数以 --selftest **自报**，本行不抄数（ADR-218 D-44 与 
 [[gate]]
 id = "G-125"
 spec_ref = "ADR-222 D1/D3（L0-A/L0-B 双层与方向铁律 L0-R1/L0-R2）"
-cmd = "{python} scripts/check_l0_sublayer.py"
+cmd = "{python} scripts/check_l0_surface.py sublayer"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1397,7 +1397,7 @@ note = "L0 亚层方向门。为什么需要：ADR-222 把 L0 拆为 0A 纯契�
 [[gate]]
 id = "G-126"
 spec_ref = "G-125 配套（门自身有牙，沿 G-20/G-92/G-99/G-105/G-107/G-109/G-111/G-114/G-116/G-118/G-120/G-122/G-124 先例）"
-cmd = "{python} scripts/check_l0_sublayer.py --selftest"
+cmd = "{python} scripts/check_l0_surface.py sublayer --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1443,7 +1443,7 @@ note = "断言数以 --selftest **自报**，本行不抄数（ADR-218 D-44 / G-
 [[gate]]
 id = "G-129"
 spec_ref = "ADR-223 D3 / ADR-215 D-29 / ADR-221 D-29（逐 crate 装配面棘轮）"
-cmd = "{python} scripts/check_l0a_sibling_assembly.py"
+cmd = "{python} scripts/check_l0_surface.py assembly"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1452,7 +1452,7 @@ note = "L0-A sibling 装配面棘轮。口径：每个 crates/*/Cargo.toml 的�
 [[gate]]
 id = "G-130"
 spec_ref = "G-129 配套（门自身有牙，沿 G-120/G-122/G-124/G-126/G-128 先例）"
-cmd = "{python} scripts/check_l0a_sibling_assembly.py --selftest"
+cmd = "{python} scripts/check_l0_surface.py assembly --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1471,7 +1471,7 @@ note = "断言数以 --selftest 自报，本行不抄数。全部断言走生产
 [[gate]]
 id = "G-131"
 spec_ref = "ADR-223 D1（L0-B 依赖面 only-decrease；反转 R8-1 的不设门决定）"
-cmd = "{python} scripts/check_l0b_dep_surface.py"
+cmd = "{python} scripts/check_l0_surface.py dep-surface"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1480,7 +1480,7 @@ note = "L0-B 外部依赖面棘轮。口径：nexus-core / event-bus / nexus-tel
 [[gate]]
 id = "G-132"
 spec_ref = "G-131 配套（门自身有牙，沿 G-120/G-122/G-124/G-126/G-128/G-130 先例）"
-cmd = "{python} scripts/check_l0b_dep_surface.py --selftest"
+cmd = "{python} scripts/check_l0_surface.py dep-surface --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1688,7 +1688,7 @@ note = "夹具在 tempdir 复制真树文件并走与生产同一个 run_all：�
 [[gate]]
 id = "G-150"
 spec_ref = "W2 L0 const/static surface ratchet"
-cmd = "{python} scripts/check_l0_const_ratchet.py"
+cmd = "{python} scripts/check_l0_surface.py const-ratchet"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1697,7 +1697,7 @@ note = "L0-A pub const/static 名面多重集棘轮(仿 G-105)；冻结台账 sc
 [[gate]]
 id = "G-151"
 spec_ref = "W2 L0 const ratchet selftest"
-cmd = "{python} scripts/check_l0_const_ratchet.py --selftest"
+cmd = "{python} scripts/check_l0_surface.py const-ratchet --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1706,7 +1706,7 @@ note = "夹具双向有牙(NEW/STALE/malformed/floor)"
 [[gate]]
 id = "G-152"
 spec_ref = "W2 sibling crate-root re-export parity"
-cmd = "{python} scripts/check_l0_sibling_surface.py"
+cmd = "{python} scripts/check_l0_surface.py sibling-surface"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"
@@ -1715,7 +1715,7 @@ note = "6 sibling lib.rs 单行 pub use 面 parity(仿 G-107)；冻结台账 scr
 [[gate]]
 id = "G-153"
 spec_ref = "W2 sibling surface selftest"
-cmd = "{python} scripts/check_l0_sibling_surface.py --selftest"
+cmd = "{python} scripts/check_l0_surface.py sibling-surface --selftest"
 expect = 0
 kind = "light"
 test_kind = "cross_crate"

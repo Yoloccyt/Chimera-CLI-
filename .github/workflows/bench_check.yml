@@ -146,7 +146,7 @@ jobs:
           run_bench config_concurrency cargo bench -p chimera-cli --bench config_concurrency_bench
           run_bench writer_ansi       cargo bench -p chimera-tui --bench writer_ansi_bench
           run_bench v3_pipeline       cargo bench -p chimera-tui --bench v3_pipeline_bench
-          run_bench reduce_bench      cargo bench -p nexus-core --bench reduce_bench
+          run_bench reduce_bench      cargo bench -p nexus-compute --bench reduce_bench  # ADR-309: 随 compute/ 随迁
           run_bench session_store     cargo bench -p session-store --bench session_store_bench
           run_bench cross_layer       cargo bench -p event-bus --bench cross_layer_bench
           run_bench hybrid_search     cargo bench -p repo-wiki --bench hybrid_search_bench

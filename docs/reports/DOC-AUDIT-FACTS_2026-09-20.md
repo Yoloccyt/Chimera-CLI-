@@ -172,7 +172,7 @@
 > 故漂移门禁的两处锚点自 `agents.md` 改指本文件。下列两行是门禁 ERE 的匹配目标，**格式不可改写**
 > （门禁按「匹配文本中第一个数字」与代码实测值比对）。改数须同步 `scripts/doc_count_freeze.txt`。
 
-- Workspace × **46 crates**（`tomllib` 解析 `Cargo.toml` members 实测；ADR-193 减法批次 41→39，ADR-222（2026-10-20）边界重裁 39→46：`nexus-contracts` 拆 1+6 + 新建 `nexus-telemetry`）
+- Workspace × **47 crates**（`tomllib` 解析 `Cargo.toml` members 实测；ADR-193 减法批次 41→39，ADR-222（2026-10-20）边界重裁 39→46：`nexus-contracts` 拆 1+6 + 新建 `nexus-telemetry`；ADR-309（2026-11-15）W4-1 compute/ 迁出 46→47：新建 `nexus-compute`，nexus-core 留 shim）
 - 定义 156 个 `NexusEvent` 变体（计数以 `crates/event-bus/src/types.rs` 枚举实测为准，并由 `scripts/check_doc_drift.sh` 自报校验；ADR-197 `ComputePoolSaturated` 151→152，ADR-222 遥测双事件 152→154，ADR-290 R9 蓝图双事件 154→156）
 
 ---

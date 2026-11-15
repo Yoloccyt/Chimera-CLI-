@@ -43,7 +43,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 BASELINE = os.path.join(HERE, "l0b_dep_freeze.txt")
 
-L0B = ("nexus-core", "event-bus", "nexus-telemetry")
+# L0-B core-foundation crates (ADR-222 D1 + ADR-309 W4-1: nexus-compute extracted
+# from nexus-core; machine layer 1, sub-layer 0B).
+L0B = ("nexus-compute", "nexus-core", "event-bus", "nexus-telemetry")
+
+# Below this many L0-B crates the roster is presumed blind/miswired, not clean.
+# Deliberately a floor, not an exact size: ADR-309 (2026-11-15) grew L0-B from 3
+# to 4, and later waves may grow it again -- same philosophy as CRATE_FLOOR in
+# check_l0_sublayer.py.
+ROSTER_FLOOR = 3
 EDGE_FLOOR = 5
 
 
@@ -142,9 +150,9 @@ def parse_ledger(path, l0b):
 
 def judge(crates_root, ledger_path, internal, l0b=L0B, edge_floor=EDGE_FLOOR):
     """(rc, report) over the live tree or a fixture tree."""
-    if len(l0b) != 3:
-        return 2, ["[UNDECIDABLE] L0-B roster must be exactly three crates, got %d"
-                   % len(l0b)]
+    if len(l0b) < ROSTER_FLOOR:
+        return 2, ["[UNDECIDABLE] L0-B roster below floor %d, got %d"
+                   % (ROSTER_FLOOR, len(l0b))]
     try:
         actual, seen = collect_edges(crates_root, l0b, internal)
         ledger = parse_ledger(ledger_path, l0b)

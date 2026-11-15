@@ -7,7 +7,7 @@
 > **生成方式**: 8 位资深专家虚拟团队分布式源码深度分析 + 实证验证(Cargo.toml 比对 + `cargo check --workspace` 全 members 全绿)
 > **专家签名**: E01 首席架构师 · E02 安全架构师 · E03 记忆系统专家 · E04 路由算法专家 · E05 生产系统专家 · E06 认知科学专家 · E07 任务调度专家 · E08 前端交互专家
 > **三方一致性** (2026-10-02 复核；**crate 数部分已被 ADR-222（2026-10-20）取代：现取 46 members，本行旧值不得当现势引用；行 9 末尾有现行指针**): `Cargo.toml` workspace.package.version = `2.29.0-omega`(代码实况,**39 members**;原 43 - auto-dpo/model-router + router-traits,再经 ADR-193 两批次整并 `router-traits` 退役与 `lsct-tiering` 并入 `cmt-tiering`) ⇔ `CHANGELOG.md` 最新条目 = `[2.29.0-omega] 2026-09-27 发布` ⇔ 本文档 = **39 crates(30 生产可达 + 9 GATED + 0 冻结孤岛;2026-10-02 棘轮实测 `reachable=30 frozen=0 new_gaps=0`;历史:M13 decb/scc 重路由 11→9,M12 三岛链 14→11,P0-P3 批次剩余孤岛经 r2_island_repayment feature 全部偿还)· 156 NexusEvent 变体(types.rs单表;分布 22/11/123,三层锁同步（ADR-290 R9 后现取;旧分布 20/11/123 为 ADR-223 D2 时点）;event\_types.rs 镜像已退役)· 测试规模不登记动态 passed(时点链 11587 = 2026-09-02 全量重测,出处 `docs/reports/redundancy-R9-disposition_2026-09-02.md`;→ 11794 = 2026-09-17 M13 提交态全量回归实测终值,回写提交 `d3840ba`;架构减法/三层锁变更后待重测,两值均不得当现势;静态两尺 11232 strict / 11276 loose = 2026-09-22 现取,旧"差值 = doctest + 宏展开"解释已被否证,见 `docs/reports/DOC-AUDIT-FACTS_2026-09-20.md §24`)**
-> **三方一致性・crate 数现行值（2026-10-20 现取）**：`workspace.members` = **46**（上一行 39 为 2026-10-02 时点快照）——ADR-222 拆 `nexus-contracts` 为 1+6 + 新建 `nexus-telemetry`；事件面 **152 变体 / 三层锁 20-11-120 未变**（本波 = ADR-222；ADR-223 D2 后现为 **154 / 20-11-123**，现行见行 4），本波零 `NexusEvent` 改动（G-117/118 对拍 rc=0）。可达性口径仍以 `scripts/check_crate_reachability.sh` 实时输出为准（拆 crate 后未重测，见报告 §7 R8-3）。
+> **三方一致性・crate 数现行值（2026-11-15 现取）**：`workspace.members` = **47**（46 为 ADR-222 时点值，39 为 2026-10-02 时点快照）——ADR-222 拆 `nexus-contracts` 为 1+6 + 新建 `nexus-telemetry`；**ADR-309（2026-11-15 W4-1）新建 `nexus-compute`**（`nexus-core/src/compute/` 迁出，nexus-core 留 shim）；事件面 **152 变体 / 三层锁 20-11-120 未变**（本波 = ADR-222；ADR-223 D2 后现为 **154 / 20-11-123**，现行见行 4），本波零 `NexusEvent` 改动（G-117/118 对拍 rc=0）。可达性口径仍以 `scripts/check_crate_reachability.sh` 实时输出为准（拆 crate 后未重测，见报告 §7 R8-3）。
 > **基线变更触发**: 任何 workspace.member / NexusEvent 变体 / `#[test]` 函数增删必须同步更新本文档的"§1.1 身份标识"与"§3 Crate 索引",并触发 `scripts/check_doc_consistency.ps1` 巡检
 
 ***
@@ -99,7 +99,7 @@
 
 ### 2.1 分层映射 (L1→L10)
 
-> **ADR-222 (2026-10-20 追加)**：crate 数现为 **46 crates**（+ L0-B `nexus-telemetry`，+ L0-A 6 个 sibling 契约 crate：core / sparse / safety / seams / mca / memory）；L0 = L0-A（0A 纯契约，7 crate）+ L0-B（0B 核心基础面，3 crate），机器层号 0/1 不重排。下文历史段落的 39 为 2026-10-11 前时点值，保留留痕。
+> **ADR-222 (2026-10-20 追加)**：crate 数曾为 **46 crates**（+ L0-B `nexus-telemetry`，+ L0-A 6 个 sibling 契约 crate：core / sparse / safety / seams / mca / memory）；**ADR-309 (2026-11-15 W4-1) 追加**：+ L0-B `nexus-compute`，现值以 `Cargo.toml` workspace.members 现取 **47**。L0 = L0-A（0A 纯契约，7 crate）+ L0-B（0B 核心基础面，4 crate——ADR-309 起为 nexus-core/event-bus/nexus-telemetry/nexus-compute），机器层号 0/1 不重排。下文历史段落的 39 为 2026-10-11 前时点值，保留留痕。
 
 ```
 L0   Contracts ── nexus-contracts · nexus-contracts-core · nexus-contracts-sparse · nexus-contracts-safety · nexus-contracts-seams · nexus-contracts-mca · nexus-contracts-memory [ADR-033 纯类型零依赖契约层；ADR-222：L0 = L0-A(0A) + L0-B(0B)，机器层号 0/1 不重排；D2: core_domain 已拆为 sibling]
@@ -112,7 +112,7 @@ L5   Knowledge ── repo-wiki · gsoe-evolution
 L4   Security ─── seccore · qeep-protocol · decay-engine
 L3   Storage ──── scc-cache · cmt-tiering · session-store [ADR-141 append-only 会话事件流]
 L2   Memory ───── nmc-encoder · hcw-window · mlc-engine
-L1   Core ─────── nexus-core · event-bus · nexus-telemetry [ADR-222：L0-B 核心基础面]
+L1   Core ─────── nexus-core · event-bus · nexus-telemetry · nexus-compute [ADR-222：L0-B 核心基础面；ADR-309：compute/ 迁出为 nexus-compute]
 ```
 
 > **本层图与依赖门之间的历史分歧（2026-09-22 逐层对拍登记；2026-09-24 已按 ADR-189 收口为 L10，以下保留登记时的原状描述）**：`csn-substitutor` 在本文档 §2.1 与 §3.11、目录树、E08 专家映射
@@ -173,7 +173,7 @@ L1   Core ─────── nexus-core · event-bus · nexus-telemetry [ADR-
 > **MCA M0 变更**: 37 → 38 crate,新增 L10 `mca-gateway` (ADR-065)。
 > **v2.28.0-omega 变更**: 38 → 43 crate,新增 L10 `nexus-app-server`(WI-01)、L3 `session-store`(ADR-141)、L9 `mas-sched`(ADR-145)、L9 `nexus-hook`(ADR-146)、L7 `nexus-subagent`(ADR-148)。
 > **ADR-193 架构减法**: 43 → 41 → 39（批次 A 物理删除 `auto-dpo`/`model-router`；其后整 crate 退役 `router-traits`、`lsct-tiering` 整并入 `cmt-tiering`）。被删实体唯一登记表见 §3.12。
-> **ADR-222 边界重裁变更（2026-10-20）**: 39 → **46 crate**，新增 **1 个 L0-B crate** `nexus-telemetry`（计算面遥测纯判定 + `SaturationSource` 契约 + 上报编排，从 `nexus-core/compute/telemetry.rs` 抽出）与 **6 个 L0-A sibling 契约 crate** `nexus-contracts-{core,sparse,safety,seams,mca,memory}`（umbrella 作 facade 重导出，两条旧路径逐字不变）。**层号 0/1 不重排**：L0-A/L0-B 是层名亚层，机器判据仍由 `layer_of()` + 新 `sublayer_of()` 双源给出（G-125/G-126）；本节 §3.0 列 L0-A 七 crate，§3.1 列 L0-B 三 crate（其中 `nexus-telemetry` 机器层号为 1）。
+> **ADR-222 边界重裁变更（2026-10-20）**: 39 → **46 crate**，新增 **1 个 L0-B crate** `nexus-telemetry`（计算面遥测纯判定 + `SaturationSource` 契约 + 上报编排，从 `nexus-core/compute/telemetry.rs` 抽出）与 **6 个 L0-A sibling 契约 crate** `nexus-contracts-{core,sparse,safety,seams,mca,memory}`（umbrella 作 facade 重导出，两条旧路径逐字不变）。**ADR-309 边界变更（2026-11-15，W4-1）**: 46 → **47 crate**，新增 **1 个 L0-B crate** `nexus-compute`（`nexus-core/src/compute/` 整体迁出，nexus-core 保留 `pub mod compute` shim 一个版本窗，旧路径与类型同一性编译期锁定，消费方零 diff）。**层号 0/1 不重排**：L0-A/L0-B 是层名亚层，机器判据仍由 `layer_of()` + 新 `sublayer_of()` 双源给出（G-125/G-126）；本节 §3.0 列 L0-A 七 crate，§3.1 列 L0-B 四 crate（ADR-309 起；其中 `nexus-telemetry`/`nexus-compute` 机器层号为 1）。
 > **可达性现状（2026-10-25 棘轮现测）**: **46** crate = **38 生产可达 + 8 GATED + 0 冻结孤岛**（`scripts/check_crate_reachability.sh` 输出 `[R] workspace members: 46, production reachable from chimera-cli: 38, unreachable: 0` 与 `[OK] reachable=38 frozen=0 new_gaps=0`；时点值以脚本现取为准）。GATED（仅 `--features` 编译、不入默认二进制）名单 = `chtc-bridge` · `csn-substitutor` · `mca-gateway` · `mtpe-executor` · `nexus-hook` · `omega-learner` · `sesa-router` · `ssra-fusion`；其中 `nexus-hook` 是经 `crates/chimera-cli/Cargo.toml r2_island_repayment` 转为可达（freeze 清单 2026-09-20 `[ROTATE]` 留痕），故"冻结孤岛"这一类**已清零**，剩余 8 个是**有意 feature 门控**而非欠债。`mas-sched` 原在该 GATED 名单（41-member 时点 9 GATED），已于 2026-10-12 经 ADR-211 §7.1 翻生产边（组合根 `spawn_agent()` claim 准入接线，`dep_edge_freeze.txt:185` CONNECTED 留痕）退出 GATED。
 > **可达性历史标注(ADR-160 + ADR-177 + M10/M12/M13 批次)**: **M13 时点(2026-09-17)** 42 crate = 32 生产可达 + 9 冻结孤岛 + 1 GATED(mca-gateway;M13 批次 2026-09-17:decb-governor 经 efficiency-monitor 生产边转正(L9→L8 向下非内环,RuntimeAuditor 第 6 维 budget_discipline 消费 get_stats)+ scc-cache 经 chimera-cli 组合根转正(ADR-161 路径①,doctor 第 9 探针消费 stats()),冻结 11→9、可达 30→32,棘轮实测 reachable=32/frozen=9/new_gaps=0,消费者决策论证与 D1/D2 决策见 §3.11 M13 批次注记;M12 批次 2026-09-16:gea-activator/gqep-executor/qeep-protocol 三岛链经 wave 3c 接线全量转正——mas→gea 生产边(L9→L9)+ chimera-cli→gqep 生产边(L10→L7)+ qeep 传递转正(ADR-048 收编),冻结 14→11、可达 27→30,ADR-185;M10 批次 2026-09-16:acb-governor 退役删除 + lsct-tiering 转正,冻结 16→14;decb/scc-cache M10 经 parliament/hcw-window 转正被依赖铁律驳回后于 M13 按重路由候选偿还);孤岛完整清单(含阻塞依赖/解除条件)集中见本节末尾 **§3.11 冻结孤岛清单**,权威源为 `scripts/crate_reachability_freeze.txt`(由 `scripts/check_crate_reachability.sh` 生成,dev-dep 不计入装配面)。
 
@@ -185,12 +185,12 @@ L1   Core ─────── nexus-core · event-bus · nexus-telemetry [ADR-
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **架构层** | L0 Contracts |
 | **核心职责** | 纯类型 + **受控纯逻辑** + 零外部业务依赖契约层（口径出处：`ADR-033` 追加节 2026-10-09——旧口径“零逻辑”已被量体证伪于 `harness_spec`（`validate` 143 行）与 `capability_token`（EWMA 灰度状态机），而 `vector.rs` 上仍成立；逐模块登记于 `nexus-contracts/src/lib.rs` 顶部例外表 1-5）;承载跨层共享的语义不变量类型(`OmniSparseMasks` / `HarnessSpec` / `TemporalMeta` / `NamespaceQuota` / `SelectorPolicy`,MCA M0 新增 `affinity` 模块:`ProviderId` / `CapabilitySet` / `ModelAffinitySpec`,ADR-065),P9 新增 `budget_tier` / `command_validation` / `domain` / `event_payload` 模块(`BudgetTier` / `Command` / `CommandPolicy` / `AttackType` / `ThinkingMode` / `MultimodalInput` / `UserIntent` / `Quest` / `Task` / `EventSeverity` / `TaskPriority` / `AgentStatus`,ADR-054 决策 3/6,P9-T3/T4/T7 上提/下沉),依赖铁律扩展为 `L(N) → L(0)` 恒允许；**ADR-215（2026-10-15）：56 个 pub 类型经 G-115 台账 `#[non_exhaustive]` 开档（open=56 / closed=171，D-23），零消费符号 12 项逐个裁决（D-24），档 2 收口** |
-| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-contracts/src/lib.rs) |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-contracts/src/lib.rs)（模块级 re-export 面 + `l0_surface!` 宏调用）；[facade_surface.rs](file:///d:/Chimera%20CLI/crates/nexus-contracts/src/facade_surface.rs)（L0-A 值级面单源声明宏，顶层 `pub use` 与 `prelude` 由同一份符号声明生成）；[faces.rs](file:///d:/Chimera%20CLI/crates/nexus-contracts/src/faces.rs)（L0-C 域导向聚合面 `domain`/`execution`/`governance`/`learning`，additive 便捷再导出，不改既有路径） |
 | **关键类型** | `OmniSparseMasks` · `HarnessSpec` · `TemporalMeta` · `NamespaceQuota` · `SelectorPolicy` · `BudgetTier` · `Command` · `CommandPolicy` · `AttackType` · `ThinkingMode` · `MultimodalInput` · `UserIntent` · `Quest` · `Task` · `EventSeverity` · `TaskPriority` · `AgentStatus` |
 | **关键函数** | 类型派生(`Serialize`/`Deserialize`/`Clone`/`Debug`/`PartialEq`);`util` 模块七个共享工具函数（**五个**为无副作用纯函数，另两个是测量旋钮）:`xts_top_k_by`(Top-K,O(n) `select_nth_unstable_by`)、`xts_top_k`(序元素 Top-K,同 O(n) 内核)、`sigmoid`、`percentile_sorted<T: Copy>`(已排序切片分位,O(1))、`cosine_similarity_slices`(逐位一致余弦相似度,供检索/分层评分复用)、`perf_scale` 与 `perf_scale_ms`(测量尺度因子,读 `CHIMERA_PERF_SCALE`,仅供基准放宽阈值)。**订正记录(2026-10-08 / v3.5 W6-2)**:本行原写“三个”仅列 `xts_top_k_by`/`sigmoid`/`percentile_sorted`,与 `crates/nexus-contracts/src/vector_math/util.rs` 现测 7 个 `pub fn` 不符(余 4 个为后续批次新增且未同步本文)。其中**五个**(`xts_top_k`/`xts_top_k_by`/`sigmoid`/`percentile_sorted`/`cosine_similarity_slices`)属 ADR-033"纯类型+受控纯逻辑"约束的**受控例外**(旧口径"零逻辑"已于 ADR-033 2026-10-09 追加节量体订正;与 `test_scale::scaled_timeout!` 同源),保持零分配/零 I/O/零全局状态;而 `perf_scale`/`perf_scale_ms` **不是纯函数**(每次调用读进程环境变量),其定位是测试/CI 侧阈值缩放,本体注释自陈"仅适用于测试/CI 路径;生产代码不得依赖本函数做业务决策",失败安全为非法值回退 1.0(不因旋钮写错而静默放松红线) |
 | **性能证据** | `benches/util_micro.rs`(criterion,含 `CountingAlloc` 零堆分配硬断言):`sigmoid scalar` 33.2 ns / `sigmoid map 1024` 33.73 µs / `percentile_sorted p95` 6.5 ns(n=100 与 n=10000 等价 → 实证 O(1));CI 门槛见 `bench_check.yml` |
 | **主要依赖** | **workspace 外部仅 `serde`**（无其他业务 crate）；**ADR-222 D2/D4 后本 umbrella 额外依赖 6 个 L0-A sibling**（`nexus-contracts-{core,sparse,safety,seams,mca,memory}`）作 facade 重导出，且**方向单向**（sibling 不得反向依赖 umbrella，否则即 crate 环）；旧口径「零 workspace 内部依赖」已随拆分订正（权威源 `crates/nexus-contracts/Cargo.toml`） |
-| **设计模式** | Pure Data · 零运行时 · 编译期契约 · **facade 重导出（ADR-222 D4）** |
+| **设计模式** | Pure Data · 零运行时 · 编译期契约 · **facade 重导出（ADR-222 D4）** · **值级面单源宏 `l0_surface!`（L0-A）** · **域聚合面 `faces`（L0-C）** |
 | **ADR 来源** | ADR-033 (L0 nexus-contracts) · ADR-212 (单 crate 边界 + G-99) · ADR-218 (受控逻辑量门 G-119) · **ADR-222** (1+6 拆分与 L0-A/L0-B 双层，部分 supersede ADR-212 D1/D2) |
 
 #### L0-A sibling 索引（ADR-222 D2；每个 sibling **保留原组目录**，所以消费方旧路径不变）
@@ -204,10 +204,22 @@ L1   Core ─────── nexus-core · event-bus · nexus-telemetry [ADR-
 | [nexus-contracts-mca](file:///d:/Chimera%20CLI/crates/nexus-contracts-mca) | `mca/` | 5 | `ProviderId`/`CapabilitySet`/`ModelAffinitySpec`/`OmniMessage`/`PriceVector`（ADR-065 族） | 无 |
 | [nexus-contracts-memory](file:///d:/Chimera%20CLI/crates/nexus-contracts-memory) | `memory/` | 8 | Ω₁₀ 经验卡片 / `NamespaceQuota` / `TokenLedgerEntry` / 归档单调性 / 技能生命周期 | core + mca + seams |
 
-> 分区依据是实测组间依赖 DAG（**量纲订正 2026-10-20**：拆分新增的**跨 crate 边 = 11 条**，与 `scripts/dep_edge_freeze.txt` 本波登记的 11 行同集；crate 级 L0 内部边现取 **14 条**（G-125 自报，含 L0-B 的 `nexus-core->event-bus` 等）；模块级展开边另见 `docs/reports/L0-boundary-readjudication_2026-10-19.md` §5.2——该报告原标「实测 15 条边」无可复现口径，已在 §5.2 标题就地订正）；上述七个 crate 的生产依赖白名单恒为 `{serde, chrono, uuid, thiserror}` + 已拆出的 sibling（G-99），方向铁律由 G-125 守护（L0-A 不得指向 L0-B）。
+> 分区依据是实测组间依赖 DAG（**量纲订正 2026-10-20**：拆分新增的**跨 crate 边 = 11 条**，与 `scripts/dep_edge_freeze.txt` 本波登记的 11 行同集；crate 级 L0 内部边现取 **17 条**（G-125 自报 2026-11-15：ADR-309 新增 `nexus-core->nexus-compute`、`nexus-compute->event-bus`、`nexus-compute->nexus-telemetry` 三条，14→17；含 L0-B 的 `nexus-core->event-bus` 等）；模块级展开边另见 `docs/reports/L0-boundary-readjudication_2026-10-19.md` §5.2——该报告原标「实测 15 条边」无可复现口径，已在 §5.2 标题就地订正）；上述七个 crate 的生产依赖白名单恒为 `{serde, chrono, uuid, thiserror}` + 已拆出的 sibling（G-99），方向铁律由 G-125 守护（L0-A 不得指向 L0-B）。
 > **本索引不洗白一件事**：六个 sibling 的装配面多为“仅被 umbrella 消费”（CONSUMERS=1~2，见 `docs/architecture/views/layer_contracts.txt`），这是拆分的已知代价而不是收益，登记于 ADR-222 §3 与报告待裁 R8-3。
 
-### 3.1 L1 Core (3 crates)
+### 3.1 L1 Core (4 crates)
+
+#### [nexus-compute](file:///d:/Chimera%20CLI/crates/nexus-compute)（ADR-309，2026-11-15）
+
+| 项 | 说明 |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **架构层** | L1 Core（**机器层号 1**）—— ADR-222 D1 层名为 **L0-B 核心基础面**；ADR-309（W4-1）自 `nexus-core/src/compute/` 整体迁出（`git mv`，9 源文件，模块声明零变化），L0-B 第四成员 |
+| **核心职责** | CPU 卸载计算面：`ComputeBridge`（L-a 全局 rayon 池 + L-f 三态路由）· HTS 动态阈值表 + 序贯检验 + cgroup 校正 · DetReduce 双模式归约 · Clock/Rng/Fs/Net 缝合点（Ω₇）· CPU 利用率双探针 · `ComputeTelemetry` 遥测适配器（实现 `nexus-telemetry::SaturationSource`）· 按 TaskKind 归因计数器 · 阈值校准闭环（ADR-198） |
+| **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-compute/src/lib.rs) · [bridge.rs](file:///d:/Chimera%20CLI/crates/nexus-compute/src/bridge.rs) · [hts.rs](file:///d:/Chimera%20CLI/crates/nexus-compute/src/hts.rs) · [reduce.rs](file:///d:/Chimera%20CLI/crates/nexus-compute/src/reduce.rs) · [seam.rs](file:///d:/Chimera%20CLI/crates/nexus-compute/src/seam.rs) · [utilization.rs](file:///d:/Chimera%20CLI/crates/nexus-compute/src/utilization.rs) · [telemetry.rs](file:///d:/Chimera%20CLI/crates/nexus-compute/src/telemetry.rs) |
+| **关键类型** | `ComputeBridge` · `ComputeError` · `DispatchPlan`/`TaskKind` · `HtsTable`/`ThresholdSource`/`SequentialTest` · `ReduceMode` · `UtilizationSampler`/`RayonProbe`/`TokioProbe` · `KindCounters`/`KindStat` · `CalibrationMode` |
+| **主要依赖** | event-bus · nexus-telemetry · arc-swap · rand · rayon · thiserror · tokio · tracing（**不依赖 `nexus-core`**——反向即 crate 环；消费面经 `nexus-core` 的 `pub mod compute { pub use nexus_compute::*; }` shim 一个版本窗，类型同一性由 `crates/nexus-core/tests/compute_shim.rs` 编译期锁定） |
+| **设计模式** | 依赖倒置消费者（`SaturationSource` 端口在 `nexus-telemetry`，适配器在本 crate）· bench 三件套随迁（`bridge_bench`/`hts_bench`/`reduce_bench`，`reduce_bench` 保持 registered 四联同步） |
+| **ADR 来源** | ADR-102/103/106（DetReduce/HTS）· ADR-196/197/198（计算面治理与饱和观测）· **ADR-309**（compute/ 迁出为独立 crate） |
 
 #### [nexus-core](file:///d:/Chimera%20CLI/crates/nexus-core)
 
@@ -239,10 +251,10 @@ L1   Core ─────── nexus-core · event-bus · nexus-telemetry [ADR-
 | **架构层** | L1 Core（**机器层号 1**）—— ADR-222 D1 层名为 **L0-B 核心基础面**（层名与层号分离，0/1 不重排） |
 | **核心职责** | 计算面饱和观测的**纯判定 + 契约 + 上报编排**：`SaturationMode` 三态处置策略（Observe/Degrade/Strict）、bp 阈值解析与 fail-safe 回退、`report_needed` 去抖判定、`SaturationSource` 依赖倒置契约、`reporter_tick`/`spawn_saturation_reporter` 周期驱动。从 `nexus-core/src/compute/telemetry.rs` 抽出（ADR-197 Phase A 的可观测闭环，ADR-222 D3 只改落点不改语义） |
 | **关键文件** | [lib.rs](file:///d:/Chimera%20CLI/crates/nexus-telemetry/src/lib.rs) · [mode.rs](file:///d:/Chimera%20CLI/crates/nexus-telemetry/src/mode.rs) · [threshold.rs](file:///d:/Chimera%20CLI/crates/nexus-telemetry/src/threshold.rs) · [source.rs](file:///d:/Chimera%20CLI/crates/nexus-telemetry/src/source.rs) · [report.rs](file:///d:/Chimera%20CLI/crates/nexus-telemetry/src/report.rs) · [tests/contract.rs](file:///d:/Chimera%20CLI/crates/nexus-telemetry/tests/contract.rs) |
-| **关键类型** | `SaturationMode` · `SaturationSource`（trait，对象安全，由 L0-B 的 `nexus-core` 实现） · `CalibrationEvidence`（纯 DTO，枚举字段字符串化以免 crate 环） · `TickReport` |
+| **关键类型** | `SaturationMode` · `SaturationSource`（trait，对象安全，由 L0-B 的 `nexus-compute` 实现——ADR-309 随迁，原 `nexus-core` 实现体已随 compute/ 迁出） · `CalibrationEvidence`（纯 DTO，枚举字段字符串化以免 crate 环） · `TickReport` |
 | **关键函数** | `saturation_ratio_bp`（u64 大数百分比经 f64 中间值，项目红线）、`parse_saturation_mode`、`parse_threshold_bp`、`threshold_bp`/`saturation_mode`（env 一次性读取）、`report_needed`、`clamped_period`（周期下界 1s）、`reporter_tick`、`spawn_saturation_reporter(bus, period_secs, Arc<dyn SaturationSource>)` |
 | **主要依赖** | event-bus · tokio · tracing（**三件，不依赖 `nexus-core`**——反向即 crate 环，由 G-125 `[PURITY-LEAK]` 拦；也不依赖 `nexus-contracts`，抽取代码不引用任何 L0 类型，按字面加声明会撞 G-31「声明未用即红」） |
-| **设计模式** | 依赖倒置（端口在 L0-B、适配与有状态实体在 `nexus-core`） · facade 薄包装（旧签名 `spawn_saturation_reporter(bus, secs)` 保留 ⇒ 3 处装配点零改动） |
+| **设计模式** | 依赖倒置（端口在 L0-B、适配与有状态实体自 ADR-309 起在 `nexus-compute`） · facade 薄包装（旧签名 `spawn_saturation_reporter(bus, secs)` 保留 ⇒ 3 处装配点零改动） |
 | **测试面** | 13 测：6 单元（纯函数表驱动）+ 7 集成契约测（外部视角：`clamped_period(0)→1s`、`reporter_tick` 三阶段各调一次且顺序为 sample→flush→evidence、`TickReport` 透传、周期任务真驱动 tick） |
 | **ADR 来源** | ADR-197（双口径饱和事件）· ADR-198（B1 校准写表）· **ADR-222 D3**（上提为 L0-B 并抽契约） |
 

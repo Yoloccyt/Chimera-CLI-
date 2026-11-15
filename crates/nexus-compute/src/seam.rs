@@ -1,0 +1,446 @@
+//! 缝合点 — Clock / Rng / Fs / Net 四个可注入接口（手册 §10.8,Ω₇ 可测试性的根基）
+//!
+//! 对应架构层:L1 Core
+//!
+//! # 设计动机（Ω₇ 测试性）
+//! 业务逻辑**禁止直调** `SystemTime::now()` / `thread_rng()` / `std::fs` / 网络（§11.6 禁令）,
+//! 否则单测无法注入确定性时钟与种子。经本模块 trait 注入后:
+//! - 生产路径: `SystemClock` / `ChaCha8Rng` / `OsFs`(真实磁盘 IO) / 网络后端(骨架不实现)
+//! - 测试路径: `FixedClock` / `SeedableRng(42)` / `MemFs` / `MockNet`
+//!
+//! # 本任务边界（T8）
+//! 只建 trait 与测试实现,**不要求任何生产代码改用它**;
+//! T14(WI-34)已落地且未消费本模块——接线触发条件=首个需注入的生产热点(W4-2 诚实化登记)。
+
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::Instant;
+
+use rand::rngs::StdRng;
+// WHY RngCore 而非 Rng: next_u64 的实际提供 trait 为 RngCore(rand 0.8 中
+// Rng 仅委托),且本模块自有 trait 名恰为 Rng,避免同名导入冲突
+use rand::{RngCore, SeedableRng};
+use thiserror::Error;
+
+/// 缝合点错误 — 最小抽象,“后端刻意不实现”与“真实 IO 失败”共用同一出口
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum SeamError {
+    /// 后端刻意不实现（如 `MockNet::post`）——调用方不得把“不实现”当成功
+    #[error("seam backend not implemented: {0}")]
+    Unsupported(&'static str),
+    /// 真实 IO 失败 —— `OsFs` 的唯一错误出口。
+    ///
+    /// WHY 带路径:`std::io::Error` 的 Display 不含路径（如 "The system cannot find
+    /// the file specified"）,只报错误文本会让人无法判断是哪条路径失败。
+    /// WHY 不用 Copy:路径是堆上字符串,为保住“错到哪条路径”这一信息而放弃
+    /// `Copy` 是有意取舍（ADR-223 D4;本枚举仅在 `nexus-core` 内使用）。
+    #[error("seam io failure: {0}")]
+    Io(String),
+}
+
+/// 时间缝合点 — 生产 `SystemClock`,测试 `FixedClock`
+pub trait Clock: Send + Sync {
+    /// 当前时间 — 骨架阶段返回单调时钟（T14 后升级为可配置时间源）
+    fn now(&self) -> Instant;
+}
+
+/// 随机数缝合点 — 生产 `ChaCha8Rng`,测试 `SeedableRng(42)`
+///
+/// WHY `&self` 签名:缝合点需 `Send + Sync`（跨线程注入）,
+/// 实现侧用内部可变性（`Mutex<StdRng>`）承载状态。
+pub trait Rng: Send + Sync {
+    /// 下一 u64 — 与 rand 的 `Rng::next_u64` 同名不同 trait,注意导入区分
+    fn next_u64(&self) -> u64;
+}
+
+/// 文件系统缝合点 — 生产 `OsFs`（真实磁盘 IO）,测试 `MemFs`
+///
+/// 最小抽象:read / write / list 三个操作,足够覆盖存储类热点的可测试需求;
+/// 生产后端已实装（ADR-223 D4 清偿 R8-8 的占位债）。
+///
+/// ⚠ 本 trait 是**同步**接口（刻意不加 async,以保持在 `Send + Sync` 对象里可用）:
+/// 异步调用方必须把 `OsFs` 的调用包进 `tokio::task::spawn_blocking`,否则违反
+/// “阻塞 IO 禁入计算线程池”红线（与 rusqlite 同一条纪律，§4.4 反模式 2）。
+pub trait Fs: Send + Sync {
+    /// 读取文件全部字节
+    fn read(&self, path: &Path) -> Result<Vec<u8>, SeamError>;
+    /// 写入文件全部字节（覆盖语义;不隐式建父目录）
+    fn write(&self, path: &Path, data: &[u8]) -> Result<(), SeamError>;
+    /// 列目录（非递归,返回排序后的条目路径）
+    fn list(&self, dir: &Path) -> Result<Vec<PathBuf>, SeamError>;
+}
+
+/// 网络缝合点 — 生产后端骨架不实现（任务边界）,测试 `MockNet`
+///
+/// 最小抽象:HTTP GET / POST;生产后端（reqwest 等）未接线（T14 已落地未消费,W4-2 登记）,
+/// 且 **LLM 调用类任务禁止进 rayon 池**（红线,§7.5.3 纪律⑥）。
+pub trait Net: Send + Sync {
+    /// HTTP GET — 返回响应体字节
+    fn get(&self, url: &str) -> Result<Vec<u8>, SeamError>;
+    /// HTTP POST — 返回响应体字节
+    fn post(&self, url: &str, body: &[u8]) -> Result<Vec<u8>, SeamError>;
+}
+
+/// 生产时钟 — `Instant::now()`（单调,不受系统时间回拨影响,§14.2 场景 9）
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+}
+
+/// 生产随机源 — 命名对齐手册 §10.8（`ChaCha8Rng`）;内部为 `rand::rngs::StdRng`
+///
+/// WHY StdRng 而非 rand_chacha:`rand_chacha` 未在 workspace 声明（Ω₆ 最小依赖）,
+/// 且 `rand` 0.8 自带 `StdRng`（ChaCha12 流密码,`SeedableRng` 确定性语义同 ChaCha8:
+/// 同种子必同序列,满足 Ω₂）。如需精确 ChaCha8 算法,T9 引入 rand_chacha 后
+/// 仅替换内部实现,接口不变。此缝合点用途:确定性随机注入（Ω₇ + Ω₂）。
+pub struct ChaCha8Rng {
+    /// 内部状态 — Mutex 承载 `&self` + Sync 语义（缝合点跨线程注入）
+    inner: Mutex<StdRng>,
+}
+
+impl ChaCha8Rng {
+    /// 以显式种子构造（Ω₂ 确定性:相同输入相同输出）
+    #[must_use]
+    pub fn new(seed: u64) -> Self {
+        Self {
+            inner: Mutex::new(StdRng::seed_from_u64(seed)),
+        }
+    }
+}
+
+impl Rng for ChaCha8Rng {
+    fn next_u64(&self) -> u64 {
+        // 单线程注入场景锁竞争可忽略;unwrap_or_else 防御 poison(本模块无 panic 路径)
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .next_u64()
+    }
+}
+
+/// 生产文件系统 — 真实磁盘 IO（`std::fs`）
+///
+/// WHY 不再是占位:ADR-223 D4 清偿 R8-8——占位的价值是“fail-closed 防假读写”,
+/// 但 T14/WI-34 之后这条缝合点无任何生产调用方,占位只会把它长期算作 WIP 债;
+/// 实装后三个操作均可用,错误一律 [`SeamError::Io`] 且文案带路径。
+pub struct OsFs;
+
+/// IO 错误统一出口 — 把路径编入文案（std 的 Display 不带路径）
+fn io_error(path: &Path, err: std::io::Error) -> SeamError {
+    SeamError::Io(format!("{}: {}", path.display(), err))
+}
+
+impl Fs for OsFs {
+    fn read(&self, path: &Path) -> Result<Vec<u8>, SeamError> {
+        std::fs::read(path).map_err(|err| io_error(path, err))
+    }
+
+    fn write(&self, path: &Path, data: &[u8]) -> Result<(), SeamError> {
+        // WHY 不隐式建父目录:write 的语义是“覆盖写入已存在的路径”,静默 mkdir 会把
+        // 路径拼错的调用方失败伪装成成功（与“unwrap_or 静默失真”同族的假成功）。
+        std::fs::write(path, data).map_err(|err| io_error(path, err))
+    }
+
+    fn list(&self, dir: &Path) -> Result<Vec<PathBuf>, SeamError> {
+        let mut out = Vec::new();
+        for entry in std::fs::read_dir(dir).map_err(|err| io_error(dir, err))? {
+            let entry = entry.map_err(|err| io_error(dir, err))?;
+            out.push(entry.path());
+        }
+        // WHY 排序:`read_dir` 顺序由文件系统决定,不排序会让“列表内容”类断言
+        // 成为平台/文件系统相关的 flaky 来源。
+        out.sort();
+        Ok(out)
+    }
+}
+
+/// 测试时钟 — 返回固定 `Instant`（构造时快照）,确定性测试注入
+pub struct FixedClock {
+    /// 固定时间点
+    fixed: Instant,
+}
+
+impl FixedClock {
+    /// 以当前时刻快照构造 — 单测内两次读取恒等
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            fixed: Instant::now(),
+        }
+    }
+}
+
+impl Clock for FixedClock {
+    fn now(&self) -> Instant {
+        self.fixed
+    }
+}
+
+impl Default for FixedClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// 测试随机源 — 固定种子 42（手册 §10.8）;同种子必同序列（Ω₂）
+pub struct SeedRng42 {
+    /// 内部 ChaCha8Rng 实现,种子 42
+    inner: ChaCha8Rng,
+}
+
+impl SeedRng42 {
+    /// 构造 — 种子固定 42,测试可复现
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            inner: ChaCha8Rng::new(42),
+        }
+    }
+}
+
+impl Default for SeedRng42 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Rng for SeedRng42 {
+    fn next_u64(&self) -> u64 {
+        self.inner.next_u64()
+    }
+}
+
+/// 测试文件系统 — 内存 HashMap 后端（确定性,无真实磁盘）
+pub struct MemFs {
+    /// 路径 → 内容;`Mutex` 承载 `&self` + Sync
+    map: Mutex<std::collections::HashMap<PathBuf, Vec<u8>>>,
+}
+
+impl MemFs {
+    /// 构造空内存文件系统
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            map: Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+}
+
+impl Default for MemFs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Fs for MemFs {
+    fn read(&self, path: &Path) -> Result<Vec<u8>, SeamError> {
+        let map = self.map.lock().unwrap_or_else(|p| p.into_inner());
+        map.get(path)
+            .cloned()
+            .ok_or(SeamError::Unsupported("MemFs:path-not-found"))
+    }
+
+    fn write(&self, path: &Path, data: &[u8]) -> Result<(), SeamError> {
+        let mut map = self.map.lock().unwrap_or_else(|p| p.into_inner());
+        map.insert(path.to_path_buf(), data.to_vec());
+        Ok(())
+    }
+
+    fn list(&self, dir: &Path) -> Result<Vec<PathBuf>, SeamError> {
+        let map = self.map.lock().unwrap_or_else(|p| p.into_inner());
+        Ok(map.keys().filter(|p| p.starts_with(dir)).cloned().collect())
+    }
+}
+
+/// 测试网络 — 固定响应（URL → 响应体）;用于不变量测试的确定性注入
+pub struct MockNet {
+    /// URL → 响应体
+    responses: Mutex<std::collections::HashMap<String, Vec<u8>>>,
+}
+
+impl MockNet {
+    /// 构造空模拟网络
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            responses: Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// 注册固定响应 — URL 命中时返回该字节序列
+    pub fn stub_get(&self, url: &str, body: Vec<u8>) {
+        self.responses
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(url.to_owned(), body);
+    }
+}
+
+impl Net for MockNet {
+    fn get(&self, url: &str) -> Result<Vec<u8>, SeamError> {
+        let responses = self.responses.lock().unwrap_or_else(|p| p.into_inner());
+        responses
+            .get(url)
+            .cloned()
+            .ok_or(SeamError::Unsupported("MockNet:no-stub"))
+    }
+
+    fn post(&self, _url: &str, _body: &[u8]) -> Result<Vec<u8>, SeamError> {
+        // 骨架测试后端只模拟 GET;POST 语义 T14 接线
+        Err(SeamError::Unsupported("MockNet:post"))
+    }
+}
+
+impl Default for MockNet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
+mod tests {
+    use super::*;
+
+    /// FixedClock — 两次读取返回同一固定值
+    #[test]
+    fn fixed_clock_returns_constant() {
+        let clock = FixedClock::new();
+        let t1 = clock.now();
+        let t2 = clock.now();
+        assert_eq!(t1, t2, "FixedClock 必须返回固定时刻");
+        // 与 SystemClock 的推进性对照:固定时钟不随真实时间推进
+        let real = SystemClock.now();
+        let real_later = SystemClock.now();
+        assert!(real_later >= real, "SystemClock 单调不减");
+    }
+
+    /// SeedRng42 — 同种子同序列（Ω₂ 确定性）
+    #[test]
+    fn seed_rng_deterministic() {
+        let a = SeedRng42::new();
+        let b = SeedRng42::new();
+        for _ in 0..8 {
+            assert_eq!(a.next_u64(), b.next_u64(), "同种子必须同序列");
+        }
+    }
+
+    /// ChaCha8Rng — 同种子同序列;异种子序列不同
+    #[test]
+    fn chacha8_rng_seeded_determinism() {
+        let a = ChaCha8Rng::new(7);
+        let b = ChaCha8Rng::new(7);
+        let c = ChaCha8Rng::new(8);
+        let (mut seq_a, mut seq_b, mut seq_c) = (Vec::new(), Vec::new(), Vec::new());
+        for _ in 0..8 {
+            seq_a.push(a.next_u64());
+            seq_b.push(b.next_u64());
+            seq_c.push(c.next_u64());
+        }
+        assert_eq!(seq_a, seq_b, "同种子同序列");
+        assert_ne!(seq_a, seq_c, "异种子序列应不同");
+    }
+
+    /// OsFs — 真实磁盘 IO：写后读一致、list 排序、缺文件报错带路径、不隐式建父目录
+    #[test]
+    fn os_fs_roundtrip_list_and_errors() {
+        // 唯一临时目录（纳秒时间戳 + 进程号）：并行测试不得互相踩同一临时路径
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "chimera_seam_osfs_{}_{}",
+            stamp,
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("临时目录应可创建");
+
+        let file = dir.join("a.bin");
+        OsFs.write(&file, b"hello").expect("写入已存在目录应成功");
+        assert_eq!(OsFs.read(&file).expect("读回应成功"), b"hello".to_vec());
+
+        std::fs::create_dir_all(dir.join("sub")).expect("子目录应可创建");
+        let names: Vec<String> = OsFs
+            .list(&dir)
+            .expect("list 应成功")
+            .iter()
+            .map(|p| {
+                p.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(
+            names,
+            vec!["a.bin".to_string(), "sub".to_string()],
+            "list 必须排序返回（read_dir 原始顺序由文件系统决定）"
+        );
+
+        // 缺失文件：错误必须是 Io 且文案含路径（不带路径的报错无法定位）
+        let missing = dir.join("nope.bin");
+        let err = OsFs.read(&missing).expect_err("缺失文件必须失败");
+        assert!(matches!(err, SeamError::Io(_)), "错误形态应为 Io: {err}");
+        assert!(
+            err.to_string().contains("nope.bin"),
+            "错误文案应含路径: {err}"
+        );
+
+        // 不隐式建父目录：路径拼错必须显式失败，而不是伪装成成功
+        let bad_parent = dir.join("absent").join("x.bin");
+        assert!(
+            matches!(OsFs.write(&bad_parent, b"x"), Err(SeamError::Io(_))),
+            "write 不得静默创建父目录"
+        );
+
+        std::fs::remove_dir_all(&dir).expect("清理临时目录");
+    }
+
+    /// MemFs — 写后读一致,list 前缀过滤
+    #[test]
+    fn mem_fs_roundtrip_and_list() {
+        let fs = MemFs::new();
+        fs.write(Path::new("/a/b.txt"), b"hello")
+            .expect("MemFs 写入应成功");
+        fs.write(Path::new("/a/c.txt"), b"world")
+            .expect("MemFs 写入应成功");
+        assert_eq!(
+            fs.read(Path::new("/a/b.txt")).expect("读取应成功"),
+            b"hello"
+        );
+        let listed = fs.list(Path::new("/a")).expect("list 应成功");
+        assert_eq!(listed.len(), 2);
+        assert!(listed.contains(&PathBuf::from("/a/b.txt")));
+        assert!(listed.contains(&PathBuf::from("/a/c.txt")));
+    }
+
+    /// MockNet — stub 命中返回固定响应;未注册 URL 报错
+    #[test]
+    fn mock_net_stub_hit_and_miss() {
+        let net = MockNet::new();
+        net.stub_get("http://test.local/a", vec![1, 2, 3]);
+        assert_eq!(
+            net.get("http://test.local/a").expect("stub 应命中"),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            net.get("http://test.local/miss"),
+            Err(SeamError::Unsupported("MockNet:no-stub"))
+        );
+    }
+
+    /// SeamError Display — Unsupported 含后端名，Io 含路径
+    #[test]
+    fn seam_error_display() {
+        assert!(SeamError::Unsupported("MockNet:post")
+            .to_string()
+            .contains("MockNet:post"));
+        assert!(SeamError::Io("/tmp/x: boom".to_string())
+            .to_string()
+            .contains("/tmp/x"));
+    }
+}

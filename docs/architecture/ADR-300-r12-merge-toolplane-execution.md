@@ -42,8 +42,11 @@
 | 5 | `mcp_discovery_assembly` / `mcp_approval_surface` / `mcp_stdio::configured_env_reaches_the_child` | PATH 上的 `bash` 是 WSL 桩：不把任意 Windows env 带进 Linux 侧，且冷启动超 5s 请求超时 | 测试夹具解析真实 POSIX shell（`CHIMERA_TEST_SHELL` → Git Bash → `bash`），闸门按文件名放行；生产语义不变 |
 | 6 | `quest-engine` doctest E0765 + 两文件文档注释乱码 | T1 机械合流对 `quest-engine/src/lib.rs`、`chimera-cli/src/lib.rs` 做了 GBK 转码（有损） | 以主线版本重建文档面，保留合流新增声明（`config::{DagMode, QuestConfig}` 与 `db_open`/`llm`/`quest_exec`/`tool_plane`）；全库 mojibake 扫描 `suspects=0` |
 | 7 | doctest E0460 "possibly newer version of crate" | 并行 cargo 会话（全量回归 + 定点修复）在 `target/` 留下多份同 crate 不同 hash 的 rlib | `cargo clean -p chimera-mas -p repo-wiki` 后串行复跑 doctest；禁止在回归运行期并发 `cargo` |
+| 8 | 重建期 `mel_spec` 链接崩溃（`ld returned 5`） | Windows GNU `ld` 在可用物理内存 ~1 GB 时链接 46 MB cdylib 触发访问违例（0xC0000005 被 MSYS 截断为 5） | 内存回落后同一命令重试成功；`CARGO_INCREMENTAL=0` + `--jobs 1` 完成重建 |
 
-判据纪律（写入本 ADR）：合流后的全量回归必须**串行**执行；任何并行 cargo 会话造成的 E0460 不得当作代码缺陷，也不得用"重跑一次绿了"掩盖——必须记录为取数纪律。
+判据纪律（写入本 ADR）：
+1. 合流后的全量回归必须**串行**执行；任何并行 cargo 会话造成的 E0460 不得当作代码缺陷，也不得用"重跑一次绿了"掩盖——必须记录为取数纪律。
+2. 本机（15.2 GB RAM）在大链接期会触发 `ld` 访问违例；失败后先确认可用内存再重试，不得据此判定代码缺陷。
 
 
 

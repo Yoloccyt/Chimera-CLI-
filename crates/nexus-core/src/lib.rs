@@ -1,8 +1,8 @@
 //! CRATE-CONTRACT BEGIN
 //! LAYER:    L1
 //! ROLE:     核心状态与领域类型 — 维护 NexusState、UserIntent、CLV 等全局领域模型
-//! BACKEND:  fs
-//! PRODUCERS: 2 ClvSnapshotReported,ComputePoolSaturated
+//! BACKEND:  memory
+//! PRODUCERS: 1 ClvSnapshotReported
 //! CONSUMERS: 23 chimera-cli,chimera-mas,chimera-tui,chtc-bridge,cmt-tiering…
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
@@ -44,9 +44,15 @@
 #![warn(missing_docs, clippy::all)]
 
 pub mod clv;
-// P1-T8: CPU 卸载统一入口(ComputeBridge L-a 全局 rayon 池 + L-f 三态路由 + Ω₇ 缝合点,
-// 手册 §8.3/§8.4/§10.8/§11.1,Phase 1 地基波次关键路径,T9/T14 依赖本模块)
-pub mod compute;
+/// ADR-309 (W4-1): CPU 卸载统一入口(ComputeBridge L-a 全局 rayon 池 + L-f 三态路由 +
+/// Ω₇ 缝合点,手册 §8.3/§8.4/§10.8/§11.1,Phase 1 地基波次关键路径,T9/T14 依赖本模块)
+/// 实现已迁出为独立 crate `nexus-compute`（L0-B，机器层号 1）；本模块为兼容 shim ——
+/// `nexus_core::compute::*` 旧路径（含 `compute::bridge` 等子模块路径，经 glob 再导出
+/// 可达）一个版本窗内继续可用，类型同一性由 tests/compute_shim.rs 编译期锁定。
+/// 消费方迁移完成后删本 shim（独立小批）。
+pub mod compute {
+    pub use nexus_compute::*;
+}
 pub mod config;
 pub mod decay;
 pub mod error;

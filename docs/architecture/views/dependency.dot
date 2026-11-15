@@ -39,6 +39,7 @@ digraph chimera {
   "mlc-engine" [label="mlc-engine\nL2"];
   "nmc-encoder" [label="nmc-encoder\nL2"];
   "event-bus" [label="event-bus\nL1"];
+  "nexus-compute" [label="nexus-compute\nL1"];
   "nexus-core" [label="nexus-core\nL1"];
   "nexus-telemetry" [label="nexus-telemetry\nL1"];
   "nexus-contracts" [label="nexus-contracts\nL0"];
@@ -147,6 +148,8 @@ digraph chimera {
   "nexus-app-server" -> "nexus-subagent";
   "nexus-app-server" -> "quest-engine";
   "nexus-app-server" -> "session-store";
+  "nexus-compute" -> "event-bus";
+  "nexus-compute" -> "nexus-telemetry";
   "nexus-contracts" -> "nexus-contracts-core";
   "nexus-contracts" -> "nexus-contracts-mca";
   "nexus-contracts" -> "nexus-contracts-memory";
@@ -157,6 +160,7 @@ digraph chimera {
   "nexus-contracts-memory" -> "nexus-contracts-mca";
   "nexus-contracts-memory" -> "nexus-contracts-seams";
   "nexus-core" -> "event-bus";
+  "nexus-core" -> "nexus-compute";
   "nexus-core" -> "nexus-contracts";
   "nexus-core" -> "nexus-telemetry";
   "nexus-hook" -> "event-bus";

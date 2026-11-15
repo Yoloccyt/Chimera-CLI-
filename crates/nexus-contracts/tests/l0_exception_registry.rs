@@ -57,6 +57,10 @@ const SUBSTANTIVE_LOGIC_MODULES: &[&str] = &[
     // lib.rs 一侧而本表未同步 ⇒ 两个不变量一红（多登记）一绿（无根声明那条也红）。
     // 基线口径：本表与 lib.rs 登记表必须**同批**修改，否则本测试逐字判红。
     "context_capability",
+    // P-A（ADR-新-3）：批派发准入契约的纯判定函数族
+    // （is_conserved 四段守恒计数 / segment_counts / is_read_safe）达 G-119
+    // 派生逻辑检阈，与 lib.rs 登记表同批加入。
+    "tool_admission",
 ];
 
 /// W3 子模块化后的 10 个组模块（结构锁，防回退平铺）。

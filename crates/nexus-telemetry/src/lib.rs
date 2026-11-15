@@ -3,7 +3,7 @@
 //! ROLE:     NEXUS-OMEGA L0-B 核心基础面 — 计算面遥测契约与上报编排（ADR-222 D3）
 //! BACKEND:  memory
 //! PRODUCERS: 2 TelemetryCalibrationApplied,TelemetryReporterDegraded
-//! CONSUMERS: 1 nexus-core
+//! CONSUMERS: 2 nexus-compute,nexus-core
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! NEXUS-OMEGA L0-B 核心基础面 — 计算面遥测契约与上报编排（ADR-222 D3）

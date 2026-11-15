@@ -25,6 +25,12 @@ chrono
 event-bus
 hex
 ndarray
+# ADR-309 (2026-11-15) W4-1 L0-B compute extraction: reviewed for minimality -- nexus-core
+# needs nexus-compute ONLY as the compat shim re-export face (pub mod compute { pub use
+# nexus_compute::*; }); one-way (nexus-compute must not depend back on nexus-core or the
+# shim re-export closes a crate cycle). Not an upward edge: both are machine layer 1
+# (L0-B), so Check B cannot see it -- this ledger owns it.
+nexus-compute
 nexus-contracts
 # ADR-222 D3 (2026-10-20) L0-B telemetry extraction: reviewed for minimality -- nexus-core needs
 # only the SaturationSource trait + pure judgement functions; one-way (telemetry must not depend

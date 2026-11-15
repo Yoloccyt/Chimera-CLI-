@@ -141,8 +141,8 @@ jobs:
       # 沿 check_layer_map_parity/check_accel_exclusion 的 --selftest 双向夹具先例。
       - name: L0 contracts purity gate (G-99)
         run: |
-          python3 scripts/check_l0_purity.py --selftest
-          python3 scripts/check_l0_purity.py
+          python3 scripts/check_l0_surface.py purity --selftest
+          python3 scripts/check_l0_surface.py purity
 
       # WHY: ADR-222 D1 把 L0 拆为 0A 纯契约 / 0B 核心基础面，但机器层号 0/1 刻意
       # 不重排（116+ 份 ADR 以 L4 seccore 等层号引用历史证据，重排会让整条证据链
@@ -151,8 +151,8 @@ jobs:
       # （轴分工，不互抄基线）。亚层成员来自 .sh/.ps1 双源并互相对拍。
       - name: L0 sub-layer direction (G-125)
         run: |
-          python3 scripts/check_l0_sublayer.py --selftest
-          python3 scripts/check_l0_sublayer.py
+          python3 scripts/check_l0_surface.py sublayer --selftest
+          python3 scripts/check_l0_surface.py sublayer
 
       # WHY: L0-B 公共 API 签名第三方后端类型泄露门(ADR-225 D6 / R2 M37+M46+M47)——
       # G-131 只锁 L0-B 的外部*依赖行*,并在自己 note 里自陈“L0-B public fn 面不在本门
@@ -230,13 +230,13 @@ jobs:
       # 本步锁 Cargo 装配边（only-decrease）；另一步锁 L0-B 外部依赖面。
       - name: L0-A sibling assembly ratchet (G-129)
         run: |
-          python3 scripts/check_l0a_sibling_assembly.py --selftest
-          python3 scripts/check_l0a_sibling_assembly.py
+          python3 scripts/check_l0_surface.py assembly --selftest
+          python3 scripts/check_l0_surface.py assembly
 
       - name: L0-B dependency surface ratchet (G-131)
         run: |
-          python3 scripts/check_l0b_dep_surface.py --selftest
-          python3 scripts/check_l0b_dep_surface.py
+          python3 scripts/check_l0_surface.py dep-surface --selftest
+          python3 scripts/check_l0_surface.py dep-surface
 
       # WHY: 加速器/推理栈排除门(ADR-195 V1/D5)——把"零 GPU 依赖"从一次性人工核对升为
       # 机器判据。当前排除靠 feature 非激活而非结构隔离:nmc-encoder 直接依赖
@@ -314,17 +314,17 @@ jobs:
       # 四支门均先 --selftest 证明有牙(含真空守卫与畸形台账退 2),再跑真实裁决;零 cargo、秒级。
       - name: L0 contract-surface ratchets (G-105, G-107)
         run: |
-          python3 scripts/check_l0_pubfn_ratchet.py --selftest
-          python3 scripts/check_l0_pubfn_ratchet.py
-          python3 scripts/check_l0_root_surface.py --selftest
-          python3 scripts/check_l0_root_surface.py
+          python3 scripts/check_l0_surface.py pubfn-ratchet --selftest
+          python3 scripts/check_l0_surface.py pubfn-ratchet
+          python3 scripts/check_l0_surface.py root-surface --selftest
+          python3 scripts/check_l0_surface.py root-surface
 
       - name: L0 const surface and sibling surface (G-150~G-153)
         run: |
-          python3 scripts/check_l0_const_ratchet.py --selftest
-          python3 scripts/check_l0_const_ratchet.py
-          python3 scripts/check_l0_sibling_surface.py --selftest
-          python3 scripts/check_l0_sibling_surface.py
+          python3 scripts/check_l0_surface.py const-ratchet --selftest
+          python3 scripts/check_l0_surface.py const-ratchet
+          python3 scripts/check_l0_surface.py sibling-surface --selftest
+          python3 scripts/check_l0_surface.py sibling-surface
 
       - name: Fuzz config static gate (G-156)
         run: bash scripts/check_fuzz_config.sh
@@ -396,8 +396,8 @@ jobs:
       # floor 守卫排在 --emit 之前,致盲的解析器不得把致盲写成一份"干净"基线。
       - name: L0 extensibility class ledger (G-115)
         run: |
-          python3 scripts/check_l0_extensibility_class.py --selftest
-          python3 scripts/check_l0_extensibility_class.py
+          python3 scripts/check_l0_surface.py extensibility --selftest
+          python3 scripts/check_l0_surface.py extensibility
       # WHY: ADR-212 7.1 raised ImmutableSurface Critical coverage to 17 (=16 mpsc +
       # CheckpointSaved), but all five bus-side locks live inside event-bus: a new
       # mpsc-Critical variant turns those red while L0 stays silent -- the spec could
@@ -425,8 +425,8 @@ jobs:
       # drift class this repository already fights.
       - name: L0 controlled-logic ledger (G-119)
         run: |
-          python3 scripts/check_l0_logic_ledger.py --selftest
-          python3 scripts/check_l0_logic_ledger.py
+          python3 scripts/check_l0_surface.py logic-ledger --selftest
+          python3 scripts/check_l0_surface.py logic-ledger
       # WHY: the 120 gates above judge Rust; nothing judged the 92 scripts/*.py that
       # *implement* those gates (`grep -riE ruff|flake8|mypy|pylint|black|pyright` over
       # .github/workflows and scripts/*.toml = 0 hits, while Rust has fmt+clippy+typos+

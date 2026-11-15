@@ -34,6 +34,7 @@ members = [
     "crates/nexus-contracts-mca",
     "crates/nexus-contracts-memory",
     "crates/nexus-core", "crates/event-bus", "crates/nexus-telemetry", "crates/quest-engine",
+    "crates/nexus-compute",
     "crates/repo-wiki", "crates/parliament",
     "crates/pvl-layer", "crates/osa-coordinator", "crates/kvbsr-router",
     "crates/faae-router", "crates/gea-activator", "crates/gqep-executor",
@@ -239,6 +240,8 @@ nexus-core = { path = "crates/nexus-core" }
 event-bus = { path = "crates/event-bus" }
 # ADR-222 L0-B 核心基础面：计算面遥测契约与上报编排（nexus-core 单向依赖）
 nexus-telemetry = { path = "crates/nexus-telemetry" }
+# ADR-309 L0-B 核心基础面：CPU 卸载计算面自 nexus-core 迁出（nexus-core 经 shim 单向依赖）
+nexus-compute = { path = "crates/nexus-compute" }
 mcp-mesh = { path = "crates/mcp-mesh" }  # L10 Interface(跨进程 MCP 网格);物理位置沿史留在 L1 段,层号以本行为准
 # L2 Memory:多模态编码，分层窗口，四级记忆
 nmc-encoder = { path = "crates/nmc-encoder" }
