@@ -1729,3 +1729,21 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "既有 check_fuzz_config 升格接 CI（5 项静态检查零 cargo）；此前不在任何 workflow，fuzz 静态面零守护属实测缺口"
+
+[[gate]]
+id = "G-158"
+spec_ref = "W3 版本单一事实源对拍门"
+cmd = "{python} scripts/check_version_sync.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "workspace.version 对拍 Dockerfile ARG + 5 处 --version 正则 alternation 集合；只读 tracked 文件（CI 面有效，不受 *.md gitignore 降级影响）；2026-11-15 首扫即抓 test-install-scripts.yml 缺 chimela 漂移实锤"
+
+[[gate]]
+id = "G-159"
+spec_ref = "W3 版本门 selftest"
+cmd = "{python} scripts/check_version_sync.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "夹具双向有牙（Dockerfile 漂移/正则漂移/缺失面 -> 红或 2）"

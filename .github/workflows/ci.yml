@@ -329,6 +329,11 @@ jobs:
       - name: Fuzz config static gate (G-156)
         run: bash scripts/check_fuzz_config.sh
 
+      - name: Version single-source-of-truth sync (G-158, G-159)
+        run: |
+          python3 scripts/check_version_sync.py --selftest
+          python3 scripts/check_version_sync.py
+
       - name: Gate provenance and contract-member ledger (G-101, G-103)
         run: |
           python3 scripts/check_dead_contract_apis.py --selftest

@@ -293,7 +293,7 @@ jobs:
       # WHY: 保持全量验证语义 —— 含 doc-tests 与 backpressure 60s spec 验收
       # (不设 CHIMERA_BACKPRESSURE_SECS,缺省 60s),发布前完整性不降级。
       - name: Run workspace tests
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast --jobs 2
 
   # ============================================================
   # Job 2.5: Docker 镜像构建 + 推送 GHCR

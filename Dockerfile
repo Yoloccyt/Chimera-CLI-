@@ -16,7 +16,7 @@
 # gcr.io/distroless/cc-debian12(Debian 12/Bookworm)。若 builder 的 glibc
 # 版本高于 runtime,二进制会因 "GLIBC_x.xx not found" 启动失败。
 # 固定 slim-bookworm 确保 builder 与 runtime 的 glibc 版本一致。
-FROM rust:1-slim-bookworm AS builder
+FROM rust:1.97.1-slim-bookworm AS builder
 
 # 系统依赖:
 # - pkg-config: 部分 crate 探测系统库时需要

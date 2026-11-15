@@ -171,13 +171,13 @@ jobs:
           echo "Binary path: $BIN_PATH"
           echo "Version output: $VERSION_OUTPUT"
 
-          # 与 release.yml docker job line 232 一致的正则
-          # ^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+
-          if printf '%s\n' "$VERSION_OUTPUT" | grep -Eq '^(aether|chimera) [0-9]+\.[0-9]+\.[0-9]+'; then
+          # 与 release.yml docker job 的 Verify image functionality 步骤一致的正则
+          # ^(aether|chimera|chimela) [0-9]+\.[0-9]+\.[0-9]+
+          if printf '%s\n' "$VERSION_OUTPUT" | grep -Eq '^(aether|chimera|chimela) [0-9]+\.[0-9]+\.[0-9]+'; then
             echo "✅ Version regex validation passed"
           else
             echo "❌ Version regex validation failed"
-            echo "Expected: ^(aether|chimera) [0-9]+\\.[0-9]+\\.[0-9]+"
+            echo "Expected: ^(aether|chimera|chimela) [0-9]+\\.[0-9]+\\.[0-9]+"
             echo "Actual: $VERSION_OUTPUT"
             exit 1
           fi

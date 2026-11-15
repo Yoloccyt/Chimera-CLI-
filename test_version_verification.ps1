@@ -29,7 +29,7 @@
 # param MUST be the first non-comment statement in the script
 # ============================================================
 param(
-    [string]$BinaryPath = "D:\Chimera CLI\target\release\aether.exe"
+    [string]$BinaryPath = "D:\Chimera CLI\target\release\chimera.exe"
 )
 
 Set-StrictMode -Version Latest
