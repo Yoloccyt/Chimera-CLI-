@@ -3630,8 +3630,6 @@ dependencies = [
 name = "nexus-core"
 version = "2.29.0-omega"
 dependencies = [
- "arc-swap",
- "async-trait",
  "chrono",
  "criterion",
  "event-bus",
@@ -3640,8 +3638,6 @@ dependencies = [
  "nexus-contracts",
  "nexus-telemetry",
  "proptest",
- "rand 0.8.6",
- "rayon",
  "rmp-serde",
  "serde",
  "serde_json",

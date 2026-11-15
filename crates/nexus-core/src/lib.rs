@@ -51,20 +51,9 @@ pub mod error;
 pub mod newtype;
 pub mod ids;
 pub mod path_util;
-/// P2-T6: AERA 自适应错误恢复分配（手册 T-11,effort = 0.20·quota + 0.45·criticality + 0.35·ewma）
-///
-/// 非对称迟滞（升档快降档慢）防抖;effort 决定重试预算/回退层级/人工升级。
-pub mod resilience;
-/// RL 客户端骨架 — RulePolicyFallback 默认实现（v3.4.0 §6.4,RL 预留）
-///
-/// 承载 RLClient trait（predict/report_experience/sync_policy）+ RLError，
-/// 铁律1: 零运行时 Python 依赖（GrpcRLClient 仅 v4.0 预留占位）。
-pub mod rl_client;
-/// 统计学习接口层 — SlidingWindow/UCB 策略（v3.4.0 §6.3,RL 预留）
-///
-/// 承载 StatLearningPolicy trait + SlidingWindowPolicy + UCBPolicy，
-/// 铁律6: 全部统计学习机制可导出为 RLTrajectory（v4.0 数据流预留）。
-pub mod stat_learning;
+// NOTE(B2/ADR-311): resilience / rl_client / stat_learning 三个 RL/学习预留面已随
+// 2026-11-15 破坏式重构退役（生产代码零消费者,仅自身 tests 引用;决策与重建触发
+// 条件登记 ADR-311）。RL 闸门开启时按 L0 rl_hooks 契约（nexus-contracts-seams）重建。
 pub mod state;
 pub mod storage_traits;
 pub mod types;
@@ -78,10 +67,6 @@ pub use ids::{AgentId, CapabilityId, IntentId, ModelId, OperationId, QuestId, Ta
 pub use state::{NexusState, StateChangeKind, StateChangeListener};
 pub use storage_traits::{apply_performance_pragmas, PragmaCapable};
 pub use types::{Checkpoint, MultimodalInput, Quest, Task, TaskStatus, ThinkingMode, UserIntent};
-// v3.4.0 §6.3: 统计学习接口层（SlidingWindow/UCB，铁律6 轨迹导出）
-pub use stat_learning::{ActionStats, SlidingWindowPolicy, StatLearningPolicy, UCBPolicy};
-// v3.4.0 §6.4: RL 客户端骨架（RulePolicyFallback 默认，铁律1 零 Python 依赖）
-pub use rl_client::{GrpcRLClient, RLClient, RLError, RulePolicyFallback};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
@@ -97,10 +82,4 @@ pub mod prelude {
     pub use crate::types::{
         Checkpoint, MultimodalInput, Quest, Task, TaskStatus, ThinkingMode, UserIntent,
     };
-    // v3.4.0 §6.3: 统计学习接口层（与顶层导出同集）
-    pub use crate::stat_learning::{
-        ActionStats, SlidingWindowPolicy, StatLearningPolicy, UCBPolicy,
-    };
-    // v3.4.0 §6.4: RL 客户端骨架（与顶层导出同集）
-    pub use crate::rl_client::{GrpcRLClient, RLClient, RLError, RulePolicyFallback};
 }

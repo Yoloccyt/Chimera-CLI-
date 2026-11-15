@@ -34,19 +34,9 @@ tracing = { workspace = true }
 # WHY 合规: L1 → L0 恒允许(§2.2 依赖铁律扩展 ADR-033);nexus-contracts 纯类型零依赖,不引入环
 # re-export 模式: types.rs 中 `pub use nexus_contracts::{TaskStatus, Checkpoint}` 保持向后兼容
 nexus-contracts = { workspace = true }
-# P1-W4: 统计学习接口层(v3.4.0 §6.3 SlidingWindow/UCB,epsilon-greedy 探索)
-rand = { workspace = true }
-# P1-W5: RL 客户端骨架(v3.4.0 §6.4 RLClient trait,async 接口)
-async-trait = { workspace = true }
-# P1-T8: ComputeBridge 独立 rayon 全局池(手册 §8.3 L-a,WI-34)
-# WHY 红线纪律: rayon 闭包内禁 .await/IO/持锁跨边界(§7.5.3 纪律④⑥);
-# 线程数 num_cpus-2 用 std::thread::available_parallelism() 计算(Ω₆ 最小依赖,不加 num_cpus)
-rayon = { workspace = true }
-# P1-T9: HTS 动态阈值表(手册 §8.4 / ADR-103 / ADR-128)
-# WHY 用 arc-swap:route() 热路径读无锁(RCU 快照 ~5ns),符合 ADR-128;
-# 更新(T1 测定/T14 序贯校准)低频,全表 RCU store 成本可忽略;
-# 纯 safe 封装,与 forbid(unsafe_code) 哲学一致(unsafe 在依赖内不传播)
-arc-swap = { workspace = true }
+# P1-W4 统计学习层与 P1-W5 RL 客户端已随 B2/ADR-311 退役（2026-11-15）：
+# rand（仅 stat_learning 消费）与 async-trait（仅 rl_client 消费）同批摘除；
+# rayon/arc-swap 系 W4-1 compute/HTS 迁出后的零消费残留，B2 一并清理。
 
 [dev-dependencies]
 criterion = { workspace = true }
