@@ -4,6 +4,8 @@
 //! 类型同一性用 `Option<T>` 技巧在编译期证明（同 types.rs 既有模式），
 //! 双路径任一漂移即编译错误。
 #![forbid(unsafe_code)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+// 集成测试惯用 expect/unwrap（G-82 文档化豁免：integration-test idiom 整文件豁免）
 
 use nexus_contracts::masks::SparseMask as ViaFacade;
 use nexus_contracts_sparse::sparse::masks::SparseMask as ViaSibling;

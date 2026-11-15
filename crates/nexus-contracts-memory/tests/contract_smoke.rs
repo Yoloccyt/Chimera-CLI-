@@ -4,6 +4,8 @@
 //! 统一（QuotaError/InvariantViolation）的落地 crate——本文件把 facade 双路径
 //! 同一性与错误语义钉在 owning crate 内。
 #![forbid(unsafe_code)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+// 集成测试惯用 expect/unwrap（G-82 文档化豁免：integration-test idiom 整文件豁免）
 
 use nexus_contracts::quota::NamespaceQuota as ViaFacade;
 use nexus_contracts_memory::memory::archive_monotonicity::{

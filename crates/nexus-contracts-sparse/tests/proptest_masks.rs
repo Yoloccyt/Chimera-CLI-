@@ -4,6 +4,8 @@
 //! （xts_top_k_by 同族）。本属性用严格递增评分（无并列）钉死三件事：
 //! sparsity 算术、active 集合 == 全排序参考实现的 Top-K、active_ids 按评分降序。
 #![forbid(unsafe_code)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+// 集成测试惯用 expect/unwrap（G-82 文档化豁免：integration-test idiom 整文件豁免）
 
 use nexus_contracts_sparse::sparse::masks::SparseMask;
 use proptest::prelude::*;

@@ -3,6 +3,8 @@
 //! WHY: safety 是 L0-A 唯一成体系错误层（NexusError/Recoverable/RecoveryStrategy），
 //! 其 facade 双路径同一性必须由 owning crate 内的测试钉死，而非只靠 umbrella 集成面。
 #![forbid(unsafe_code)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+// 集成测试惯用 expect/unwrap（G-82 文档化豁免：integration-test idiom 整文件豁免）
 
 use nexus_contracts::errors::{NexusError as ViaFacade, RecoveryStrategy as RSFacade};
 use nexus_contracts_safety::safety::errors::{

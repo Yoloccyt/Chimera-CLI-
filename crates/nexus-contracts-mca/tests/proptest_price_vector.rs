@@ -5,6 +5,8 @@
 //! 对参考实现钉死，防止排序键或取整方向被静默改动。
 //! ModelPrice 为 #[non_exhaustive]，经 `PriceVector::from_parts` 构造。
 #![forbid(unsafe_code)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+// 集成测试惯用 expect/unwrap（G-82 文档化豁免：integration-test idiom 整文件豁免）
 
 use nexus_contracts_mca::mca::price_vector::PriceVector;
 use proptest::prelude::*;

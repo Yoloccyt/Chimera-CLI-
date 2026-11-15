@@ -4,6 +4,8 @@
 //! 本文件把最小回归面下沉到 owning crate。core 无 facade dev-dep
 //! （零 doctest 的既定待遇），故只做 sibling 自有路径断言。
 #![forbid(unsafe_code)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+// 集成测试惯用 expect/unwrap（G-82 文档化豁免：integration-test idiom 整文件豁免）
 
 use nexus_contracts_core::core_domain::task::TaskStatus;
 

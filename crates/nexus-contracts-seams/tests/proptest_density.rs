@@ -4,6 +4,8 @@
 //! 语义此前只有单元测试点例；属性测试把「任意输入 → 返回档 = argmin 距离」
 //! 钉死，防止将来改档表/改比较方向时静默漂移。
 #![forbid(unsafe_code)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+// 集成测试惯用 expect/unwrap（G-82 文档化豁免：integration-test idiom 整文件豁免）
 
 use nexus_contracts_seams::seams::density::DensityTier;
 use proptest::prelude::*;

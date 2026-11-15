@@ -3,6 +3,8 @@
 //! WHY: mca 契约面（渠道亲和/协议方言）由 hcw-window/mca-gateway 跨层共享，
 //! 方言枚举的 wire 稳定性须在 owning crate 内钉死。
 #![forbid(unsafe_code)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+// 集成测试惯用 expect/unwrap（G-82 文档化豁免：integration-test idiom 整文件豁免）
 
 use nexus_contracts::affinity::ProtocolDialect as ViaFacade;
 use nexus_contracts_mca::mca::affinity::ProtocolDialect as ViaSibling;
