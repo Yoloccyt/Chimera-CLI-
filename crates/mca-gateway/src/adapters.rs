@@ -16,6 +16,7 @@
 use std::sync::Arc;
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
+use hcw_window::{PlanContext, WindowGovernor};
 use nexus_contracts::affinity::{
     AffinityMessage, AffinityRequest, AffinityResponse, ContentBlock, CostEstimate, FinishReason,
     MessageRole, ModelAffinitySpec, ProtocolDialect, ProviderReceipt, TokenCacheKey, UsageReport,
@@ -88,6 +89,10 @@ pub struct VendorAdapter {
     coalescer: Option<Arc<RequestCoalescer>>,
     /// 事件总线(None = 静默模式,单测/录播回放用)
     bus: Option<EventBus>,
+    /// HCW v3 P1 窗口装载 governor（None = 走 legacy 预算 ratio，逐位不变）
+    window_governor: Option<Arc<dyn WindowGovernor>>,
+    /// governor 输入快照（None = 不启用动态定容）
+    plan_context: Option<PlanContext>,
 }
 
 /// 可选挂接依赖集合 — 收敛 assemble 系构造函数(避免参数无限膨胀)
@@ -111,6 +116,10 @@ pub struct AdapterOptions {
     pub estimator: Option<Arc<TokenEstimator>>,
     /// in-flight 请求合并器(ADR-072;None = 不合并)
     pub coalescer: Option<Arc<RequestCoalescer>>,
+    /// HCW v3 P1 窗口装载 governor（None = legacy 预算 ratio）
+    pub window_governor: Option<Arc<dyn WindowGovernor>>,
+    /// governor 输入快照（effective_window/budget_utilization/thinking_mode）
+    pub plan_context: Option<PlanContext>,
 }
 
 impl VendorAdapter {
@@ -183,6 +192,7 @@ impl VendorAdapter {
                 cost_guard: None,
                 estimator: None,
                 coalescer: None,
+                ..AdapterOptions::default()
             },
         )
     }
@@ -213,6 +223,8 @@ impl VendorAdapter {
             estimator: options.estimator,
             coalescer: options.coalescer,
             bus,
+            window_governor: options.window_governor,
+            plan_context: options.plan_context,
         })
     }
 
@@ -475,7 +487,29 @@ impl VendorAdapter {
         Option<f32>,
     ) {
         let mut effective = std::borrow::Cow::Borrowed(request);
-        let budget = crate::conversation_trim::conversation_budget(&self.spec, request);
+        let (budget, plan) = crate::conversation_trim::conversation_budget_with_plan(
+            &self.spec,
+            request,
+            self.window_governor.as_deref(),
+            self.plan_context.as_ref(),
+        );
+        // 双跑对照锚点：governor 产 plan 即留痕；legacy 路径不发布（事件序列与 HEAD 一致）
+        if let Some(plan) = &plan {
+            self.publish(NexusEvent::WindowPlanApplied {
+                metadata: EventMetadata::new(EVENT_SOURCE),
+                resident_cap: plan.resident_cap,
+                page_budget: plan.page_budget,
+                tier_allocation_json: serde_json::to_string(&plan.tier_allocation)
+                    .unwrap_or_default(),
+                plan_source: plan.plan_source.as_str().to_string(),
+            })
+            .await;
+        }
+        // 本 Spec A3: S+E+M 配额作为装配内核容量（0 = 不启用驱逐，与 HEAD 逐位一致）
+        let tier_capacity = plan
+            .as_ref()
+            .map(|p| p.tier_budget().assembly_capacity())
+            .unwrap_or(0);
         let estimated = match &self.estimator {
             Some(est) => est.estimate_messages_calibrated(
                 self.spec.provider.as_str(),
@@ -489,8 +523,12 @@ impl VendorAdapter {
         let mut compressed_ratio: Option<f32> = None;
         if estimated > budget {
             trimmed_before_tokens = Some(u64::from(estimated));
-            effective.to_mut().messages =
-                crate::conversation_trim::trim_to_budget(request.messages.clone(), budget);
+            effective.to_mut().messages = crate::conversation_trim::trim_to_budget_with_tier(
+                request.messages.clone(),
+                budget,
+                crate::conversation_trim::assembly_wiring(),
+                tier_capacity,
+            );
             trimmed_after_tokens = Some(match &self.estimator {
                 Some(est) => u64::from(est.estimate_messages_calibrated(
                     self.spec.provider.as_str(),
@@ -1870,7 +1908,9 @@ mod tests {
     /// 返回 (端口, 请求计数句柄)。WHY 可行:check_allowlist 只校验
     /// 「target host == spec host」,spec.base_url 指向 mock 即可
     /// (SSRF 拒 loopback 是 mcp-mesh 注册面,非 VendorAdapter 传输面)。
-    fn spawn_status_mock(script: Vec<u16>) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    fn spawn_status_mock(
+        script: Vec<u16>,
+    ) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         use std::io::{Read as _, Write as _};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("mock bind");
         let port = listener.local_addr().expect("mock addr").port();
@@ -1921,10 +1961,7 @@ mod tests {
             VendorAdapter::assemble(spec_on(port), None).expect("assemble should succeed");
         let req = mock_request();
         let resp = adapter.invoke(&req).await.expect("404 重发后应成功");
-        assert!(
-            !format!("{resp:?}").is_empty(),
-            "mock 200 响应应透传解码面"
-        );
+        assert!(!format!("{resp:?}").is_empty(), "mock 200 响应应透传解码面");
         assert_eq!(
             calls.load(AtomicOrdering::SeqCst),
             2,

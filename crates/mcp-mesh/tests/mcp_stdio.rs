@@ -13,6 +13,36 @@ use std::time::{Duration, Instant};
 use mcp_mesh::protocol::{CommandGate, McpTransport, StdioTransport};
 use mcp_mesh::McpError;
 
+/// 解析本机可用的 POSIX shell —— 测试夹具必须用**真正的** bash。
+///
+/// WHY 不直接写 `"bash"`：Windows 上 PATH 里的 `bash` 可能是 WSL 桩
+/// （`C:\Windows\System32\bash.exe`），它不把任意 Windows 环境变量带进 Linux 侧
+/// （只有 `WSLENV` 列出的才带）⇒ `configured_env_reaches_the_child` 假红；
+/// 冷启动也可能超过请求超时。本项目本地约定用 Git Bash（见
+/// `Aegis/hooks/run-hook.cmd`），CI（ubuntu）走 PATH 里的 `bash`。
+/// `CHIMERA_TEST_SHELL` 为其他机器的逃生口。
+fn shell_program() -> &'static str {
+    static SHELL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+    SHELL.get_or_init(|| {
+        if let Ok(custom) = std::env::var("CHIMERA_TEST_SHELL") {
+            if !custom.trim().is_empty() {
+                return Box::leak(custom.into_boxed_str());
+            }
+        }
+        if cfg!(windows) {
+            for candidate in [
+                r"C:\Program Files\Git\bin\bash.exe",
+                r"C:\Program Files (x86)\Git\bin\bash.exe",
+            ] {
+                if std::path::Path::new(candidate).exists() {
+                    return candidate;
+                }
+            }
+        }
+        "bash"
+    })
+}
+
 /// 只允许清单里的可执行文件 —— 与生产 `ProcessFence` 同形的最小替身。
 struct AllowList(Vec<&'static str>);
 
@@ -28,14 +58,14 @@ impl CommandGate for AllowList {
 
 fn bash(script: &str) -> (String, Vec<String>) {
     (
-        "bash".to_string(),
+        shell_program().to_string(),
         vec!["-c".to_string(), script.to_string()],
     )
 }
 
 fn spawn(script: &str, env: &BTreeMap<String, String>) -> StdioTransport {
     let (program, args) = bash(script);
-    StdioTransport::spawn(&program, &args, env, &AllowList(vec!["bash"]))
+    StdioTransport::spawn(&program, &args, env, &AllowList(vec![shell_program()]))
         .expect("bash is allowlisted and must spawn")
 }
 

@@ -1,0 +1,8 @@
+{
+  "domain": "rust_crate",
+  "id": "guards_consistency_via",
+  "label": "一致性守卫现状",
+  "range": {
+    "form": "statement"
+  }
+}

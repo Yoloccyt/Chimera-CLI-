@@ -56,6 +56,8 @@
 pub mod affinity;
 /// R9: 统一上下文装配内核（去重 + 单一预算账本 + 确定性驱逐）
 pub mod assemble;
+/// 本 Spec A1: 能力档案快照（`ContextCapabilityUpdated` → L2 只读消费）
+pub mod capability_snapshot;
 pub mod compressor;
 pub mod config;
 /// P4-W13.2.2: 密度学习器持有器 — S1 接缝策略异步下发 + 本地 fallback（C4 合规）
@@ -83,10 +85,11 @@ pub mod window;
 // === 关键类型重导出,简化外部导入 ===
 pub use affinity::{FoldResult, WindowAffinity};
 pub use assemble::{
-    assemble_context, assemble_context_with, estimate_tokens as estimate_context_tokens,
-    AssembledContext, AssemblyDiagnostics, ContextItem, ContextRole, ContextSource,
-    RECENT_WINDOW_ITEMS,
+    assemble_context, assemble_context_with, assemble_context_with_tier,
+    estimate_tokens as estimate_context_tokens, AssembledContext, AssemblyDiagnostics, ContextItem,
+    ContextRole, ContextSource, RECENT_WINDOW_ITEMS,
 };
+pub use capability_snapshot::{CapabilitySnapshot, CapabilityWindow};
 pub use compressor::ContextCompressor;
 pub use density_learner::DensityLearnerHolder;
 pub use error::HcwError;
@@ -97,8 +100,8 @@ pub use probe::{mix_probe, probe_health, score_with_probe, ProbeHealth, ProbeWei
 pub use selector::WindowSelector;
 // P4-W13.3.2: S4 接缝（HCW selector 权重系数）学习器持有器
 pub use governor::{
-    AdaptiveGovernor, PlanContext, PlanSource, StaticGovernor, TierAlloc, WindowGovernor,
-    WindowPlan,
+    AdaptiveGovernor, PlanContext, PlanSource, StaticGovernor, TierAlloc, TierBudget,
+    WindowGovernor, WindowPlan,
 };
 pub use selector_learner::SelectorLearnerHolder;
 pub use types::{CompressionReport, ContextEntry, HcwConfig, HcwState, WindowTier};

@@ -298,12 +298,7 @@ impl SessionStore {
                     provider = excluded.provider,
                     provider_thread_id = excluded.provider_thread_id,
                     updated_at = excluded.updated_at",
-                rusqlite::params![
-                    sid,
-                    provider,
-                    handle,
-                    chrono::Utc::now().to_rfc3339()
-                ],
+                rusqlite::params![sid, provider, handle, chrono::Utc::now().to_rfc3339()],
             )
             .map_err(|e| AffinityError::Unknown {
                 raw: format!("upsert thread_handles: {e}"),
@@ -317,7 +312,10 @@ impl SessionStore {
     }
 
     /// 读取厂商线程句柄(None = 该会话未建立过服务端线程)
-    pub async fn get_thread_handle(&self, session_id: &str) -> Result<Option<String>, AffinityError> {
+    pub async fn get_thread_handle(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<String>, AffinityError> {
         let sid = session_id.to_string();
         let conn = self.conn.clone();
         spawn_blocking(move || -> Result<Option<String>, AffinityError> {
@@ -332,11 +330,11 @@ impl SessionStore {
                 .map_err(|e| AffinityError::Unknown {
                     raw: format!("prepare thread_handles: {e}"),
                 })?;
-            let mut rows = stmt
-                .query(rusqlite::params![sid])
-                .map_err(|e| AffinityError::Unknown {
-                    raw: format!("query thread_handles: {e}"),
-                })?;
+            let mut rows =
+                stmt.query(rusqlite::params![sid])
+                    .map_err(|e| AffinityError::Unknown {
+                        raw: format!("query thread_handles: {e}"),
+                    })?;
             match rows.next().map_err(|e| AffinityError::Unknown {
                 raw: format!("next thread_handles: {e}"),
             })? {
@@ -510,7 +508,11 @@ mod tests {
             "upsert 刷新句柄"
         );
         assert!(
-            store.get_thread_handle("sess-other").await.unwrap().is_none(),
+            store
+                .get_thread_handle("sess-other")
+                .await
+                .unwrap()
+                .is_none(),
             "会话间句柄隔离"
         );
     }

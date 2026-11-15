@@ -68,6 +68,8 @@ use std::collections::HashMap;
 use nexus_contracts::spec::harness_dimensions::ContextAssemblyContract;
 use serde::{Deserialize, Serialize};
 
+use crate::governor::TierBudget;
+
 /// 近期段保护窗口（条目数）
 ///
 /// WHY 4：与 TUI 策展器 `CurationConfig::recent_turns` 的缺省值 4 对齐；
@@ -131,7 +133,17 @@ pub struct AssemblyDiagnostics {
     #[serde(default)]
     pub deduped_normalized: usize,
     /// 被预算驱逐的条数
+    ///
+    /// 口径（本 Spec A3 起）：分层配额驱逐 + 全局预算驱逐之和。页预算拒绝
+    /// 不计入此字段（见 [`Self::page_rejected`]，两条规则彼此独立）。
     pub evicted: usize,
+    /// 被页预算拒绝的条数（本 Spec A3）
+    ///
+    /// 单条 token 估算超过 `TierBudget::page_budget` 的条目**不装载**（拒绝
+    /// 而非切分，理由见模块文档）。`#[serde(default)]` 保持旧诊断载荷反序列化
+    /// 兼容（诊断快照非持久契约）。
+    #[serde(default)]
+    pub page_rejected: usize,
     /// 生效预算（token）
     pub budget_tokens: usize,
     /// 装配后 token 估算
@@ -227,6 +239,56 @@ pub fn assemble_context_with(
     tier_capacity: usize,
     estimate: &dyn Fn(&str) -> usize,
 ) -> AssembledContext {
+    assemble_context_core(items, contract, tier_capacity, None, estimate)
+}
+
+/// 装配上下文 —— **分层配额 + 页预算**入口（本 Spec A3，ADR-301 D4）
+///
+/// # 与 [`assemble_context_with`] 的关系
+/// 两者共用一个内核 [`assemble_context_core`]；本入口额外提供 [`TierBudget`]
+/// 的执行语义。**不提供 `TierBudget` 的旧入口逐字段不变** —— 旧入口传
+/// `None`，内核跳过全部新增执行段（结构性保证，非约定）。
+///
+/// # 执行语义（本入口专属）
+/// 1. **全局预算** = `min(contract.max_tokens, tier_budget.total())`；
+///    `total()` 是四项配额之和，正常由 [`crate::governor::WindowPlan::tier_budget`]
+///    派生（和恒等于 `resident_cap`）。四项全 `0` 是**显式零容量**语义（驱逐
+///    全部条目），不是「未配置」——未配置的形态是**不提供**本预算。
+/// 2. **页预算**（`page_budget > 0`）：单条 token 估算超过上限即拒绝装载，
+///    计入 [`AssemblyDiagnostics::page_rejected`]。`0` = 关闭该约束。
+///    WHY 拒绝而非切分：`seq` 是调用方回取原消息的唯一句柄，切分会破坏
+///    「输出是输入子序列」的结构性保证（详见 `tests/assembly_tier_budget.rs`
+///    模块文档）。
+/// 3. **R/S/E/M 分层配额**：来源映射 R=`System|User|Assistant`、S=`Tool`、
+///    E=`Memory`、M=`Retrieval`；某层累计超配额时，**在该层内**按与全局驱逐
+///    相同的优先级（保护组 → 价值密度升序 → `seq` 降序）淘汰，计入
+///    [`AssemblyDiagnostics::evicted`]。
+/// 4. 分层驱逐后若总量仍超全局预算，再执行既有全局驱逐（同一优先级函数）。
+///
+/// # 顺序与确定性
+/// 去重 → 页拒绝 → 分层配额 → 全局预算 → 输出保持输入相对顺序。所有排序
+/// 键均含 `seq` 兜底，结果确定；输出条目是输入条目的克隆（不改写内容/`seq`）。
+pub fn assemble_context_with_tier(
+    items: Vec<ContextItem>,
+    contract: &ContextAssemblyContract,
+    tier_budget: &TierBudget,
+    estimate: &dyn Fn(&str) -> usize,
+) -> AssembledContext {
+    assemble_context_core(items, contract, 0, Some(tier_budget), estimate)
+}
+
+/// 装配内核（唯一函数体）—— `tier_budget = None` 时与 R12 W1-2 的行为逐字段一致
+///
+/// WHY 单一内核而非两条实现：等价性由结构保证（`None` 分支不进入任何新增
+/// 执行段），无需依赖两处实现"看起来一样"。新增段全部收敛在
+/// [`apply_tier_budget`]，便于评审时一眼确认旧路径未被触碰。
+fn assemble_context_core(
+    items: Vec<ContextItem>,
+    contract: &ContextAssemblyContract,
+    tier_capacity: usize,
+    tier_budget: Option<&TierBudget>,
+    estimate: &dyn Fn(&str) -> usize,
+) -> AssembledContext {
     if items.is_empty() {
         return AssembledContext {
             items: Vec::new(),
@@ -234,6 +296,7 @@ pub fn assemble_context_with(
                 deduped: 0,
                 deduped_normalized: 0,
                 evicted: 0,
+                page_rejected: 0,
                 budget_tokens: effective_budget(contract, tier_capacity),
                 used_tokens: 0,
                 synthesis_requested: contract.on_demand_synthesis,
@@ -306,7 +369,12 @@ pub fn assemble_context_with(
     let deduped_count = deduped_count + deduped_normalized;
 
     // ---- 2) 预算与驱逐 ----
-    let budget = effective_budget(contract, tier_capacity);
+    // 全局预算：提供 `TierBudget` 时 = `min(契约, 四项配额和)`；否则沿用
+    // `min(契约, tier_capacity)` 旧口径（`tier_capacity == 0` ⇒ 只有契约值）。
+    let budget = match tier_budget {
+        Some(tier_budget) => contract.max_tokens.min(tier_budget.total() as usize),
+        None => effective_budget(contract, tier_capacity),
+    };
     // **本函数唯一的估算调用点**（R12 W1-2 单一账本的结构支点）：
     // 每条（去重后的）条目精确调用注入估算器一次；预算累计 `total_tokens`
     // 是这份向量的求和，驱逐扣减读 `per_item_tokens[index]`，`used_tokens`
@@ -320,30 +388,41 @@ pub fn assemble_context_with(
     //    `all_estimations_use_injected` 直接打红，而不是靠读者肉眼比对）。
     // 代价:一次 O(n) 的 usize 分配（n = 去重后条目数，装配面本来就是 O(n)）。
     let per_item_tokens: Vec<usize> = deduped.iter().map(|item| estimate(&item.content)).collect();
-    let total_tokens: usize = per_item_tokens.iter().copied().sum();
 
     let mut retained_flags = vec![true; deduped.len()];
-    let mut used = total_tokens;
+    // 驱逐优先级（保护组 → 价值密度升序 → `seq` 降序）：分层配额与全局预算
+    // 两道驱逐共用同一个排序函数，避免"两套优先级"漂移。
+    let recent_start = deduped.len().saturating_sub(RECENT_WINDOW_ITEMS);
+
+    // ---- 2a) 页预算 + 分层配额（仅提供 TierBudget 时执行；旧入口整段跳过）----
+    let mut page_rejected = 0usize;
     let mut evicted = 0usize;
-    if total_tokens > budget {
-        // 计算保留优先级：group 越小越先被淘汰；密度越低越先被淘汰；seq 越大越先被淘汰。
-        let recent_start = deduped.len().saturating_sub(RECENT_WINDOW_ITEMS);
-        let mut order: Vec<usize> = (0..deduped.len()).collect();
-        order.sort_by(|&a, &b| {
-            let ga = protection_group(&deduped[a], a, recent_start);
-            let gb = protection_group(&deduped[b], b, recent_start);
-            ga.cmp(&gb)
-                .then_with(|| {
-                    let da = density(&deduped[a], a, deduped.len());
-                    let db = density(&deduped[b], b, deduped.len());
-                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| deduped[b].seq.cmp(&deduped[a].seq))
-        });
+    if let Some(tier_budget) = tier_budget {
+        let outcome = apply_tier_budget(
+            tier_budget,
+            &deduped,
+            &per_item_tokens,
+            recent_start,
+            &mut retained_flags,
+        );
+        page_rejected = outcome.page_rejected;
+        evicted = outcome.evicted;
+    }
+
+    // ---- 2b) 全局预算驱逐（既有语义；仅对仍保留的条目生效）----
+    let mut used: usize = retained_flags
+        .iter()
+        .enumerate()
+        .filter(|(_, kept)| **kept)
+        .map(|(index, _)| per_item_tokens[index])
+        .sum();
+    if used > budget {
+        let order = eviction_priority(&deduped, recent_start);
         for &index in &order {
             if used <= budget {
                 break;
             }
+            // 已在前序阶段（页拒绝/分层配额）出局的条目不再重复计数
             if retained_flags[index] {
                 retained_flags[index] = false;
                 // 读同一份 `per_item_tokens`：与预算累计同源同口径（见上）
@@ -364,6 +443,7 @@ pub fn assemble_context_with(
     tracing::debug!(
         deduped = deduped_count,
         evicted,
+        page_rejected,
         budget_tokens = budget,
         used_tokens = used,
         "context assembly diagnostics"
@@ -375,6 +455,7 @@ pub fn assemble_context_with(
             deduped: deduped_count,
             deduped_normalized,
             evicted,
+            page_rejected,
             budget_tokens: budget,
             used_tokens: used,
             synthesis_requested: contract.on_demand_synthesis,
@@ -389,6 +470,131 @@ fn effective_budget(contract: &ContextAssemblyContract, tier_capacity: usize) ->
     } else {
         contract.max_tokens.min(tier_capacity)
     }
+}
+
+/// 分层配额执行结果（页拒绝与预算驱逐分开计数，便于诊断分流）
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct TierBudgetOutcome {
+    /// 被页预算拒绝的条数
+    page_rejected: usize,
+    /// 被分层配额驱逐的条数
+    evicted: usize,
+}
+
+/// R/S/E/M 层归属（与 [`TierBudget`] 四字段一一对应）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TierClass {
+    /// 常驻层：System / User / Assistant
+    Resident,
+    /// 结构化层：Tool
+    Structured,
+    /// 情景层：Memory
+    Episodic,
+    /// 语义层：Retrieval
+    Semantic,
+}
+
+/// 来源 → 层的**唯一映射**（本 Spec A3；`TierAlloc` 语义的代码化）
+///
+/// WHY 按 `source` 而非 `role`：`role` 中 `Tool` 与 `source` 的 `Tool` 在 L10
+/// 退化映射下重合，但 `Memory`/`Retrieval` 只能由 `source` 表达（L0 契约面）。
+/// 按 `source` 单一维度分组可让"层归属"只有一个事实源。
+fn tier_class(source: ContextSource) -> TierClass {
+    match source {
+        ContextSource::System | ContextSource::User | ContextSource::Assistant => {
+            TierClass::Resident
+        }
+        ContextSource::Tool => TierClass::Structured,
+        ContextSource::Memory => TierClass::Episodic,
+        ContextSource::Retrieval => TierClass::Semantic,
+    }
+}
+
+/// 执行页预算与 R/S/E/M 分层配额（原地改写 `retained`）
+///
+/// # 顺序
+/// 先页拒绝、后分层配额：被页拒绝的条目不再计入层用量（它根本不会被装载），
+/// 否则一条超页大条目会把同层其它正常条目挤出配额。
+///
+/// # 参数
+/// - `budget`: governor 派生的配额（正常由 `WindowPlan::tier_budget()` 产出）
+/// - `items` / `per_item_tokens`: 去重后的条目与**同一把尺子**的逐条估算
+/// - `recent_start`: 近期段起点（与全局驱逐共用保护组语义）
+/// - `retained`: 保留标记（进入时全 `true`，本函数只做置 `false`）
+fn apply_tier_budget(
+    budget: &TierBudget,
+    items: &[ContextItem],
+    per_item_tokens: &[usize],
+    recent_start: usize,
+    retained: &mut [bool],
+) -> TierBudgetOutcome {
+    let mut outcome = TierBudgetOutcome::default();
+
+    // ---- 页预算：单条装载上限（0 = 关闭）----
+    if budget.page_budget > 0 {
+        let cap = budget.page_budget as usize;
+        for (index, tokens) in per_item_tokens.iter().enumerate() {
+            if *tokens > cap {
+                retained[index] = false;
+                outcome.page_rejected += 1;
+            }
+        }
+    }
+
+    // ---- 分层配额：超配额即在该层内按统一优先级驱逐 ----
+    // 优先级列表只算一次：四个层共用同一排序结果，避免 O(4·n log n)。
+    let priority = eviction_priority(items, recent_start);
+    let tiers = [
+        (TierClass::Resident, budget.resident as usize),
+        (TierClass::Structured, budget.structured as usize),
+        (TierClass::Episodic, budget.episodic as usize),
+        (TierClass::Semantic, budget.semantic as usize),
+    ];
+    for (class, quota) in tiers {
+        let mut tier_used: usize = 0;
+        for (index, item) in items.iter().enumerate() {
+            if retained[index] && tier_class(item.source) == class {
+                tier_used = tier_used.saturating_add(per_item_tokens[index]);
+            }
+        }
+        if tier_used <= quota {
+            continue;
+        }
+        for &index in &priority {
+            if tier_used <= quota {
+                break;
+            }
+            if !retained[index] || tier_class(items[index].source) != class {
+                continue;
+            }
+            retained[index] = false;
+            tier_used = tier_used.saturating_sub(per_item_tokens[index]);
+            outcome.evicted += 1;
+        }
+    }
+
+    outcome
+}
+
+/// 驱逐优先级：保护组升序 → 价值密度升序 → `seq` 降序（越靠前越先淘汰）
+///
+/// 全局预算驱逐与分层配额驱逐**共用本函数**：两处若各写一份排序，就会出现
+/// "全局先淘汰 A、分层先淘汰 B"的语义分叉（同一条目在两套优先级下命运不同）。
+fn eviction_priority(items: &[ContextItem], recent_start: usize) -> Vec<usize> {
+    let total = items.len();
+    let mut order: Vec<usize> = (0..total).collect();
+    order.sort_by(|&a, &b| {
+        let ga = protection_group(&items[a], a, recent_start);
+        let gb = protection_group(&items[b], b, recent_start);
+        ga.cmp(&gb)
+            .then_with(|| {
+                let da = density(&items[a], a, total);
+                let db = density(&items[b], b, total);
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .then_with(|| items[b].seq.cmp(&items[a].seq))
+    });
+    order
 }
 
 /// 保护分组：0 = 可驱逐，1 = 近期段，2 = 钉选段（越大越晚被淘汰）

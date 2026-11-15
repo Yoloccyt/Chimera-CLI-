@@ -1,0 +1,8 @@
+{
+  "id": "shows_barrier_loss",
+  "label": "屏障损失比",
+  "range": {
+    "form": "quantity",
+    "unit": "1"
+  }
+}

@@ -114,6 +114,12 @@ pub struct ContextBlock {
     /// （NMC 编码器/上游数据源，P3.2 落地）经 `with_clv` 提供
     #[serde(default)]
     pub clv: Option<CLV>,
+    /// 上下文来源（None = 未知，w4 中性 0.5；本 Spec A4）
+    ///
+    /// WHY `#[serde(default)]`: 旧 checkpoint/序列化数据无此字段，缺省 None
+    /// 保证反序列化兼容；生产调用方经 `with_source` 标注，激活 HCW w4 降权。
+    #[serde(default)]
+    pub source: Option<hcw_window::ContextSource>,
 }
 
 impl ContextBlock {
@@ -141,6 +147,8 @@ impl ContextBlock {
             is_compressible: !priority.is_critical(),
             // PROBE P1.1: 默认无向量（调用方按需注入）
             clv: None,
+            // 本 Spec A4: 默认未知来源（w4 中性），调用方按需标注
+            source: None,
         }
     }
 
@@ -150,6 +158,18 @@ impl ContextBlock {
     /// - `clv`: 块语义向量（512 维 CLV）
     pub fn with_clv(mut self, clv: CLV) -> Self {
         self.clv = Some(clv);
+        self
+    }
+
+    /// 标注上下文来源（链式调用，本 Spec A4 / HCW w4）
+    ///
+    /// # 参数
+    /// - `source`: HCW 装配面来源枚举（System/User/Assistant/Memory/Tool/Retrieval）
+    ///
+    /// WHY 可选而非必填：既有调用方零改动；None 条目不奖不罚（w4 中性 0.5），
+    /// 保持既有排序在 None 集合内不变。
+    pub fn with_source(mut self, source: hcw_window::ContextSource) -> Self {
+        self.source = Some(source);
         self
     }
 }
@@ -418,6 +438,11 @@ impl AgentContext {
                 &block.content,
                 block.tokens,
             );
+            // 本 Spec A4: 来源标注进入 HCW 压缩评分（w4）；None 保持既有中性
+            let entry = match block.source {
+                Some(source) => entry.with_source(source),
+                None => entry,
+            };
             temp_window
                 .insert(entry)
                 .await

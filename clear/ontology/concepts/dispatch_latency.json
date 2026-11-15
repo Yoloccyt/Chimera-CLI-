@@ -1,0 +1,7 @@
+{
+  "gloss": "工具执行四环链在无真实 I/O 时的一次端到端耗时（传输地板 + 策略 + 沙箱 + 路由）",
+  "id": "dispatch_latency",
+  "kind": "measure",
+  "label": "单次派发固定开销",
+  "unit": "µs"
+}

@@ -1,0 +1,7 @@
+{
+  "gloss": "同一时刻允许在飞的调用数上限；0 视为串行，缺省由常量或 env 决定",
+  "id": "concurrency_bound",
+  "kind": "measure",
+  "label": "并发上界",
+  "unit": "1"
+}

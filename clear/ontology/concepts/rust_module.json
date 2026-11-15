@@ -1,0 +1,6 @@
+{
+  "gloss": "某个 crate 内的源文件/模块，以工作区相对路径指认",
+  "id": "rust_module",
+  "kind": "category",
+  "label": "crate 内模块"
+}

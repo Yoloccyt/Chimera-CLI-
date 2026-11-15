@@ -129,6 +129,48 @@ pub fn conversation_budget(spec: &ModelAffinitySpec, request: &AffinityRequest) 
     coordinator.compute_token_budget(complexity, spec.capabilities.context_window, budget_ratio)
 }
 
+/// governor 开关 — `CHIMERA_WINDOW_GOVERNOR=off` 时逐位回退 legacy ratio 预算
+///
+/// WHY 启动期 OnceLock：与 `CHIMERA_W4_DISABLED` / `CHIMERA_NO_PARALLEL_HCW` 同款，
+/// 避免热路径反复读环境变量；默认开启（只有显式注入 governor 才会走到新路径，
+/// 未注入时行为与 HEAD 逐位一致）。
+fn window_governor_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("CHIMERA_WINDOW_GOVERNOR")
+            .map(|v| v != "off")
+            .unwrap_or(true)
+    })
+}
+
+/// 预算 + 窗口计划 — HCW v3 P1（本 Spec A2）
+///
+/// 返回值第二项仅当 governor 真正产出 `PlanSource::Governor` 时才为 `Some`，
+/// 供调用方发布 `WindowPlanApplied`（双跑对照锚点）。`None`/off/静态回退
+/// 三态都返回 `None`，事件序列与 legacy 路径一致。
+pub fn conversation_budget_with_plan(
+    spec: &ModelAffinitySpec,
+    request: &AffinityRequest,
+    governor: Option<&dyn hcw_window::WindowGovernor>,
+    plan_context: Option<&hcw_window::PlanContext>,
+) -> (u32, Option<hcw_window::WindowPlan>) {
+    let fallback = conversation_budget(spec, request);
+    if !window_governor_enabled() {
+        return (fallback, None);
+    }
+    match (governor, plan_context) {
+        (Some(governor), Some(ctx)) => {
+            let plan = governor.plan(ctx);
+            if plan.plan_source == hcw_window::PlanSource::Governor {
+                (plan.resident_cap, Some(plan))
+            } else {
+                (fallback, None)
+            }
+        }
+        _ => (fallback, None),
+    }
+}
+
 /// 预算驱动的 conversation 裁剪 — 超预算才裁剪(纯函数,不修改入参)
 ///
 /// **本函数是接线前的原始实现,保留为两条用途**:
@@ -341,12 +383,25 @@ pub fn trim_to_budget_with(
     budget_tokens: u32,
     wiring: AssemblyWiring,
 ) -> Vec<AffinityMessage> {
+    trim_to_budget_with_tier(messages, budget_tokens, wiring, 0)
+}
+
+/// 预算裁剪 + 装配内核分层容量（本 Spec A3）
+///
+/// `tier_capacity` 来自 `WindowPlan::tier_budget().assembly_capacity()`（S+E+M）。
+/// 0 = 不启用内核驱逐（与 [`trim_to_budget_with`] 逐位一致）。
+pub fn trim_to_budget_with_tier(
+    messages: Vec<AffinityMessage>,
+    budget_tokens: u32,
+    wiring: AssemblyWiring,
+    tier_capacity: u32,
+) -> Vec<AffinityMessage> {
     let legacy = |msgs: Vec<AffinityMessage>| trim_to_budget_legacy(msgs, budget_tokens);
     // 空会话不是故障:旧路径本就返回空,不必先跑一遍内核再命中空结果告警
     if wiring == AssemblyWiring::Off || messages.is_empty() {
         return legacy(messages);
     }
-    match assemble_dedup(&messages) {
+    match assemble_dedup_with_tier(&messages, tier_capacity as usize) {
         Ok(deduped) => legacy(deduped),
         Err(reason) => {
             tracing::warn!(
@@ -422,8 +477,11 @@ pub(crate) fn assembly_token_estimate(content: &str) -> usize {
 /// 公民(Anthropic 回传校验会直接 400)。故 `seq` 承载原始下标,回取时按
 /// `seq` 取回**原消息的克隆**,装配结果只决定"保留哪几条、按什么顺序",
 /// 绝不改写消息内容。这也使"输出是输入的子序列"成为结构性保证而非约定。
-fn assemble_dedup(messages: &[AffinityMessage]) -> Result<Vec<AffinityMessage>, &'static str> {
-    assemble_dedup_detailed(messages).map(|(kept, _diagnostics)| kept)
+fn assemble_dedup_with_tier(
+    messages: &[AffinityMessage],
+    tier_capacity: usize,
+) -> Result<Vec<AffinityMessage>, &'static str> {
+    assemble_dedup_detailed(messages, tier_capacity).map(|(kept, _diagnostics)| kept)
 }
 
 /// [`assemble_dedup`] 的诊断可见版 —— 同一条实现,额外把内核诊断交回调用方
@@ -434,6 +492,7 @@ fn assemble_dedup(messages: &[AffinityMessage]) -> Result<Vec<AffinityMessage>, 
 /// 单位"(见 `mod tests`)。
 fn assemble_dedup_detailed(
     messages: &[AffinityMessage],
+    tier_capacity: usize,
 ) -> Result<(Vec<AffinityMessage>, AssemblyDiagnostics), &'static str> {
     // === 参与面闸门（R12 W1-1 订正，ADR-298 D2）===
     //
@@ -478,7 +537,8 @@ fn assemble_dedup_detailed(
     // 内核内的预算累计 / 驱逐扣减 / `used_tokens` 全部只经它 ⇒ 与
     // `estimate_message_tokens` 同一把尺子。`max_tokens = usize::MAX` 仍使驱逐
     // 不触发(三条例由见本函数文档),故这一步是**口径统一**而非启用驱逐。
-    let assembled = assemble_context_with(items, &contract, 0, &assembly_token_estimate);
+    let assembled =
+        assemble_context_with(items, &contract, tier_capacity, &assembly_token_estimate);
 
     if assembled.items.is_empty() {
         return Err("装配结果为 0 条(不得用空结果替换非空输入)");
@@ -528,6 +588,7 @@ fn no_participant_diagnostics(contract: &ContextAssemblyContract) -> AssemblyDia
         deduped: 0,
         deduped_normalized: 0,
         evicted: 0,
+        page_rejected: 0,
         budget_tokens: contract.max_tokens,
         used_tokens: 0,
         synthesis_requested: contract.on_demand_synthesis,
@@ -854,6 +915,61 @@ mod tests {
         );
     }
 
+    // ============================================================
+    // 3.4 HCW v3 P1：governor 动态定容（本 Spec A2）
+    // ============================================================
+
+    struct FixedGovernor;
+
+    impl hcw_window::WindowGovernor for FixedGovernor {
+        fn plan(&self, _ctx: &hcw_window::PlanContext) -> hcw_window::WindowPlan {
+            hcw_window::WindowPlan {
+                resident_cap: 800_000,
+                page_budget: 4_000,
+                tier_allocation: hcw_window::TierAlloc::DEFAULT,
+                plan_source: hcw_window::PlanSource::Governor,
+            }
+        }
+    }
+
+    #[test]
+    fn governor_plan_overrides_legacy_budget() {
+        let spec = spec_with_window(1_000_000);
+        let ctx = hcw_window::PlanContext {
+            effective_window: 1_000_000,
+            budget_utilization: 0.0,
+            thinking_mode: "Standard".into(),
+        };
+        let (budget, plan) = conversation_budget_with_plan(
+            &spec,
+            &request(Vec::new(), 3),
+            Some(&FixedGovernor),
+            Some(&ctx),
+        );
+        assert_eq!(budget, 800_000, "governor 开启时预算 = resident_cap");
+        let plan = plan.expect("Governor 来源必须返回 plan 供事件发布");
+        assert_eq!(plan.plan_source, hcw_window::PlanSource::Governor);
+    }
+
+    #[test]
+    fn static_fallback_keeps_legacy_budget() {
+        let spec = spec_with_window(1_000_000);
+        let ctx = hcw_window::PlanContext {
+            effective_window: 1_000_000,
+            budget_utilization: 0.0,
+            thinking_mode: "Standard".into(),
+        };
+        let legacy = conversation_budget(&spec, &request(Vec::new(), 3));
+        let (budget, plan) = conversation_budget_with_plan(
+            &spec,
+            &request(Vec::new(), 3),
+            Some(&hcw_window::StaticGovernor),
+            Some(&ctx),
+        );
+        assert_eq!(budget, legacy, "静态回退必须与 legacy ratio 逐位一致");
+        assert!(plan.is_none(), "静态回退不发布 WindowPlanApplied");
+    }
+
     #[test]
     fn large_window_models_use_default_budget_ratio() {
         // 64K 窗口:Simple 档 = 65536 × 0.25 × 0.6 = 9830.4 → 9830
@@ -968,7 +1084,7 @@ mod tests {
             msg(MessageRole::Tool, "tool ok"),
             msg(MessageRole::User, "继续"),
         ];
-        let (kept, diagnostics) = assemble_dedup_detailed(&messages).expect("装配必须成功");
+        let (kept, diagnostics) = assemble_dedup_detailed(&messages, 0).expect("装配必须成功");
         assert_eq!(kept, messages, "无重复 ⇒ 输出与输入逐条相同(含非参与者)");
 
         // 参与去重的条目 = 内核看到的条目
@@ -1012,7 +1128,7 @@ mod tests {
             msg(MessageRole::User, "继续"),
             msg(MessageRole::Assistant, "好的"),
         ];
-        let (kept, diagnostics) = assemble_dedup_detailed(&messages).expect("空参与面不是故障");
+        let (kept, diagnostics) = assemble_dedup_detailed(&messages, 0).expect("空参与面不是故障");
         assert_eq!(kept, messages, "无参与者 ⇒ 原样放行");
         assert_eq!(diagnostics.deduped, 0);
         assert_eq!(diagnostics.evicted, 0);

@@ -736,11 +736,9 @@ mod tests {
         let Some(start) = SRC.find("fn attribute_results(") else {
             panic!("attribute_results 不在了——这条结构断言的锚点需要先更新");
         };
-        let Some(end) = SRC[start..].find(
-            "
-}
-",
-        ) else {
+        // 行尾无关：Windows 检出可能把源码转成 CRLF，找 `"\n}\n"` 会假红。
+        // 函数体收尾 = 锚点之后第一个「行首 `}`」（函数内层块均缩进，不会误命中）。
+        let Some(end) = SRC[start..].find("\n}") else {
             panic!("找不到 attribute_results 的函数体结尾");
         };
         let body = &SRC[start..start + end];

@@ -1,0 +1,10 @@
+{
+  "basis": "Cargo.toml members 中的 crates/session-store",
+  "id": "session-store",
+  "label": "session-store（L3 会话事件流）",
+  "provenance": {
+    "kind": "named",
+    "ref": "crates/session-store/Cargo.toml"
+  },
+  "type": "rust_crate"
+}

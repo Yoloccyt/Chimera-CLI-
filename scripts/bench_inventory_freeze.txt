@@ -121,3 +121,4 @@ scc-cache|lru_select_victim|dev-only|R11 W2e(ADR-295)LRU 规模标定产物—�
 gqep-executor|plan_dag_skew|dev-only|R12 W0(ADR-296) 偏斜 DAG 基线——既有 toolplan_layers 只测单层,结构上测不出层间 barrier 把长尾放大到整个后代的代价;重开条件=W4 就绪派发落地且偏斜实测显著后按 CI 首跑校准升格 registered
 gqep-executor|sched_plane|dev-only|R12 W0(ADR-296) 跨面过订阅基线——四面各 8 路 vs 共享 8 路预算的在飞峰值与 makespan;bench 内最小复刻,不引用 W6 才落地的 ResourceGovernor;重开条件=W6 治理器接线后按实测升格 registered
 mlc-engine|l2_lock_contention|dev-only|R12 W2-2(ADR-297 邻接) 锁竞争取证基准——以 try_write 成功率证明评分期间写锁空出,并记录写者 p95 随读者数的劣化;非契约面;重开条件=读锁竞争进入生产 p95 观测面时升格 run_bench
+hcw-window|assembly_dedup|dev-only|本 Spec D0-1 生产压缩率基准——固定 200 条/60% 冗余语料,启动即断言 original/used≥2.5;非契约面;重开条件=A5 压缩率门进入 CI 后升格 registered

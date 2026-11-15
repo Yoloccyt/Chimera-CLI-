@@ -671,7 +671,7 @@ pub async fn llm_answer_with(
         .run(
             prompt,
             plane.descriptors(),
-            &CancellationToken::new(),
+            &crate::call_budget::cancel_root().clone(),
             approval,
         )
         .await

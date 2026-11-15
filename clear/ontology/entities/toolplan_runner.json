@@ -1,0 +1,10 @@
+{
+  "basis": "声明式 ToolPlan DAG 的解释执行器（PlanRunner 实现所在文件）",
+  "id": "toolplan_runner",
+  "label": "PlanRunner 计划执行器模块",
+  "provenance": {
+    "kind": "named",
+    "ref": "crates/gqep-executor/src/toolplan_runner.rs"
+  },
+  "type": "rust_module"
+}

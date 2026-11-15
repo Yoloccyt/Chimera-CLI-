@@ -17,6 +17,8 @@ use chimera_cli::tool_plane::{assemble_mcp, FenceGate};
 use mcp_mesh::protocol::CommandGate;
 use nexus_core::config::{default_mcp_servers, McpServerConfig};
 
+mod common;
+
 fn server(id: &str) -> McpServerConfig {
     McpServerConfig {
         id: id.to_string(),
@@ -156,7 +158,7 @@ struct AllowBash;
 
 impl CommandGate for AllowBash {
     fn check(&self, program: &str, _args: &[String]) -> Result<(), String> {
-        if program == "bash" {
+        if common::is_posix_shell(program) {
             Ok(())
         } else {
             Err(format!("{program} is not allowlisted"))
@@ -179,7 +181,7 @@ fn working_fake_server(id: &str) -> McpServerConfig {
   esac
 done"#;
     let mut fake = server(id);
-    fake.command = Some("bash".to_string());
+    fake.command = Some(common::shell_program().to_string());
     fake.args = Some(vec!["-c".to_string(), script.to_string()]);
     fake.enabled = true;
     fake.timeout_ms = 5_000;

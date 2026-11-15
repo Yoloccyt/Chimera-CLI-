@@ -1,0 +1,42 @@
+{
+  "id": "n-u-5tww5k",
+  "kind": "unresolved",
+  "status": "unresolved",
+  "statement": "预测：c≤2（读者很少）时写者应几乎不受阻、单次 insert 应在几十微秒量级。实际：c≤2 档出现 0.62~3.56 秒的病态单次 insert，而同期读者单次最大仅 38~132 ms——写者被阻塞的时长远超任一读者持锁时长，与\"写者优先\"的锁语义相矛盾。三次独立静默跑均复现（runA/runB/runC），at_idx 多为 0（首次插入）。",
+  "touches": [
+    "l2_semantic.rs:544"
+  ],
+  "evidence": [],
+  "about": [
+    "mlc-engine L2 召回读锁（l2_lock_contention bench）",
+    "l2_semantic.rs:544",
+    "hcw-window",
+    "mlc-engine",
+    "cmt-tiering",
+    "session-store",
+    "gqep-executor",
+    "toolplan_runner",
+    "faae-router",
+    "mcp-mesh",
+    "chimera-mas"
+  ],
+  "scope": {
+    "conditions": {
+      "分支": "feat/toolchain-parallel-optimization",
+      "版本": "2.29.0-omega",
+      "edition": "2021",
+      "msrv": "1.97",
+      "批次": "R12"
+    },
+    "ranges": {}
+  },
+  "source": {
+    "session": "session-b3831272-9ad1-4b6d-b4d2-750dfdc2d9ec",
+    "goal": "g-mwg8bz5w5mw5",
+    "anomaly": "u-5tww5k",
+    "by": "model"
+  },
+  "review": null,
+  "at": 1794658196795,
+  "updated": 1794658196795
+}

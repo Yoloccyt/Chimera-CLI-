@@ -1,0 +1,10 @@
+{
+  "domain": "rust_crate",
+  "id": "has_concurrency_bound",
+  "label": "并发上界为",
+  "range": {
+    "form": "quantity",
+    "unit": "1"
+  },
+  "shape": "threshold"
+}

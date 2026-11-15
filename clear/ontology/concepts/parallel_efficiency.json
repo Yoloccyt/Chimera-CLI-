@@ -1,0 +1,7 @@
+{
+  "gloss": "Σ各任务服务时间 ÷ (makespan × 并发上界)；1 表示打到理论上限",
+  "id": "parallel_efficiency",
+  "kind": "measure",
+  "label": "并行效率",
+  "unit": "1"
+}

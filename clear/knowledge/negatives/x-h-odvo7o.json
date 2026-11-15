@@ -1,0 +1,51 @@
+{
+  "id": "x-h-odvo7o",
+  "kind": "excluded",
+  "status": "preliminary_excluded",
+  "statement": "工具执行面的端到端墙钟主要受三处独立并发上界（action 循环 8 / PlanRunner 层内 8 / delegation 8）与写屏障串行叠加约束，而非单次工具执行成本。",
+  "about": [
+    "gqep-executor",
+    "rust_crate",
+    "achieves_parallel_efficiency",
+    "has_dispatch_latency",
+    "hcw-window",
+    "mlc-engine",
+    "cmt-tiering",
+    "session-store",
+    "toolplan_runner",
+    "faae-router",
+    "mcp-mesh",
+    "chimera-mas"
+  ],
+  "scope": {
+    "conditions": {
+      "分支": "feat/toolchain-parallel-optimization",
+      "版本": "2.29.0-omega",
+      "edition": "2021",
+      "msrv": "1.97",
+      "批次": "R12"
+    },
+    "ranges": {}
+  },
+  "strength": {
+    "count": 1,
+    "independent": 0,
+    "preliminary": true
+  },
+  "evidence": [
+    {
+      "id": "e-hrwbqc",
+      "level": "L2",
+      "evaluator": "self",
+      "basis": "推翻条件“上界内实测并发度已饱和”被满足：批量 64×1ms 达 7.97×/8×（效率 99.6%）、单层只读 8×2ms 达 7.94×/8×；且链级固定成本 1.06µs 对 30.67ms 的 MCP 2PC 仅占 0.003%，两条证据都指向“上界与微秒链路不构成墙钟约束”。预测的“若推翻→效率≥0.95”得到命中。"
+    }
+  ],
+  "source": {
+    "session": "session-b3831272-9ad1-4b6d-b4d2-750dfdc2d9ec",
+    "goal": "g-mwg8bz5w5mw5",
+    "hypothesis": "h-odvo7o"
+  },
+  "review": null,
+  "at": 1794651019849,
+  "updated": 1794651019849
+}

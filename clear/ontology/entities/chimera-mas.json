@@ -1,0 +1,10 @@
+{
+  "basis": "Cargo.toml members 中的 crates/chimera-mas",
+  "id": "chimera-mas",
+  "label": "chimera-mas（L9 多 Agent 协同）",
+  "provenance": {
+    "kind": "named",
+    "ref": "crates/chimera-mas/Cargo.toml"
+  },
+  "type": "rust_crate"
+}

@@ -1686,8 +1686,8 @@ fn help_text_has_no_stale_references() {
         .expect("执行 chimera 二进制失败");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("9 个 slash"),
-        "chat --help 应写 \"9 个 slash 命令\", 实际: {}",
+        stdout.contains("6 个 slash"),
+        "chat --help 应写 \"6 个 slash 命令\", 实际: {}",
         stdout
     );
 }

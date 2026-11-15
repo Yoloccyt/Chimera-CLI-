@@ -411,7 +411,9 @@ impl DelegationExecutor {
             event_bus,
             default_timeout,
             task_runner: default_task_runner(),
-            max_concurrency: 8,
+            // 进程级默认上限（`CHIMERA_DELEGATION_MAX_CONCURRENT` 覆盖，启动期一次读取）；
+            // `with_max_concurrency` 可对单个执行器显式收窄（本 Spec Phase 5 契约）。
+            max_concurrency: delegation_max_concurrent(),
             gea: None,
         }
     }
@@ -437,7 +439,7 @@ impl DelegationExecutor {
             event_bus,
             default_timeout,
             task_runner,
-            max_concurrency: 8,
+            max_concurrency: delegation_max_concurrent(),
             gea: None,
         }
     }
@@ -610,7 +612,7 @@ impl DelegationExecutor {
         //
         // Phase 5:每个 poll 单元携带 task_id/agent_id —— JoinError 也能合成一条
         // 失败结果,不丢弃批次内其余已完成结果。
-        let max_concurrent = delegation_max_concurrent();
+        let max_concurrent = self.max_concurrency;
         let permits = Arc::new(Semaphore::new(max_concurrent));
         debug!(
             fanout = sub_task_count,

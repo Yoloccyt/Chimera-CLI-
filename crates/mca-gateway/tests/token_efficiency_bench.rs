@@ -1759,6 +1759,7 @@ async fn run_stress_matrix() {
                     cost_guard: None, // 主矩阵不熔断；成本上限保护由独立场景验证
                     estimator: None,  // 主矩阵保持纯函数字节/4 口径(基线可比)
                     coalescer: None,  // 主矩阵不合并(合并独立场景验证)
+                    ..AdapterOptions::default()
                 },
             )
             .expect("优化适配器装配");

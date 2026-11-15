@@ -1,0 +1,10 @@
+{
+  "basis": "Cargo.toml members 中的 crates/hcw-window",
+  "id": "hcw-window",
+  "label": "hcw-window（L2 记忆层）",
+  "provenance": {
+    "kind": "named",
+    "ref": "crates/hcw-window/Cargo.toml"
+  },
+  "type": "rust_crate"
+}

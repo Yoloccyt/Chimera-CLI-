@@ -1,0 +1,6 @@
+{
+  "domain": "rust_crate",
+  "id": "contains_module",
+  "label": "包含模块",
+  "range": "rust_module"
+}

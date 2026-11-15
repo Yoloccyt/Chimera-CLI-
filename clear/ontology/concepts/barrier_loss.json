@@ -1,0 +1,7 @@
+{
+  "gloss": "层间 barrier 造成的额外墙钟占 makespan 的比例；均匀负载趋近 0，偏斜负载随长尾放大",
+  "id": "barrier_loss",
+  "kind": "measure",
+  "label": "屏障损失比",
+  "unit": "1"
+}

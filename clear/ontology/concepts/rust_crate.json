@@ -1,0 +1,6 @@
+{
+  "gloss": "Chimera CLI workspace 的一个成员包，位于 crates/ 下并拥有独立 Cargo.toml；计数以 crates/*/Cargo.toml 现取",
+  "id": "rust_crate",
+  "kind": "category",
+  "label": "Rust 工作区成员包"
+}

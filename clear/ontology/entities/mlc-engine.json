@@ -1,0 +1,10 @@
+{
+  "basis": "Cargo.toml members 中的 crates/mlc-engine",
+  "id": "mlc-engine",
+  "label": "mlc-engine（L2 记忆层）",
+  "provenance": {
+    "kind": "named",
+    "ref": "crates/mlc-engine/Cargo.toml"
+  },
+  "type": "rust_crate"
+}

@@ -87,6 +87,67 @@ impl PlanSource {
     }
 }
 
+/// R/S/E/M 四层配额拆分（本 Spec A3：让 `tier_allocation` 成为运行行为）
+///
+/// 由 [`WindowPlan::tier_budget`] 从 `resident_cap × tier_allocation` 派生；
+/// 四项之和恒等于 `resident_cap`（整数取整误差 ≤ 3 token，由 resident 项吸收）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TierBudget {
+    /// 常驻层配额（System/User/Assistant）
+    pub resident: u32,
+    /// 结构化层配额（Tool）
+    pub structured: u32,
+    /// 情景层配额（Memory）
+    pub episodic: u32,
+    /// 语义层配额（Retrieval）
+    pub semantic: u32,
+    /// 单页装载上限（码元）
+    pub page_budget: u32,
+}
+
+impl TierBudget {
+    /// 装配内核可用的总容量（S+E+M；R 由对话窗口自身持有）
+    pub fn assembly_capacity(&self) -> u32 {
+        self.structured
+            .saturating_add(self.episodic)
+            .saturating_add(self.semantic)
+    }
+
+    /// 四项之和
+    pub fn total(&self) -> u32 {
+        self.resident
+            .saturating_add(self.structured)
+            .saturating_add(self.episodic)
+            .saturating_add(self.semantic)
+    }
+}
+
+impl WindowPlan {
+    /// 派生 R/S/E/M 配额拆分（本 Spec A3）
+    ///
+    /// WHY 由 plan 派生而非另建配置：`tier_allocation` 是 governor 的决策输出，
+    /// 只写事件不回读就是"契约空转"（R12 §11.1）。本方法让装配面有唯一入口。
+    pub fn tier_budget(&self) -> TierBudget {
+        let alloc = self.tier_allocation;
+        let resident = (self.resident_cap as f32 * alloc.resident) as u32;
+        let structured = (self.resident_cap as f32 * alloc.structured) as u32;
+        let episodic = (self.resident_cap as f32 * alloc.episodic) as u32;
+        // 语义层吸收取整余量，保证四项之和 = resident_cap
+        let semantic = self
+            .resident_cap
+            .saturating_sub(resident)
+            .saturating_sub(structured)
+            .saturating_sub(episodic);
+        TierBudget {
+            resident,
+            structured,
+            episodic,
+            semantic,
+            page_budget: self.page_budget,
+        }
+    }
+}
+
 /// 每请求窗口装载计划（蓝图 §六 Rust 类型草案落地）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WindowPlan {
@@ -292,6 +353,35 @@ mod tests {
         let plan = AdaptiveGovernor::new().plan(&ctx(100_000, 0.0, "Deep"));
         assert_eq!(plan.resident_cap, 90_000);
         assert!(plan.resident_cap <= 100_000);
+    }
+
+    #[test]
+    fn tier_budget_sums_to_resident_cap() {
+        let plan = AdaptiveGovernor::new().plan(&ctx(1_000_000, 0.0, "Standard"));
+        let budget = plan.tier_budget();
+        assert_eq!(
+            budget.total(),
+            plan.resident_cap,
+            "四项之和必须等于 resident_cap"
+        );
+        assert_eq!(budget.resident, 480_000, "0.6 × 800K");
+        assert_eq!(budget.structured, 160_000, "0.2 × 800K");
+        assert_eq!(budget.episodic, 80_000, "0.1 × 800K");
+        assert_eq!(budget.semantic, 80_000, "0.1 × 800K");
+        assert_eq!(budget.assembly_capacity(), 320_000, "S+E+M");
+        assert_eq!(budget.page_budget, 4_000);
+    }
+
+    #[test]
+    fn tier_budget_absorbs_rounding_remainder() {
+        let plan = WindowPlan {
+            resident_cap: 1_001,
+            page_budget: 4_000,
+            tier_allocation: TierAlloc::DEFAULT,
+            plan_source: PlanSource::Governor,
+        };
+        let budget = plan.tier_budget();
+        assert_eq!(budget.total(), 1_001, "取整余量由 semantic 吸收");
     }
 
     #[test]

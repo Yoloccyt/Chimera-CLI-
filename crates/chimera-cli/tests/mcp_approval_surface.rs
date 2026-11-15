@@ -27,12 +27,14 @@ use mcp_mesh::protocol::{
 use nexus_contracts::tool_plan::SideEffectDecl;
 use tokio_util::sync::CancellationToken;
 
-/// 只放行 bash 的闸门（这些用例专测审批面，不测 SecCore 白名单）。
+mod common;
+
+/// 只放行 POSIX shell 的闸门（这些用例专测审批面，不测 SecCore 白名单）。
 struct AllowBash;
 
 impl CommandGate for AllowBash {
     fn check(&self, program: &str, _args: &[String]) -> Result<(), String> {
-        if program == "bash" {
+        if common::is_posix_shell(program) {
             Ok(())
         } else {
             Err(format!("{program} is not allowlisted"))
@@ -61,6 +63,8 @@ done"#;
         "mcp:\n  servers:\n    - id: {id}\n      command: bash\n      enabled: true\n      timeout_ms: 5000\n"
     );
     let mut config: ChimeraConfig = serde_yaml::from_str(&yaml).expect("yaml must parse");
+    // shell 程序在解析后注入：YAML 里写死 `bash` 在 Windows 可能落到 WSL 桩。
+    config.mcp.servers[0].command = Some(common::shell_program().to_string());
     config.mcp.servers[0].args = Some(vec!["-c".to_string(), script.to_string()]);
     assert!(
         !config.mcp.servers[0].trust_readonly_hints,

@@ -1,0 +1,9 @@
+{
+  "domain": "rust_crate",
+  "id": "has_dispatch_latency",
+  "label": "派发固定开销",
+  "range": {
+    "form": "quantity",
+    "unit": "µs"
+  }
+}

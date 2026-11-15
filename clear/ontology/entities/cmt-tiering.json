@@ -1,0 +1,10 @@
+{
+  "basis": "Cargo.toml members 中的 crates/cmt-tiering",
+  "id": "cmt-tiering",
+  "label": "cmt-tiering（L3 存储层）",
+  "provenance": {
+    "kind": "named",
+    "ref": "crates/cmt-tiering/Cargo.toml"
+  },
+  "type": "rust_crate"
+}

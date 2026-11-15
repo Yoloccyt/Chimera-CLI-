@@ -1,0 +1,10 @@
+{
+  "domain": "rust_crate",
+  "id": "wired_in_production",
+  "label": "生产调用点数量",
+  "range": {
+    "form": "quantity",
+    "unit": "1"
+  },
+  "shape": "threshold"
+}

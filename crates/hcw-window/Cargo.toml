@@ -104,6 +104,10 @@ harness = false
 name = "probe_select"
 harness = false
 
+[[bench]]
+name = "assembly_dedup"
+harness = false
+
 
 
 # E-5 lint ratchet opt-in (docs/reports/arch-quality-deep-review-2026-09-25.md)

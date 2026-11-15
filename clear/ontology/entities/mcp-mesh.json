@@ -1,0 +1,10 @@
+{
+  "basis": "Cargo.toml members 中的 crates/mcp-mesh",
+  "id": "mcp-mesh",
+  "label": "mcp-mesh（L10 跨进程通信）",
+  "provenance": {
+    "kind": "named",
+    "ref": "crates/mcp-mesh/Cargo.toml"
+  },
+  "type": "rust_crate"
+}

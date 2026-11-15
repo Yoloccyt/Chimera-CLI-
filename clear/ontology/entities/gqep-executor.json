@@ -1,0 +1,10 @@
+{
+  "basis": "Cargo.toml members 中的 crates/gqep-executor",
+  "id": "gqep-executor",
+  "label": "gqep-executor（L7 执行层）",
+  "provenance": {
+    "kind": "named",
+    "ref": "crates/gqep-executor/Cargo.toml"
+  },
+  "type": "rust_crate"
+}

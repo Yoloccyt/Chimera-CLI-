@@ -90,8 +90,9 @@ pub use coalescing::{
 pub use codec::{Codec, DecodedResponse};
 // R12 W1-1:装配内核接线的开关面与纯函数分派入口(默认关闭,关态逐字节等价旧路径)
 pub use conversation_trim::{
-    assembly_wiring, conversation_budget, estimate_tokens, parse_assembly_wiring, trim_to_budget,
-    trim_to_budget_legacy, trim_to_budget_with, AssemblyWiring, ASSEMBLY_WIRED_ENV,
+    assembly_wiring, conversation_budget, conversation_budget_with_plan, estimate_tokens,
+    parse_assembly_wiring, trim_to_budget, trim_to_budget_legacy, trim_to_budget_with,
+    trim_to_budget_with_tier, AssemblyWiring, ASSEMBLY_WIRED_ENV,
 };
 pub use cost_guard::{CostGuard, CostGuardError};
 pub use early_stop::{EarlyStopController, StopDecision, StopReason};

@@ -1,0 +1,9 @@
+{
+  "domain": "rust_crate",
+  "id": "achieves_parallel_efficiency",
+  "label": "实测并行效率",
+  "range": {
+    "form": "quantity",
+    "unit": "1"
+  }
+}

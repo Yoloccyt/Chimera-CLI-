@@ -1,0 +1,10 @@
+{
+  "basis": "Cargo.toml members 中的 crates/faae-router",
+  "id": "faae-router",
+  "label": "faae-router（L6 路由层）",
+  "provenance": {
+    "kind": "named",
+    "ref": "crates/faae-router/Cargo.toml"
+  },
+  "type": "rust_crate"
+}
