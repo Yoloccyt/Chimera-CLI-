@@ -2,7 +2,7 @@
 //! LAYER:    L10
 //! ROLE:     多通道亲和网关 — MCA(Model-Channel Affinity)体系的 L10 通道层
 //! BACKEND:  sqlite
-//! PRODUCERS: 6 AffinityQuotaExhausted,BudgetExceeded,ModelAffinitySelected,SemanticCacheHit,StreamSessionCompleted…
+//! PRODUCERS: 9 AffinityQuotaExhausted,BudgetExceeded,ContextCapabilityUpdated,ModelAffinitySelected,ProviderDegraded…
 //! CONSUMERS: 0 -
 //! MATURITY: NOT-IMPL-CN
 //! CRATE-CONTRACT END

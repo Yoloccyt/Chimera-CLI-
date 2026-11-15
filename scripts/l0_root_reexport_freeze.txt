@@ -14,6 +14,7 @@ core_domain::graph_identity
 core_domain::task
 core_domain::temporal
 mca::affinity
+mca::context_capability
 mca::omni_message
 mca::price_vector
 memory::archive_monotonicity

@@ -31,6 +31,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gate_rc  # noqa: E402  (崩溃退 2 不借 1; F33/C2 入口契约)
+
 # impl 头：允许泛型参数与 trait 的完整路径前缀（gqep_executor::ToolExecutor）
 IMPL_RE = re.compile(
     r"impl\s*(?:<[^>]*>)?\s*(?:[\w:]+::)*ToolExecutor\s+for\s+(\w+)"
@@ -288,4 +291,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(gate_rc.run(main))

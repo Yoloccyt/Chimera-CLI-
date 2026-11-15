@@ -13,7 +13,7 @@
 //!
 //! # 核心职责
 //! - 提供类型安全的发布订阅(typed broadcast bus)
-//! - 定义全部 154 类 NexusEvent 跨层事件变体(本行保留计数:它是
+//! - 定义全部 156 类 NexusEvent 跨层事件变体(本行保留计数:它是
 //!   `scripts/check_doc_drift.sh` DECLS「全部 N 类」锚点,数值由 G-37 门
 //!   与代码实测逐次对拍;改本行必须与 `tests/variant_count_test.rs` 的
 //!   `VARIANT_COUNT_LOCK` 和 `scripts/doc_count_freeze.txt` 同批,否则

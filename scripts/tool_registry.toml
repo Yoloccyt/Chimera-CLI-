@@ -423,3 +423,9 @@ script = "scripts/energy_profile.ps1"
 status = "diagnostic"
 owner = "perf"
 evidence = "ADR-265 RSS 双口径采样（窗口峰值+均值 / PeakWorkingSet64 生存期峰值）；dev-only 手动诊断面 (measured 2026-11-12)"
+
+[[tool]]
+script = "scripts/measure_rss.ps1"
+status = "diagnostic"
+owner = "perf"
+evidence = "R12 D0-3 内存门固定场景峰值 RSS 采样器（PeakWorkingSet64 轮询取 max，Windows 无 /usr/bin/time -v 的替代）；pwsh 手动按需运行，never block | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-11-14)"

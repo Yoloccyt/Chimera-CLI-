@@ -126,7 +126,7 @@ cmd = "{python} scripts/audit_phaseR_spec.py"
 expect = 1
 kind = "light"
 test_kind = "cross_crate"
-note = "按 Spec 字面条目判 PROVEN/NOT PROVEN/MISSING；当前唯一非 PROVEN 是 T6 heredoc 延后（按设计为 1）"
+note = "按 Spec 字面条目判 PROVEN/NOT PROVEN/MISSING；非 PROVEN：T3-④ agents.md v2.27.1 措辞（check 关键词漂移，登记待修）+ T6 heredoc 延后（按设计为 1）；T3-④ Dockerfile 已改动态对拍 workspace.package.version（W0-8）"
 ci_exempt = "按设计 expect=1（T6 heredoc 延后）；不进 CI 阻塞面，收口时本地跑"
 
 [[gate]]

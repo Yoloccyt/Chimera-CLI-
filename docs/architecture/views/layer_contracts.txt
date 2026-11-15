@@ -9,7 +9,7 @@ L0  nexus-contracts-sparse BACKEND=memory   PROD=0   CONS=1   MATURITY=TRUE  :: 
 L1  event-bus              BACKEND=fs       PROD=3   CONS=34  MATURITY=TRUE  :: 事件总线 — 基于 tokio::broadcast + MessagePack 的跨层通信通道
 L1  nexus-core             BACKEND=fs       PROD=2   CONS=23  MATURITY=TRUE  :: 核心状态与领域类型 — 维护 NexusState、UserIntent、CLV 等全局领域模型
 L1  nexus-telemetry        BACKEND=memory   PROD=2   CONS=1   MATURITY=TRUE  :: NEXUS-OMEGA L0-B 核心基础面 — 计算面遥测契约与上报编排（ADR-222 D3）
-L2  hcw-window             BACKEND=memory   PROD=5   CONS=3   MATURITY=TRUE  :: 分层上下文窗口 - 4K/32K/128K/1M 四级上下文窗口管理
+L2  hcw-window             BACKEND=memory   PROD=6   CONS=3   MATURITY=TRUE  :: 分层上下文窗口 - 4K/32K/128K/1M 四级上下文窗口管理
 L2  mlc-engine             BACKEND=sqlite   PROD=4   CONS=1   MATURITY=PLACEHOLDER-CN :: 四级潜在记忆引擎  L0-L3 神经形态记忆分级存储与检索
 L2  nmc-encoder            BACKEND=fs       PROD=1   CONS=3   MATURITY=DEFERRED|PLACEHOLDER-CN :: 神经多模态上下文编码器 — 将多模态输入编码为统一的潜在表示
 L3  cmt-tiering            BACKEND=sqlite   PROD=3   CONS=1   MATURITY=TRUE  :: 能力内存四级分层 — 热/温/冷/冰四级能力存储与自动迁移
@@ -42,6 +42,6 @@ L10 chimera-cli            BACKEND=fs       PROD=14  CONS=0   MATURITY=NOT-IMPL-
 L10 chimera-tui            BACKEND=sqlite   PROD=9   CONS=1   MATURITY=SIMPLIFIED-CN :: Chimera TUI — 基于 Ratatui 的多面板终端用户界面
 L10 chtc-bridge            BACKEND=memory   PROD=2   CONS=0   MATURITY=MOCK-ONLY :: 跨平台工具兼容桥 — 5 大 IDE 的工具调用兼容适配层
 L10 csn-substitutor        BACKEND=memory   PROD=1   CONS=0   MATURITY=TRUE  :: 能力替代网络(CSN)— 能力降级链,在缺失时自动寻找替代实现
-L10 mca-gateway            BACKEND=sqlite   PROD=6   CONS=0   MATURITY=NOT-IMPL-CN :: 多通道亲和网关 — MCA(Model-Channel Affinity)体系的 L10 通道层
+L10 mca-gateway            BACKEND=sqlite   PROD=9   CONS=0   MATURITY=NOT-IMPL-CN :: 多通道亲和网关 — MCA(Model-Channel Affinity)体系的 L10 通道层
 L10 mcp-mesh               BACKEND=fs       PROD=3   CONS=1   MATURITY=NOT-IMPL-CN|PLACEHOLDER-CN :: MCP 量子网格 — Model Context Protocol 的量子化网格通信层
 L10 nexus-app-server       BACKEND=memory   PROD=1   CONS=2   MATURITY=TRUE  :: NEXUS-OMEGA L10 宿主层协议门面 — 核心-表面分离（WI-01）

@@ -87,10 +87,18 @@ cl = read(".claude/CLAUDE.md") or ""
 verdict("T3-④ CLAUDE.md 锚点改指", "PROVEN" if "AGENTS.md" in cl and "7.2" in cl else "MISSING",
         "§7.2 引用检查")
 dk = read("Dockerfile") or ""
-# 实际写法是 `ARG VERSION=2.28.0-omega`（无空格）；要求 \s+ 会把已改好的值误报为缺失。
+# 实际写法是 `ARG VERSION=2.29.0-omega`（无空格）；要求 \s+ 会把已改好的值误报为缺失。
+# T3-④ 动态对拍（W0-8）：ARG 默认值必须与 Cargo.toml workspace.package.version 逐字一致
+# （版本唯一权威源）。旧写法钉死 2.28.0 前缀，版本一升即 MISSING 并被 G-10 expect=1 遮蔽。
 m = re.search(r"ARG\s+VERSION\s*=?\s*(\S+)", dk)
-verdict("T3-④ Dockerfile ARG VERSION=2.28.0", "PROVEN" if m and m.group(1).startswith("2.28.0") else "MISSING",
-        m.group(0) if m else "未见 ARG VERSION")
+wsver = None
+wsec = re.search(r"\[workspace\.package\]([^\[]*)", read("Cargo.toml") or "", re.S)
+if wsec:
+    wvm = re.search(r'(?m)^version\s*=\s*"([^"]+)"', wsec.group(1))
+    wsver = wvm.group(1) if wvm else None
+verdict("T3-④ Dockerfile ARG VERSION 与 workspace 版本一致",
+        "PROVEN" if (m and wsver and m.group(1) == wsver) else "MISSING",
+        f"{m.group(0) if m else '未见 ARG VERSION'} vs workspace={wsver}")
 
 # --- RK-P31..34 是否入册 ---
 rk = read("docs/governance/RK-P_risk_register.md") or ""

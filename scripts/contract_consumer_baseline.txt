@@ -20,7 +20,7 @@ BlockedPattern
 BlueprintSource
 BlueprintStep
 CalibrationSample
-CalibrationTier  # R9/ADR-291: L0 能力档案三档置信度——mca-gateway 探针写入侧已规划，第二消费者随 WP-B/C 接线增长
+
 CapabilityTokenStatus
 CertifyPayload
 CertifyPayload
