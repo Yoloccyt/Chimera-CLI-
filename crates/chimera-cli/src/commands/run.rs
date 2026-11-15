@@ -30,7 +30,7 @@ use gqep_executor::tool_runtime::{
     BatchLimits, BatchOutcome, DispatchError, DispatchOutcome, DispatchRequest,
 };
 use gqep_executor::MAX_GATHER_FANOUT;
-use nexus_core::{MultimodalInput, Quest, UserIntent};
+use nexus_contracts::{MultimodalInput, Quest, UserIntent};
 use quest_engine::decompose::DependencyMode;
 use std::collections::HashMap;
 use tokio_util::sync::CancellationToken;

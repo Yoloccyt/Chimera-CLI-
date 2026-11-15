@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 use chimera_tui::{TuiApp, TuiConfig};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use nexus_core::Quest;
+use nexus_contracts::Quest;
 
 /// 串行化涉及全局 locale 的测试(与既有集成测试同范式)
 static LOCALE_LOCK: Mutex<()> = Mutex::new(());

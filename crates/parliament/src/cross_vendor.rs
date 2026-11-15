@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::affinity::ProviderId;
-use nexus_core::Quest;
+use nexus_contracts::Quest;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 

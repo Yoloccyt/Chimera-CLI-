@@ -141,7 +141,7 @@ pub fn dependency_inference(mode: DependencyMode) -> Box<dyn DependencyInference
 mod tests {
     use super::*;
     use crate::dag::validate_dag;
-    use nexus_core::{Task, TaskStatus};
+    use nexus_contracts::{Task, TaskStatus};
     use proptest::prelude::*;
 
     /// 词库:覆盖序数/承接词/独立句三类(heuristic_always_dag 的句子来源)

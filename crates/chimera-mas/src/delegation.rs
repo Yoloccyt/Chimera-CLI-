@@ -198,7 +198,7 @@ impl AgentTask {
     ///
     /// ```no_run
     /// use chimera_mas::prelude::*;
-    /// use nexus_core::{Task, TaskStatus};
+    /// use nexus_contracts::{Task, TaskStatus};
     /// use std::time::Duration;
     ///
     /// let task = Task {
@@ -252,7 +252,7 @@ impl AgentTask {
     /// ```no_run
     /// use chimera_mas::prelude::*;
     /// use event_bus::TaskPriority;
-    /// use nexus_core::{Task, TaskStatus};
+    /// use nexus_contracts::{Task, TaskStatus};
     /// use std::time::Duration;
     ///
     /// let task = Task {
@@ -951,7 +951,7 @@ async fn execute_single_task(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use nexus_core::{Task, TaskStatus};
+    use nexus_contracts::{Task, TaskStatus};
 
     fn make_test_task(complexity: TaskComplexity, latency: Duration) -> AgentTask {
         let inner = Task {

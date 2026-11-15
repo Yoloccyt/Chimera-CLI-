@@ -39,7 +39,7 @@ use chimera_tui::{
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use event_bus::{BudgetMetricsPayload, EventMetadata, NexusEvent};
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use std::collections::VecDeque;

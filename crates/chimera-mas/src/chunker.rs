@@ -564,7 +564,7 @@ mod tests {
     use crate::delegation::QualityLevel;
     use crate::scheduler::{PriorityScheduler, WsjfInput};
     use event_bus::TaskPriority;
-    use nexus_core::{Task, TaskStatus};
+    use nexus_contracts::{Task, TaskStatus};
     use std::collections::HashSet;
     use std::time::Duration;
 
@@ -877,7 +877,7 @@ mod tests {
     #[test]
     fn test_thinking_mode_mapping_from_task_complexity() {
         // 验证 From<TaskComplexity> for ThinkingMode 映射(在 delegation.rs 实现)
-        use nexus_core::ThinkingMode;
+        use nexus_contracts::ThinkingMode;
 
         assert_eq!(
             ThinkingMode::from(TaskComplexity::Simple),
@@ -904,7 +904,7 @@ mod tests {
         // Medium → Standard + L1(32K)
         // Complex → Deep + L2(128K)
         // VeryComplex → Deep + L3(1M 等效)
-        use nexus_core::ThinkingMode;
+        use nexus_contracts::ThinkingMode;
 
         let cases = [
             (TaskComplexity::Simple, ContextTier::L0, ThinkingMode::Fast),

@@ -19,7 +19,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
 use event_bus::{NexusEvent, QuestStatus};
-use nexus_core::{Quest, TaskStatus};
+use nexus_contracts::{Quest, TaskStatus};
 
 use crate::types::TuiState;
 
@@ -236,7 +236,7 @@ fn task_depths(quest: &Quest) -> std::collections::HashMap<String, usize> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use nexus_core::Task;
+    use nexus_contracts::Task;
 
     /// 构造最小 TuiState 测试夹具
     fn state_with_quest(tasks: Vec<Task>) -> TuiState {

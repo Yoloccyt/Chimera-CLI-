@@ -41,7 +41,7 @@ use chimera_tui::data::{DataSnapshot, DataSourceConfig, TuiDataSource};
 use chimera_tui::types::TimelineSnapshot;
 use chimera_tui::{TuiApp, TuiConfig, TuiError};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

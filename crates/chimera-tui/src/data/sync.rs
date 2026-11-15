@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use event_bus::{ChatStatus, NexusEvent};
 use nexus_contracts::app::AppEvent;
-use nexus_core::Quest;
+use nexus_contracts::Quest;
 
 use super::snapshot::{
     AsaInterventionSummary, BudgetMetrics, HealthMetrics, MemoryMetrics, RedTeamAuditSummary,

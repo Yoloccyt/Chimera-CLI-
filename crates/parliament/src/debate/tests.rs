@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use super::*;
 use event_bus::NexusEvent;
-use nexus_core::{Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Task, TaskStatus, ThinkingMode};
 
 fn make_parliament() -> Parliament {
     let config = ParliamentConfig::default();

@@ -20,7 +20,7 @@ use chimera_tui::engine::compat::{from_ratatui_buffer, from_ratatui_modifier};
 use chimera_tui::engine::Buffer as EngineBuffer;
 use chimera_tui::panels::{Panel, QuestPanel};
 use chimera_tui::TuiState;
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::buffer::Buffer as RatBuffer;
 use ratatui::layout::{Position as RatPosition, Rect as RatRect};
 

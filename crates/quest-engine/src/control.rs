@@ -148,7 +148,7 @@ pub fn spawn_control_subscriber_with_receiver(
 mod tests {
     use super::*;
     use event_bus::EventMetadata;
-    use nexus_core::{MultimodalInput, UserIntent};
+    use nexus_contracts::{MultimodalInput, UserIntent};
     use std::sync::Arc;
 
     use crate::QuestEngine;

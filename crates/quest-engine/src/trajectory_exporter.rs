@@ -59,7 +59,7 @@
 //! ```
 
 use chrono::{DateTime, Utc};
-use nexus_core::{Checkpoint, Quest, TaskStatus, ThinkingMode};
+use nexus_contracts::{Checkpoint, Quest, TaskStatus, ThinkingMode};
 use serde::{Deserialize, Serialize};
 
 use crate::error::QuestError;
@@ -392,7 +392,7 @@ pub fn export_trajectory_from_quest(checkpoint: &Checkpoint, quest: &Quest) -> Q
 mod tests {
     use super::*;
     use chrono::Utc;
-    use nexus_core::{MultimodalInput, Task, UserIntent};
+    use nexus_contracts::{MultimodalInput, Task, UserIntent};
 
     // ============================================================
     // 测试夹具

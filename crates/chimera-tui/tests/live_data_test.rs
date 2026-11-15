@@ -12,7 +12,7 @@ use chimera_tui::{
     BudgetMetrics, DataPipeline, DataSourceConfig, EventSubscriber, PanelId, TuiApp, TuiConfig,
 };
 use event_bus::{BudgetMetricsPayload, EventBus, EventMetadata, NexusEvent};
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 

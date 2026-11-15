@@ -21,7 +21,7 @@ use crate::panels::Panel;
 use crate::popup::PopupKind;
 use crate::types::{PanelId, TuiCommand, TuiState};
 use nexus_contracts::domain::ThinkingMode;
-use nexus_core::{Quest, TaskStatus};
+use nexus_contracts::{Quest, TaskStatus};
 
 /// ThinkingMode → i18n 标签(US-01 防 Debug 泄漏)
 ///
@@ -740,7 +740,7 @@ impl Panel for QuestPanel {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+    use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
     use proptest::prelude::*;
 
     fn sample_quest(id: &str, title: &str) -> Quest {

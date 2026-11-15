@@ -22,7 +22,7 @@ use gqep_executor::tool_plane::{
 };
 use mas_sched::{PeerScheduler, SimplePeerScheduler};
 use nexus_contracts::tool_plan::SideEffectDecl;
-use nexus_core::UserIntent;
+use nexus_contracts::UserIntent;
 use quest_engine::{DagMode, QuestConfig, QuestEngine};
 use serde_json::Value;
 use tokio::sync::Barrier;

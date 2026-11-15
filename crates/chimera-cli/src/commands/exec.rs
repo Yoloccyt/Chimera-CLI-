@@ -23,7 +23,7 @@
 use anyhow::Result;
 use gqep_executor::toolplan_runner::TruncationReason;
 use nexus_contracts::spec::tool_plan::ToolPlan;
-use nexus_core::{MultimodalInput, UserIntent};
+use nexus_contracts::{MultimodalInput, UserIntent};
 use serde::Serialize;
 use uuid::Uuid;
 

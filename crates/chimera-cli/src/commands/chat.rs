@@ -41,7 +41,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use event_bus::{EventBus, NexusEvent};
-use nexus_core::{MultimodalInput, UserIntent};
+use nexus_contracts::{MultimodalInput, UserIntent};
 use quest_engine::QuestEngine;
 use uuid::Uuid;
 

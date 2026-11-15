@@ -299,7 +299,7 @@ fn test_multiple_panels_marked_when_multiple_fields_change() {
 
 #[test]
 fn test_quest_change_marks_quest_only() {
-    use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+    use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 
     let quest = Quest {
         quest_id: "q-test".into(),

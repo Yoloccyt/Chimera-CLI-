@@ -23,7 +23,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use nexus_core::Task;
+use nexus_contracts::Task;
 
 use crate::error::QuestError;
 
@@ -256,7 +256,7 @@ pub fn sort_tasks_topologically(tasks: Vec<Task>) -> Result<Vec<Task>, QuestErro
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use nexus_core::{Task, TaskStatus};
+    use nexus_contracts::{Task, TaskStatus};
 
     fn make_task(id: &str, deps: Vec<&str>) -> Task {
         Task {

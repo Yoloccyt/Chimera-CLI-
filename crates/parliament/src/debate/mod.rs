@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use futures::stream::{FuturesUnordered, StreamExt};
-use nexus_core::Quest;
+use nexus_contracts::Quest;
 use tracing::{error, info, warn};
 
 use crate::config::ParliamentConfig;

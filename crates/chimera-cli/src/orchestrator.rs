@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use event_bus::{ChatStatus, EventBus, EventBusError, EventMetadata, NexusEvent};
-use nexus_core::{MultimodalInput, Quest, UserIntent};
+use nexus_contracts::{MultimodalInput, Quest, UserIntent};
 use quest_engine::{QuestEngine, QuestError};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -331,7 +331,7 @@ pub fn spawn_quest_orchestrator(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use nexus_core::{Task, TaskStatus, ThinkingMode};
+    use nexus_contracts::{Task, TaskStatus, ThinkingMode};
 
     // === ADR-280：流式节流的三层优先级（纯函数，无 env/无 TTY 依赖） ===
 

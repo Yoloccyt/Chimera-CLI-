@@ -4,8 +4,8 @@ use crate::types::Consensus;
 use crate::types::Opinion;
 use crate::types::Proposal;
 use crate::types::Role;
-use nexus_core::Quest;
-use nexus_core::ThinkingMode;
+use nexus_contracts::Quest;
+use nexus_contracts::ThinkingMode;
 /// 共识结果→审议结果标签(DebateCompleted 事件的 outcome 字段)
 ///
 /// WHY 独立函数:标签取值("Reached"/"Rejected"/"Vetoed")是事件契约的

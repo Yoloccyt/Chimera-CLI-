@@ -25,7 +25,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use nexus_core::{Checkpoint, Quest};
+use nexus_contracts::{Checkpoint, Quest};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
@@ -667,7 +667,7 @@ mod tests {
         AtomicOperator, CardMetadata, ExecutionStatus, ThreeFactorScore,
     };
     use nexus_contracts::ExperienceCard;
-    use nexus_core::{MultimodalInput, Task, TaskStatus, ThinkingMode, UserIntent};
+    use nexus_contracts::{MultimodalInput, Task, TaskStatus, ThinkingMode, UserIntent};
     use tempfile::tempdir;
 
     /// 构造卫星态测试用经验卡片(搜索树扩展节点)

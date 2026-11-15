@@ -33,7 +33,7 @@ use mas_sched::{
     TodoClaim, HANDOFF,
 };
 use nexus_contracts::tool_plan::ToolPlan;
-use nexus_core::{Quest, Task, TaskStatus};
+use nexus_contracts::{Quest, Task, TaskStatus};
 use quest_engine::{DagMode, QuestEngine, QuestError};
 use serde::Serialize;
 use tokio::sync::Semaphore;

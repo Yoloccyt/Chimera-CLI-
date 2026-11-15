@@ -26,7 +26,8 @@ use std::time::Instant;
 use dashmap::DashMap;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::BudgetTier;
-use nexus_core::{Checkpoint, Quest, Task, TaskStatus, ThinkingMode, UserIntent};
+// B4a/ADR-311: 领域类型直连 L0（nexus-core 仅保留 NexusState/StateChangeListener 面）
+use nexus_contracts::{Checkpoint, Quest, Task, TaskStatus, ThinkingMode, UserIntent};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -1092,7 +1093,7 @@ fn simple_hash(input: &str) -> String {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use nexus_core::MultimodalInput;
+    use nexus_contracts::MultimodalInput;
 
     fn make_intent(text: &str) -> UserIntent {
         UserIntent {

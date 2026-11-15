@@ -29,7 +29,7 @@ use chimera_tui::data::curator::{
 };
 use chimera_tui::types::{ChatMessage, ChatRole};
 use event_bus::{EventBus, EventBusError, EventMetadata, NexusEvent, TuiChatMessagePayload};
-use nexus_core::{MultimodalInput, UserIntent};
+use nexus_contracts::{MultimodalInput, UserIntent};
 use quest_engine::QuestEngine;
 use serde_json::Value;
 use tokio::task::JoinHandle;

@@ -9,7 +9,7 @@ use chimera_tui::{
     DataSnapshot, DataSourceConfig, HealthMetrics, PanelId, TuiApp, TuiConfig, TuiDataSource,
     TuiError,
 };
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use std::sync::Mutex;

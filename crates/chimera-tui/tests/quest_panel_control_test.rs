@@ -22,7 +22,7 @@
 use chimera_tui::{PopupKind, TuiApp, TuiConfig};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use event_bus::NexusEvent;
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 
 /// 构造单个 Quest(指定 ID 与优先级)
 fn make_quest(id: &str, priority: u8) -> Quest {

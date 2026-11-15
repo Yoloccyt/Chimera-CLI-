@@ -7,7 +7,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
-use event_bus::SegmentAwarePER;
+// B5/ADR-312: 原 `use event_bus::SegmentAwarePER` 已随 segment_per 子系统退役。
 use nexus_contracts::rl_types::{MemPiAction, RLAction, RLExperience, RLState};
 use nexus_contracts::token_evidence::{SegmentCreationReason, SegmentMetadata};
 use nexus_contracts::SeamId;
@@ -123,12 +123,13 @@ fn unknown_trajectory_returns_error() {
 }
 
 // ----------------------------------------------------------
-// L1 SegmentAwarePER 协同闭环
+// anchor 终局奖励传播闭环（B5/ADR-312 订正：原「L1 SegmentAwarePER 协同」
+// 半边随 segment_per 子系统退役；本测试保留 L7 validator 半边覆盖）
 // ----------------------------------------------------------
 
 #[test]
-fn segment_per_collaboration_closure() {
-    // L7 验证 → anchor 终局奖励 → L1 SegmentAwarePER 广播（Dressage 闭环）
+fn segment_final_reward_propagation_closure() {
+    // L7 验证 → anchor 终局奖励（0.3 系数传播，proptest 不变量见下）
     let mut validator = SegmentAwareValidator::new();
     let anchor = segment("s0", "traj-1", 0, true);
     let normal = segment("s1", "traj-1", 1, false);
@@ -137,19 +138,6 @@ fn segment_per_collaboration_closure() {
     validator
         .broadcast_final_reward("traj-1", 2.5)
         .expect("已知轨迹");
-
-    // L1 PER: 分段登记 + 终局奖励广播
-    let mut per = SegmentAwarePER::new(100, 42);
-    let s0 = segment("s0", "traj-1", 0, true);
-    let s1 = segment("s1", "traj-1", 1, false);
-    per.add_segment(exp(0.0), s0, 0.8);
-    per.add_segment(exp(0.0), s1, 0.6);
-    // anchor 终局奖励经 PER 广播（prompt-equal 分母由 PER 侧处理）
-    per.broadcast_reward("traj-1", 2.5);
-    assert_eq!(per.segment_count("traj-1"), 2, "铁律9 同轨迹分段登记");
-    // 采样验证奖励已注入
-    let samples = per.sample_batch(4);
-    assert!(!samples.is_empty());
 }
 
 // ----------------------------------------------------------

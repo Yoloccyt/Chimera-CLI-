@@ -30,7 +30,7 @@
 //! ```
 //! use parliament::{Parliament, ParliamentConfig, Proposal};
 //! use event_bus::EventBus;
-//! use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+//! use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 //!
 //! # async fn run() {
 //! let bus = EventBus::new();

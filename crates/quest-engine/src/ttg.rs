@@ -49,7 +49,7 @@ use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Duration, Utc};
 use nexus_contracts::BudgetTier;
-use nexus_core::{Quest, ThinkingMode};
+use nexus_contracts::{Quest, ThinkingMode};
 // WHY 降级:ThinkingModeSwitched 事件已通过 EventBus 发布(见 publish_mode_switch),
 // 同步方法内的 info! 与已发布事件重复(违反 DRY)。降级为 debug! 保留诊断信息,
 // 避免生产日志噪声;下游消费者订阅 EventBus 获取结构化切换通知,不依赖 tracing。
@@ -881,7 +881,7 @@ fn compute_dependency_depth(tasks: &[nexus_core::Task]) -> usize {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use nexus_core::{Task, TaskStatus};
+    use nexus_contracts::{Task, TaskStatus};
 
     /// 构造测试用 Quest
     fn make_quest(quest_id: &str, tasks: Vec<Task>) -> Quest {

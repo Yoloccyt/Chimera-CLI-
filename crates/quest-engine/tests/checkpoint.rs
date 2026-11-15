@@ -20,7 +20,7 @@ use event_bus::{EventBus, NexusEvent};
 use nexus_contracts::experience_card::{
     AtomicOperator, CardMetadata, ExecutionStatus, ThreeFactorScore,
 };
-use nexus_core::{MultimodalInput, Quest, TaskStatus, UserIntent};
+use nexus_contracts::{MultimodalInput, Quest, TaskStatus, UserIntent};
 use quest_engine::{
     CheckpointManager, InMemoryExternalStorage, LongTaskMap, NoopMemorySyncHook, QuestConfig,
     QuestEngine, QuestError, SatelliteState, SearchTreeManager, StepResult,

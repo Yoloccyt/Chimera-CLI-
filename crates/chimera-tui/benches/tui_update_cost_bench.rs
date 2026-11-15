@@ -34,7 +34,7 @@ use chimera_tui::types::{ChatMessage, ChatRole, TimelineSnapshot};
 use chimera_tui::{DataSnapshot, TuiApp, TuiConfig};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use event_bus::{BudgetMetricsPayload, EventMetadata, NexusEvent};
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

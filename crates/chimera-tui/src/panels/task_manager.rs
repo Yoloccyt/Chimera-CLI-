@@ -52,7 +52,7 @@ use crate::panels::quest::thinking_mode_label;
 use crate::panels::Panel;
 use crate::popup::PopupKind;
 use crate::types::{PanelId, QuestAction, SortMode, TuiCommand, TuiState};
-use nexus_core::{Quest, TaskStatus};
+use nexus_contracts::{Quest, TaskStatus};
 
 /// 优先级上限(用户面 0-10 范围)
 ///
@@ -1010,7 +1010,7 @@ fn priority_label(internal: u8) -> String {
 mod tests {
     use super::*;
     use crossterm::event::KeyModifiers;
-    use nexus_core::{Task, TaskStatus, ThinkingMode};
+    use nexus_contracts::{Task, TaskStatus, ThinkingMode};
 
     #[test]
     fn key_tables_unique_and_cover_documented_keys() {

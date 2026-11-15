@@ -14,7 +14,7 @@ use std::collections::VecDeque;
 use chimera_tui::{
     EventStreamPanel, LogPanel, Panel, ParliamentPanel, QuestPanel, RouterPanel, TuiState,
 };
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 

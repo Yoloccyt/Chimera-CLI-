@@ -12,7 +12,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chimera_cli::orchestrator::{build_quest_reply, plan_chunks, plan_chunks_batched};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 
 /// 构造含 `n` 个任务的样例 Quest(reply 长度随任务数增长)
 fn quest_with_tasks(n: usize) -> Quest {

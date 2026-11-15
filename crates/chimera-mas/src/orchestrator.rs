@@ -130,7 +130,7 @@ pub struct HeartbeatInfo {
 /// use chimera_mas::prelude::*;
 /// use chimera_mas::MAX_AGENT_DEPTH;
 /// use event_bus::EventBus;
-/// use nexus_core::{Task, TaskStatus};
+/// use nexus_contracts::{Task, TaskStatus};
 /// use std::time::Duration;
 ///
 /// # async fn run() -> chimera_mas::Result<()> {

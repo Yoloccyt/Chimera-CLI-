@@ -5,7 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-# nexus-core:L1 核心领域类型(UserIntent/Quest/Task/TaskStatus/ThinkingMode)
+# nexus-core:L1 核心运行时(NexusState/StateChangeListener/StateChangeKind——
+# B4a/ADR-311 后领域类型 Quest/Task 等直连 L0 nexus-contracts,本 crate 对
+# nexus-core 仅余状态观察者依赖倒置面)
 nexus-core = { workspace = true }
 # nexus-contracts:L0 契约层,BudgetTier 上提后 TTG/Arbitration 的类型来源
 # (ADR-054 决策 3:消除 L9→L8 生产违规边,L(N)→L(0) 恒允许)

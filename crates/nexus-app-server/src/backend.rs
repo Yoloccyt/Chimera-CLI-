@@ -15,7 +15,7 @@
 use async_trait::async_trait;
 use event_bus::EventBus;
 use nexus_contracts::app::{Item, ItemId, ItemStatus, Thread, TurnId, UserInput};
-use nexus_core::UserIntent;
+use nexus_contracts::UserIntent;
 use quest_engine::QuestEngine;
 
 use crate::server::{BackendError, CoreBackend};

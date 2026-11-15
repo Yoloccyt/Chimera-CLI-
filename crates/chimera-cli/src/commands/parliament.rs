@@ -22,7 +22,7 @@
 //! v2.9.0-omega Task 1.7:接受 `json` flag(共识结果 envelope 在本命令输出)
 
 use anyhow::Result;
-use nexus_core::{MultimodalInput, UserIntent};
+use nexus_contracts::{MultimodalInput, UserIntent};
 use parliament::{
     Consensus, CrossVendorDebate, CrossVendorFallback, Parliament, ParliamentConfig, Proposal,
 };

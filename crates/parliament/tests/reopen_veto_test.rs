@@ -15,7 +15,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::EventBus;
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use parliament::{Consensus, Parliament, ParliamentConfig, Proposal, VetoOverrideTicket};
 
 /// 构造测试用 Quest(指定任务数与思考模式)

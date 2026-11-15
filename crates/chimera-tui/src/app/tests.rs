@@ -19,7 +19,7 @@ use crate::data::{BudgetMetrics, DataSnapshot, DataSourceConfig, TuiDataSource};
 use crate::popup::PopupKind;
 use crate::types::{InputMode, LayoutMode};
 use event_bus::{EventMetadata, NexusEvent};
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use ratatui::backend::TestBackend;
 
 use crate::popup::Severity;

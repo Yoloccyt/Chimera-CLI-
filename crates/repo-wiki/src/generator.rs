@@ -19,7 +19,7 @@
 //! NMC 路径由感知器自身维度决定(不强制填充)。
 
 use chrono::Utc;
-use nexus_core::{Quest, TaskStatus};
+use nexus_contracts::{Quest, TaskStatus};
 use nmc_encoder::{PerceptionInput, Perceptor};
 use sha2::{Digest, Sha256};
 

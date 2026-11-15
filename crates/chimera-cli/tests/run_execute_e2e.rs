@@ -36,7 +36,7 @@ use event_bus::NexusEvent;
 use gqep_executor::tool_runtime::{
     BatchOutcome, DispatchError, DispatchOutcome, BATCH_DEADLINE_PREFIX,
 };
-use nexus_core::{Quest, Task, TaskStatus};
+use nexus_contracts::{Quest, Task, TaskStatus};
 use proptest::prelude::*;
 use std::time::Duration;
 

@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use chimera_tui::{InputMode, TuiApp, TuiConfig, TuiState, ViewMode};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use event_bus::{EventMetadata, NexusEvent, QuestStatus};
-use nexus_core::{Quest, Task, TaskStatus};
+use nexus_contracts::{Quest, Task, TaskStatus};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 

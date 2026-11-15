@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chimera_mas::{AgentTask, QualityLevel, RootOrchestrator, TaskComplexity, MAX_AGENT_DEPTH};
-use nexus_core::{Task, TaskStatus};
+use nexus_contracts::{Task, TaskStatus};
 use serde::Serialize;
 
 use crate::cli::AgentAction;

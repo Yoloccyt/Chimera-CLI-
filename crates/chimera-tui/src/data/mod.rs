@@ -80,7 +80,7 @@ mod tests {
     use crate::types::{ChatRole, TickMode};
     use chrono::Utc;
     use event_bus::{BudgetMetricsPayload, ChatStatus, EventMetadata, NexusEvent, QuestStatus};
-    use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+    use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 
     /// 构造测试用 Quest
     fn quest(id: &str, title: &str) -> Quest {

@@ -8,7 +8,7 @@
 
 use chrono::{DateTime, Utc};
 use event_bus::{ChatStatus, NexusEvent};
-use nexus_core::{Quest, TaskStatus};
+use nexus_contracts::{Quest, TaskStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;

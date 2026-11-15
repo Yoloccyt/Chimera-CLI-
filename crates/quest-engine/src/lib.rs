@@ -22,7 +22,7 @@
 //! # 快速示例
 //! ```
 //! use event_bus::EventBus;
-//! use nexus_core::{UserIntent, MultimodalInput};
+//! use nexus_contracts::{UserIntent, MultimodalInput};
 //! use quest_engine::QuestEngine;
 //!
 //! # async fn run() {

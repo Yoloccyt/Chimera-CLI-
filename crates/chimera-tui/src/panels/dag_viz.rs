@@ -15,7 +15,7 @@
 //!   环依赖(理论上被 quest-engine 拒绝)防御性截断为 0 层,避免渲染死循环
 
 use crossterm::event::KeyEvent;
-use nexus_core::{Task, TaskStatus};
+use nexus_contracts::{Task, TaskStatus};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -201,7 +201,7 @@ impl Panel for DagVizPanel {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use nexus_core::{Quest, ThinkingMode};
+    use nexus_contracts::{Quest, ThinkingMode};
 
     fn task(id: &str, desc: &str, status: TaskStatus, deps: &[&str]) -> Task {
         Task {
