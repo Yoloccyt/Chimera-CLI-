@@ -319,6 +319,16 @@ jobs:
           python3 scripts/check_l0_root_surface.py --selftest
           python3 scripts/check_l0_root_surface.py
 
+      - name: L0 const surface and sibling surface (G-150~G-153)
+        run: |
+          python3 scripts/check_l0_const_ratchet.py --selftest
+          python3 scripts/check_l0_const_ratchet.py
+          python3 scripts/check_l0_sibling_surface.py --selftest
+          python3 scripts/check_l0_sibling_surface.py
+
+      - name: Fuzz config static gate (G-156)
+        run: bash scripts/check_fuzz_config.sh
+
       - name: Gate provenance and contract-member ledger (G-101, G-103)
         run: |
           python3 scripts/check_dead_contract_apis.py --selftest

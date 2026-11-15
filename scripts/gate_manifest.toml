@@ -1684,3 +1684,48 @@ expect = 0
 kind = "light"
 test_kind = "cross_crate"
 note = "夹具在 tempdir 复制真树文件并走与生产同一个 run_all：未改动夹具必须判绿；植入缺陷分别使 C1（注册名与 echo 撞车 / provider_id 全部改名致 0 命中 / **子目录 providers/dup.rs 撞名**）、C2（L7 加 chimera-cli 依赖）、C3（构造 NexusEvent）、C4（#[default] 移到 Apply / 非法 env 兜底改成 Apply）判红；反向边界：只有 use event_bus::NexusEvent 而无构造点不得判红（否则门在无关改动上狼来了）；整目录缺失必须退 2。子目录夹具是递归扫描的回归锁——把枚举改回 os.listdir 即红（已用非递归探针实测该断言失败）。任一断言不成立 ⇒ 退 1。"
+
+[[gate]]
+id = "G-150"
+spec_ref = "W2 L0 const/static surface ratchet"
+cmd = "{python} scripts/check_l0_const_ratchet.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "L0-A pub const/static 名面多重集棘轮(仿 G-105)；冻结台账 scripts/l0_const_freeze.txt（45 键，实测 2026-11-15）"
+
+[[gate]]
+id = "G-151"
+spec_ref = "W2 L0 const ratchet selftest"
+cmd = "{python} scripts/check_l0_const_ratchet.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "夹具双向有牙(NEW/STALE/malformed/floor)"
+
+[[gate]]
+id = "G-152"
+spec_ref = "W2 sibling crate-root re-export parity"
+cmd = "{python} scripts/check_l0_sibling_surface.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "6 sibling lib.rs 单行 pub use 面 parity(仿 G-107)；冻结台账 scripts/l0_sibling_surface_freeze.txt（43 键，实测 2026-11-15）"
+
+[[gate]]
+id = "G-153"
+spec_ref = "W2 sibling surface selftest"
+cmd = "{python} scripts/check_l0_sibling_surface.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "夹具双向有牙 + 真树负例反证(2026-11-15 实测 planted pub use -> rc=1)"
+
+[[gate]]
+id = "G-156"
+spec_ref = "W2 fuzz 静态面升格接 CI"
+cmd = "bash scripts/check_fuzz_config.sh"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+note = "既有 check_fuzz_config 升格接 CI（5 项静态检查零 cargo）；此前不在任何 workflow，fuzz 静态面零守护属实测缺口"
