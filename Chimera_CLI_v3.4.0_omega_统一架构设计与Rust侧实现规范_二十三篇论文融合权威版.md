@@ -22,7 +22,7 @@
 >
 > **D. §16.4 跨层事件协议四个事件名未采纳**：`ExperienceCardGenerated` / `HighScoreCard` / `OperatorExecuted` / `SegmentValidated` 在 `types.rs` 零命中；经验卡片交付面**刻意不新增事件变体**，改走独立数据面（证据 `crates/event-bus/src/experience_card_bus.rs:20-22`）。另 `StopRuling` 实名 **`StopRulingIssued`**（`types.rs:2544`）。
 >
-> **E. §6.1 实现规范示例与红线相悖，勿照抄**：示例 `use nexus_contracts::{ExperienceCard, ...}` 不可编译（`nexus-contracts` 为 **mod 级导出、无根 re-export**，实际写法 `nexus_contracts::experience_card::{...}`，见 `experience_card_bus.rs:37`）；示例用 `mpsc::UnboundedSender` 与 Top-K `sort_by`，而现行实现为 **bounded** mpsc（容量 4096，`bus.rs:39`）与 `select_nth_unstable*`（`agents.md` §4.1/§6.2 红线）。
+> **E. §6.1 实现规范示例与红线相悖，勿照抄**：示例 `use nexus_contracts::{ExperienceCard, ...}` 不可编译（`nexus-contracts` 为 **mod 级导出、无根 re-export**，实际写法 `nexus_contracts::experience_card::{...}`，见 `experience_card_bus.rs:37`）；示例用 `mpsc::UnboundedSender` 与 Top-K `sort_by`，而现行实现为 **bounded** mpsc（容量 4096，`bus/mod.rs:49`）与 `select_nth_unstable*`（`agents.md` §4.1/§6.2 红线）。
 >
 > **F. 依赖铁律现为红**：2026-09-21 现测 `scripts/check_dependency_rules.sh` → EXIT=1，失败项 `[GAP-A] gsoe-evolution -> decay-engine`；裁决在途 `docs/reports/Q3-adjudication-inner-ring-gate-2026-09-21.md`。
 >
