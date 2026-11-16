@@ -180,7 +180,6 @@ DECLS=(
     'crates/event-bus/src/topic.rs|nexus_event_variants|全部 [0-9]+ 个 NexusEvent 变体'
     'crates/event-bus/src/topic.rs|event_topic_variants|[0-9]+ 类 EventTopic'
     'crates/event-bus/src/topic.rs|event_topic_variants|全部 [0-9]+ 个 topic'
-    'crates/event-bus/src/pattern_index.rs|event_topic_variants|[0-9]+ 类 EventTopic'
     'docs/reports/DOC-AUDIT-FACTS_2026-09-20.md|workspace_crates|Workspace × \*\*[0-9]+ crates\*\*'
     'crates/event-bus/src/lib.rs|nexus_event_variants|全部 [0-9]+ 类'
     'crates/event-bus/src/registry.rs|event_topic_variants|[0-9]+ 类 EventTopic'
@@ -383,12 +382,14 @@ impl EventTopic {
     pub fn all() {}
 }
 RS
-    cat > "$fx/crates/event-bus/src/pattern_index.rs" <<'RS'
-//! - 与既有 `topic.rs`（2 类 EventTopic 订阅侧过滤）互补：PatternIndex
-RS
     # C-04 anchors: lib.rs declaration line, registry topic-count doc lines,
     # and the lock constants in variant_count_test.rs (must exist in the
     # fixture or run_check exits 2 on "declaration target missing").
+    #
+    # 注:原此处还有 `crates/event-bus/src/pattern_index.rs` 锚点,该文件已随
+    # ADR-312(B5 提交 2abc977b)「四子系统退役」被物理删除,但本门 DECLS 未同批
+    # 撤销 ⇒ 门在 HEAD 即红(exit 2 "declaration target missing")。
+    # 本次同批撤销该锚点与对应夹具文件(ADR-222 D6:台账与代码同批)。
     cat > "$fx/crates/event-bus/src/lib.rs" <<'RS'
 //! - 定义全部 3 类 NexusEvent 跨层事件变体(fixture declaration anchor)
 RS
