@@ -934,14 +934,48 @@ pub enum OmniMessage {
 
 ## 6. L1 Core：核心层——Event Bus经验卡片化 + Segment-aware PER + 统计学习接口 + RL预留
 
+> **📌 本章状态注记（2026-11-16 补录，ADR-311 D4 裁决）**
+>
+> 本章描述的是 **2026-09 的设计稿**。经 2026-11-16 全面实测，本章与代码实况存在
+> **8 处差异**（D1~D8）。裁决原则：**凡代码已通过 ADR 正式裁决并留痕者，以代码为
+> 事实源**；文档降级为「历史设计稿」并就地标注。**无一条差异需要回滚代码。**
+>
+> | 差异 | 状态 |
+> |---|---|
+> | §6.1 `ExperienceCardBus` 的 11 处实现偏离 | **不回滚**（ADR-311 D5：10 处为有意的风险消除——unbounded→bounded 消慢消费者 OOM、async→sync、Top-K O(n log n)→O(n)、索引键 `Box<str>` 等；1 处为文档笔误） |
+> | §6.2 `SegmentAwarePER` / §6.3 `StatLearningPolicy` / §6.4 `crates/rl-client/` | **已退役**（ADR-311 D2.2 / ADR-312）。重建触发条件 = R2 解冻六要素全 Satisfied + ADR-054 治理签署 + 按 L0 `rl_hooks` 契约重建。**注意**：L10 侧 `chimera-cli::rl_client`（feature `rl-client` 默认 off）仍存，独立于本批次范围 |
+> | §6.1 import 示例 `use nexus_contracts::{ExperienceCard, ...}` | **已修正**（ADR-222 L0-A sibling 拆分后遗留，原示例不可编译；现应为 `nexus_contracts::experience_card::{...}`） |
+> | §6 的「L1 Core」层名 | **ADR-222 D1** 已将 L1 命名为「**L0-B 核心基础面**」，机器层号 0/1 **不重排**（116+ 份 ADR 层引用证据链不得失真）。本章的「L1」与「L0-B」指同一集合 |
+> | §6 完全未提 `nexus-compute` | **已补 §6.5**（ADR-309 新增的 L0-B 第四成员） |
+>
+> L1（L0-B 核心基础面）当前成员：`nexus-core` / `event-bus` / `nexus-telemetry` /
+> `nexus-compute`（机器层号 1，`scripts/check_dependency_rules.sh` 双源锁定，
+> `expected_crates=47`）。
+
 ### 6.1 经验卡片Event Bus
 
 将Event Bus扩展为经验卡片的一级公民，支持双通道（Normal broadcast + Critical mpsc）分级投递，四索引（task/node/factor/error）快速检索。
 
+> **📌 §6.1 与落地实现的偏离（ADR-311 D5 裁决，2026-11-16）**：下列代码块是**设计稿**。
+> 落地实现在 `crates/event-bus/src/experience_card_bus.rs`，与之相比：① **无 `base_bus`
+> 字段**（`new()` 无参——经验卡片是独立数据面，遵循 ADR-065 决策 4，不混入
+> `NexusEvent` 枚举）；② Critical 通道是 **bounded fan-out**（`Arc<Mutex<Vec<mpsc::Sender>>>`，
+> 容量 4096）而非 `UnboundedSender`——**unbounded 在慢消费者下 OOM**，是必须消除的风险；
+> ③ `publish` 是**同步**方法且**不返回 `Result`**（投递路径无 IO）；
+> ④ 设计稿中的 `enum BusError` **在本仓不存在**（与本 crate 的 `EventBusError` 体系不兼容）；
+> ⑤ `get_cards_by_error_hash` 更名为 `get_card_ids_by_error_hash` 且返回 ID 列表；
+> ⑥ 索引键用 `Box<str>`（零拷贝）；⑦ Top-K 用 `select_nth_unstable_by`（O(n)）而非
+> `sort_by`（O(n log n)）；⑧ 新增 `critical_dropped_count` 计数（运维可观测性）；
+> ⑨ 四个索引**无上界、无 TTL、无淘汰**——这是**明示豁免**（C-69/M54），加淘汰属行为变更，
+> 与「高分必达」语义冲突，须另立 ADR；⑩ 投递分级阈值（>0.8 / >0.5）与设计稿一致。
+> **裁决：代码为事实源，本节不回滚任何偏离。**
+
 ```rust
 // crates/event-bus/src/experience_card_bus.rs
 #![forbid(unsafe_code)]
-use nexus_contracts::{ExperienceCard, ThreeFactorScore, ExecutionStatus};
+// NOTE(ADR-311 D5): 契约类型的实际路径为 `nexus_contracts::experience_card::*`
+// （ADR-222 L0-A sibling 拆分后，根路径 re-export 已不可用）。
+use nexus_contracts::experience_card::{ExperienceCard, ThreeFactorScore, ExecutionStatus};
 use tokio::sync::{broadcast, mpsc};
 use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -1041,6 +1075,12 @@ pub enum BusError {
 
 ### 6.2 Segment-aware PER（Dressage核心）
 
+> **📌 已退役（ADR-311 D2.2 / ADR-312，2026-11-15）**：`crates/event-bus/src/segment_per.rs`
+> **已物理删除**——生产装配点为零（仅本 crate 测试消费）。
+> **重建触发条件**：R2 解冻前置六要素全 Satisfied（ADR-053 rev4）+ ADR-054 治理签署，
+> 且按 **L0 `rl_hooks` 契约**（`nexus-contracts-seams`）重建，不得反向定义在 L1。
+> 以下为设计稿存档。
+
 轨迹分段优先级经验回放，共享父轨迹身份，只有anchor segment承载终局reward，prompt-equal denominator避免segment数量影响梯度。
 
 ```rust
@@ -1091,6 +1131,13 @@ impl SegmentAwarePER {
 ```
 
 ### 6.3 统计学习接口层
+
+> **📌 已退役（ADR-311 D2.2，2026-11-15）**：`crates/nexus-core/src/stat_learning.rs`
+> **已物理删除**——`StatLearningPolicy` / `SlidingWindowPolicy` / `UCBPolicy` /
+> `ActionStats` 的生产消费者数为 0（全仓 grep 零命中）。
+> **重建触发条件**同 §6.2（R2 解冻 + ADR-054 签署），且契约面以 L0 `rl_hooks` 为唯一源。
+> 另注：`omega_learner::per_buffer::PerBuffer`（L6 学习层）是**现存的**唯一 PER 实现，
+> 与已退役的 `segment_per::PerBuffer` **同名不同物**。以下为设计稿存档。
 
 Rust侧先用统计方法实现80%的RL价值，为v4.0神经网络预留接口。
 
@@ -1215,6 +1262,16 @@ impl<S: Clone + Hash + Eq, A: Clone + Hash + Eq + Default> StatLearningPolicy fo
 
 ### 6.4 RL客户端骨架（RulePolicyFallback默认）
 
+> **📌 L1 侧已退役（ADR-311 D2.2，2026-11-15）**：`crates/rl-client/` 目录
+> **已物理删除**——Rust 侧 `RLClient` / `RulePolicyFallback` 生产消费者数为 0。
+>
+> **⚠️ L10 侧仍存，独立于本批次范围**：`crates/chimera-cli/src/rl_client.rs`
+> （140 行，`rl-client` feature **默认 off**）承载实际的 Python 训练服务传输通道
+> ——`POST /experiences`（批量上传 `RewardSignal`）与 `GET /health`。
+> 该文件仍带 **ADR-053 R2 冻结声明**，解冻由 ADR-053 rev4 + ADR-054 治理线裁决。
+>
+> **重建触发条件**同 §6.2。以下为设计稿存档。
+
 ```rust
 // crates/rl-client/src/lib.rs
 #![forbid(unsafe_code)]
@@ -1257,6 +1314,33 @@ pub enum RLError {
     #[error("Invalid state: {0}")] InvalidState(String),
 }
 ```
+
+### 6.5 L0-B 计算面（ADR-309 补记，2026-11-15）
+
+> **📌 本节为补记**：原 §6 只描述 `nexus-core` / `event-bus` / `rl-client`，
+> **完全未提及 `nexus-compute`**——而它已是 L0-B 核心基础面的**第四成员**
+> （机器层号 1，与前三者同亚层；层号 0/1 不重排，见 ADR-222 D1）。
+
+`crates/nexus-compute` 承载 **CPU 卸载计算面**，由 `nexus-core/src/compute/` 迁出
+（ADR-309：9 文件 / 5,281 行整体 `git mv`，消费方 11 crate / 14 文件 / 34 行）。
+
+| 模块 | 职责 | 关键公开类型 |
+|---|---|---|
+| `bridge.rs` | 计算派发与全局单例 | `ComputeBridge`、`ComputeError`、`bridge()` |
+| `hts/` | 自适应阈值表（HTS）+ cgroup 校正 + 序贯检验 | `HtsTable`、`ThresholdSource`、`CgroupProbe`、`SequentialTest` |
+| `reduce.rs` | 归约内核（tree / repro / 固定模式） | `reduce`、`tree_reduce_fixed`、`ReduceMode` |
+| `calibration.rs` | 阈值标定（采样 → 判定 → 应用） | `Calibrator`、`CalibrationMode`、`CalibrationStat` |
+| `utilization.rs` | 利用率采样（tokio / rayon 双探针） | `UtilizationSampler`、`RayonProbe`、`TokioProbe` |
+| `seam.rs` | 可测试接缝（clock / rng / fs / net） | `Clock`、`Rng`、`Fs`、`Net` 四个 trait + 生产实现 |
+| `dispatch.rs` | 任务种类与派发计划 | `TaskKind`、`DispatchPlan` |
+| `counters.rs` | 分类计数 | `KindCounters`、`KindStat` |
+| `telemetry.rs` | 饱和度上报 | `ComputeTelemetry`（实现 `nexus_telemetry::SaturationSource`） |
+
+**依赖方向**：`nexus-compute → event-bus` / `nexus-telemetry`（均为同层 L0-B）；
+**不得依赖 `nexus-core`**（反向会构成 crate 环，ADR-309 D4 红线）。
+
+**红线**（`nexus-compute/src/lib.rs`）：rayon 闭包内**禁 `.await` / IO / 持锁跨边界**；
+**禁 feature 标志**（本 crate 不设 `[features]` 段）。
 
 ---
 

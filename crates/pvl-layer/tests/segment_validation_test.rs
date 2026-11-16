@@ -8,9 +8,10 @@
 #![forbid(unsafe_code)]
 
 // B5/ADR-312: 原 `use event_bus::SegmentAwarePER` 已随 segment_per 子系统退役。
-use nexus_contracts::rl_types::{MemPiAction, RLAction, RLExperience, RLState};
+// B2/ADR-311: 原 `exp()` 辅助函数随 `stat_learning`/`segment_per` 退役后成为孤儿
+// （`RLExperience` 构造器在 L1 侧已无消费方）——连同其专属 import
+// （`MemPiAction`/`RLAction`/`RLExperience`/`RLState`/`SeamId`）一并摘除。
 use nexus_contracts::token_evidence::{SegmentCreationReason, SegmentMetadata};
-use nexus_contracts::SeamId;
 use proptest::prelude::*;
 use pvl_layer::{SegmentAwareValidator, SegmentValidationError};
 
@@ -26,17 +27,6 @@ fn segment(id: &str, traj: &str, index: u32, is_anchor: bool) -> SegmentMetadata
         5,
         SegmentCreationReason::NaturalBoundary,
     )
-}
-
-fn exp(reward: f32) -> RLExperience {
-    RLExperience {
-        state: RLState::new(vec![0.1], 1),
-        action: RLAction::MemPi(MemPiAction::Retrieve),
-        reward,
-        next_state: RLState::new(vec![0.2], 2),
-        done: false,
-        seam: SeamId::S8MemPi,
-    }
 }
 
 // ----------------------------------------------------------
