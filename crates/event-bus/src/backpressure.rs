@@ -121,8 +121,16 @@ impl BackpressurePolicy {
 /// 总线侧仅需原子存取,不含判断逻辑(热路径与可测性分离)。
 /// WHY 千分比整数比较:避免浮点与除法,`u64` 乘法在 queued/capacity
 /// 量级(≤ 1e9)下无溢出风险。
+///
+/// # 可见性收缩(BC-05,ADR-314 W6)
+///
+/// `pub(crate)` 理由：本函数是**总线内部**降采样状态机的真值核,
+/// 唯一生产调用点是 `bus::ds_admit`(同 crate);全仓外部 `src/` /
+/// `tests/` / `benches/` / `examples/` / doctest 引用数均为 0
+/// (2026-11-16 实测),故从 crate 根与 `backpressure` 模块的公开面撤出。
+/// 对外仍可通过 `BackpressurePolicy::downsample_params` 观测策略参数。
 #[must_use]
-pub fn pressure_latch_next(
+pub(crate) fn pressure_latch_next(
     engaged: bool,
     queued: usize,
     capacity: usize,

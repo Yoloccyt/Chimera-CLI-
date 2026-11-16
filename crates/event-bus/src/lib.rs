@@ -189,9 +189,9 @@ pub mod topic;
 pub mod types;
 
 // === 关键类型重导出,简化外部导入 ===
-pub use backpressure::{
-    is_critical_event, pressure_latch_next, BackpressurePolicy, SlowConsumerDetector,
-};
+// 注:`pressure_latch_next` 已于 ADR-314 W6(BC-05)降级为 `pub(crate)` ——
+// 它是总线内部降采样状态机的纯函数核,外部零引用(2026-11-16 实测)。
+pub use backpressure::{is_critical_event, BackpressurePolicy, SlowConsumerDetector};
 // FormalVerifier M1:事件因果一致性验证器重导出(P7-T4)
 pub use bus::{
     deserialize_json, deserialize_msgpack, serialize_json, serialize_msgpack, EventBus,

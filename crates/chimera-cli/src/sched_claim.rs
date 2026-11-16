@@ -18,7 +18,8 @@
 //! # 事件面（ADR-211 §7.3）
 //!
 //! 发布方 = 组合根本层（持 `ctx.bus`；**mas-sched 保持零 event-bus 依赖**）：
-//! claim Granted → [`EventBus::publish_claim`]（`ClaimIssued`，Normal/Parliament Topic）；
+//! claim Granted → [`EventBus::publish`]（`ClaimIssued`，Normal/Parliament Topic；
+//! 原 `publish_claim` 已于 ADR-314 W6 废弃——其方法体逐字等于 `publish`）；
 //! delegate 失败 → [`publish_retract`]（`ClaimRetracted`）。Certify 不涉及（G-83 白名单锁）。
 //! 两变体的生产构造点即 `event_ownership_baseline` 两行的消除依据（台账只减）。
 //!
@@ -142,7 +143,7 @@ async fn publish_claim_issued(bus: &EventBus, claim_id: &str, subject: &str, cla
         subject: subject.to_string(),
         claimant: claimant.to_string(),
     };
-    if let Err(e) = bus.publish_claim(event).await {
+    if let Err(e) = bus.publish(event).await {
         tracing::warn!(error = %e, claim_id, "ClaimIssued 发布失败（不阻断派单）");
     }
 }
@@ -157,7 +158,7 @@ pub(crate) async fn publish_retract(bus: &EventBus, claim_ref: &str, reason: &st
         claim_ref: claim_ref.to_string(),
         reason: reason.to_string(),
     };
-    if let Err(e) = bus.publish_declaim(event).await {
+    if let Err(e) = bus.publish(event).await {
         tracing::warn!(error = %e, claim_ref, "ClaimRetracted 发布失败（不阻断）");
     }
 }

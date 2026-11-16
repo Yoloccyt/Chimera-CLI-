@@ -52,6 +52,11 @@ fn normal_event() -> NexusEvent {
 // 契约 1:无订阅者 — 全部发布 API 恒 Ok(事件丢弃 + bus 内部观测,不失败)
 // ============================================================
 
+// WHY 允许 deprecated:`publish_batch_blocking` 已于 ADR-314 W6 打废弃标记
+// (BC-02 阶段①),物理删除在版本窗之后的独立 commit(阶段②)。
+// 废弃窗口内该路径**仍在服役**,故契约守护必须继续覆盖它 ——
+// 删掉这条断言等于让「废弃中但仍生效」的 API 脱离守护。
+#[allow(deprecated)]
 #[tokio::test]
 async fn contract_publish_is_ok_without_subscribers() {
     let bus = EventBus::new();
