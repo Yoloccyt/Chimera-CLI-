@@ -753,6 +753,7 @@ git push origin v<x.y.z>-omega
 | `zizmor.yml` | 每日 UTC 06:00 + PR 改 .github/workflows/** + 手动 | zizmor | `zizmor . --min-severity=high` 0 退出(Actions 供应链自检) |
 | `coverage.yml` | 每晚 UTC 04:00 + 手动 | coverage | `python3 scripts/coverage_gate.py --check` 单点裁决;阈值只写在 `scripts/coverage_baseline.toml`(`min_line_coverage = 85`),不在工作流里写死数字 |
 | `slo.yml` | tag `v*.*.*-omega` + 每日 UTC 04:00 + 手动(带 scale 输入) | slo-release-gate / slo-daily | 发布门按契约值 `CHIMERA_PERF_SCALE=1.0`;daily 跑比值/宽松阈值类长尾 |
+| `perf_redline.yml` | 每日 UTC 05:00 + 手动 | perf-contract-static / perf-contract-exec | static 阻塞(`check_perf_redlines.py --static-only`);exec 为 COE 观察期(`continue-on-error: true`,连续 2 晚全绿无 SKIP 后切阻塞,切换条件机器检查=`scripts/check_coe_observability.py`) |
 | `stress.yml` | 每日 UTC 03:00 + 手动(带 scale 输入) | stress | `#[ignore]` 档重测试;超时按 `CHIMERA_TEST_TIMEOUT_SCALE`(默认 1.0)缩放 |
 | `bench_check.yml` | PR 改 benches/**、任一 Cargo.toml、chimera-cli/src/** 或本文件 + tag 推送 | bench-check / cli-startup | 逐项 bench 阈值断言,与 `scripts/perf_thresholds.toml` 逐键一致 |
 | `fuzz.yml` | tag + 每周一 UTC 03:00 + 手动 | fuzz(ubuntu-latest + nightly,matrix 8 target × 300s) | crash 上传(90 天留存),非阻塞;matrix 8 项与 `fuzz/Cargo.toml` 的 8 个 [[bin]] 一致 |

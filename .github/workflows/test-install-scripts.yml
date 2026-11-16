@@ -152,7 +152,8 @@ jobs:
           Write-Host "✅ install.ps1 执行成功"
 
       # ============ 验证 --version 正则 ============
-      # 与 release.yml docker job line 232 完全一致的正则
+      # 与 release.yml docker job 的 Verify image functionality 步骤完全一致的正则
+      # (步骤名引用 per ADR-167 决策 4:行号引用必漂,旧注释写的 line 232 早已失效)
       # 避免仅检退出码导致 binary 损坏但退出码 0 的假阳性
       - name: Verify --version regex
         shell: bash
