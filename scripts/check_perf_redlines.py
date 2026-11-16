@@ -7,8 +7,9 @@
   lint        Part 1: 11 条红线的存在性静态检查 (文件 / fn / 阈值标记 = 32 子检查)
   inventory   Part 3: crates/*/benches/*.rs 三态清单门 (gated/registered/dev-only) + STALE
   invariants  数据表自证: 阈值键集对等、兜底债棘轮、CI 执行清单与 run_bench 表对等 (I7)
-  thresholds  解析 target/criterion/**/new/estimates.json 并断言 36 项阈值
-  compare     双跑比对 heredoc 输出(--legacy-out)与 py 核结果, 逐键必须一致
+  thresholds  解析 target/criterion/**/new/estimates.json 并断言 [thresholds_ns] 在册阈值
+  compare     双跑比对 CI 落盘阈值断言(--legacy-out)与同轮新鲜重算, 逐键必须一致
+              (W4a 起左源从 heredoc 迁移为 thresholds 模式的 tee 落盘输出)
   slo         Part 2: 实跑 criterion bench 并对 80% 红线断言 (需 cargo bench)
   redline     Part 2b: 实跑 [[redline_exec]] 的 bench 条目并按 assert_ns 断言
   ignored     #[ignore] 测试归属登记门 (slo-blocking/slo-daily/unignore/manual-only)
@@ -19,7 +20,9 @@
 
 选项:
   --criterion-dir PATH  criterion 根 (默认 target/criterion)
-  --legacy-out PATH     compare 模式读入的 heredoc stdout 文件
+  --legacy-out PATH     compare 模式读入的 CI 阈值断言 stdout 文件
+  --emit-verdict-json PATH  compare 模式把逐键一致判定落盘为该 JSON 文件；
+                        缺省读取环境变量 CHIMERA_PERF_VERDICT_JSON（W4a 观测位产物）
   --json                thresholds 模式输出机器可读结果 (供双跑比对使用)
   --strict              thresholds 模式把关键词匹配歧义与零匹配幽灵键也算作失败
 
@@ -381,10 +384,18 @@ def mode_invariants(redlines, thresholds_doc, freeze):
     # perf_thresholds.toml / perf_redline.yml 三处已按 I11 登记）；feat 侧 I10 = 三表键集
     # 对拍（严格包含 HEAD 那一对），I11 = heredoc 阈值「值」对拍。取并集：I10 用 feat 的
     # 三表对拍，值对拍顺延为 I12（I11 号位让给已登记三处的 ADR-278 判据），HEAD 的 I11 原号保留。
+    # W4a（heredoc 表体删除后收敛，P9 病灶两起实害）：CI 阈值断言已切流 py 核单一
+    # 实现，I9/I10/I12 的 heredoc 对拍面随之退役。前置断言从「两份 dict 必须都在」
+    # 改为成对语义：双缺 = 删除后的稳态（放行，ci_table_sync 自然中性）；双在 =
+    # heredoc 仍在的旧稳态（全量对拍继续）；单缺 = 删除不完整的半态 —— 与
+    # hnsw_tiered「有阈值没关键词」同形状的假绿口子，必红。
+    _th_dict_present = ci_threshold_dict_present(BENCH_WORKFLOW_PATH)
+    _pk_dict_present = ci_pathkeywords_dict_present(BENCH_WORKFLOW_PATH)
     if (BENCH_WORKFLOW_PATH == _REAL_BENCH_WORKFLOW_PATH
-            and not _check("I10/I12 preconditions: both dicts present in the real workflow",
-                           ci_table_dicts_present(BENCH_WORKFLOW_PATH))):
+            and _th_dict_present != _pk_dict_present):
         fails += 1
+        _check("I10/I12 preconditions: heredoc dicts present as a pair "
+               "or absent as a pair", False)
     pk_problems, value_problems = ci_table_sync(BENCH_WORKFLOW_PATH, thr, kw)
     if not _check("I10 heredoc PATH_KEYWORDS keys == heredoc THRESHOLDS_NS keys == TOML keys",
                   not pk_problems):
@@ -929,6 +940,10 @@ def keyword_overlaps(kw):
 
 # --------------------------------------------------------------------------- thresholds
 LEGACY_ASSERT_RE = re.compile(r"^\s+(\S+): ([\u2713\u2717]) max median = (.+) \(threshold")
+# W4a：左源从 heredoc 迁移为 thresholds 模式的 tee 落盘输出（py 核单一实现），
+# 其断言行形态为 `  [PASS] key: max median = ... (threshold < ...)`。两种形态同集
+# 解析；历史 heredoc 语义（✓/✗ 形态）不受影响。
+PY_ASSERT_RE = re.compile(r"^\s+\[(PASS|FAIL)\]\s+(\S+):\s+max median\s*=\s*.+\s*\(threshold")
 LEGACY_WORST_RE = re.compile(r"^\s+worst group: (.+)$")
 
 
@@ -972,38 +987,75 @@ def collect_threshold_results(thresholds_doc, criterion_dir):
 
 
 def parse_legacy_threshold_log(path):
-    """解析 heredoc 的 stdout: {key: (passed, worst_path)}。
+    """解析 CI 落盘的阈值断言 stdout: {key: (passed, worst_path)}。
 
-    legacy 对"无 estimates"的键只打 ::warning:: 行而不进结果集, 故这里也不记。
+    支持两种断言行形态：历史 heredoc 的 `key: ✓/✗ ...` 与 W4a 起 thresholds
+    模式的 `[PASS]/[FAIL] key: ...`。对"无 estimates"的键（heredoc 的 ::warning::
+    行 / thresholds 模式的 [SKIP-GHOST] 行）不进结果集。
     """
     res = {}
     with open(path, encoding="utf-8-sig", errors="replace") as fh:
         lines = fh.read().splitlines()
     for i, line in enumerate(lines):
+        key = None
+        passed = None
         m = LEGACY_ASSERT_RE.match(line)
-        if not m:
+        if m:
+            key, passed = m.group(1), m.group(2) == "\u2713"
+        else:
+            mpy = PY_ASSERT_RE.match(line)
+            if mpy:
+                key, passed = mpy.group(2), mpy.group(1) == "PASS"
+        if key is None:
             continue
         worst = ""
         if i + 1 < len(lines):
             m2 = LEGACY_WORST_RE.match(lines[i + 1])
             if m2:
                 worst = m2.group(1).strip()
-        res[m.group(1)] = (m.group(2) == "\u2713", worst)
+        res[key] = (passed, worst)
     return res
 
 
-def mode_compare(thresholds_doc, criterion_dir, legacy_path):
-    """双跑比对: heredoc 结果 vs py 核结果逐键必须一致 (R1-T6 切流前置门)。
+def _write_verdict_json(path, report):
+    """把 compare 的逐键一致判定落盘（W4a 观测位产物）。
 
-    WHY 固化到 CI: 等价性只在本地证过一次就删 heredoc, 等于把双实现漂移风
-    险重新埋回去(F-R4-01 的病根)。在删 heredoc 前让 CI 每日跑这个比对。
+    写入失败只告警、绝不影响 compare 的 rc —— 这是观测面，不是判据面；
+    判据面失守会违反「门禁噪声不得反噬主判据」的既有纪律。
     """
-    print("=== double-run comparison: heredoc vs py core ===")
+    if not path:
+        return
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as fh:
+            json.dump(report, fh, ensure_ascii=False, indent=2, sort_keys=True)
+            fh.write("\n")
+    except OSError as exc:
+        print(f"[WARN] failed to write verdict json {path}: {exc}")
+
+
+def mode_compare(thresholds_doc, criterion_dir, legacy_path, emit_verdict_json=None):
+    """双跑比对: CI 落盘阈值断言 vs 同轮新鲜重算, 逐键必须一致。
+
+    W4a 语义迁移（heredoc 根除后）：左源不再是「另一份实现」，而是上一步
+    thresholds 模式 tee 落盘的 CI 断言输出 —— 本步验证「CI 落盘结果」与
+    「同轮新鲜重算」逐键一致（passed + worst group），捕获 criterion 树在
+    两步之间变动 / tee 截断 / 解析漂移等运行期异常。emit_verdict_json 把
+    逐键判定落盘为 JSON 观测产物（main() 以环境变量 CHIMERA_PERF_VERDICT_JSON
+    为缺省值注入）。
+    """
+    report = {"legacy_path": legacy_path, "compared": 0, "divergences": 0,
+              "breached_keys_exercised": 0, "keys": {}}
+    print("=== double-run comparison: logged CI output vs fresh recompute ===")
     if not os.path.isfile(legacy_path):
         # F31: 缺输入 = 比对根本没跑, 不是"跑完发现不等"。旧码退 1(确定红),
         # 收口清单会把它记成"双跑发现漂移"; 契约行里 2 才是"环境错误/判据未运行"。
         print(f"[UNDECIDABLE] legacy log not found: {legacy_path} "
               "-- comparison never ran")
+        report["error"] = "legacy log not found"
+        _write_verdict_json(emit_verdict_json, report)
         return 2
     legacy = parse_legacy_threshold_log(legacy_path)
     payload, _unmatched, _ambiguous = collect_threshold_results(thresholds_doc, criterion_dir)
@@ -1014,6 +1066,12 @@ def mode_compare(thresholds_doc, criterion_dir, legacy_path):
         pv = payload.get(key)
         if pv is None or pv["passed"] is None:
             fails += 1
+            report["divergences"] += 1
+            report["keys"][key] = {
+                "verdict": "py_missing_estimates",
+                "legacy_passed": l_passed, "py_passed": None,
+                "legacy_worst": l_worst, "py_worst": None,
+            }
             print(f"  [DIFF] {key}: legacy asserted but py has no estimates")
             continue
         checked += 1
@@ -1021,8 +1079,17 @@ def mode_compare(thresholds_doc, criterion_dir, legacy_path):
             fail_verdicts += 1
         same_verdict = l_passed == pv["passed"]
         same_worst = l_worst.replace("\\", "/") == (pv["worst"] or "").replace("\\", "/")
-        if not (same_verdict and same_worst):
+        agree = same_verdict and same_worst
+        report["compared"] = checked
+        report["breached_keys_exercised"] = fail_verdicts
+        report["keys"][key] = {
+            "verdict": "agree" if agree else "disagree",
+            "legacy_passed": l_passed, "py_passed": pv["passed"],
+            "legacy_worst": l_worst, "py_worst": pv["worst"],
+        }
+        if not agree:
             fails += 1
+            report["divergences"] += 1
             print(f"  [DIFF] {key}: legacy=(passed={l_passed}, {l_worst}) "
                   f"py=(passed={pv['passed']}, {pv['worst']})")
     print(f"\n  compared: {checked} key(s) with estimates on both sides; "
@@ -1031,13 +1098,15 @@ def mode_compare(thresholds_doc, criterion_dir, legacy_path):
         print("  [FAIL] nothing to compare - the proof would be vacuous "
               "(bench step produced no estimates?)")
         fails += 1
+    _write_verdict_json(emit_verdict_json, report)
     if fails:
-        print(f"  RESULT: FAIL ({fails} divergence(s)) - heredoc must NOT be removed yet")
+        print(f"  RESULT: FAIL ({fails} divergence(s)) - logged CI assertions "
+              f"and fresh recompute must not diverge")
         return 1
-    # 措辞与验证范围对齐（F71）: 上面只遍历了 legacy 侧的键 ⇒ 证明的是"heredoc 守卫过的
-    # 键上无分歧", 而非两侧逐键等价（py 侧多出的键从未进入比对）。补对称段属判据收紧,
+    # 措辞与验证范围对齐（F71）: 上面只遍历了落盘侧的键 ⇒ 证明的是"CI 断言过的
+    # 键上无分歧", 而非两侧逐键等价（新鲜重算侧多出的键从未进入比对）。补对称段属判据收紧,
     # 未授权前只把话说准（task #60 / Q50）。
-    print("  RESULT: PASS (no divergence on keys guarded by the heredoc)")
+    print("  RESULT: PASS (no divergence on keys asserted in the CI log)")
     return 0
 
 
@@ -1688,6 +1757,44 @@ def mode_selftest():
         expect("selftest-19d compare undecidable when legacy log is absent",
                (rc19d, "UNDECIDABLE" in out19d), (2, True))
 
+        # 断言 25a-25b：compare 的 --emit-verdict-json（W4a 观测位产物）——
+        # 逐键一致判定必须落盘为 JSON：一致例 verdict=agree 且 rc=0，不一致例
+        # verdict=disagree 且 rc=1、divergences 计数正确。夹具复用 19x 的合成
+        # criterion 树与 legacy_log 生成器，不读真仓 target/。
+        vj_path = os.path.join(tmp, "verdict_25.json")
+        rc25a, _out25a = _capture_out(mode_compare, cmp_td, cmp_dir,
+                                      legacy_log("✓"), vj_path)
+        with open(vj_path, encoding="utf-8") as fh:
+            vj_agree = json.load(fh)
+        expect("selftest-25a compare emits per-key verdict json on agreement",
+               (rc25a, vj_agree["keys"]["zz_ns"]["verdict"],
+                vj_agree["divergences"]), (0, "agree", 0))
+        rc25b, _out25b = _capture_out(mode_compare, cmp_td, cmp_dir,
+                                      legacy_log("✗"), vj_path)
+        with open(vj_path, encoding="utf-8") as fh:
+            vj_dis = json.load(fh)
+        expect("selftest-25b compare emits per-key verdict json on divergence",
+               (rc25b, vj_dis["keys"]["zz_ns"]["verdict"],
+                vj_dis["divergences"]), (1, "disagree", 1))
+
+        # 25c/25d：W4a 起 compare 的真实左源是 thresholds 模式的 tee 落盘
+        # （`  [PASS] key: max median = ...` 形态）——PY_ASSERT_RE 解析路径必须有
+        # 自己的正负夹具，否则「CI 实际走的形态」恰恰是 selftest 没测的那条。
+        def pyfmt_log(passed):
+            pth = os.path.join(tmp, f"pyfmt_{'pass' if passed else 'fail'}.log")
+            with open(pth, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(f"  [{'PASS' if passed else 'FAIL'}] zz_ns: "
+                         f"max median = 500.00 ns (threshold < 1000.00 ns)\n")
+                fh.write(f"         worst group: {cmp_worst}\n")
+            return pth
+
+        rc25c, out25c = _capture_out(mode_compare, cmp_td, cmp_dir, pyfmt_log(True))
+        expect("selftest-25c compare parses thresholds-mode [PASS] log lines",
+               (rc25c, "RESULT: PASS" in out25c), (0, True))
+        rc25d, out25d = _capture_out(mode_compare, cmp_td, cmp_dir, pyfmt_log(False))
+        expect("selftest-25d compare flags divergence from thresholds-mode [FAIL] log",
+               (rc25d, "[DIFF]" in out25d), (1, True))
+
         # 断言 21：C-07/D6 —— thresholds 模式零匹配幽灵键: 默认 advisory 可见不致命,
         #   --strict 计入 fails; 无幽灵键时一声不吭(防空转式常报)。复用断言 19 的
         #   合成 criterion 树(zz_ns 有产物)+ 一个零匹配键, 不读真仓 target/。
@@ -1879,16 +1986,43 @@ def mode_selftest():
                single_criterion_time(one_time + change_block), (1.1, "ms"))
         # 11h/11i：I10/I12 的产环境对账（ADR-235 S1）。11h 若红，说明「阈值登记了但
         # 关键词缺项」——那正是 hnsw_tiered 从 2026-09-26 起空转六周的真实形态。
+        # W4a 双形态：heredoc 双 dict 仍在 → 真仓全量对账（旧语义）；已整体删除
+        # → 对拍面无左源，退化为「成对删除」断言（只允许双缺，单缺一份 = 删除不
+        # 完整的半态）——与 mode_invariants 的成对前置同一语义，防 selftest 与
+        # 判据面各说各话。
         _td_real = load_toml(THRESHOLDS_PATH)
         _pk_probs, _val_probs = ci_table_sync(
             BENCH_WORKFLOW_PATH, _td_real["thresholds_ns"], _td_real["path_keywords"])
-        expect("selftest-11h real PATH_KEYWORDS keys lock-step with THRESHOLDS_NS + TOML",
-               _pk_probs, [])
-        expect("selftest-11i real heredoc threshold values == TOML values",
-               _val_probs, [])
+        if ci_table_dicts_present(BENCH_WORKFLOW_PATH):
+            expect("selftest-11h real PATH_KEYWORDS keys lock-step with THRESHOLDS_NS + TOML",
+                   _pk_probs, [])
+            expect("selftest-11i real heredoc threshold values == TOML values",
+                   _val_probs, [])
+        else:
+            _retired_pair = (ci_threshold_dict_present(BENCH_WORKFLOW_PATH),
+                             ci_pathkeywords_dict_present(BENCH_WORKFLOW_PATH))
+            expect("selftest-11h heredoc retired as a pair (W4a)",
+                   _retired_pair, (False, False))
+            expect("selftest-11i no half-dict left behind by heredoc removal (W4a)",
+                   _retired_pair, (False, False))
 
-        with open(BENCH_WORKFLOW_PATH, encoding="utf-8-sig") as fh:
-            _real_wf = fh.read()
+        # W4a：heredoc 已从真 workflow 删除，11j/11k 的基座改为从真实 TOML 两表
+        # 合成的 heredoc 形状文本（键/值均真实）——红路径（数值漂移 / 缺关键词）
+        # 的判定力不再依赖真 yml 里还留着一份 heredoc。
+        def _synth_heredoc_wf(thr_table, kw_table):
+            buf = ["          THRESHOLDS_NS = {\n"]
+            for k, v in thr_table.items():
+                buf.append(f'              "{k}": {int(v):_},\n')
+            buf.append("          }\n")
+            buf.append("          PATH_KEYWORDS = {\n")
+            for k, kws in kw_table.items():
+                joined = ", ".join(f'"{w}"' for w in kws)
+                buf.append(f'              "{k}": [{joined}],\n')
+            buf.append("          }\n")
+            return "".join(buf)
+
+        _real_wf = _synth_heredoc_wf(_td_real["thresholds_ns"],
+                                     _td_real["path_keywords"])
 
         # 11j：数值漂移必红（副本里把 hnsw 的 heredoc 值改大）—— 键集仍相等，
         # 所以只有 I12 能抓，正好证明 I10 不是它的替代品。
@@ -1980,7 +2114,7 @@ def _capture_out(fn, *args):
 
 
 # --------------------------------------------------------------------------- main
-VALUE_FLAGS = ("--criterion-dir", "--legacy-out")
+VALUE_FLAGS = ("--criterion-dir", "--legacy-out", "--emit-verdict-json")
 # F29: 显式白名单 —— 新增旗标必须写进这里，否则 main 会拒绝而不是静默忽略它。
 KNOWN_FLAGS = ("--selftest", "--json", "--strict", "--help", "-h", "--static-only")
 
@@ -2011,7 +2145,7 @@ def main(argv):
     if unknown:
         print("用法: py -3 scripts/check_perf_redlines.py "
               "[--selftest|--static-only|MODE] [--json] [--strict] "
-              "[--criterion-dir D] [--legacy-out F]")
+              "[--criterion-dir D] [--legacy-out F] [--emit-verdict-json F]")
         print("  MODE = all|static|lint|inventory|invariants|thresholds|compare|"
               "slo|redline|ignored|emit-ignored|emit-slo-filter|emit-overlaps")
         print(f"[UNDECIDABLE] 未知旗标: {' '.join(unknown)} —— 未执行任何判据；"
@@ -2024,6 +2158,7 @@ def main(argv):
     strict = "--strict" in flags
     criterion_dir = os.path.join(ROOT, "target", "criterion")
     legacy_out = None
+    verdict_json = None
     # 位置参数 = 排除选项名与它们的值。之前只剔了选项名, 值会混进 modes,
     # 靠"取第一个"侥幸不出错; 现在是显式剔除, 不再依赖顺序。
     consumed = set()
@@ -2035,9 +2170,16 @@ def main(argv):
                 return 2
             if opt == "--criterion-dir":
                 criterion_dir = argv[i + 1]
-            else:
+            elif opt == "--legacy-out":
                 legacy_out = argv[i + 1]
+            else:
+                verdict_json = argv[i + 1]
             consumed.update({i, i + 1})
+    # W4a：compare 的逐键判定落盘路径缺省取环境变量 CHIMERA_PERF_VERDICT_JSON
+    # （bench_check.yml compare 步以 env 形式声明产物位置，命令行旗标优先）。
+    # 环境缺省不算「旗标缺失」——compare 的判据面仍是 --legacy-out，verdict json
+    # 只是观测产物，缺省不请求就根本不写。
+    verdict_json = verdict_json or os.environ.get("CHIMERA_PERF_VERDICT_JSON") or None
     modes = [a for idx, a in enumerate(argv)
              if not a.startswith("-") and idx not in consumed]
 
@@ -2075,9 +2217,9 @@ def main(argv):
         return mode_thresholds(thresholds_doc, criterion_dir, as_json, strict)
     if mode == "compare":
         if not legacy_out:
-            print("[UNDECIDABLE] compare mode needs --legacy-out <heredoc stdout file>")
+            print("[UNDECIDABLE] compare mode needs --legacy-out <CI threshold assertion stdout file>")
             return 2
-        return mode_compare(thresholds_doc, criterion_dir, legacy_out)
+        return mode_compare(thresholds_doc, criterion_dir, legacy_out, verdict_json)
     if mode == "slo":
         return mode_slo(redlines)
     if mode == "redline":

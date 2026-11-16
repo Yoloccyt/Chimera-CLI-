@@ -290,10 +290,27 @@ jobs:
           restore-keys: linux-test-cargo-
       - name: Setup sccache
         uses: mozilla/sccache-action@v0.0.11
-      # WHY: 保持全量验证语义 —— 含 doc-tests 与 backpressure 60s spec 验收
+      # W4c：cargo test 的 test-binary 串行执行是 release 全量测试 5-12min 的主因之一，
+      # 切流 cargo nextest（并行执行所有测试 binary，与 ci.yml check/e2e job 同口径）。
+      # 语义边界（两条都由本 job 的步结构显式接住，非静默丢失）：
+      #   - nextest 不跑 doc-tests → 下方 doctest 步按 ci.yml doctest job 同形命令补回；
+      #   - 不跑 #[ignore] 压测档（本就不属 release 验收语义：spec 60s 验收档，
+      #     不带 --run-ignored，压测由 stress.yml nightly 承接）。
+      # 保持全量验证语义：含 backpressure 60s spec 验收
       # (不设 CHIMERA_BACKPRESSURE_SECS,缺省 60s),发布前完整性不降级。
+      - name: Install cargo-nextest
+        # WHY: taiki-e/install-action 下载预编译二进制，避免 cargo install 长编译；
+        # 与 ci.yml check job 的 Install cargo-nextest 步同口径。
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
       - name: Run workspace tests
-        run: cargo test --workspace --no-fail-fast --jobs 2
+        run: cargo nextest run --workspace --no-fail-fast
+      # WHY --no-fail-fast：一次跑出全部失败 target，避免「修一个才看见下一个」。
+      # WHY 排除根 package：e2e 由 e2e job 承担（ci.yml doctest job 同口径注释），
+      # doctest 面无该 target。
+      - name: Run doctests
+        run: cargo test --workspace --exclude chimera-e2e-tests --doc --no-fail-fast
 
   # ============================================================
   # Job 2.5: Docker 镜像构建 + 推送 GHCR

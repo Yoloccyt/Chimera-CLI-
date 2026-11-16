@@ -129,7 +129,11 @@ async fn three_auto_routed_paths_produce_identical_sequences() {
     let seq_batch = drain(&mut rx_batch, n).await;
 
     assert_eq!(seq_async.len(), n, "publish 路径必须送达全部 {n} 条");
-    assert_eq!(seq_sync.len(), n, "publish_blocking 路径必须送达全部 {n} 条");
+    assert_eq!(
+        seq_sync.len(),
+        n,
+        "publish_blocking 路径必须送达全部 {n} 条"
+    );
     assert_eq!(seq_batch.len(), n, "publish_batch 路径必须送达全部 {n} 条");
 
     assert!(
@@ -242,10 +246,7 @@ async fn batch_path_must_not_bypass_downsample_gate() {
     let events: Vec<NexusEvent> = (0..160).map(progress_event).collect();
     bus.publish_batch(events).await.unwrap();
 
-    assert!(
-        bus.pressure_engaged(),
-        "无消费持续批量发布必须进入压力区"
-    );
+    assert!(bus.pressure_engaged(), "无消费持续批量发布必须进入压力区");
     assert!(
         bus.downsampled_total() > 0,
         "批量路径必须经降采样闸门(压力区内应产生降级量);\

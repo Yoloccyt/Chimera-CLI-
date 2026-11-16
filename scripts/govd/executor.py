@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shlex
 import shutil
@@ -141,6 +142,75 @@ def is_cargo_argv(argv) -> bool:
     return base.lower() in _CARGO_BASENAMES
 
 
+# N2（W4N）：间接 cargo 探测 —— semaphore 只锁 argv[0] 为 cargo 的**直接**门，
+# wrapper 门（python/bash/pwsh 包 cargo）从互斥面漏出（ADR-318 TL-W3c 的已知边界）。
+# 本探针对这类 argv 做静态扫描并追加登记，供评估「互斥面缺口规模」：先量，再决定
+# 要不要把互斥延伸到 wrapper 门。纯观测位 —— 不改 rc、不强制互斥、默认关零开销
+# （env GOVD_CARGO_INDIRECT_PROBE=1 显式 opt-in，与 cargo_semaphore 同一开关纪律）。
+_CARGO_SUBCOMMANDS = frozenset({"build", "check", "test", "clippy", "bench", "doc"})
+_INDIRECT_WRAPPERS = frozenset({
+    "python", "python.exe", "python3", "python3.exe",
+    "bash", "bash.exe", "sh", "sh.exe",
+    "pwsh", "pwsh.exe", "powershell", "powershell.exe",
+})
+_CARGO_INDIRECT_REGISTRY = os.path.join(str(ROOT), "tmp", "govd",
+                                        "cargo_indirect_registry.json")
+_REGISTRY_LOCK = threading.Lock()
+
+
+def _scan_cargo_subcmd(tokens):
+    """token 序列里找「cargo <已知子命令>」邻接对；basename + 小写比较。
+
+    取邻接对而非「出现过 cargo」：cargo 可以不带子命令（`cargo --version`），
+    那种形态与编译资源占用无关，登记进来只会稀释观测信号。
+    """
+    names = [t.replace("\\", "/").rsplit("/", 1)[-1].lower() for t in tokens]
+    for i, name in enumerate(names[:-1]):
+        if name in _CARGO_BASENAMES and names[i + 1] in _CARGO_SUBCOMMANDS:
+            return names[i + 1]
+    return None
+
+
+def detect_indirect_cargo(argv):
+    """argv[0] 为 python/bash/pwsh 类 wrapper 且参数序列含 cargo + 子命令时返回该子命令名，否则 None。"""
+    if not argv:
+        return None
+    base = argv[0].replace("\\", "/").rsplit("/", 1)[-1].lower()
+    if base not in _INDIRECT_WRAPPERS:
+        return None
+    rest = list(argv[1:])
+    hit = _scan_cargo_subcmd(rest)
+    if hit:
+        return hit
+    # `bash -c "cargo test"` 形态：-c 的载荷是**一个**字符串参数，token 级扫描
+    # 看不见内部空格 —— 对载荷再 shlex 切分一次后重扫（只递归一层，防套娃）。
+    for i, tok in enumerate(rest[:-1]):
+        if tok == "-c":
+            try:
+                payload = shlex.split(rest[i + 1], posix=True)
+            except ValueError:
+                return None
+            return _scan_cargo_subcmd(payload)
+    return None
+
+
+def register_indirect_cargo(gate_id, argv, subcmd, registry_path=None):
+    """追加登记一条间接 cargo 门记录（JSONL，观测位任何故障不得影响门判决）。
+
+    WHY 追加写而不是读-改-写 JSON 数组：govd 单进程多线程并发跑门，JSONL 每行
+    独立对象、单次 write 落盘，无竞争窗口；读侧（如果有）按行解析即可。
+    """
+    path = registry_path or _CARGO_INDIRECT_REGISTRY
+    record = {"gate_id": gate_id, "argv": list(argv),
+              "matched_cargo_subcmd": subcmd,
+              "run_ts": time.strftime("%Y-%m-%dT%H:%M:%S")}
+    line = json.dumps(record, ensure_ascii=False)
+    with _REGISTRY_LOCK:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a", encoding="utf-8", newline="\n") as fh:
+            fh.write(line + "\n")
+
+
 def env_fingerprint():
     """Hash the host facts that make a rerun non-comparable elsewhere."""
     parts = [sys.version.split()[0], sys.executable, os.name,
@@ -192,6 +262,18 @@ def run_attempt(task, log_path, timeout_s, bash_path=None, root=None):
     except (ValueError, LookupError) as exc:
         return Attempt(task.id, 1, Verdict.LAUNCH, None, 0.0,
                        "resolve:%s" % exc, log_path)
+    # N2（W4N）间接 cargo 探测（纯观测位）：semaphore 只锁 argv[0] 为 cargo 的
+    # 直接门，wrapper 门（python/bash/pwsh 包 cargo）从互斥面漏出 —— env
+    # GOVD_CARGO_INDIRECT_PROBE=1 时才静态扫描这类 argv 并追加登记，供评估
+    # 互斥面缺口规模。默认关（热路径上只多一次 env 查找，零其他开销）；
+    # 任何探测故障全吞：它不改 rc、不强制互斥，绝不让观测面反噬门判决。
+    if os.environ.get("GOVD_CARGO_INDIRECT_PROBE") == "1":
+        try:
+            _indirect = detect_indirect_cargo(args)
+            if _indirect:
+                register_indirect_cargo(task.id, args, _indirect)
+        except Exception:
+            pass
     # ADR-318 TL-W3c：cargo 门的进程级互斥。获取超时取本门预算的 1/10 ——
     # 排队是互斥的预期形态，但等待必须有上限：一次 permit 泄漏（未来某次改动的
     # bug）会让此后所有 cargo 门无限挂起、整个 CI job 被静默吊死，那才是最难
