@@ -10,6 +10,9 @@
 //!   可跨线程传递(如 Event Bus 回调、异步任务)
 //! - **快照哈希确定性**:snapshot_hash 按 quest_id 排序后哈希,
 //!   保证相同状态产生相同哈希(HashMap 迭代序不确定,需排序)
+//! - **快照哈希缓存(R2.3)**:写操作将缓存置 None 失效,读路径双检后
+//!   惰性重算并缓存——「读多写少」下后续读取零重算成本,notify() 触发的
+//!   重算结果亦被缓存(此前 notify 与读取各算一次,天然 2 倍写放大)
 //!
 //! # 架构红线
 //! - 所有状态变更通过 Event Bus 广播(NexusStateChanged 事件)
@@ -22,7 +25,8 @@
 //! nexus-core 已零依赖(ClvSummary::from_clv_slice 改签),nexus-core 同层依赖
 //! event-bus 合法且无环(`CLV::report_snapshot` 即经此直接发布);依赖倒置现仅
 //! 承载"适配层归 L9"语义(L1 不可向上依赖 L9,§2.2),故实现留在上层。
-//! 回调在写锁**释放后**执行(红线:不持锁调用外部代码)。
+//! 回调在写锁**释放后**执行(红线:不持锁调外部代码),且经 catch_unwind
+//! 隔离(R2.1:监听器 panic 不得影响状态变更——注释契约原承诺,本批次落地)。
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -42,6 +46,10 @@ struct NexusStateInner {
     global_budget: u64,
     /// 模型注册表快照(model_id 列表)
     model_registry_snapshot: Vec<String>,
+    /// 快照哈希缓存(R2.3):写操作置 None 失效,读路径双检后惰性重算并缓存。
+    /// None = 已失效,下次读取时重算(缓存是纯派生态,任何时刻重算结果一致,
+    /// 因此缓存不引入新的语义,只消除读放大)。
+    cached_hash: Option<String>,
 }
 
 /// 状态变更类型 — NexusState 变更通知的触发源分类(P1-1)
@@ -70,7 +78,8 @@ pub enum StateChangeKind {
 /// # 调用时机契约
 /// - 回调在状态变更成功且写锁释放**之后**同步调用(不持锁调外部代码)
 /// - 变更失败(如 Quest 重复注册)不触发回调
-/// - 监听器自身异常不得影响状态变更(回调发生在变更完成之后)
+/// - 监听器自身异常不得影响状态变更(R2.1 落地:`notify` 以 catch_unwind
+///   隔离回调并记 error 日志;release profile panic="abort" 下无效,见 ADR-271)
 pub trait StateChangeListener: Send + Sync {
     /// 状态变更通知
     ///
@@ -117,14 +126,25 @@ impl NexusState {
         }
     }
 
-    /// 触发监听器回调(内部辅助,P1-1)
+    /// 触发监听器回调(内部辅助,P1-1;R2.1 加 panic 隔离)
     ///
     /// 前置条件:调用方已释放写锁(红线:不持锁调外部代码)。
-    /// 无监听器时零开销(分支预测友好);state_hash 按需计算。
+    /// 无监听器时零开销(分支预测友好);state_hash 经缓存惰性重算(R2.3)。
     fn notify(&self, kind: StateChangeKind) {
         if let Some(listener) = &self.listener {
             let hash = self.snapshot_hash();
-            listener.on_state_changed(kind, hash);
+            // R2.1 panic 隔离:监听器异常不得影响状态变更(注释契约原承诺)。
+            // release profile panic="abort" 下 catch_unwind 无效(ADR-271 已载),
+            // 此处为 dev/test 及 unwind 构建提供隔离并留观测痕迹。
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                listener.on_state_changed(kind, hash);
+            }));
+            if result.is_err() {
+                tracing::error!(
+                    ?kind,
+                    "StateChangeListener 回调 panic 已隔离,状态变更不受影响"
+                );
+            }
         }
     }
 
@@ -139,6 +159,7 @@ impl NexusState {
                 return Err(NexusError::QuestAlreadyExists(quest.quest_id));
             }
             inner.active_quests.insert(quest.quest_id.clone(), quest);
+            inner.cached_hash = None; // R2.3:失效缓存,notify/读路径惰性重算
         } // 写锁在此释放(红线:不持锁调用外部代码)
         self.notify(StateChangeKind::QuestRegistered);
         Ok(())
@@ -175,7 +196,8 @@ impl NexusState {
             }
         } // 读锁在此释放
           // P1-1:进度更新成功后通知(快照哈希当前不含进度字段,
-          // 但监听器仍需感知变更时机,与既有注释"后续扩展触发事件"对齐)
+          // 但监听器仍需感知变更时机,与既有注释"后续扩展触发事件"对齐;
+          // 本方法不改动状态,缓存哈希原样复用)
         self.notify(StateChangeKind::QuestProgressUpdated);
         Ok(())
     }
@@ -184,33 +206,22 @@ impl NexusState {
     ///
     /// WHY:按 quest_id 排序后哈希,保证确定性(HashMap 迭代序不确定)。
     /// 用于 NexusStateChanged 事件的链式校验(prev_hash → state_hash)。
+    /// R2.3:读路径双检缓存——命中返回缓存,未命中重算并回填;写操作已
+    /// 将缓存置 None。缓存是纯派生态,返回序列与全量重算逐位一致。
     pub fn snapshot_hash(&self) -> String {
-        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-
-        let mut hasher = Sha256::new();
-
-        // 按 quest_id 排序,保证哈希确定性
-        let mut entries: Vec<_> = inner.active_quests.iter().collect();
-        entries.sort_by(|a, b| a.0.cmp(b.0));
-
-        for (quest_id, quest) in &entries {
-            hasher.update(quest_id.as_bytes());
-            hasher.update(b"\x00");
-            // 序列化 Quest 后哈希;序列化失败(理论不可能)用空串兜底
-            let json = serde_json::to_string(quest).unwrap_or_default();
-            hasher.update(json.as_bytes());
-            hasher.update(b"\x00");
+        {
+            let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(hash) = &inner.cached_hash {
+                return hash.clone();
+            }
+        } // 读锁释放;未命中走写路径(双检,防并发重复计算)
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(hash) = &inner.cached_hash {
+            return hash.clone();
         }
-
-        hasher.update(inner.global_budget.to_le_bytes());
-        hasher.update(b"\x00");
-
-        for model_id in &inner.model_registry_snapshot {
-            hasher.update(model_id.as_bytes());
-            hasher.update(b"\x00");
-        }
-
-        hex::encode(hasher.finalize())
+        let hash = compute_snapshot_hash(&inner);
+        inner.cached_hash = Some(hash.clone());
+        hash
     }
 
     /// 按 ID 获取 Quest 克隆(不存在返回 None)
@@ -238,6 +249,7 @@ impl NexusState {
         {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             inner.global_budget = budget;
+            inner.cached_hash = None; // R2.3
         } // 写锁在此释放
         self.notify(StateChangeKind::GlobalBudgetChanged);
     }
@@ -255,9 +267,47 @@ impl NexusState {
         {
             let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
             inner.model_registry_snapshot = models;
+            inner.cached_hash = None; // R2.3
         } // 写锁在此释放
         self.notify(StateChangeKind::ModelRegistryChanged);
     }
+}
+
+/// 全量计算快照哈希(按 quest_id 排序保证确定性)
+///
+/// 从 `snapshot_hash` 抽出的纯函数:读路径缓存未命中时调用一次,结果回填缓存。
+fn compute_snapshot_hash(inner: &NexusStateInner) -> String {
+    let mut hasher = Sha256::new();
+
+    // 按 quest_id 排序,保证哈希确定性
+    let mut entries: Vec<_> = inner.active_quests.iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(b.0));
+
+    for (quest_id, quest) in &entries {
+        hasher.update(quest_id.as_bytes());
+        hasher.update(b"\x00");
+        // 序列化 Quest 后哈希;序列化失败(理论不可能)由静默兜底改为
+        // warn 观测 + 空串降级(R2.2——此前 unwrap_or_default 无声吞失败)
+        let json = match serde_json::to_string(quest) {
+            Ok(json) => json,
+            Err(e) => {
+                tracing::warn!(quest_id = %quest_id, error = %e, "Quest 序列化失败,快照哈希按空串降级");
+                String::new()
+            }
+        };
+        hasher.update(json.as_bytes());
+        hasher.update(b"\x00");
+    }
+
+    hasher.update(inner.global_budget.to_le_bytes());
+    hasher.update(b"\x00");
+
+    for model_id in &inner.model_registry_snapshot {
+        hasher.update(model_id.as_bytes());
+        hasher.update(b"\x00");
+    }
+
+    hex::encode(hasher.finalize())
 }
 
 impl Default for NexusState {
@@ -352,7 +402,13 @@ mod tests {
         state.register_quest(make_quest("q1")).unwrap();
         let result = state.update_quest_progress("q1", 11, 10);
         assert!(
-            matches!(result, Err(NexusError::InvalidProgress { completed: 11, total: 10 })),
+            matches!(
+                result,
+                Err(NexusError::InvalidProgress {
+                    completed: 11,
+                    total: 10
+                })
+            ),
             "completed > total 必须被拒（实际 {result:?}）"
         );
     }
@@ -375,7 +431,10 @@ mod tests {
         let state = NexusState::new();
         state.register_quest(make_quest("q1")).unwrap();
         let result = state.update_quest_progress("q1", 10, 10);
-        assert!(result.is_ok(), "completed == total 是合法边界（实际 {result:?}）");
+        assert!(
+            result.is_ok(),
+            "completed == total 是合法边界（实际 {result:?}）"
+        );
     }
 
     #[test]
@@ -409,6 +468,21 @@ mod tests {
 
         // 插入顺序不同,但状态相同 → 哈希应一致(排序保证确定性)
         assert_eq!(state1.snapshot_hash(), state2.snapshot_hash());
+    }
+
+    /// R2.3:缓存命中路径必须与重算路径逐位一致,且变更后缓存失效重算。
+    /// (缓存是纯派生态,此测试钉住「外部可观测语义不变」这一契约。)
+    #[test]
+    fn test_snapshot_hash_cache_hit_matches_recompute() {
+        let state = NexusState::new();
+        state.register_quest(make_quest("q1")).unwrap();
+        let h1 = state.snapshot_hash(); // 首次:重算并回填
+        let h2 = state.snapshot_hash(); // 二次:缓存命中
+        assert_eq!(h1, h2, "缓存命中必须与重算结果逐位一致");
+        state.set_global_budget(7); // 变更 → 缓存失效
+        let h3 = state.snapshot_hash();
+        assert_ne!(h1, h3, "变更后缓存必须失效,哈希应变化");
+        assert_eq!(h3, state.snapshot_hash(), "重算后再次命中须一致");
     }
 
     #[test]
@@ -477,6 +551,16 @@ mod tests {
         }
     }
 
+    /// R2.1 负例:每次回调必 panic 的监听器 —— 验证 panic 被隔离,
+    /// 状态变更与其后的所有操作不受影响(注释契约原承诺,此前无实现)。
+    struct PanicListener;
+
+    impl StateChangeListener for PanicListener {
+        fn on_state_changed(&self, _kind: StateChangeKind, _state_hash: String) {
+            panic!("deliberate listener panic (R2.1 isolation test)");
+        }
+    }
+
     #[test]
     fn test_listener_notified_on_quest_registered() {
         let listener = std::sync::Arc::new(MockListener::default());
@@ -535,5 +619,35 @@ mod tests {
         state.register_quest(make_quest("q1")).unwrap();
         state.set_global_budget(1);
         assert_eq!(state.list_quests().len(), 1);
+    }
+
+    /// R2.1:监听器 panic 被 catch_unwind 隔离 —— register/set 均返回成功,
+    /// 状态保持可读可写,哈希缓存路径不受影响。
+    /// 注:catch_unwind 仍会触发 panic hook(打印到测试输出),测试期临时置静默。
+    #[test]
+    fn test_listener_panic_is_isolated() {
+        let default_hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = std::panic::catch_unwind(|| {
+            let listener = std::sync::Arc::new(PanicListener);
+            let state = NexusState::with_listener(listener);
+
+            // 两次触发回调的写操作:panic 均被隔离,语义照常成功
+            state.register_quest(make_quest("q1")).unwrap();
+            state.set_global_budget(9);
+            state.set_model_registry_snapshot(vec!["m".into()]);
+            state.update_quest_progress("q1", 1, 2).unwrap();
+
+            // 状态本体不受监听器异常影响
+            assert_eq!(state.list_quests().len(), 1);
+            assert_eq!(state.global_budget(), 9);
+            assert_eq!(state.snapshot_hash().len(), 64);
+            // 无监听器的新实例行为不变
+            let plain = NexusState::new();
+            plain.register_quest(make_quest("p1")).unwrap();
+            assert_eq!(plain.snapshot_hash().len(), 64);
+        });
+        std::panic::set_hook(default_hook);
+        assert!(result.is_ok(), "监听器 panic 不得传播到调用方");
     }
 }
