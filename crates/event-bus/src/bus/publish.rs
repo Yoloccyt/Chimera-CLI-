@@ -32,7 +32,7 @@ use crate::types::{EventSeverity, NexusEvent};
 
 use super::{is_critical_mpsc_event, EventBus};
 
-/// 单事件发布的共享实现(**宏形式**)—— `publish` 与 `publish_blocking` 的唯一路径
+/// 单事件发布的共享实现(**宏形式**)—— `publish` / `publish_blocking` / 批量循环的唯一投递体
 ///
 /// # WHY 必须是宏,不能改回函数(实测结论,勿优化)
 /// 2026-09-11 基准实测:把本实现提取为**函数**后无法让两条路径同时零成本 ——
@@ -43,16 +43,36 @@ use super::{is_critical_mpsc_event, EventBus};
 /// 宏展开是文本替换,两条路径生成的机器码与原始内联实现逐字等价,同时源码保持单一
 /// (消除 88 行复制粘贴的**静默分叉**风险:改一处漏一处,两条路径行为不再等价)。
 ///
+/// # 双入口结构(R4.2 收敛,ADR-314 BC-01 的彻底形态)
+/// - `dispatch_one_impl!(self, event)`(入口 ①):单发路径 ——
+///   `Instant::now()` / `receiver_count()` / `sender.len()` 以表达式形式注入,
+///   在宏体**原位**逐条求值(求值位置与历史宏逐字等价,机器码零变化);
+/// - `dispatch_one_impl!(@body self, event, start, subscriber_count, queued)`(入口 ②):
+///   共享投递体 —— 三个采样值由调用方注入。批量循环注入**批级摊销采样**
+///   (`dispatch_batch`,ds 闸门激活时逐条重采 `sender.len()` 后注入)。
+///   入口 ② 仍是宏展开(非函数调用),I-6 不变量(不可抽函数)保持。
+///
+/// 收敛动机:批量路径原是本宏的手写并行副本,历史上已两次漂移 —— BC-01 补
+/// 漏计三处(入口计数 published_total/critical_total、ds 闸门),第三轮 T1.2
+/// 车道单次求值补丁需双写。收敛后批量循环与单发**字面共享同一份投递语义**。
+///
 /// # 为什么用 `$self` / `$event` 作参数
-/// 宏体含 `return Ok(())`(分片命中提前返回),展开后必须落在**调用方函数**内 ——
-/// 故不能抽成闭包或函数(会改变 `return` 的目标或引入调用边界)。
+/// 宏体含提前退出(分片命中跳出标签块),展开后必须落在**调用方函数**内 ——
+/// 故不能抽成闭包或函数(会改变 `break` 的目标或引入调用边界)。
 /// `$event` 以 `expr` 匹配,由调用方按值传入。
 ///
 /// # 发布序列(顺序敏感,勿随意调整)
 /// 吞吐计数 → Critical 车道计数 → CBF 信用扣减(仅「分片启用 + Unordered」)
-/// → 分片路由(命中提前返回;片满回退并归还信用)→ 日志埋点
+/// → 分片路由(命中跳出;片满回退并归还信用)→ 日志埋点
 /// → Critical 保底送达(空订阅者)或 mpsc 旁路投递(有订阅者)
-/// → 背压水位告警 → broadcast 发送 + lag 检测
+/// → 背压水位告警 → broadcast 发送 + lag 检测(E-2 降采样闸门在 send 之前)
+///
+/// # 提前退出形态(R4.2)
+/// 历史形态为 `return Ok(())`(单发)/ `continue`(批量)。收敛后宏体被批量循环
+/// 复用,而 `dispatch_batch` 返回 `()` —— 宏体内无法使用 `return`。改用标签块
+/// `'dispatch_one: { ... }` + `break`(单发等效原 `return Ok(())`;批量等效原
+/// `continue`),`break` 后落在宏体尾部的 `Ok(())`。事件所有权在分片回退
+/// `Err(ev)` 臂重赋值,漏发率恒 0 语义不变。
 ///
 /// # SubTask 17.2:Critical 事件无订阅者告警(B-a 后语义更新)
 /// 当 `subscriber_count == 0` 且事件为 Critical 级时,**投递到保底 sink**
@@ -74,19 +94,31 @@ use super::{is_critical_mpsc_event, EventBus};
 /// 订阅者 API 零变化);`Critical`/`OrderSensitive` 恒走单流路径
 /// (红线:Critical 永不进分片,顺序敏感保序)。
 macro_rules! dispatch_one_impl {
-    ($self:ident, $event:expr) => {{
+    // 入口 ①:单发(publish / publish_blocking)——采样表达式原位注入宏体,
+    // 求值位置/顺序与历史宏逐字等价(分片命中路径不求值,同历史早退语义)。
+    ($self:ident, $event:expr) => {
+        dispatch_one_impl!(
+            @body $self, $event,
+            Instant::now(),
+            $self.sender.receiver_count(),
+            $self.sender.len()
+        )
+    };
+
+    // 入口 ②:共享投递体(单发/批量共用)——start/subscriber_count/queued 由调用方注入
+    (@body $self:ident, $event:expr, $start:expr, $subscriber_count:expr, $queued:expr) => {{
         // 遮蔽为可变:P1-T12 分片回退分支需重新赋值事件所有权
         // (Err(ev) => event = ev),保证回退事件继续走既有单流路径,
         // 事件永不因分片而丢失(漏发率恒 0)。
         let mut event = $event;
-        // 第三轮 T1.2(F-P2):车道判定单次求值。旧形态在信用分支(原 :421)与
-        // 分片路由分支(原 :434)各调一次 `event_lane(&event)` —— 第二次结果
-        // 被 `matches!` 即时丢弃,而 OrderSensitive 车道会先分配一个
+        // 第三轮 T1.2(F-P2):车道判定单次求值。旧形态在信用分支与
+        // 分片路由分支各调一次 `event_lane(&event)` —— 第二次结果被
+        // `matches!` 即时丢弃,而 OrderSensitive 车道会先分配一个
         // `SessionKey`(session_id/correlation_id/rule_id 的 String clone),
         // 等于热路径每发布白做 0-2 次堆分配。提升为 `lane` 单值后:
         //   - event_lane 是纯函数(只读事件,无副作用),两次求值同值 ⇒ 行为等价;
         //   - `Lane` 为 owned 类型不借事件,`&event` 借位在求值结束即释放(NLL),
-        //     :438 try_shard_publish(event) 的所有权移动不受影响;
+        //     try_shard_publish(event) 的所有权移动不受影响;
         //   - severity() 保留原位(语义独立的廉价虚调用,不因本改动一并合并判定)。
         let lane = event_lane(&event);
         // §16.5 吞吐量计数(Phase 10 Wave 6):发布入口递增
@@ -112,105 +144,117 @@ macro_rules! dispatch_one_impl {
         {
             credit_deducted = $self.credit_flow.try_acquire(1).is_ok();
         }
-        // P1-T12 分片路由(灰度开关;F-a 后快速路径 = 一次 ArcSwap load ~5ns,
-        // 默认关闭时仅此一次原子读 —— 单一真值源,无双表达分叉风险)
-        // - `Unordered` → 入分片(worker 攒批汇入 broadcast,订阅者 API 零变化);
-        // - `Critical`/`OrderSensitive` → 走原单流(红线:Critical 永不进分片;
-        //   顺序敏感通道保持单流,不分片,E8-4)。
-        // WHY log_publish 不覆盖分片路径:分片是发布端并行化灰度增强,其可观测性
-        // 由 shadow_stats()/bus_shard_depth 指标承载;log_publish 埋点保留在单流
-        // 路径(Critical/OrderSensitive/回退事件),避免双记与热路径额外采样。
-        if $self.shard_bus.load().is_some()
-            && matches!(&lane, &Lane::Unordered)
-        {
-            match $self.try_shard_publish(event) {
-                Ok(()) => return Ok(()),
-                // 片满且信用耗尽回退:重新赋值事件所有权,继续走既有
-                // broadcast 单流路径 —— 事件永不因分片而丢失(漏发率恒 0)。
-                // 同时归还入口扣的 1 信用(事件不经分片、无 worker 归还,
-                // 信用不可滞留 —— 否则「片满回退」成为无人归还的泄漏路径)。
-                Err(ev) => {
-                    if credit_deducted {
-                        $self.credit_flow.release(1);
+        // 标签块(R4.2):分片命中即 `break 'dispatch_one` —— 单发等效历史
+        // `return Ok(())`,批量等效历史 `continue`(宏体尾部 `Ok(())` 对
+        // publish 是返回值,对批量循环是丢弃值,见 dispatch_batch)。
+        'dispatch_one: {
+            // P1-T12 分片路由(灰度开关;F-a 后快速路径 = 一次 ArcSwap load ~5ns,
+            // 默认关闭时仅此一次原子读 —— 单一真值源,无双表达分叉风险)
+            // - `Unordered` → 入分片(worker 攒批汇入 broadcast,订阅者 API 零变化);
+            // - `Critical`/`OrderSensitive` → 走原单流(红线:Critical 永不进分片;
+            //   顺序敏感通道保持单流,不分片,E8-4)。
+            // WHY log_publish 不覆盖分片路径:分片是发布端并行化灰度增强,其可观测性
+            // 由 shadow_stats()/bus_shard_depth 指标承载;log_publish 埋点保留在单流
+            // 路径(Critical/OrderSensitive/回退事件),避免双记与热路径额外采样。
+            if $self.shard_bus.load().is_some()
+                && matches!(&lane, &Lane::Unordered)
+            {
+                match $self.try_shard_publish(event) {
+                    Ok(()) => break 'dispatch_one,
+                    // 片满且信用耗尽回退:重新赋值事件所有权,继续走既有
+                    // broadcast 单流路径 —— 事件永不因分片而丢失(漏发率恒 0)。
+                    // 同时归还入口扣的 1 信用(事件不经分片、无 worker 归还,
+                    // 信用不可滞留 —— 否则「片满回退」成为无人归还的泄漏路径)。
+                    Err(ev) => {
+                        if credit_deducted {
+                            $self.credit_flow.release(1);
+                        }
+                        event = ev;
                     }
-                    event = ev;
                 }
             }
-        }
-        // WHY 在方法入口测量 start:log_publish 在 send 之前调用(event 所有权
-        // 尚未 move),elapsed 主要覆盖 receiver_count() 调用(接近零),
-        // 但保留测量点以便未来将 log/指标采集移到 send 之后时仍准确。
-        let start = Instant::now();
-        let subscriber_count = $self.sender.receiver_count();
+            // WHY 在方法入口测量 start:log_publish 在 send 之前调用(event 所有权
+            // 尚未 move),elapsed 主要覆盖 receiver_count() 调用(接近零),
+            // 但保留测量点以便未来将 log/指标采集移到 send 之后时仍准确。
+            //
+            // 采样注入(R4.2):$start/$subscriber_count/$queued 由调用方提供 ——
+            // 单发入口在此逐条求值(Instant::now()/receiver_count()/len(),位置与
+            // 历史宏逐字一致);批量入口注入批级摊销值(ds 闸门激活时批量侧
+            // 逐条重采,见 dispatch_batch)。
+            let start = $start;
+            let subscriber_count = $subscriber_count;
+            let queued = $queued;
 
-        // 记录发布日志(若已启用日志埋点)
-        if let Some(logger) = &$self.logger {
-            logger.log_publish(&event, subscriber_count, start.elapsed());
-        }
+            // 记录发布日志(若已启用日志埋点)
+            if let Some(logger) = &$self.logger {
+                logger.log_publish(&event, subscriber_count, start.elapsed());
+            }
 
-        // SubTask 17.2:Critical 事件无订阅者告警
-        // WHY:关键事件(CheckpointSaved/ConsensusReached/SlowConsumerDropped)丢失
-        // 会导致系统状态不一致,无订阅者时必须告警;Normal 级静默丢弃避免日志噪声
-        if subscriber_count == 0 && event.severity() == EventSeverity::Critical {
-            warn!(
-                event_type = event.type_name(),
-                "Critical 事件无订阅者,事件将被丢弃"
-            );
-        }
-
-        // §6.2 红线双通道:Critical 安全/治理告警事件(is_critical_mpsc_event 清单)额外走 mpsc 旁路
-        // WHY 先 mpsc 后 broadcast:旁路走的是**有界**通道(CRITICAL_CHANNEL_CAPACITY)且用
-        // try_send,故本步「不可能阻塞」——这是把它放前面的真正理由:不因 Critical 旁路
-        // 的背压拖住主发布路径。语义边界(勿读成「无条件必达」):
-        //   - 有空位 ⇒ 必达;满载(Full)⇒ 丢弃本条并递增 critical_dropped_count 使丢弃可见,
-        //     Sender 保留(临时满载,下次可能成功);receiver 已 drop(Closed)⇒ 移除该 Sender
-        //   - 无任何活跃订阅者 ⇒ 不走「warn + 放弃」,而落 fallback sink 保底(见 B-a 分支)
-        // broadcast 仍照发以保证向后兼容(旁路不减 broadcast,两通道是并集不是二选一)。
-        if is_critical_mpsc_event(&event) {
-            $self.send_critical_mpsc(&event);
-        }
-
-        // A3 背压监控:发送前检查 broadcast 缓冲区占用率
-        // WHY sender.len() 是 AtomicUsize load,开销极低(~1ns),不影响 publish 吞吐
-        // 阈值 3/4:提前告警,留给运维反应缓冲;满容量时才告警已太晚(事件即将被丢弃)
-        let queued = $self.sender.len();
-        let threshold = $self.capacity * 3 / 4;
-        if queued > threshold {
-            $self.backpressure_warning_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!(
-                queued,
-                threshold,
-                capacity = $self.capacity,
-                "broadcast 通道背压告警:缓冲区占用超过 75%"
-            );
-        }
-
-        // E-2(ADR-191 D2)压力下降采样:非降采样策略/Critical 恒放行(上方早退),
-        // 锁存期内被降采样的事件递增计数后跳过广播(返回 Ok——主动降级非错误,
-        // published_total 已在入口计数,降级量由 downsampled_total 单独可见)
-        if !$self.ds_admit(event.severity(), queued) {
-            $self.ds.downsampled.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            return Ok(());
-        }
-
-        // broadcast::Sender::send 返回 Ok(receiver_count) 表示有多少接收者收到了消息。
-        // 若 receiver_count < subscriber_count(发送前采样),说明有慢消费者 lag
-        // (其内部缓冲区已满,send 跳过了它)。Err(SendError) 表示无接收者。
-        // WHY 零成本:send 返回值本身是 usize,仅需一次整数比较 + 原子 load,
-        // 不影响 publish 热路径性能(~1ns 额外开销)。
-        let expected = subscriber_count;
-        match $self.sender.send(event) {
-            Ok(receivers) if receivers < expected => {
+            // SubTask 17.2:Critical 事件无订阅者告警
+            // WHY:关键事件(CheckpointSaved/ConsensusReached/SlowConsumerDropped)丢失
+            // 会导致系统状态不一致,无订阅者时必须告警;Normal 级静默丢弃避免日志噪声
+            if subscriber_count == 0 && event.severity() == EventSeverity::Critical {
                 warn!(
-                    expected_subscribers = expected,
-                    actual_receivers = receivers,
-                    lagged_count = expected - receivers,
-                    "broadcast 发送者 lag 检测:部分订阅者缓冲区已满,事件被跳过"
+                    event_type = event.type_name(),
+                    "Critical 事件无订阅者,事件将被丢弃"
                 );
             }
-            Ok(_) => {}  // 所有订阅者正常接收
-            Err(_) => {} // 无接收者,已在上方 Critical 告警路径处理
+
+            // §6.2 红线双通道:Critical 安全/治理告警事件(is_critical_mpsc_event 清单)额外走 mpsc 旁路
+            // WHY 先 mpsc 后 broadcast:旁路走的是**有界**通道(CRITICAL_CHANNEL_CAPACITY)且用
+            // try_send,故本步「不可能阻塞」——这是把它放前面的真正理由:不因 Critical 旁路
+            // 的背压拖住主发布路径。语义边界(勿读成「无条件必达」):
+            //   - 有空位 ⇒ 必达;满载(Full)⇒ 丢弃本条并递增 critical_dropped_count 使丢弃可见,
+            //     Sender 保留(临时满载,下次可能成功);receiver 已 drop(Closed)⇒ 移除该 Sender
+            //   - 无任何活跃订阅者 ⇒ 不走「warn + 放弃」,而落 fallback sink 保底(见 B-a 分支)
+            // broadcast 仍照发以保证向后兼容(旁路不减 broadcast,两通道是并集不是二选一)。
+            if is_critical_mpsc_event(&event) {
+                $self.send_critical_mpsc(&event);
+            }
+
+            // A3 背压监控:发送前检查 broadcast 缓冲区占用率
+            // (queued 为注入的采样值:单发=逐条新鲜值;批量=批级摊销值,
+            // 差异声明见 dispatch_batch 文档)
+            // WHY sender.len() 是 AtomicUsize load,开销极低(~1ns),不影响 publish 吞吐
+            // 阈值 3/4:提前告警,留给运维反应缓冲;满容量时才告警已太晚(事件即将被丢弃)
+            let threshold = $self.capacity * 3 / 4;
+            if queued > threshold {
+                $self.backpressure_warning_count
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                warn!(
+                    queued,
+                    threshold,
+                    capacity = $self.capacity,
+                    "broadcast 通道背压告警:缓冲区占用超过 75%"
+                );
+            }
+
+            // E-2(ADR-191 D2)压力下降采样:非降采样策略/Critical 恒放行(上方早退),
+            // 锁存期内被降采样的事件递增计数后跳过广播(主动降级非错误,
+            // published_total 已在入口计数,降级量由 downsampled_total 单独可见)。
+            // R4.2:历史「return Ok(())/continue」改为 if/else 跳过 send。
+            if $self.ds_admit(event.severity(), queued) {
+                // broadcast::Sender::send 返回 Ok(receiver_count) 表示有多少接收者收到了消息。
+                // 若 receiver_count < subscriber_count(发送前采样),说明有慢消费者 lag
+                // (其内部缓冲区已满,send 跳过了它)。Err(SendError) 表示无接收者。
+                // WHY 零成本:send 返回值本身是 usize,仅需一次整数比较 + 原子 load,
+                // 不影响 publish 热路径性能(~1ns 额外开销)。
+                let expected = subscriber_count;
+                match $self.sender.send(event) {
+                    Ok(receivers) if receivers < expected => {
+                        warn!(
+                            expected_subscribers = expected,
+                            actual_receivers = receivers,
+                            lagged_count = expected - receivers,
+                            "broadcast 发送者 lag 检测:部分订阅者缓冲区已满,事件被跳过"
+                        );
+                    }
+                    Ok(_) => {}  // 所有订阅者正常接收
+                    Err(_) => {} // 无接收者,已在上方 Critical 告警路径处理
+                }
+            } else {
+                $self.ds.downsampled.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
         }
         Ok(())
     }};
@@ -292,137 +336,55 @@ impl EventBus {
 
     /// 批量发布内部实现(async/blocking 共用,内部纯同步 send)
     ///
-    /// 摊销点:`receiver_count()` 与 `sender.len()` 背压采样各仅一次;
-    /// 逐条事件的 send / mpsc 旁路 / Critical 判定为固有开销,无法摊销。
+    /// R4.2 收敛:循环内逐条走与单发完全相同的宏体
+    /// (`dispatch_one_impl!` 的 `@body` 入口),消除原手写并行副本 —— 该副本
+    /// 历史上已两次漂移(BC-01 补漏计三处:入口计数 published_total/
+    /// critical_total + ds 闸门;第三轮 T1.2 车道单次求值补丁需双写)。
+    ///
+    /// 摊销点(每批一次,提到循环外):`Instant::now()`(日志 elapsed)、
+    /// `receiver_count()`(订阅者计数采样)、`sender.len()`(背压水位)。
+    /// ds 闸门激活时(`DownsampleUnderPressure` 策略)逐条重采 `sender.len()`
+    /// 注入 —— 闸门按「当前压力」裁决放行,批前采样恒为 0(一条都还没发)
+    /// 会使闸门永不触发 = 策略被完全绕过;默认策略下 ds_admit 直接早退,
+    /// 复用批前采样即可(零额外原子操作,保留摊销收益)。
+    ///
+    /// # 与旧批量路径的已知差异(R4.2 收敛声明,评审接受;测试口径见下)
+    /// 1. **背压告警计数**:旧批量路径「批前一次」;现随宏体逐条判定(与单发
+    ///    路径逐条一致,正是收敛目标语义)。持续超阈值批量下告警次数会多于
+    ///    旧批量路径(旧值最多 1 次/批),`backpressure_warning_count` 语义
+    ///    自此与单发路径统一 —— 该差异属修复漂移而非回归。
+    /// 2. **日志文案**:宏体为单发/批量共用,「Critical 事件无订阅者」「背压
+    ///    告警」「lag 检测」三条 WARN 不再带 "(批量发布)" 后缀(消息体主干
+    ///    不变,`test_backpressure_warn_emits_log_contract` 等契约断言的
+    ///    匹配子串不受影响)。
+    /// 3. **计数语义**(published_total / critical_total / ds 闸门 / 信用扣减 /
+    ///    分片路由 / mpsc 旁路)与单发路径逐条一致 —— 由
+    ///    `publish_path_equivalence_test.rs` 与 `test_publish_and_blocking_are_equivalent`
+    ///    守卫,本收敛的目标契约。
     pub(super) fn dispatch_batch(&self, events: Vec<NexusEvent>) {
         if events.is_empty() {
             return; // 空批次早退,避免无意义采样
         }
+        // 摊销采样(每批一次)——注入宏体;逐条事件的 send / mpsc 旁路 /
+        // Critical 判定为固有开销,无法摊销(与 publish 逐条同码)。
         let start = Instant::now();
-        // 摊销点 1:receiver_count 仅采样一次(原子 load)
         let subscriber_count = self.sender.receiver_count();
-        // 摊销点 2:背压检查仅一次(sender.len 原子 load + 阈值比较)
         let queued = self.sender.len();
-        // 降采样闸门是否启用(策略 = DownsampleUnderPressure 时为 Some)。
-        // WHY 需要这个开关:降采样策略的语义是「按**当前**压力决定放行」,
-        // 故闸门必须拿到**新鲜**的占用水位 —— 而批前一次性采样恒为 0
-        // (此时一条都还没发出去)⇒ 闸门永不触发 = 策略被完全绕过。
-        // 默认策略(全仓唯一生产配置)下 ds_admit 直接早退,无需逐条重采,
-        // 故按此开关只在策略启用时逐条重采,保留默认路径的摊销收益。
+        // 降采样闸门是否启用(策略 = DownsampleUnderPressure 时为 Some):
+        // 闸门须拿新鲜占用水位,启用时逐条重采;默认策略下复用批前采样。
         let ds_gate_active = self.ds.params.is_some();
-        let threshold = self.capacity * 3 / 4;
-        if queued > threshold {
-            self.backpressure_warning_count
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            warn!(
-                queued,
-                threshold,
-                capacity = self.capacity,
-                "broadcast 通道背压告警:缓冲区占用超过 75%(批量发布)"
-            );
-        }
-        // 逐条发布:与 publish 语义一致,仅采样已摊销到循环外
         for event in events {
-            // 遮蔽为可变:分片回退分支需重新赋值事件所有权(Err(ev) => event = ev),
-            // 保证回退事件继续走本循环既有单流逻辑(事件不丢弃,漏发率恒 0)。
-            let mut event = event;
-            // ADR-314 W6(BC-01 发布路径收敛):批量路径与单发路径对齐**入口计数** ——
-            // `publish` 在入口递增 published_total / critical_total,批量路径此前漏计。
-            // WHY 必须对齐:① ADR-191 §16.5 把 published_total 定义为「发布入口计数」,
-            // 是 L1 吞吐量指标(§8.3 观测面)的唯一输入 —— publish_batch 同样是发布入口,
-            // 漏计会让吞吐量**低报**(唯一生产批量发布方是 parliament 的辩论批量投递);
-            // ② critical_total 是影子双跑前哨的 Critical 车道计数,漏计会让前哨失真。
-            // 位置对齐 publish 的顺序:计数在**信用扣减与分片路由之前**(入片事件同样计数)。
-            self.published_total
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if event.severity() == EventSeverity::Critical {
-                self.critical_total
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-            // 第三轮 T1.2 补丁（F-P2 · 批量路径同病）：车道判定单次求值。
-            // 批量循环不走 `dispatch_one_impl` 宏（手写并行副本），旧形态在信用
-            // 分支（原 :1014）与分片路由分支（原 :1027）各调一次 `event_lane(&event)`——
-            // OrderSensitive 车道会先分配一个 `SessionKey`（session_id/correlation_id/
-            // rule_id 的 String clone），等于每次批量发布白做 0-2 次堆分配。提升为
-            // `lane` 单值后：event_lane 是纯函数（只读事件），两次求值同值⇒行为等价；
-            // `Lane` 为 owned 不借事件，:1028 try_shard_publish(event) 的移动不受影响（NLL）。
-            let lane = event_lane(&event);
-            // P1-T11 CBF 信用流：逐条判定（与 publish 一致，方案 A：仅「分片启用 +
-            // Unordered」扣信用，扣减失败静默；OrderSensitive/Critical/未启用
-            // 分片不扣 —— 见 publish 注释；shed 由 try_shard_publish 统一计数）
-            let mut credit_deducted = false;
-            if event.severity() != EventSeverity::Critical
-                && self.shard_bus.load().is_some()
-                && matches!(&lane, &Lane::Unordered)
-            {
-                credit_deducted = self.credit_flow.try_acquire(1).is_ok();
-            }
-            // P1-T12 分片路由(逐条判定,与 publish 一致):
-            // Unordered 事件入分片,worker 汇入 broadcast(订阅者 API 零变化);
-            // Critical/OrderSensitive 恒走本循环原单流(红线)
-            // WHY 在信用处理之后路由:与 publish 信用账目完全一致 —— 入分片事件
-            // 的 1 信用由本循环扣除(条件与下方路由一致:F-a 后由 shard_bus.load
-            // 判启用 + Unordered),worker 汇入时 release_many 归还(信用守恒
-            // 不变量见 try_shard_publish;若先路由后扣信用,worker 会归还未扣过
-            // 的信用,破坏守恒语义;若扣信用条件宽于路由条件,则 OrderSensitive/
-            // 未入片事件扣而无人归还)
-            if self.shard_bus.load().is_some() && matches!(&lane, &Lane::Unordered) {
-                match self.try_shard_publish(event) {
-                    Ok(()) => continue,
-                    // 回退语义与 publish 一致:重新赋值所有权,继续走既有单流路径
-                    // (批量路径同样保证事件不丢弃,漏发率恒 0);同时归还入口扣的
-                    // 1 信用(回退路径无 worker 归还,信用不可滞留)。
-                    Err(ev) => {
-                        if credit_deducted {
-                            self.credit_flow.release(1);
-                        }
-                        event = ev;
-                    }
-                }
-            }
-            if let Some(logger) = &self.logger {
-                logger.log_publish(&event, subscriber_count, start.elapsed());
-            }
-            if subscriber_count == 0 && event.severity() == EventSeverity::Critical {
-                warn!(
-                    event_type = event.type_name(),
-                    "Critical 事件无订阅者,事件将被丢弃(批量发布)"
-                );
-            }
-            // §6.2 红线双通道:Critical 安全事件(is_critical_mpsc_event 清单)额外走 mpsc 旁路(逐条判定,不破坏语义)
-            if is_critical_mpsc_event(&event) {
-                self.send_critical_mpsc(&event);
-            }
-            // ADR-314 W6(BC-01 发布路径收敛):批量路径补齐**降采样闸门** ——
-            // publish 的单发路径经 ds_admit 判定,批量路径此前完全跳过 ⇒
-            // 压力区内批量发布会绕过「每 every 条放行 1 条」策略,使两条路径不等价
-            // (且降采样计数downsampled_total 漏记,运维看不见降级量)。
-            // 位置对齐 publish 的顺序:闸门在 mpsc 旁路之后、broadcast 发送之前。
-            //
-            // WHY 逐条重采占用:降采样策略按「当前压力」决定放行,批前采样恒为 0
-            // ⇒ 闸门永不触发(策略被完全绕过)。默认策略下 ds_gate_active=false,
-            // 直接复用批前采样值(零额外开销,保留摊销收益)。
             let queued_for_ds = if ds_gate_active {
                 self.sender.len()
             } else {
                 queued
             };
-            if !self.ds_admit(event.severity(), queued_for_ds) {
-                self.ds.downsampled.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                continue;
-            }
-            match self.sender.send(event) {
-                Ok(receivers) if receivers < subscriber_count => {
-                    warn!(
-                        expected_subscribers = subscriber_count,
-                        actual_receivers = receivers,
-                        lagged_count = subscriber_count - receivers,
-                        "broadcast 发送者 lag 检测:部分订阅者缓冲区已满,事件被跳过(批量发布)"
-                    );
-                }
-                Ok(_) => {}
-                Err(_) => {}
-            }
+            // 宏体尾部返回 Ok(())(单发路径作为 publish 返回值);批量场景下
+            // 投递错误就地消化(send 返回 Err 仅表示无接收者),结果恒为 Ok。
+            // 类型标注:宏体 Ok 在无返回语境下无法推断(E0282),显式钉住与
+            // 单发路径同一错误类型。
+            let _: Result<(), EventBusError> =
+                dispatch_one_impl!(@body self, event, start, subscriber_count, queued_for_ds);
         }
     }
 
