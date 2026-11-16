@@ -37,6 +37,40 @@ B1~B5 是 L0 深度重构（W4-1 起）向 L1 收口的连续五批，每批均�
 ---
 
 
+### D1.1 — W1 批次裁决（死参数「赋义」，而非删参）
+
+**批次**：W1（前置 W1-0 经实测为**空批次**，见 D8 第 3 项）。
+
+**处置**：`nexus-core::state::NexusState::update_quest_progress(&self, quest_id,
+_completed, _total)` 的两个死参数（带 `_` 前缀、不参与逻辑）**赋义**而非删除：
+
+| 裁决 | 依据 |
+|---|---|
+| 语义：`completed > total` 是**物理不可能**的进度组合 ⇒ 入口即拒 | 参数名自带「完成数 / 总数」语义；不参与逻辑本身就是缺陷（调用方可传任意值） |
+| 错误面：新增 `NexusError::InvalidProgress { completed, total }` | 全仓 `NexusError` 消费方均用 `matches!` 宏（非穷尽 match）⇒ **加变体零破坏**（已逐个 grep 核实） |
+| 选「赋义」而非「删参」 | 删参会丢失调用方的「完成数 / 总数」意图并需改所有调用点；赋义保留意图并把它变成**可校验的不变量** |
+
+**验证**：`cargo test -p nexus-core --lib` ⇒ **74 passed / 0 failed**（新增 4 用例：
+负例 ×2 + 边界 + 「载荷错优先于存在性」的判定顺序）。
+
+### D1.2 — W2 批次裁决（错误模型核实：方案前提被证伪 ⇒ 零代码改动）
+
+**批次**：W2（方案 §5.4 的 BC-09 / BC-10：错误模型统一）。
+
+**方案前提**：BC-09 称 `event-bus/src/critical_sink.rs` 有 11 处 `expect()`，
+BC-10 称 `nexus-compute` 有 2 处 `panic!()`，均需改为 `Result` 传播。
+
+**实测结论：两处前提均不成立 ⇒ W2 为验证性批次，零代码改动。**
+
+| 方案前提 | 实测 | 裁决 |
+|---|---|---|
+| `critical_sink.rs` 11 处 `expect()` 在生产面 | **生产面（1~174 行）零 `expect`**；11 处全在 `#[cfg(test)] mod file_wal_tests` 内，且测试模块有 `#[allow(clippy::unwrap_used, clippy::expect_used)]` 豁免 | **不改**。改动会把「测试惯用法」误升格为生产面错误模型变更，属无谓扩大改动面 |
+| `nexus-compute` 2 处 `panic!()` 需改 `Result` | `bridge.rs:147`（rayon 建池失败）注释载明「进程级资源耗尽 = 进程不可用，无运行期降级路径」；`hts.rs:395`（SequentialTest 配置非法）同时提供 `try_new` 的 Result 版本，且生产调用点为 0（`calibration.rs:242` 用 `try_new`） | **不改**。两处均为有充分论证的设计意图，且已有 Result 替代路径 |
+| `G-81`/`G-82` lint 棘轮 | `scripts/check_lint_ratchet.py` 实跑：47 crate 全 opt-in、**0 offenders** | 棘轮为绿 ⇒ 无需任何登记 |
+
+⇒ W2 的价值在**证伪**（避免把测试惯用法与有意设计意图当成缺陷去"修"），
+证据即 `check_lint_ratchet.py` 的 0 offenders 实跑结果。
+
 ## D2 — 决策
 
 ### D2.1 零生产装配面的处置判据（ADR-312 子章节）

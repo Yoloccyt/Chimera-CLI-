@@ -1,14 +1,18 @@
-//! 遥测源契约 — 依赖倒置的接缝（由 `nexus-core` 实现，本 crate 消费）
+//! 遥测源契约 — 依赖倒置的接缝（由 `nexus-compute` 实现，本 crate 消费）
 //!
-//! WHY 需要这个 trait：`nexus-core` 的 `KindCounters` 引用 `TaskKind`/`hts`，
-//! 若本 crate 直接读这些类型就会与 `nexus-core -> nexus-telemetry` 形成 crate 环。
-//! 把“有状态实现”留在 `nexus-core`、把“编排”放在本 crate，依赖方向即可单向。
+//! WHY 需要这个 trait：`nexus-compute` 的 `KindCounters` 引用 `TaskKind`/`hts`，
+//! 若本 crate 直接读这些类型就会与 `nexus-compute -> nexus-telemetry` 形成 crate 环。
+//! 把“有状态实现”留在 `nexus-compute`、把“编排”放在本 crate，依赖方向即可单向。
+//!
+//! NOTE(ADR-309 W4-1, 2026-11-15): 实现方已随 `compute/` 自 `nexus-core` 迁至
+//! `nexus-compute`；本文档原以 `nexus-core` 指代，指引的路径已不存在
+//! （ADR-311 D2.4 记录 shim 退役）。
 
 use event_bus::EventBus;
 
 /// 单 `TaskKind` 的校准证据（纯 DTO）
 ///
-/// WHY 用字符串而非 `TaskKind`/`Decided` 枚举：本 crate 不得依赖 `nexus-core`，
+/// WHY 用字符串而非 `TaskKind`/`Decided` 枚举：本 crate 不得依赖 `nexus-compute`，
 /// 否则形成 crate 环。字符串只在低频证据输出路径分配，不在采样热路径。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CalibrationEvidence {

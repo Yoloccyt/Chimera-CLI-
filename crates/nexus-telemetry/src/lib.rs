@@ -3,7 +3,7 @@
 //! ROLE:     NEXUS-OMEGA L0-B 核心基础面 — 计算面遥测契约与上报编排（ADR-222 D3）
 //! BACKEND:  memory
 //! PRODUCERS: 2 TelemetryCalibrationApplied,TelemetryReporterDegraded
-//! CONSUMERS: 2 nexus-compute,nexus-core
+//! CONSUMERS: 1 nexus-compute
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! NEXUS-OMEGA L0-B 核心基础面 — 计算面遥测契约与上报编排（ADR-222 D3）
@@ -11,16 +11,20 @@
 //! 对应架构层: **L0-B Core Foundation**（机器层号 1；与 `nexus-core`/`event-bus` 同亚层）
 //! 对应 ADR: **ADR-222**（L0 双层边界）/ **ADR-197**（计算面可观测闭环）
 //!
-//! # 职责边界（与 nexus-core 的分工）
+//! # 职责边界（与 nexus-compute 的分工）
 //!
 //! - 本 crate：**无状态**的判定纯函数、env 阈值/策略解析、上报循环，以及
 //!   [`SaturationSource`] 契约（依赖倒置的接缝）；
-//! - `nexus-core::compute::telemetry`：有状态的 `KindCounters` 与
+//! - `nexus-compute::telemetry`：有状态的 `KindCounters` 与
 //!   `ComputeTelemetry` 适配器（持有采样器/校准器/计算桥）。
 //!
-//! 依赖方向固定为 `nexus-core -> nexus-telemetry`；本 crate **不得**依赖
-//! `nexus-core`，否则 `KindCounters`（用 `TaskKind`）与本 crate 的判定函数
-//! 会形成 crate 级环。该方向由 G-125/G-126 守护。
+//! 依赖方向固定为 `nexus-compute -> nexus-telemetry`；本 crate **不得**依赖
+//! `nexus-core` 或 `nexus-compute`，否则 `KindCounters`（用 `TaskKind`）与本 crate
+//! 的判定函数会形成 crate 级环。该方向由 G-125/G-126 守护。
+//!
+//! NOTE(ADR-309 W4-1, 2026-11-15): 实现方已随 `compute/` 自 `nexus-core` 迁至
+//! `nexus-compute`；本文档原以 `nexus-core::compute::telemetry` 指代，指向的路径
+//! 已不存在（ADR-311 D2.4 记录 shim 退役）。
 //!
 //! # 纯度口径
 //!

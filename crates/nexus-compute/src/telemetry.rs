@@ -1,4 +1,4 @@
-//! 计算面遥测（nexus-core 侧）— L0-B 契约的有状态适配（ADR-197 / ADR-222 D3）
+//! 计算面遥测（nexus-compute 侧）— L0-B 契约的有状态适配（ADR-197 / ADR-222 D3 / ADR-309）
 //!
 //! 对应架构层: **L0-B Core Foundation**（机器层号 1）
 //!
@@ -11,9 +11,13 @@
 //!
 //! # 依赖方向
 //!
-//! `nexus-core -> nexus-telemetry` 单向；本模块**不得**被 `nexus-telemetry`
+//! `nexus-compute -> nexus-telemetry` 单向；本模块**不得**被 `nexus-telemetry`
 //! 反向引用，否则 `KindCounters`（用 `TaskKind`）与契约之间形成 crate 环。
 //! 该方向由 G-125/G-126 机器守护（`scripts/check_l0_sublayer.py`）。
+//!
+//! NOTE(ADR-309 W4-1, 2026-11-15): 本模块随 `compute/` 自 `nexus-core` 迁至
+//! `nexus-compute`；文档原以「nexus-core 侧」指代，指引的路径已不存在
+//! （ADR-311 D2.4 记录 shim 退役）。
 
 use std::sync::{Arc, OnceLock};
 
@@ -23,8 +27,8 @@ use super::bridge;
 use super::calibration;
 use super::utilization::UtilizationSampler;
 
-// 兼容 re-export：B1/ADR-311 shim 退役前 `nexus_core::compute::telemetry::*` 旧路径
-// 即经本模块转发（拆分只是搬家，不是改 API）；shim 删除后消费方直连 `nexus_compute::…`。
+// re-export：本模块把 `nexus_telemetry` 的契约面转出到 `nexus_compute::telemetry::`
+// 路径（ADR-309 W4-1 随迁时保持原 API 形状 —— 拆分只是搬家，不是改 API）。
 pub use super::counters::{KindCounters, KindStat};
 pub use nexus_telemetry::{
     clamped_period, parse_saturation_mode, parse_threshold_bp, report_needed, reporter_tick,
@@ -33,7 +37,7 @@ pub use nexus_telemetry::{
     CalibrationEvidence, SaturationMode, SaturationSource, TickReport,
 };
 
-/// 有状态遥测源 —— 把 `nexus-core` 的采样器/校准器/计算桥接到 L0-B 契约
+/// 有状态遥测源 —— 把 `nexus-compute` 的采样器/校准器/计算桥接到 L0-B 契约
 ///
 /// WHY 是零尺寸类型：采样器本身是进程级 `static OnceLock`（与上提前的
 /// `spawn_saturation_reporter` 完全同形），适配器只做方法转发，不持有新状态。

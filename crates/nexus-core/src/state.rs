@@ -144,17 +144,30 @@ impl NexusState {
         Ok(())
     }
 
-    /// 更新 Quest 进度 — Quest 不存在返回 `QuestNotFound`
+    /// 更新 Quest 进度 — Quest 不存在返回 `QuestNotFound`，
+    /// 进度计数非法（`completed > total`）返回 `InvalidProgress`
     ///
     /// WHY:Week 2 阶段仅校验 Quest 存在性,实际进度通过 Task.status
     /// 字段反映(由 GQEP 执行器更新)。此方法作为进度通知的校验入口,
     /// 后续阶段可扩展为触发 QuestProgressUpdated 事件。
+    ///
+    /// WHY 进度参数参与校验（BC-08, 2026-11-16）：此前 `_completed`/`_total`
+    /// 带 `_` 前缀不参与任何逻辑（死参数），调用方传入物理上不可能的
+    /// `completed > total` 无人看守。现赋予其「进度快照自洽」语义：
+    /// 该不变量在方法入口即被拒绝，错误可被调用方精确归因。
+    /// 对既有合法调用点零行为变更（既有传值均为 `completed <= total`）。
     pub fn update_quest_progress(
         &self,
         quest_id: &str,
-        _completed: u32,
-        _total: u32,
+        completed: u32,
+        total: u32,
     ) -> Result<(), NexusError> {
+        // 进度自洽性:完成数不得超过总数（物理上不可能的组合在入口即拒）。
+        // WHY 先于存在性校验:这是调用方载荷的内在矛盾,与 quest 是否存在无关,
+        // 先报载荷错误能给出更精确的归因（避免"quest 不存在"掩盖载荷错误）。
+        if completed > total {
+            return Err(NexusError::InvalidProgress { completed, total });
+        }
         {
             let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
             if !inner.active_quests.contains_key(quest_id) {
@@ -329,6 +342,40 @@ mod tests {
         state.register_quest(make_quest("q1")).unwrap();
         let result = state.update_quest_progress("q1", 5, 10);
         assert!(result.is_ok());
+    }
+
+    /// 负例（BC-08）：进度自洽性 —— 完成数超过总数是物理上不可能的组合，
+    /// 必须在入口被拒（此前该参数完全不参与逻辑，无人看守）。
+    #[test]
+    fn test_update_progress_rejects_completed_exceeds_total() {
+        let state = NexusState::new();
+        state.register_quest(make_quest("q1")).unwrap();
+        let result = state.update_quest_progress("q1", 11, 10);
+        assert!(
+            matches!(result, Err(NexusError::InvalidProgress { completed: 11, total: 10 })),
+            "completed > total 必须被拒（实际 {result:?}）"
+        );
+    }
+
+    /// 负例（BC-08）：载荷矛盾优先于存在性 —— 非法载荷的归因不应被
+    /// "quest 不存在"掩盖（否则调用方无法定位是载荷错还是 ID 错）。
+    #[test]
+    fn test_update_progress_invalid_payload_precedes_existence_check() {
+        let state = NexusState::new();
+        let result = state.update_quest_progress("nonexistent", 11, 10);
+        assert!(
+            matches!(result, Err(NexusError::InvalidProgress { .. })),
+            "非法载荷须先于存在性校验报错（实际 {result:?}）"
+        );
+    }
+
+    /// 边界（BC-08）：`completed == total` 是合法的（全部完成）。
+    #[test]
+    fn test_update_progress_accepts_completed_equals_total() {
+        let state = NexusState::new();
+        state.register_quest(make_quest("q1")).unwrap();
+        let result = state.update_quest_progress("q1", 10, 10);
+        assert!(result.is_ok(), "completed == total 是合法边界（实际 {result:?}）");
     }
 
     #[test]
