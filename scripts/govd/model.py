@@ -51,6 +51,24 @@ class Task:
     owner: str = ""
     disk_gb: float = 0.0
     source: str = "gate"
+    # ADR-315 W-T0/W-T1: the domainization fields. `group` is the concurrency
+    # scope, `resource` the host-resource class, `exclusive` the mutual-exclusion
+    # key.
+    #
+    # WHY `exclusive` exists and `needs` cannot do this job: the manifest
+    # header (gate_manifest.toml:14-22) records the measured fact that `needs`
+    # buys only *inclusion order*, NOT a mutex -- with jobs>1 the executor
+    # submits every pending task into the thread pool at once and never reads
+    # `needs` again (govd/tests/test_govd.py::NeedsSemanticsTests asserts the
+    # overlap). Real mutual exclusion must therefore be implemented by the
+    # scheduler on an explicit resource key. Concurrent cargo sessions leave
+    # same-crate rlibs with different hashes in target/ and break linking
+    # (E0460/E0462/E0463/E0786) -- ADR-300 D4 forbids concurrent cargo during
+    # regression, so every cargo gate carries `exclusive = "cargo"`.
+    group: str = ""
+    concurrency: int = 1
+    resource: str = ""
+    exclusive: str = ""
 
     def selected_by(self, profile_name: str, include_heavy: bool,
                     allow_mutating: bool) -> bool:
@@ -80,6 +98,8 @@ class Task:
             "mutating": self.mutating, "needs": list(self.needs),
             "profiles": list(self.profiles), "owner": self.owner,
             "disk_gb": self.disk_gb, "source": self.source,
+            "group": self.group, "concurrency": self.concurrency,
+            "resource": self.resource, "exclusive": self.exclusive,
         }
 
 

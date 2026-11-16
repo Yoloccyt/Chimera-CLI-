@@ -189,6 +189,14 @@ jobs:
       - name: govd scheduler self-tests (G-147)
         run: python3 scripts/govd/tests/test_govd.py
 
+      # WHY(ADR-315 W-T1): exclusive 资源互斥的**变异负控**必须与 G-147 同批落地——
+      # G-147 锁的是"互斥实现正确"，本步锁的是"互斥断言非恒真"。并发断言最大的风险
+      # 就是永远通过、却什么都没锁（恒真）。本步在临时副本上变异掉 cli.py 的互斥判定，
+      # 期望 G-147 里的互斥断言变红、其余三条保持绿；变异若没生效（真实包覆盖副本）
+      # 本步自身判红——负控方法的失败模式必须可见，不能静默变成"通过"。
+      - name: exclusive mutex negative control (G-160)
+        run: python3 scripts/check_exclusive_mutex_negative.py
+
       # WHY: ADR-229 的三层倒置与 ADR-232 的四条默认值承诺,都是编译期与既有测试
       # 看不见的那类约束——给 L7 加一条 chimera-cli 依赖照样编译,把 max_turns 从 8
       # 改成 800、给 LlmLoopOutcome 加 #[derive(Default)]、把启用面扩成 `_ => true`

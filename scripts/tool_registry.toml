@@ -429,3 +429,75 @@ script = "scripts/measure_rss.ps1"
 status = "diagnostic"
 owner = "perf"
 evidence = "R12 D0-3 内存门固定场景峰值 RSS 采样器（PeakWorkingSet64 轮询取 max，Windows 无 /usr/bin/time -v 的替代）；pwsh 手动按需运行，never block | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-11-14)"
+
+[[tool]]
+script = "scripts/check_exclusive_mutex_negative.py"
+status = "active"
+owner = "toolchain"
+evidence = "ADR-315 W-T1 exclusive 资源互斥的负控（变异验证）| 证明 govd/tests/test_govd.py::ExclusiveSemanticsTests 的并发断言非恒真：复制 scripts/govd 到临时目录、变异掉 cli.py 的互斥判定（if t.exclusive: -> if False:）、以 scripts.govd 包名加载副本并断言被测 cli.__file__ 指向副本（防真实包覆盖副本导致变异从未生效），期望互斥断言变红而其余三条保持绿 | gate G-160"
+
+[[tool]]
+script = "scripts/gate_domainize.py"
+status = "active"
+owner = "toolchain"
+evidence = "ADR-315 W-T0 门禁清单域化器（一次性迁移工具，迁移后清单即权威源）| 读 gate_manifest.toml 按 cmd 脚本名分桶注入 5 个调度字段（group/concurrency/resource/exclusive/needs），幂等写入；带 --selftest 负控夹具（域划分非退化 / cargo 门互斥生效 / 未知 cmd 落兜底 / inject 幂等）| 迁移执行证据：清单 156 → 157 门（新增 G-160），check_manifest_schema.py 与 check_ci_manifest_parity.py 均绿"
+
+[[tool]]
+script = "scripts/check_l0_purity.py"
+status = "active"
+owner = "l0-contract"
+evidence = "ADR-310 D6 L0 门单入口薄调度器委托的子执行体 —— G-99 L0-A 依赖白名单 + 杂质符号扫描（ADR-310 D6 薄调度器委托） | 经 scripts/check_l0_surface.py <mode> 调用（该调度器是 ci.yml/gate_manifest 的登记入口），本脚本自身非门、不单独被 workflow 调用"
+
+[[tool]]
+script = "scripts/check_l0_logic_ledger.py"
+status = "active"
+owner = "l0-contract"
+evidence = "ADR-310 D6 L0 门单入口薄调度器委托的子执行体 —— G-119 受控逻辑台账（ADR-310 D6 薄调度器委托） | 经 scripts/check_l0_surface.py <mode> 调用（该调度器是 ci.yml/gate_manifest 的登记入口），本脚本自身非门、不单独被 workflow 调用"
+
+[[tool]]
+script = "scripts/check_l0_sublayer.py"
+status = "active"
+owner = "l0-contract"
+evidence = "ADR-310 D6 L0 门单入口薄调度器委托的子执行体 —— G-125/G-126 L0-A/L0-B 方向判据（ADR-310 D6 薄调度器委托） | 经 scripts/check_l0_surface.py <mode> 调用（该调度器是 ci.yml/gate_manifest 的登记入口），本脚本自身非门、不单独被 workflow 调用"
+
+[[tool]]
+script = "scripts/check_l0a_sibling_assembly.py"
+status = "active"
+owner = "l0-contract"
+evidence = "ADR-310 D6 L0 门单入口薄调度器委托的子执行体 —— L0-A sibling 装配面一致性（ADR-310 D6 薄调度器委托） | 经 scripts/check_l0_surface.py <mode> 调用（该调度器是 ci.yml/gate_manifest 的登记入口），本脚本自身非门、不单独被 workflow 调用"
+
+[[tool]]
+script = "scripts/check_l0b_dep_surface.py"
+status = "active"
+owner = "l0-contract"
+evidence = "ADR-310 D6 L0 门单入口薄调度器委托的子执行体 —— G-131 L0-B 依赖面（ADR-310 D6 薄调度器委托） | 经 scripts/check_l0_surface.py <mode> 调用（该调度器是 ci.yml/gate_manifest 的登记入口），本脚本自身非门、不单独被 workflow 调用"
+
+[[tool]]
+script = "scripts/check_l0_root_surface.py"
+status = "active"
+owner = "l0-contract"
+evidence = "ADR-310 D6 L0 门单入口薄调度器委托的子执行体 —— G-107 umbrella 根 re-export 棘轮（ADR-310 D6 薄调度器委托） | 经 scripts/check_l0_surface.py <mode> 调用（该调度器是 ci.yml/gate_manifest 的登记入口），本脚本自身非门、不单独被 workflow 调用"
+
+[[tool]]
+script = "scripts/check_l0_sibling_surface.py"
+status = "active"
+owner = "l0-contract"
+evidence = "ADR-310 D6 L0 门单入口薄调度器委托的子执行体 —— G-152 sibling 根 re-export 对拍（ADR-310 D6 薄调度器委托） | 经 scripts/check_l0_surface.py <mode> 调用（该调度器是 ci.yml/gate_manifest 的登记入口），本脚本自身非门、不单独被 workflow 调用"
+
+[[tool]]
+script = "scripts/check_l0_const_ratchet.py"
+status = "active"
+owner = "l0-contract"
+evidence = "ADR-310 D6 L0 门单入口薄调度器委托的子执行体 —— L0 常量/静态面棘轮（ADR-310 D6 薄调度器委托） | 经 scripts/check_l0_surface.py <mode> 调用（该调度器是 ci.yml/gate_manifest 的登记入口），本脚本自身非门、不单独被 workflow 调用"
+
+[[tool]]
+script = "scripts/check_l0_pubfn_ratchet.py"
+status = "active"
+owner = "l0-contract"
+evidence = "ADR-310 D6 L0 门单入口薄调度器委托的子执行体 —— G-105 pub fn 面棘轮（ADR-310 D6 薄调度器委托） | 经 scripts/check_l0_surface.py <mode> 调用（该调度器是 ci.yml/gate_manifest 的登记入口），本脚本自身非门、不单独被 workflow 调用"
+
+[[tool]]
+script = "scripts/check_l0_extensibility_class.py"
+status = "active"
+owner = "l0-contract"
+evidence = "ADR-310 D6 L0 门单入口薄调度器委托的子执行体 —— G-115 逐类型可扩展性分类台账（ADR-310 D6 薄调度器委托） | 经 scripts/check_l0_surface.py <mode> 调用（该调度器是 ci.yml/gate_manifest 的登记入口），本脚本自身非门、不单独被 workflow 调用"

@@ -27,10 +27,23 @@ KNOWN_KEYS = {
     "id", "spec_ref", "cmd", "expect", "kind", "note", "test_kind",
     "timeout_s", "retry", "mutating", "needs", "profiles", "owner",
     "disk_gb", "ci_exempt", "ci_advisory", "source",
+    # ADR-315 W-T0：域化五字段（group/concurrency/resource/exclusive/needs）。
+    # WHY `needs` 已在白名单但此前 156 门零使用 —— 清单头注 :14-22 实测
+    # `needs` 只买得到入列顺序、不是互斥锁，故本次**不复用 needs 表达互斥**，
+    # 而是新增 `exclusive` 资源键承载真正的互斥语义（ADR-315 D4）。
+    "group", "concurrency", "resource", "exclusive",
 }
 PROFILES = ("pr", "nightly", "release", "local")
 EXES = ("{python}", "bash", "pwsh", "cargo", "git")
 SOURCES = ("gate", "rust", "external", "diagnostic")
+# ADR-315 W-T0：域化字段的取值词表。
+# WHY 域键是闭集：域是「并发上限的作用域」，调度器需要按域聚簇；
+# 开放词表会让拼写错误静默变成新域（域计数漂移且无门报警）。
+GATE_GROUPS = (
+    "rust-build", "dep-layer", "l0-contract", "doc", "lint-static",
+    "tool-plane", "perf", "security", "governance", "misc",
+)
+GATE_RESOURCES = ("cpu", "io", "net")
 # 清单头注声明的 test_kind 词表。此前只校验「是字符串」，于是 2026-11 前已有 4 行
 # 写成 `single_crate`（头注里根本没有这个词）而全库无门发现 —— ADR-235 S1 补齐。
 TEST_KINDS = ("crate_unit", "cross_crate")
@@ -207,6 +220,25 @@ def validate(gates, *, family="gate"):
         for key in ("ci_exempt", "ci_advisory", "test_kind", "owner"):
             if key in g and not isinstance(g[key], str):
                 bad("TYPE", "%s: %s must be a string" % (gid, key))
+        # ADR-315 W-T0：域化字段的类型与词表校验。
+        # WHY 必须校验而不仅放行：域键是闭集（调度器按域聚簇，拼写错误会静默
+        # 变成新域 ⇒ 域计数漂移且无门报警）；concurrency 必须是 >=1 的整数
+        # （0 或负数会让调度器的并发上限失效或抛异常）；resource 是资源类词表。
+        if "group" in g:
+            if not isinstance(g["group"], str):
+                bad("TYPE", "%s: group must be a string" % gid)
+            elif g["group"] not in GATE_GROUPS:
+                bad("GROUP", "%s: group must be one of %s" % (gid, list(GATE_GROUPS)))
+        if "concurrency" in g:
+            if not _is_int(g["concurrency"]) or g["concurrency"] < 1:
+                bad("CONCURRENCY", "%s: concurrency must be an int >= 1" % gid)
+        if "resource" in g:
+            if not isinstance(g["resource"], str):
+                bad("TYPE", "%s: resource must be a string" % gid)
+            elif g["resource"] not in GATE_RESOURCES:
+                bad("RESOURCE", "%s: resource must be one of %s" % (gid, list(GATE_RESOURCES)))
+        if "exclusive" in g and not isinstance(g["exclusive"], str):
+            bad("TYPE", "%s: exclusive must be a string" % gid)
         if "test_kind" in g and g["test_kind"] not in TEST_KINDS:
             bad("TEST_KIND", "%s: test_kind %r not in %s (清单头注声明的词表;"
                              " 只校验类型时写错值不会红 —— ADR-235 S1)"
@@ -310,6 +342,12 @@ def selftest() -> int:
         ("bad-disk", [_gate(disk_gb=-1)], "DISK"),
         ("bad-exec", [_gate(cmd="python3 scripts/a.py")], "EXEC"),
         ("unknown-key", [_gate(ownerx="me")], "UNKNOWN_KEY"),
+        # ADR-315 W-T0：域化字段的负例（证明类型/词表校验有牙齿）。
+        ("bad-group", [_gate(group="typo-domain")], "GROUP"),
+        ("group-not-string", [_gate(group=123)], "TYPE"),
+        ("bad-concurrency", [_gate(concurrency=0)], "CONCURRENCY"),
+        ("bad-resource", [_gate(resource="gpu")], "RESOURCE"),
+        ("exclusive-not-string", [_gate(exclusive=True)], "TYPE"),
         ("bad-id", [_gate(id="X-1")], "ID"),
         ("empty", [], "EMPTY"),
         ("bool-expect", [_gate(expect=True)], "EXPECT"),

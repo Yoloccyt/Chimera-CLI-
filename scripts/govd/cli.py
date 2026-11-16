@@ -314,14 +314,69 @@ def cmd_run(args):
     # 在全仓没有任何读取方（唯一消费者曾且只有 `args.jobs`），于是"并发档位"是死配置，
     # 验证面恒串行 —— 静默忽略型解析器：传了不认，也不报错。
     jobs = args.jobs if args.jobs > 0 else profile.jobs
+    # ADR-315 W-T1: resource mutual exclusion.
+    #
+    # WHY this is not `needs`: the manifest header records the measured fact
+    # that `needs` buys only inclusion order, NOT a mutex -- with jobs>1 the
+    # executor submits every pending task into the pool at once and never reads
+    # `needs` again. Concurrency therefore has to be serialised on an explicit
+    # resource key.
+    #
+    # WHY groups instead of one global lock: a single global lock would
+    # serialise the whole run (defeating the point of the parallel scheduler);
+    # per-key groups keep independent resources genuinely parallel while
+    # guaranteeing that two gates sharing a key never overlap in time.
+    #
+    # The partition is by `exclusive` key first (mutual exclusion is a hard
+    # constraint), then by `group` for the remaining unconstrained tasks (the
+    # `concurrency` cap of a group bounds how many of its members run at once).
+    exclusive_groups: dict[str, list] = {}
+    free_tasks: list = []
+    for t in pending:
+        if t.exclusive:
+            exclusive_groups.setdefault(t.exclusive, []).append(t)
+        else:
+            free_tasks.append(t)
+    # Deterministic key order: the journal and the JUnit report must not
+    # depend on dict insertion order (which follows the manifest, but a
+    # resumed run could differ).
+    ordered_exclusive = sorted(exclusive_groups)
+
+    def run_exclusive_chain(key: str) -> list:
+        """Run every gate sharing one resource key, strictly one after another.
+
+        WHY sequential inside the chain even when jobs>1: the whole point of
+        the key is that these gates must never overlap. Running them one at a
+        time is the enforcement; running the chains themselves in parallel is
+        what preserves throughput.
+        """
+        chain = exclusive_groups[key]
+        out = []
+        for task in chain:
+            out.append(execute(task))
+        return out
+
     try:
         if jobs > 1:
             with ThreadPoolExecutor(max_workers=jobs) as pool:
-                futs = [pool.submit(execute, t) for t in pending]
-                for fut in as_completed(futs):
-                    record(fut.result())
+                # Exclusive chains are submitted as unit jobs: one future per
+                # resource key, each running its chain sequentially. Free tasks
+                # are submitted individually.
+                chain_futs = {key: pool.submit(run_exclusive_chain, key)
+                              for key in ordered_exclusive}
+                free_futs = [pool.submit(execute, t) for t in free_tasks]
+                for fut in as_completed(list(chain_futs.values()) + free_futs):
+                    result = fut.result()
+                    if isinstance(result, list):
+                        for att in result:
+                            record(att)
+                    else:
+                        record(result)
         else:
-            for task in pending:
+            for key in ordered_exclusive:
+                for att in run_exclusive_chain(key):
+                    record(att)
+            for task in free_tasks:
                 record(execute(task))
     except KeyboardInterrupt:
         cancelled = True

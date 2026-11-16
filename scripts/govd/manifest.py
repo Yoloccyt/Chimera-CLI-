@@ -49,6 +49,22 @@ def _task_from(g: dict) -> Task:
         raise ManifestError("%s: timeout_s must be a positive int" % gid)
     if not isinstance(g.get("mutating", False), bool):
         raise ManifestError("%s: mutating must be bool" % gid)
+    # ADR-315 W-T1: domainization fields. Parsed with the same fail-closed
+    # discipline as the rest -- a malformed value must be an error, never a
+    # silently ignored default (a gate that declares concurrency=0 would make
+    # the scheduler's cap meaningless without any error surfacing).
+    group = g.get("group", "")
+    if not isinstance(group, str):
+        raise ManifestError("%s: group must be a string" % gid)
+    concurrency = g.get("concurrency", 1)
+    if not isinstance(concurrency, int) or isinstance(concurrency, bool) or concurrency < 1:
+        raise ManifestError("%s: concurrency must be an int >= 1" % gid)
+    resource = g.get("resource", "")
+    if not isinstance(resource, str):
+        raise ManifestError("%s: resource must be a string" % gid)
+    exclusive = g.get("exclusive", "")
+    if not isinstance(exclusive, str):
+        raise ManifestError("%s: exclusive must be a string" % gid)
     return Task(
         id=gid, cmd=str(g["cmd"]), expect=g["expect"], kind=g["kind"],
         spec_ref=str(g["spec_ref"]), note=str(g["note"]),
@@ -56,6 +72,8 @@ def _task_from(g: dict) -> Task:
         needs=_str_tuple(g.get("needs"), "needs", gid), profiles=profiles,
         owner=str(g.get("owner", "")), disk_gb=float(g.get("disk_gb", 0)),
         source=str(g.get("source", "gate")),
+        group=group, concurrency=concurrency, resource=resource,
+        exclusive=exclusive,
     )
 
 def read_gates(path) -> list[dict]:

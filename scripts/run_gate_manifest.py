@@ -525,9 +525,31 @@ def main(argv):
                 continue
             args[0] = bash_path  # 钉死绝对路径：不让 PATH 顺序把 WSL bash 塞进来
         log = os.path.join(LOGDIR, f"{g['id']}.log")
+        # ADR-315 W-T1 (BC-13): pass the timeout through on the legacy path.
+        #
+        # WHY this was a defect: the manifest carries `timeout_s` (and
+        # govd/policy.py::timeout_for falls back to 300s light / 1800s heavy),
+        # but the legacy engine called `subprocess.run` WITHOUT `timeout=`.
+        # The timeout semantics therefore existed only on the parallel engine,
+        # and a hanging gate blocked the whole serial run forever -- the exact
+        # failure the timeout field was written to prevent.
+        #
+        # WHY the default matches govd: the two engines must agree on what
+        # "no timeout_s declared" means, otherwise the same gate would be
+        # judged by different rules depending on which engine ran it.
+        timeout_s = g.get("timeout_s") or (1800 if g.get("kind") == "heavy" else 300)
         try:
             with open(log, "wb") as lf:
-                rc = subprocess.run(args, stdout=lf, stderr=subprocess.STDOUT).returncode
+                rc = subprocess.run(args, stdout=lf, stderr=subprocess.STDOUT,
+                                    timeout=timeout_s).returncode
+        except subprocess.TimeoutExpired:
+            # A timeout is an environment/verdict problem, not a pass and not a
+            # red gate: the gate did not produce a verdict at all. It is
+            # recorded as unknown ("cannot be judged") so it can never be
+            # laundered into a green by the expect comparison below.
+            print(f"  [{g['id']}] UNKNOWN 超时 {timeout_s}s —— 判据未产出裁决，不视为通过也不视为红")
+            unknown.append(g["id"])
+            continue
         except OSError as e:
             if is_launcher_absent(e):
                 # 与 G-17(xdoc_precise)/G-18(audit_gate_selfreport) 同口径: 执行器缺失是

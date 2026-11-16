@@ -26,13 +26,14 @@ MANIFEST = ROOT / "scripts" / "gate_manifest.toml"
 POLICY = ROOT / "scripts" / "govd" / "policy.toml"
 
 # Single pinned census of gate_manifest.toml. Adding or removing a gate must
-# update these three numbers in the same commit (G-147 wiring: 156 =
-# 149 light + 7 heavy; 2026-11-14 合流 = HEAD 144 道 + feat 侧 5 道，两门重号按
-# G-148/G-149 顺延，见 gate_manifest.toml 的「合流裁决」块). Every other assertion in this file derives from here
+# update these three numbers in the same commit (G-147 wiring: 157 =
+# 150 light + 7 heavy; 2026-11-14 合流 = HEAD 144 道 + feat 侧 5 道，两门重号按
+# G-148/G-149 顺延，见 gate_manifest.toml 的「合流裁决」块；ADR-315 W-T1 新增
+# G-160 exclusive 互斥负控 ⇒ 156 → 157). Every other assertion in this file derives from here
 # instead of repeating the literals -- on the wiring day three separate
 # assertions failed for what is one fact, which is the cost of duplicating it.
-# 自锁已实测：只加门不改这三值 ⇒ 本文件自己的 test_real_census 先红（149 != 148）。
-CENSUS_TOTAL, CENSUS_LIGHT, CENSUS_HEAVY = 156, 149, 7
+# 自锁已实测：只加门不改这三值 ⇒ 本文件自己的 test_real_census 先红（157 != 156）。
+CENSUS_TOTAL, CENSUS_LIGHT, CENSUS_HEAVY = 157, 150, 7
 PR_SUM_LINE = f"selected={CENSUS_LIGHT} total={CENSUS_TOTAL} skipped={CENSUS_HEAVY}"
 
 def make_task(**kw):
@@ -1282,6 +1283,124 @@ class NeedsSemanticsTests(TempDirTest):
             end_a, start_b,
             "串行腿必须测出'A 完全结束后 B 才开始'。若这里也重叠，说明区间仪器"
             "分辨不出串行，上一条测试的重叠断言就是空转（恒真）",
+        )
+
+
+class ExclusiveSemanticsTests(TempDirTest):
+    """What `exclusive` buys: real mutual exclusion, keyed by resource.
+
+    ADR-315 W-T1. The `NeedsSemanticsTests` above established the measured
+    fact that `needs` buys ordering only -- with jobs>1 the executor submits
+    every pending task into the pool at once and never reads `needs` again.
+    Concurrent cargo sessions leave same-crate rlibs with different hashes in
+    target/ and break linking (E0460/E0462/E0463/E0786); ADR-300 D4 forbids
+    concurrent cargo during regression. `exclusive` is the key that carries
+    that constraint, so these tests lock the *enforcement*, not the intent.
+
+    Three legs, all needed:
+    - same key + jobs=2 => intervals must NOT overlap (the enforcement);
+    - same key + jobs=1 => intervals must not overlap (positive control:
+      without it the overlap assertion above could be vacuous);
+    - different keys + jobs=2 => intervals MUST overlap (proves the mutex
+      is per-key and does not accidentally serialise the whole run).
+    """
+
+    SLEEP = '"import time;time.sleep(0.25)"'
+
+    def drive(self, flags, tasks):
+        order = []
+        intervals = {}
+        tick = {"n": 0}
+        lock = threading.Lock()
+        real_execute_one = cli._execute_one
+
+        def spy(task, policy_arg, bash_path, logs, n):
+            with lock:
+                tick["n"] += 1
+                start = tick["n"]
+                order.append(task.id)
+            attempt = real_execute_one(task, policy_arg, bash_path, logs, n)
+            with lock:
+                tick["n"] += 1
+                intervals[task.id] = (start, tick["n"])
+            return attempt
+
+        args = cli.build_parser().parse_args(["run", "--profile", "pr"] + flags)
+        with mock.patch.object(cli, "ROOT", self.tmp), \
+             mock.patch.object(cli, "load_all", lambda name="": (tasks, policy.load(str(POLICY)))), \
+             mock.patch.object(policy, "snapshot", side_effect=[set(), set()]), \
+             mock.patch.object(cli, "_execute_one", side_effect=spy):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                rc = cli.cmd_run(args)
+        self.assertEqual(rc, 0, buf.getvalue())
+        self.assertEqual(set(intervals), {t.id for t in tasks},
+                         "每道门都应真跑出 attempt")
+        return intervals, order
+
+    def test_same_exclusive_key_never_overlaps_under_jobs_two(self):
+        tasks = (
+            make_task(id="T-A", cmd="{python} -c " + self.SLEEP, exclusive="cargo"),
+            make_task(id="T-B", cmd="{python} -c " + self.SLEEP, exclusive="cargo"),
+        )
+        intervals, _order = self.drive(["--jobs", "2"], tasks)
+        start_a, end_a = intervals["T-A"]
+        start_b, end_b = intervals["T-B"]
+        self.assertTrue(
+            end_a <= start_b or end_b <= start_a,
+            "同 exclusive 键的两道门区间重叠（%s / %s）⇒ 互斥未生效。"
+            "cargo 类门并发会让 target/ 留下同 crate 不同 hash 的 rlib，"
+            "链接期 E0460/E0462/E0463/E0786。" % (intervals["T-A"], intervals["T-B"]),
+        )
+
+    def test_same_exclusive_key_serial_under_jobs_one_positive_control(self):
+        tasks = (
+            make_task(id="T-A", cmd="{python} -c " + self.SLEEP, exclusive="cargo"),
+            make_task(id="T-B", cmd="{python} -c " + self.SLEEP, exclusive="cargo"),
+        )
+        intervals, _order = self.drive(["--jobs", "1"], tasks)
+        start_a, end_a = intervals["T-A"]
+        start_b, _end_b = intervals["T-B"]
+        self.assertLess(
+            end_a, start_b,
+            "串行腿必须测出'A 完全结束后 B 才开始'。若这里也重叠，说明区间仪器"
+            "分辨不出串行，上一条测试的互斥断言就是空转（恒真）",
+        )
+
+    def test_different_exclusive_keys_still_run_in_parallel(self):
+        """The mutex must be per-key, not a global lock.
+
+        A global lock would serialise the whole run and defeat the parallel
+        scheduler -- which is the entire point of the exercise (ADR-315 D1:
+        the scheduler had the capability, the manifest had no feed).
+        """
+        tasks = (
+            make_task(id="T-A", cmd="{python} -c " + self.SLEEP, exclusive="cargo"),
+            make_task(id="T-B", cmd="{python} -c " + self.SLEEP, exclusive="disk-io"),
+        )
+        intervals, _order = self.drive(["--jobs", "2"], tasks)
+        start_a, end_a = intervals["T-A"]
+        start_b, end_b = intervals["T-B"]
+        self.assertLess(
+            start_b, end_a,
+            "不同 exclusive 键的两道门必须能并行（区间 %s / %s）。"
+            "若这里也串行，说明互斥被实现成了全局锁 —— 并行调度收益归零。"
+            % (intervals["T-A"], intervals["T-B"]),
+        )
+
+    def test_unconstrained_gates_are_not_serialised_by_the_mutex(self):
+        """Gates without an `exclusive` key must keep running concurrently."""
+        tasks = (
+            make_task(id="T-A", cmd="{python} -c " + self.SLEEP),
+            make_task(id="T-B", cmd="{python} -c " + self.SLEEP),
+        )
+        intervals, _order = self.drive(["--jobs", "2"], tasks)
+        start_a, end_a = intervals["T-A"]
+        start_b, _end_b = intervals["T-B"]
+        self.assertLess(
+            start_b, end_a,
+            "无 exclusive 键的两道门必须并行（区间 %s / %s）—— "
+            "资源互斥不得退化成全局串行。" % (intervals["T-A"], intervals["T-B"]),
         )
 
 
