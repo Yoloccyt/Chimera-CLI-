@@ -51,7 +51,9 @@ ID_RE = re.compile(r"^G-\d+$")
 TASK_ID_RE = re.compile(r"^(R|E|X|D)-\d+$")
 PROFILE_KEYS = {"include_heavy", "jobs", "allow_mutating"}
 EXEC_KEYS = {"whitelist", "default_timeout_s", "heavy_timeout_s", "env_retry",
-             "mutating_prefixes"}
+             "mutating_prefixes",
+             # ADR-318 工具链批 TL-W3c：cargo 门应用层互斥开关（executor 直读）。
+             "cargo_semaphore"}
 ROLE_KEYS = {"profiles"}
 # Only the release lane may ever allow mutating tasks: pr/nightly/local are the
 # lanes a contributor or an automated PR run uses, and `--allow-mutating` is their
@@ -149,6 +151,10 @@ def validate_policy(doc):
         if "env_retry" in exec_row and (not _is_int(exec_row["env_retry"])
                                         or not 0 <= exec_row["env_retry"] <= 3):
             bad("POLICY_RETRY", "exec.env_retry must be 0..3 (environment-only)")
+        # ADR-318 TL-W3c：互斥开关只能是 bool。写成 1/"true" 都按类型错误红，
+        # 与 allow_mutating 同纪律 —— 开关值的类型松动是「写了没人读」的近亲。
+        if "cargo_semaphore" in exec_row and not isinstance(exec_row["cargo_semaphore"], bool):
+            bad("POLICY_TYPE", "exec.cargo_semaphore must be a bool")
         prefixes = exec_row.get("mutating_prefixes", [])
         if not isinstance(prefixes, list) or not all(isinstance(p, str) and p for p in prefixes):
             bad("POLICY_TYPE", "exec.mutating_prefixes must be a list of strings")
@@ -368,7 +374,7 @@ def selftest() -> int:
                      for p in PROFILES},
         "exec": {"whitelist": list(EXES), "default_timeout_s": 300,
                  "heavy_timeout_s": 1800, "env_retry": 1,
-                 "mutating_prefixes": ["tmp/"]},
+                 "mutating_prefixes": ["tmp/"], "cargo_semaphore": True},
         "roles": {"local-dev": {"profiles": list(PROFILES)}, "ci": {"profiles": ["pr"]}},
     }
     want("policy-valid-clean", validate_policy(good_policy) == [])
@@ -385,6 +391,8 @@ def selftest() -> int:
          "POLICY_UNKNOWN_KEY"),
         ("policy-empty-whitelist",
          lambda d: d["exec"].__setitem__("whitelist", []), "POLICY_EXEC"),
+        ("policy-cargo-semaphore-not-bool",
+         lambda d: d["exec"].__setitem__("cargo_semaphore", "yes"), "POLICY_TYPE"),
         ("policy-unknown-exe",
          lambda d: d["exec"].__setitem__("whitelist", ["curl"]), "POLICY_EXEC"),
         ("policy-missing-profile",
