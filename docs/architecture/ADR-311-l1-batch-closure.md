@@ -410,6 +410,39 @@ unbounded channel 的 OOM 风险与 O(n log n) 的 Top-K 回归。
 | `check_bus_shard_hotspot.py`（G-89） | OK |
 | `check_lint_ratchet.py`（G-81/82） | [OK] 47 crate / 0 offenders |
 
+### D7.8 W7（BC-04）：`nexus-compute::hts` 拆分（路径不变）
+
+**背景**：方案 §5.2.4 的目标是 `hts.rs` → `hts/{mod,cgroup,sequential_test}.rs`。
+实测 `hts.rs`（1199 行）里 `sequential_test`（序贯检验）与 `cgroup`（平台校正）
+是**内联公开模块**，与阈值表结构（`Entry` / `ThresholdSource` / `HtsTable`）
+交织。
+
+**落地**：`crates/nexus-compute/src/hts/` = `mod.rs`(768 行) + `cgroup.rs`(107 行)
++ `sequential_test.rs`(345 行)。
+
+**契约零变更**：两个子模块**保持 `pub`** ⇒
+`nexus_compute::hts::cgroup::CgroupProbe`、
+`nexus_compute::hts::sequential_test::{SequentialTest, SequentialTestConfig, TestDecision, HtsError}`
+路径**逐字不变**；`nexus_compute::hts::{HtsTable, ThresholdSource, Entry}` 不变；
+`lib.rs` 的 `pub mod hts;` 声明**无需改动**（Rust 模块解析对 `hts.rs` 与
+`hts/mod.rs` 同构）。
+
+**与方案 §5.2.4 的差异**：方案的示意结构写的是
+`mod cgroup;` / `mod sequential_test;`（私有）+ `hts` 层级 `pub use` 转出。
+本批**不采用**该形态——那会把公开路径从 `hts::cgroup::X` 变成 `hts::X`，
+属**破坏式 API 变更**（与方案「路径不变」的总约束冲突）。故保留公开子模块，
+只做物理拆分。
+
+**验证**：`cargo check -p nexus-compute --all-targets` EXIT=0 / 0 warning；
+`cargo test -p nexus-compute` ⇒ **103 passed / 0 failed**；
+`check_src_module_reachability.py`（G-109）live=0（三个新文件均有 `mod` 指向）；
+`check_pub_api_leak.py`（G-135）sites=18 rows=18 scanned_pub_fn=346（模块键迁移
+但泄露面未增减）。
+
+**验证盲区（诚实登记）**：`cgroup.rs` 的 `#[cfg(target_os = "linux")]`
+`effective_cores()` 分支**在本机（Windows）不可编译验证** ⇒ 须以 CI Linux
+runner 的 `cargo test -p nexus-compute` 结果为最终判据（方案 §7.5 的 R-09）。
+
 ---
 
 ## D8 — 遗留与后续
