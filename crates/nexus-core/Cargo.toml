@@ -15,8 +15,8 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
-chrono = { workspace = true }
-tokio = { workspace = true }
+# L1-R1(2026-11,随 v2.30 重构批):tokio 全 crate(src/tests/benches)零使用,
+# 系 B2/ADR-311 RL/resilience 面退役后的孤儿依赖,摘除( freeze 台账同批)。
 # event-bus: WS-4A ClvSnapshotReported 事件发布(L1 Core → L1 Core 同层互引合规)
 # WHY 合规: §2.2 同层互引允许 L(N)→L(N);event-bus 不依赖 nexus-core(零环,
 # payloads.rs ClvSummary::from_clv_slice 已解耦),故 nexus-core→event-bus 无环。
@@ -46,6 +46,8 @@ criterion = { workspace = true }
 proptest = { workspace = true }
 rmp-serde = { workspace = true }
 serde_json = { workspace = true }
+# L1-R1:chrono 唯一使用点 tests/types.rs:354(Utc::now 时间戳断言),降为 dev 面
+chrono = { workspace = true }
 
 [[bench]]
 name = "clv_bench"

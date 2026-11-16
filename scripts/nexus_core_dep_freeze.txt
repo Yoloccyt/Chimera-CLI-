@@ -23,7 +23,9 @@
 # zero src consumers), async-trait (only rl_client), rand (only stat_learning),
 # rayon (ComputeBridge migrated out with W4-1, zero src consumers). RL/learning
 # reserve face itself deleted per ADR-311 (zero production consumers).
-chrono
+# L1-R1 (2026-11): chrono DELETED from this list in the same batch it moved to
+# [dev-dependencies] (sole use tests/types.rs:354, dev face is not frozen);
+# tokio DELETED (zero use across src/tests/benches — orphan of B2 retirements).
 event-bus
 hex
 ndarray
@@ -36,5 +38,4 @@ serde
 serde_json
 sha2
 thiserror
-tokio
 tracing
