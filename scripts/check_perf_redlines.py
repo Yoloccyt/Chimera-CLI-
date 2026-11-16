@@ -431,26 +431,28 @@ def mode_invariants(redlines, thresholds_doc, freeze):
             print(f"         {k} was tightened but is still listed as pending debt "
                   "- remove it from calibration_pending")
 
-    # I5 11 条红线 + 6 条 SLO 的规模下限 (防止误删表体把门禁掏空)
+    # I5 10 条红线 + 6 条 SLO 的规模下限 (防止误删表体把门禁掏空)
     # 2026-09-25: 原第 7 条 slo = auto-dpo/rhi_judge 幽灵（见上方 F60 注释），已随
     # 原子清幽灵批次删除 ⇒ floor 校准到诚实值 6（变绿非放宽：旧"绿"由幽灵支撑）。
+    # 2026-11-16 T0 批: RL-07 随 B5/2abc977b membrane 退役从表体删除(10 = 诚实值),
+    # floor 11→10 同步校准(同 slo 先例,非放宽——旧 floor 在 RL-07 删除后即失实)。
     n_rl = len(redlines.get("redline", []))
     n_slo = len(redlines.get("slo", []))
     if not _check(f"I5 redline/slo tables populated ({n_rl} rl / {n_slo} slo)",
-                  n_rl >= 11 and n_slo >= 6):
+                  n_rl >= 10 and n_slo >= 6):
         fails += 1
     # I6 floor 70→65→60（深审 2026-09-25/26，P-6 两批共 11 项合法减行：
     # 升格 registered 即棘轮式减债，floor 语义仅防空表不阻减债，I5 同先例）
     if not _check(f"I6 dev-only registry populated ({len(freeze)})", len(freeze) >= 60):
         fails += 1
     # I8 注释-常量一致性 (ADR-190 §5 后续 / 深审 E-7c): shard.rs 文档注释里的
-    # "N 个 Critical 事件" 必须等于 bus.rs 的 CRITICAL_TOTAL 常量，防变体新增后注释滞后回潮
+    # "N 个 Critical 事件" 必须等于 bus/mod.rs 的 CRITICAL_TOTAL 常量，防变体新增后注释滞后回潮
     # (本会话已手工修过一次 17->18；此不变式令其不可再现)。
     try:
         with open(os.path.join(ROOT, "crates", "event-bus", "src", "shard.rs"),
                   encoding="utf-8", errors="ignore") as fh:
             shard_txt = fh.read()
-        with open(os.path.join(ROOT, "crates", "event-bus", "src", "bus.rs"),
+        with open(os.path.join(ROOT, "crates", "event-bus", "src", "bus", "mod.rs"),
                   encoding="utf-8", errors="ignore") as fh:
             bus_txt = fh.read()
         m_cmt = re.search(r"(\d+)\s*个\s*Critical\s*事件", shard_txt)
@@ -472,7 +474,7 @@ def mode_invariants(redlines, thresholds_doc, freeze):
     # 语义无关的 "4096 个 Critical 事件"(通道容量)与历史 "6 个 Critical 事件"(spec.md:186)。
     try:
         import glob as _glob
-        with open(os.path.join(ROOT, "crates", "event-bus", "src", "bus.rs"),
+        with open(os.path.join(ROOT, "crates", "event-bus", "src", "bus", "mod.rs"),
                   encoding="utf-8", errors="ignore") as fh:
             _bus_src = fh.read()
         _tot_m = re.search(r"CRITICAL_TOTAL\s*:\s*usize\s*=\s*(\d+)", _bus_src)
@@ -514,7 +516,7 @@ def mode_invariants(redlines, thresholds_doc, freeze):
     #       test_critical_double_list_d8_counts 锁，治理门本身看不见；
     #   (b) 措辞：行内同时出现「旁路/mpsc/is_critical_mpsc_event」与**清单规模指标词**
     #       （清单 / CRITICAL_MPSC_VARIANTS / 变体数 / 判定的）且写了「N 类」时，
-    #       N 必须等于该常量——这是 bus.rs:42-52 注释自己登记的已知盲区
+    #       N 必须等于该常量——这是 bus/mod.rs:51-70 注释自己登记的已知盲区
     #       （旧值 13/14/17/18 全在监测面外）。
     #       为何需两个条件：单看「mpsc + N 类」会误伤“本测试覆盖 4 类事件”这类
     #       **测试范围声明**（实测 4 处假阳性）——它们说的不是旁路清单规模。
@@ -522,7 +524,7 @@ def mode_invariants(redlines, thresholds_doc, freeze):
     # 而 (a) 两侧任缺其一即红，不允许“没找到函数体”路径静默绿。
     try:
         import glob as _glob
-        with open(os.path.join(ROOT, "crates", "event-bus", "src", "bus.rs"),
+        with open(os.path.join(ROOT, "crates", "event-bus", "src", "bus", "mod.rs"),
                   encoding="utf-8", errors="ignore") as fh:
             _bus = fh.read()
         _mpsc_m = re.search(r"CRITICAL_MPSC_VARIANTS\s*:\s*usize\s*=\s*(\d+)", _bus)
