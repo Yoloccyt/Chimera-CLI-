@@ -20,13 +20,9 @@ nexus-compute::rayon
 nexus-compute::thiserror
 nexus-compute::tokio
 nexus-compute::tracing
-nexus-core::arc-swap
-nexus-core::async-trait
 nexus-core::chrono
 nexus-core::hex
 nexus-core::ndarray
-nexus-core::rand
-nexus-core::rayon
 nexus-core::serde
 nexus-core::serde_json
 nexus-core::sha2

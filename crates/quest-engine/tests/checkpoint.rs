@@ -295,7 +295,7 @@ async fn test_load_latest_returns_most_recent() {
         quest_id: "q-test".into(),
         title: "测试".into(),
         tasks: vec![],
-        thinking_mode: nexus_core::ThinkingMode::Standard,
+        thinking_mode: nexus_contracts::domain::ThinkingMode::Standard,
         checkpoint_id: None,
         priority: 128,
     };
@@ -540,7 +540,7 @@ async fn test_save_checkpoint_nonexistent_quest_returns_error() {
 
 use std::sync::Arc;
 
-use nexus_core::{Task, ThinkingMode};
+use nexus_contracts::{Task, ThinkingMode};
 use tokio::task::JoinSet;
 
 /// 构造较大体积的 Quest,使 MessagePack 序列化 + 磁盘 I/O 非平凡

@@ -356,10 +356,10 @@ mod tests {
     #[test]
     fn test_task_profile_from_agent_task_layout() {
         let task = AgentTask::new(
-            nexus_core::Task {
+            nexus_contracts::domain::Task {
                 task_id: "t-gea".into(),
                 description: "桥接测试".into(),
-                status: nexus_core::TaskStatus::Pending,
+                status: nexus_contracts::task::TaskStatus::Pending,
                 dependencies: vec![],
             },
             TaskComplexity::Complex,
@@ -408,10 +408,10 @@ mod tests {
     #[test]
     fn test_task_profile_verycomplex_covers_all_quadrants() {
         let task = AgentTask::new(
-            nexus_core::Task {
+            nexus_contracts::domain::Task {
                 task_id: "t-vc".into(),
                 description: "全象限".into(),
-                status: nexus_core::TaskStatus::Pending,
+                status: nexus_contracts::task::TaskStatus::Pending,
                 dependencies: vec![],
             },
             TaskComplexity::VeryComplex,

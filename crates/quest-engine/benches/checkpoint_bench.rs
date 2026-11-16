@@ -13,7 +13,8 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::domain::{Quest, Task, ThinkingMode};
+use nexus_contracts::task::TaskStatus;
 use quest_engine::checkpoint::CheckpointManager;
 use tempfile::tempdir;
 

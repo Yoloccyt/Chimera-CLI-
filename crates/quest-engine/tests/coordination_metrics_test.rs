@@ -14,7 +14,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{EventBus, EventMetadata, NexusEvent};
-use nexus_core::{MultimodalInput, TaskStatus, UserIntent};
+use nexus_contracts::{MultimodalInput, TaskStatus, UserIntent};
 use quest_engine::{
     ComplexityScore, CoordinationCostSample, CoordinationMetricsConfig, CoordinationToGainRatio,
     InferenceGainSample, QuestEngine,
@@ -368,7 +368,7 @@ fn make_delegation_event(quest_id: &str, overhead_ms: f64) -> NexusEvent {
 }
 
 /// 驱动 Quest 全部任务到 Completed(触发 complete_quest)
-async fn complete_all_tasks(engine: &QuestEngine, quest: &nexus_core::Quest) {
+async fn complete_all_tasks(engine: &QuestEngine, quest: &nexus_contracts::domain::Quest) {
     for task in &quest.tasks {
         engine
             .update_task_status(&quest.quest_id, &task.task_id, TaskStatus::Running)

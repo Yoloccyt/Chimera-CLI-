@@ -22,7 +22,7 @@
 //! - **层级递归委托**: RootOrchestrator → MainAgent → SubAgent → GrandAgent(最大深度 5)
 //! - **独立上下文隔离**: 每个 Agent 拥有独立 1M Token 等效上下文(128K 实际 + 8× 稀疏压缩)
 //! - **Agent 生命周期管理**: Idle → Running → Paused → Completed/Failed/Crashed
-//! - **AgentTask wrapper**: 包装 `nexus_core::Task`,扩展 MAS 特有字段,**不修改核心类型**
+//! - **AgentTask wrapper**: 包装 `nexus_contracts::domain::Task`,扩展 MAS 特有字段,**不修改核心类型**
 //!
 //! ## 相关 ADR
 //!

@@ -7,10 +7,10 @@
 //! - Checkpoint:created_at 自动生成
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
-use nexus_core::{
-    Checkpoint, MultimodalInput, NexusError, NexusState, Quest, Task, TaskStatus, ThinkingMode,
-    UserIntent, CLV,
-};
+use nexus_contracts::checkpoint::Checkpoint;
+use nexus_contracts::domain::{MultimodalInput, Quest, Task, ThinkingMode, UserIntent};
+use nexus_contracts::task::TaskStatus;
+use nexus_core::{NexusError, NexusState, CLV};
 
 // ============================================================
 // 辅助构造函数

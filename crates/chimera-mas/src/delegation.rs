@@ -1,15 +1,15 @@
 //! 委托执行 — 占位实现(Task 11 + Task 13 将完善)
 //!
 //! 本文件定义 MAS 子系统的委托执行类型:
-//! - `AgentTask`: 任务 wrapper,包装 `nexus_core::Task` 并扩展 MAS 特有字段
+//! - `AgentTask`: 任务 wrapper,包装 `nexus_contracts::domain::Task` 并扩展 MAS 特有字段
 //! - `TaskComplexity`: 任务复杂度枚举(Simple/Medium/Complex/VeryComplex)
 //! - `TaskResult`: 任务执行结果
 //! - `DelegationExecutor`: 委托执行器,并行执行多个子任务
 //!
 //! ## ADR-026 决策 3: AgentTask wrapper(不修改核心类型)
 //!
-//! `AgentTask` 包装 `nexus_core::Task`,扩展 MAS 特有字段(complexity / estimated_tokens /
-//! parent_agent_id / delegation_depth 等),**不修改 `nexus_core::Task` 的任何字段**
+//! `AgentTask` 包装 `nexus_contracts::domain::Task`,扩展 MAS 特有字段(complexity / estimated_tokens /
+//! parent_agent_id / delegation_depth 等),**不修改 `nexus_contracts::domain::Task` 的任何字段**
 //! (遵守 §3.3.1 第 4 条领域类型稳定性)。
 //!
 //! ## ADR-026 决策 6: TaskComplexity → ThinkingMode 映射
@@ -30,7 +30,7 @@ use tracing::{debug, warn};
 
 /// 任务复杂度枚举 — 用于评估任务难度并映射到 ThinkingMode
 ///
-/// ADR-026 决策 6: 通过 `From<TaskComplexity> for nexus_core::ThinkingMode` 映射
+/// ADR-026 决策 6: 通过 `From<TaskComplexity> for nexus_contracts::domain::ThinkingMode` 映射
 /// (Task 7.4 实现,本文件占位不实现 From impl 以避免循环依赖)。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum TaskComplexity {
@@ -53,7 +53,7 @@ pub enum TaskComplexity {
 /// WHY 此 impl 放在 delegation.rs 而非 meta.rs:
 /// - TaskComplexity 定义在 delegation.rs,遵循"为类型实现 trait 时,impl 与类型同模块"惯例
 /// - 避免在 meta.rs 中 import TaskComplexity 造成模块间耦合
-/// - nexus_core::ThinkingMode 是 L1 Core 公共类型,可在任何上层 crate 实现 From
+/// - nexus_contracts::domain::ThinkingMode 是 L1 Core 公共类型,可在任何上层 crate 实现 From
 ///
 /// ## 映射规则(与 ADR-026 决策 6 + spec.md 一致)
 ///
@@ -66,11 +66,11 @@ pub enum TaskComplexity {
 ///
 /// ## 设计权衡
 ///
-/// `Complex` 与 `VeryComplex` 均映射到 `Deep`,因为 nexus_core::ThinkingMode
+/// `Complex` 与 `VeryComplex` 均映射到 `Deep`,因为 nexus_contracts::domain::ThinkingMode
 /// 仅有三级(Fast/Standard/Deep,ADR-026 决策 6 不新建 Max)。
 /// VeryComplex 与 Complex 的区别在 `estimated_tokens` / `acceptable_latency`
 /// 等 AgentTask 字段中体现,而非 ThinkingMode。
-impl From<TaskComplexity> for nexus_core::ThinkingMode {
+impl From<TaskComplexity> for nexus_contracts::domain::ThinkingMode {
     fn from(complexity: TaskComplexity) -> Self {
         match complexity {
             TaskComplexity::Simple => Self::Fast,
@@ -95,20 +95,20 @@ pub enum QualityLevel {
     Production,
 }
 
-/// Agent 任务 wrapper — 包装 nexus_core::Task 并扩展 MAS 特有字段
+/// Agent 任务 wrapper — 包装 nexus_contracts::domain::Task 并扩展 MAS 特有字段
 ///
-/// ADR-026 决策 3: **不修改 nexus_core::Task**,通过 wrapper 模式扩展字段。
+/// ADR-026 决策 3: **不修改 nexus_contracts::domain::Task**,通过 wrapper 模式扩展字段。
 /// `inner` 字段持有原始 Task,MAS 特有字段在 wrapper 层。
 ///
 /// ## trait 派生
 ///
 /// - `Clone` / `Debug`: 标准调试与复制
 /// - `Serialize` / `Deserialize`: serde 序列化(JSON + MessagePack,ADR-004)
-/// - `PartialEq`: 字段级相等性比较(依赖 `nexus_core::Task: PartialEq`)
+/// - `PartialEq`: 字段级相等性比较(依赖 `nexus_contracts::domain::Task: PartialEq`)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AgentTask {
-    /// 内部包装的 nexus_core::Task(不修改,§3.3.1 第 4 条领域类型稳定性)
-    pub inner: nexus_core::Task,
+    /// 内部包装的 nexus_contracts::domain::Task(不修改,§3.3.1 第 4 条领域类型稳定性)
+    pub inner: nexus_contracts::domain::Task,
     /// 任务复杂度(用于映射 ThinkingMode + 决定委托深度)
     pub complexity: TaskComplexity,
     /// 预估 Token 消耗(用于预算分配)
@@ -149,12 +149,12 @@ pub struct AgentTask {
 impl AgentTask {
     /// 创建新的 AgentTask wrapper(5 参数完整构造)
     ///
-    /// ADR-026 决策 3: 包装 nexus_core::Task,不修改核心类型。
+    /// ADR-026 决策 3: 包装 nexus_contracts::domain::Task,不修改核心类型。
     /// `parent_agent_id` 和 `delegation_depth` 使用默认值(None / 0),
     /// 如需设置请用 `with_parent()` / `with_depth()` builder 方法。
     ///
     /// ## 参数
-    /// - `task`: 原始 nexus_core::Task(不修改,§3.3.1 第 4 条领域类型稳定性)
+    /// - `task`: 原始 nexus_contracts::domain::Task(不修改,§3.3.1 第 4 条领域类型稳定性)
     /// - `complexity`: 任务复杂度(用于映射 ThinkingMode + 决定委托深度)
     /// - `estimated_tokens`: 预估 Token 消耗(用于预算分配)
     /// - `acceptable_latency`: 可接受延迟(std::time::Duration,超时触发 MasError::TaskTimeout)
@@ -165,7 +165,7 @@ impl AgentTask {
     /// `complexity` 可通过 `From<TaskComplexity> for ThinkingMode` 转换为思考模式
     /// (Task 7.4 已实现,见本文件上方 impl 块)。
     pub fn new(
-        task: nexus_core::Task,
+        task: nexus_contracts::domain::Task,
         complexity: TaskComplexity,
         estimated_tokens: usize,
         acceptable_latency: Duration,

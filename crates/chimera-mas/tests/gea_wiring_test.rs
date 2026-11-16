@@ -15,7 +15,7 @@
 use chimera_mas::gea_bridge::{build_mas_activator, mas_gea_config};
 use chimera_mas::{AgentTask, DelegationExecutor, QualityLevel, RootOrchestrator, TaskComplexity};
 use event_bus::{EventBus, NexusEvent};
-use nexus_core::{Task, TaskStatus};
+use nexus_contracts::{Task, TaskStatus};
 use std::sync::Arc;
 use std::time::Duration;
 

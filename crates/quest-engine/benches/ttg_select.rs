@@ -9,8 +9,9 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use nexus_contracts::domain::{Quest, Task, ThinkingMode};
+use nexus_contracts::task::TaskStatus;
 use nexus_contracts::BudgetTier;
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
 use quest_engine::{TtgConfig, TtgGovernor};
 
 /// 构造测试用 Quest

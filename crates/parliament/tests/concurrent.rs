@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use event_bus::EventBus;
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use parliament::{Parliament, ParliamentConfig, Proposal};
 
 /// 构造测试用议会实例

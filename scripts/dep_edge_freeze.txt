@@ -69,7 +69,9 @@ chimera-mas|repo-wiki
 chimera-tui|event-bus
 chimera-tui|nexus-app-server
 chimera-tui|nexus-contracts
-chimera-tui|nexus-core
+# B4d/ADR-311 (2026-11-16) retired: chimera-tui consumed nexus-core ONLY via the
+# domain-type re-export aggregation point (Quest/Task); after B4d retired that
+# face, the crate直连 L0 nexus-contracts (edge above). src/tests/benches grep = 0 hits.
 chtc-bridge|event-bus
 chtc-bridge|nexus-core
 cmt-tiering|event-bus
@@ -127,7 +129,9 @@ mtpe-executor|event-bus
 mtpe-executor|nmc-encoder
 nexus-app-server|event-bus
 nexus-app-server|nexus-contracts
-nexus-app-server|nexus-core
+# B4d/ADR-311 (2026-11-16) retired: nexus-app-server consumed nexus-core ONLY via the
+# domain-type re-export aggregation point (UserIntent/Quest); after B4d retired that
+# face, the crate直连 L0 nexus-contracts (edge above). src/tests/benches grep = 0 hits.
 nexus-app-server|nexus-subagent  # 2026-10-27 M62/C-82 实测注记：边存在且非 optional（G-09 仅能证明 crate 图可达），但**装配点为零** —— 全仓 `SubAgentQuestEngine` 的构造点只在本文件的 #[cfg(test)] 段与重导出，唯一组合根 `chimera-cli` 内 `subagent`/`SubAgent` 0 命中。语义：GATED-UNWIRED，不是 wired。接线 or 退役见 ADR-225 §5 T-19；行保留（退役权限不在 R2）。
 nexus-app-server|quest-engine
 nexus-app-server|session-store
@@ -205,7 +209,12 @@ chimera-cli|ssra-fusion       # L10->L7 down; composition-root optional GATED ed
 mcp-mesh|nexus-contracts      # L10->L0 down; consumes nexus-contracts event/affinity contract types (ADR-033)
 # --- registered 2026-10-20: ADR-222 L0 dual sub-layer (L0-A 1+6 split + L0-B telemetry extraction) ---
 nexus-contracts|nexus-contracts-core  # L0-A -> L0-A, same machine layer 0; umbrella facade target after ADR-222 D2 moved `core_domain` out. Direction is umbrella -> sibling ONLY; the reverse would be a crate cycle and is rejected outright by check_l0_purity's allowlist branch (sibling must not depend on `nexus-contracts`).
-nexus-core|nexus-telemetry            # L0-B -> L0-B, same machine layer 1; ADR-222 D3 dependency inversion -- telemetry owns SaturationSource + the reporting loop, nexus-core implements the trait. Reverse edge would close a cycle through KindCounters/TaskKind.
+# L1-C-1 (2026-11-16) retired: nexus-core|nexus-telemetry was registered for the
+# ADR-222 D3 dependency inversion (nexus-core implemented SaturationSource via the
+# compute telemetry adapter). After ADR-309 W4-1 moved the compute plane to
+# nexus-compute, that adapter moved with it -- nexus-core no longer implements
+# SaturationSource; the唯一 producer/consumer of nexus-telemetry is now
+# nexus-compute (edge below). src/tests/benches grep `nexus_telemetry` = 0 hits.
 nexus-telemetry|event-bus             # L0-B -> L0-B, same machine layer 1; the reporter publishes ComputePoolSaturated over the existing bus channel (zero new NexusEvent variants).
 # --- registered 2026-10-20: ADR-222 D2 sibling edges created by the 1+6 split ---
 nexus-contracts|nexus-contracts-sparse  # L0-A -> L0-A, same layer 0; umbrella facade re-export edge (ADR-222 D4). Direction is umbrella -> sibling only; G-99 rejects the reverse (cycle).

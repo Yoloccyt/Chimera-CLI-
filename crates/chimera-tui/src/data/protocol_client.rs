@@ -83,7 +83,7 @@ impl TuiProtocolClient {
         &mut self,
         events: &[AppEvent],
         sync: &mut QuestSync,
-    ) -> Option<Vec<nexus_core::Quest>> {
+    ) -> Option<Vec<nexus_contracts::domain::Quest>> {
         let mut result = None;
         for ev in events {
             self.consumed_events += 1;
@@ -173,10 +173,10 @@ mod tests {
         client.apply_to(&events, &mut sync);
 
         // 构造携带完整 Quest 数据的 Item（核心侧序列化 → 协议面 → TUI 还原）
-        let quest = nexus_core::Quest {
+        let quest = nexus_contracts::domain::Quest {
             quest_id: "goal-payload".into(),
             title: "完整数据保真".into(),
-            ..nexus_core::Quest::default()
+            ..nexus_contracts::domain::Quest::default()
         };
         let payload = serde_json::to_string(&quest).expect("Quest 序列化成功");
         let item = nexus_contracts::app::Item::new(

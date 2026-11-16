@@ -10,7 +10,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion};
-use nexus_core::{Task, TaskStatus};
+use nexus_contracts::domain::Task;
+use nexus_contracts::task::TaskStatus;
 use quest_engine::dag::{topological_order, validate_dag};
 
 fn make_task(id: String, deps: Vec<String>) -> Task {

@@ -148,8 +148,8 @@ pub fn spawn_quest_lifecycle_bridge(bus: EventBus, engine: Arc<QuestEngine>) -> 
                                 let all_terminal = quest.tasks.iter().all(|t| {
                                     matches!(
                                         t.status,
-                                        nexus_core::TaskStatus::Completed
-                                            | nexus_core::TaskStatus::Failed
+                                        nexus_contracts::task::TaskStatus::Completed
+                                            | nexus_contracts::task::TaskStatus::Failed
                                     )
                                 });
                                 if !all_terminal {
@@ -291,7 +291,7 @@ fn snapshot_satellite(
 ///
 /// 降级形态:卫星态缺失(旧 checkpoint 无 sidecar)或重建失败时使用,
 /// 保证 record_step/终局归因链路可用性(历史保真让位于链路不断)。
-fn fresh_bridge_state(quest_id: &str, quest: &nexus_core::Quest) -> QuestBridgeState {
+fn fresh_bridge_state(quest_id: &str, quest: &nexus_contracts::domain::Quest) -> QuestBridgeState {
     let mut map = LongTaskMap::default();
     let map_ref = map.create_map(quest);
     let mut tree = SearchTreeManager::new(8);
@@ -318,7 +318,7 @@ fn fresh_bridge_state(quest_id: &str, quest: &nexus_core::Quest) -> QuestBridgeS
 fn restore_bridge_state(
     engine: &QuestEngine,
     quest_id: &str,
-    quest: &nexus_core::Quest,
+    quest: &nexus_contracts::domain::Quest,
 ) -> QuestBridgeState {
     if let Some(satellite) = engine.satellite_state(quest_id) {
         match rebuild_bridge_from_satellite(quest_id, quest, &satellite) {
@@ -334,7 +334,7 @@ fn restore_bridge_state(
 /// 卫星态 bytes → 桥接态(from_bytes_with 注入重建)
 fn rebuild_bridge_from_satellite(
     quest_id: &str,
-    quest: &nexus_core::Quest,
+    quest: &nexus_contracts::domain::Quest,
     satellite: &SatelliteState,
 ) -> Result<QuestBridgeState, QuestError> {
     // 注入本会话新实例:storage 承载恢复后 record_step 的新详情;hook 为 Noop
@@ -540,8 +540,8 @@ mod tests {
         // 无 panic 即闭环成立(组件内部状态由桥持有,日志可观测)
     }
 
-    fn make_intent() -> nexus_core::UserIntent {
-        nexus_core::UserIntent {
+    fn make_intent() -> nexus_contracts::domain::UserIntent {
+        nexus_contracts::domain::UserIntent {
             intent_id: "intent-1".to_string(),
             raw_text: "修复登录 bug".to_string(),
             multimodal_inputs: vec![],

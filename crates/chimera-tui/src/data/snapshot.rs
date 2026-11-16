@@ -34,7 +34,7 @@ pub struct DataSnapshot {
     /// 当前活动 Quest 列表
     ///
     /// 来源:聚合 `QuestListUpdated`(替换整个列表)与 `QuestCompleted`
-    /// (按 quest_id 移除)事件。使用 `nexus_core::Quest` 保证与 L1 领域模型一致。
+    /// (按 quest_id 移除)事件。使用 `nexus_contracts::domain::Quest` 保证与 L1 领域模型一致。
     pub quest_list: Vec<Quest>,
 
     /// 暂停 Quest 数(从 `QuestPaused`/`QuestResumed` 事件派生)

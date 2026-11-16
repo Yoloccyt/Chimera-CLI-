@@ -13,7 +13,7 @@
 use std::time::Duration;
 
 use event_bus::EventBus;
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use parliament::{Consensus, Parliament, ParliamentConfig, Proposal};
 
 /// 构造测试用 Quest

@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use event_bus::{EventBus, NexusEvent};
 // 架构减法批次(2026-09-20):model-router 已按 ADR-172 退役删除,
 // 原路由集成块随之移除;LLM 通道级 E2E 由 mca_quota_switch_e2e 承接。
-use nexus_core::{MultimodalInput, TaskStatus, ThinkingMode, UserIntent};
+use nexus_contracts::{MultimodalInput, TaskStatus, ThinkingMode, UserIntent};
 use quest_engine::{QuestConfig, QuestEngine};
 use repo_wiki::{Layer, VectorIndex, WikiGenerator, WikiStore};
 use tempfile::TempDir;

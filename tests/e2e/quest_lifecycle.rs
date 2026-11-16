@@ -19,7 +19,8 @@
 use std::time::Duration;
 
 use event_bus::{EventBus, NexusEvent};
-use nexus_core::{MultimodalInput, TaskStatus, ThinkingMode, UserIntent};
+use nexus_contracts::domain::{MultimodalInput, ThinkingMode, UserIntent};
+use nexus_contracts::task::TaskStatus;
 use quest_engine::{QuestConfig, QuestEngine};
 use tempfile::TempDir;
 

@@ -6,9 +6,9 @@
 //! - `ModelConfig`: Agent 使用的模型配置(provider / model / temperature / max_tokens / thinking_mode)
 //! - `AgentMeta`: Agent 元数据(agent_id / agent_type / model_config / parent_id / children_ids / ...)
 //!
-//! ## ADR-026 决策 6: 复用 nexus_core::ThinkingMode
+//! ## ADR-026 决策 6: 复用 nexus_contracts::domain::ThinkingMode
 //!
-//! `ModelConfig.thinking_mode` 使用 `nexus_core::ThinkingMode`(Fast/Standard/Deep),
+//! `ModelConfig.thinking_mode` 使用 `nexus_contracts::domain::ThinkingMode`(Fast/Standard/Deep),
 //! 不新建 `ThinkingMode::Max`。TaskComplexity 通过 `From` impl 映射到 ThinkingMode
 //! (Task 7.4 实现)。
 
@@ -76,7 +76,7 @@ pub enum AgentStatus {
 
 /// Agent 模型配置 — 定义 Agent 使用的 LLM 模型与生成参数
 ///
-/// ADR-026 决策 6: `thinking_mode` 复用 `nexus_core::ThinkingMode`,
+/// ADR-026 决策 6: `thinking_mode` 复用 `nexus_contracts::domain::ThinkingMode`,
 /// 不新建 `ThinkingMode::Max`。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelConfig {
@@ -88,8 +88,8 @@ pub struct ModelConfig {
     pub temperature: f32,
     /// 最大 Token 数(单次生成上限)
     pub max_tokens: usize,
-    /// 思考模式(TTG 三级切换),复用 nexus_core::ThinkingMode
-    pub thinking_mode: nexus_core::ThinkingMode,
+    /// 思考模式(TTG 三级切换),复用 nexus_contracts::domain::ThinkingMode
+    pub thinking_mode: nexus_contracts::domain::ThinkingMode,
 }
 
 /// Agent 元数据 — 描述 Agent 实例的全部静态与运行时状态
@@ -166,7 +166,7 @@ impl Default for ModelConfig {
             model: "gpt-4".to_string(),
             temperature: 0.7,
             max_tokens: 8192,
-            thinking_mode: nexus_core::ThinkingMode::Standard,
+            thinking_mode: nexus_contracts::domain::ThinkingMode::Standard,
         }
     }
 }

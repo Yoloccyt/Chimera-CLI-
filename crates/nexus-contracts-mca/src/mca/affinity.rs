@@ -28,7 +28,7 @@
 //!   禁止引入 `serde_json::Value`；由 L10 Codec 负责 JSON 解析/构造，L0 仅承载传输形态。
 //! - **`Box<str>` 而非 `String`**: 契约字段构造后不可变，`Box<str>` 省一个容量字段
 //!   （16 字节 vs 24 字节），对齐既有 harness_spec.rs 惯例。
-//! - **`ThinkingPreference` 是 L1 `nexus_core::ThinkingMode` 的镜像**:
+//! - **`ThinkingPreference` 是 L1 `nexus_contracts::domain::ThinkingMode` 的镜像**:
 //!   L0 不能依赖 L1（依赖方向 L0 ← L1），TTG 三档语义在此镜像定义；
 //!   两处必须保持同步（镜像注释互指），长期可评估将 ThinkingMode 下沉 L0。
 //!
@@ -480,7 +480,7 @@ impl ModelAffinitySpec {
 /// 思考偏好 — TTG 三档的 L0 镜像
 ///
 /// # 镜像关系（WHY 重复定义）
-/// `nexus_core::ThinkingMode`（L1）承载 TTG 全局语义，但 L0 零 crate
+/// `nexus_contracts::domain::ThinkingMode`（L1）承载 TTG 全局语义，但 L0 零 crate
 /// 依赖铁律禁止 L0 → L1 引用。此处镜像定义三档，**两处必须保持同步**
 /// （nexus-core/src/types.rs L63 有互指注释）；长期可评估将 ThinkingMode
 /// 下沉 L0（对齐 TaskStatus/Checkpoint 下沉先例）。

@@ -11,7 +11,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use event_bus::{EventBus, NexusEvent};
 use nexus_contracts::{ActivationStrategy, ParliamentPolicy};
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use parliament::{Parliament, ParliamentConfig, Proposal, StrategyCapConfig, StrategyCapGuard};
 use proptest::prelude::*;
 use std::time::Duration;

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use chimera_mas::{AgentTask, DelegationExecutor, QualityLevel, TaskComplexity, TaskRunner};
 use event_bus::EventBus;
-use nexus_core::{Task, TaskStatus};
+use nexus_contracts::{Task, TaskStatus};
 
 fn tasks(count: usize) -> Vec<AgentTask> {
     (0..count)

@@ -3,7 +3,7 @@
 //! 对应架构层:L5 Knowledge
 //!
 //! # 职责
-//! 将 `nexus_core::Quest` 中已完成的 Task 转化为 `WikiEntry`,
+//! 将 `nexus_contracts::domain::Quest` 中已完成的 Task 转化为 `WikiEntry`,
 //! 实现知识沉淀(ISCM:跨层共享索引)。
 //!
 //! # 嵌入生成两条路径(WHY,P1-1)
@@ -156,7 +156,7 @@ impl WikiGenerator {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use nexus_core::{Task, ThinkingMode};
+    use nexus_contracts::{Task, ThinkingMode};
 
     fn make_quest_with_tasks(tasks: Vec<Task>) -> Quest {
         Quest {

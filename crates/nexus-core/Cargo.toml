@@ -25,14 +25,17 @@ event-bus = { workspace = true }
 # B1/ADR-311 shim 退役：兼容 shim 已删，消费方直连 nexus_compute；本 crate 对其
 # 零依赖（G-125 方向守护不变），`nexus-core|nexus-compute` 内部边同批自 dep_edge_freeze 摘除。
 # L0-B 同层：计算面遥测契约与上报编排（ADR-222 D3）。
-# WHY 单向 nexus-core → nexus-telemetry：KindCounters 引用 TaskKind/hts，
-# 反向依赖会形成 crate 环；G-125 守护该方向。
-nexus-telemetry = { workspace = true }
+# B2 迁出后的零消费残留（本任务 Wave L1-C-1 摘除）：`nexus-telemetry` 声明理由
+# 「KindCounters 引用 TaskKind/hts」随 compute 面迁往 nexus-compute 后已不成立；
+# `nexus-core` 全 crate（含 tests/benches）grep `nexus_telemetry` = 0 命中。
+# 唯一消费者是 nexus-compute ⇒ 保留 nexus-telemetry 为独立 crate（ADR-222 D3），
+# 但 nexus-core 对它零依赖，G-125 方向守护与 G-90 依赖面棘轮同批同步。
 # tracing: WS-4A ClvSnapshotReported 发布失败告警日志
 tracing = { workspace = true }
 # Task 3.10: L0 nexus-contracts 类型下沉(EventMetadata/TaskStatus/Checkpoint)
 # WHY 合规: L1 → L0 恒允许(§2.2 依赖铁律扩展 ADR-033);nexus-contracts 纯类型零依赖,不引入环
-# re-export 模式: types.rs 中 `pub use nexus_contracts::{TaskStatus, Checkpoint}` 保持向后兼容
+# B4d/ADR-311: `types` 纯 re-export 汇聚点已退役 ⇒ 消费方直连 nexus-contracts,
+# 本 crate 只在自身实现处使用 L0 领域类型(Quest/Task/TaskStatus/ThinkingMode)。
 nexus-contracts = { workspace = true }
 # P1-W4 统计学习层与 P1-W5 RL 客户端已随 B2/ADR-311 退役（2026-11-15）：
 # rand（仅 stat_learning 消费）与 async-trait（仅 rl_client 消费）同批摘除；

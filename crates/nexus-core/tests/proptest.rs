@@ -17,10 +17,9 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
 
-use nexus_core::{
-    cosine_similarity_slices, MultimodalInput, Quest, Task, TaskStatus, ThinkingMode, UserIntent,
-    CLV,
-};
+use nexus_contracts::domain::{MultimodalInput, Quest, Task, ThinkingMode, UserIntent};
+use nexus_contracts::task::TaskStatus;
+use nexus_core::{cosine_similarity_slices, CLV};
 use proptest::prelude::*;
 
 proptest! {

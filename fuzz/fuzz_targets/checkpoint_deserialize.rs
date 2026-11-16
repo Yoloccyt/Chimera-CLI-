@@ -28,7 +28,7 @@
 use chimera_fuzz::fuzz_target;
 #[cfg(not(windows))]
 use libfuzzer_sys::fuzz_target;
-use nexus_core::Checkpoint;
+use nexus_contracts::checkpoint::Checkpoint;
 
 fuzz_target!(|data: &[u8]| {
     // === 目标1:Checkpoint MessagePack 反序列化不 panic ===

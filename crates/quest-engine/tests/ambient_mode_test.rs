@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
-use nexus_core::{MultimodalInput, UserIntent};
+use nexus_contracts::{MultimodalInput, UserIntent};
 use quest_engine::ambient_mode::{spawn_ambient_subscriber, AmbientModeConfig, MemoryTidyHook};
 use quest_engine::QuestEngine;
 

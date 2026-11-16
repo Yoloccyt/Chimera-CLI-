@@ -23,7 +23,7 @@
 use chimera_fuzz::fuzz_target;
 #[cfg(not(windows))]
 use libfuzzer_sys::fuzz_target;
-use nexus_core::{MultimodalInput, Quest, UserIntent};
+use nexus_contracts::domain::{MultimodalInput, Quest, UserIntent};
 
 fuzz_target!(|data: &[u8]| {
     // === 目标1:Quest JSON 反序列化不 panic ===

@@ -14,7 +14,7 @@
 //! # 核心职责
 //! - 使用 SQLite 持久化 Wiki 条目(标题、内容、标签、嵌入向量)
 //! - 提供向量相似度检索(KNN),支持语义召回
-//! - 从 `nexus_core::Quest` 结果自动生成 Wiki 条目
+//! - 从 `nexus_contracts::domain::Quest` 结果自动生成 Wiki 条目
 //! - 通过 `event_bus::EventBus` 发布 `WikiUpdated` 事件通知上层
 //!
 //! # 文档-代码偏差记录(《最新版》§10 对齐,P1-3 深度优化)

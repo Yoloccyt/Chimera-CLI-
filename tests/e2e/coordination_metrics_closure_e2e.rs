@@ -20,8 +20,9 @@ use chimera_mas::delegation::{DelegationExecutor, TaskRunner};
 use chimera_mas::prelude::*;
 use efficiency_monitor::{EfficiencyMonitor, MonitorConfig};
 use event_bus::{EventBus, NexusEvent};
+use nexus_contracts::domain::{MultimodalInput, UserIntent};
 use nexus_contracts::scaled_timeout;
-use nexus_core::{MultimodalInput, TaskStatus, UserIntent};
+use nexus_contracts::task::TaskStatus;
 use parliament::{Parliament, ParliamentConfig, Proposal};
 use quest_engine::{spawn_metrics_subscriber, CoordinationMetricsConfig, QuestEngine};
 
@@ -50,7 +51,7 @@ fn delay_runner(delay_ms: u64) -> TaskRunner {
 
 fn make_agent_task(task_id: &str, quest_id: &str) -> AgentTask {
     AgentTask::new(
-        nexus_core::Task {
+        nexus_contracts::domain::Task {
             task_id: task_id.into(),
             description: format!("e2e task {task_id}"),
             status: TaskStatus::Pending,
@@ -78,7 +79,7 @@ async fn wait_until<F: Fn() -> bool>(cond: F, what: &str) {
 }
 
 /// 驱动 Quest 全部任务到 Completed(触发 complete_quest 与度量合并)
-async fn complete_all_tasks(engine: &QuestEngine, quest: &nexus_core::Quest) {
+async fn complete_all_tasks(engine: &QuestEngine, quest: &nexus_contracts::domain::Quest) {
     for task in &quest.tasks {
         engine
             .update_task_status(&quest.quest_id, &task.task_id, TaskStatus::Running)
@@ -325,17 +326,17 @@ async fn test_e2e_vetoed_debate_reports_latency_without_quality() {
 fn make_quest(
     quest_id: &str,
     task_count: usize,
-    mode: nexus_core::ThinkingMode,
-) -> nexus_core::Quest {
-    let tasks: Vec<nexus_core::Task> = (0..task_count)
-        .map(|i| nexus_core::Task {
+    mode: nexus_contracts::domain::ThinkingMode,
+) -> nexus_contracts::domain::Quest {
+    let tasks: Vec<nexus_contracts::domain::Task> = (0..task_count)
+        .map(|i| nexus_contracts::domain::Task {
             task_id: format!("t-{i}"),
             description: format!("任务 {i}"),
             status: TaskStatus::Pending,
             dependencies: vec![],
         })
         .collect();
-    nexus_core::Quest {
+    nexus_contracts::domain::Quest {
         quest_id: quest_id.into(),
         title: "多维质量场景".into(),
         tasks,
@@ -349,7 +350,7 @@ fn make_quest(
 async fn deliberate_and_fetch_quality(
     engine: &Arc<QuestEngine>,
     parliament: &Parliament,
-    quest: &nexus_core::Quest,
+    quest: &nexus_contracts::domain::Quest,
     risk: f32,
 ) -> quest_engine::PendingCoordSample {
     let proposal = Proposal::new(
@@ -389,7 +390,7 @@ async fn test_e2e_multidim_quality_flows_through_pipeline() {
     let agree = deliberate_and_fetch_quality(
         &engine,
         &parliament,
-        &make_quest("q-agree", 2, nexus_core::ThinkingMode::Fast),
+        &make_quest("q-agree", 2, nexus_contracts::domain::ThinkingMode::Fast),
         0.2,
     )
     .await;
@@ -403,7 +404,7 @@ async fn test_e2e_multidim_quality_flows_through_pipeline() {
     let diverge = deliberate_and_fetch_quality(
         &engine,
         &parliament,
-        &make_quest("q-diverge", 7, nexus_core::ThinkingMode::Deep),
+        &make_quest("q-diverge", 7, nexus_contracts::domain::ThinkingMode::Deep),
         0.2,
     )
     .await;
@@ -418,7 +419,11 @@ async fn test_e2e_multidim_quality_flows_through_pipeline() {
     let abstain = deliberate_and_fetch_quality(
         &engine,
         &parliament,
-        &make_quest("q-abstain", 7, nexus_core::ThinkingMode::Standard),
+        &make_quest(
+            "q-abstain",
+            7,
+            nexus_contracts::domain::ThinkingMode::Standard,
+        ),
         0.4,
     )
     .await;

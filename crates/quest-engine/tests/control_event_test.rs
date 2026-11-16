@@ -4,7 +4,7 @@
 #![forbid(unsafe_code)]
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
-use nexus_core::{MultimodalInput, UserIntent};
+use nexus_contracts::{MultimodalInput, UserIntent};
 use quest_engine::{handle_control_event, QuestEngine};
 
 fn make_intent(text: &str) -> UserIntent {

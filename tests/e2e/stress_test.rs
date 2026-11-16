@@ -29,7 +29,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use event_bus::EventBus;
-use nexus_core::{MultimodalInput, TaskStatus, UserIntent};
+use nexus_contracts::domain::{MultimodalInput, UserIntent};
+use nexus_contracts::task::TaskStatus;
 use nmc_encoder::PerceptionInput;
 use osa_coordinator::{OmniSparseCoordinator, RiskLevel, TaskProfile};
 use quest_engine::{QuestConfig, QuestEngine};

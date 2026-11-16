@@ -43,7 +43,8 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use event_bus::{EventBus, EventMetadata, EventTopic, NexusEvent, TaskPriority};
-use nexus_core::{Task, TaskStatus, CLV};
+use nexus_contracts::{Task, TaskStatus};
+use nexus_core::CLV;
 
 use chimera_mas::{
     AgentContext, AgentFactory, AgentTask, AgentType, ContextBlock, ContextPriority, ContextTier,

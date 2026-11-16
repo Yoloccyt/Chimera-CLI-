@@ -277,7 +277,7 @@ async fn execute_quest(
     let quest_id = match (id, prompt) {
         (Some(existing), _) => existing.to_string(),
         (None, Some(text)) => {
-            let intent = nexus_core::UserIntent {
+            let intent = nexus_contracts::domain::UserIntent {
                 intent_id: next_intent_id(),
                 raw_text: text.to_string(),
                 multimodal_inputs: vec![],

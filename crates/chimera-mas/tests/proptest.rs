@@ -24,7 +24,7 @@ use chimera_mas::prelude::*;
 use chimera_mas::scheduler::priority_rank;
 use chimera_mas::MAX_AGENT_DEPTH;
 use event_bus::{EventBus, TaskPriority};
-use nexus_core::{Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Task, TaskStatus, ThinkingMode};
 use proptest::prelude::*;
 
 // ============================================================

@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use event_bus::{EventBus, EventReceiver, NexusEvent};
 use nexus_contracts::BudgetTier;
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use quest_engine::{TtgConfig, TtgGovernor};
 
 // ============================================================

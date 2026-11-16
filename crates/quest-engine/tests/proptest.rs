@@ -9,7 +9,7 @@
 #![forbid(unsafe_code)]
 
 use nexus_contracts::BudgetTier;
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use proptest::prelude::*;
 use quest_engine::dag::{sort_tasks_topologically, topological_order, validate_dag};
 use quest_engine::{QuestError, TtgConfig, TtgGovernor};

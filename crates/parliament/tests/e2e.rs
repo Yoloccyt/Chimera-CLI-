@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use decb_governor::{BudgetConsumption, BudgetTier, DecbConfig, DecbGovernor, QuestBudgetInput};
 use event_bus::EventBus;
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use parliament::{AhirtRedTeam, Consensus, Parliament, ParliamentConfig, ProbeType, Proposal};
 use quest_engine::{TtgConfig, TtgGovernor};
 use seccore::{

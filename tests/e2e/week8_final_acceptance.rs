@@ -88,10 +88,12 @@ fn test_week2_quest_repo_router() {
 
         // L9 Quest:Quest Engine 任务分解
         let engine = quest_engine::QuestEngine::new(bus.clone());
-        let intent = nexus_core::UserIntent {
+        let intent = nexus_contracts::domain::UserIntent {
             intent_id: "i-w2".into(),
             raw_text: "分析需求。设计方案。".into(),
-            multimodal_inputs: vec![nexus_core::MultimodalInput::Text("test".into())],
+            multimodal_inputs: vec![nexus_contracts::domain::MultimodalInput::Text(
+                "test".into(),
+            )],
             risk_level: 20,
         };
         let quest = engine.create_quest(intent).await.expect("Quest 创建失败");
@@ -316,7 +318,11 @@ fn test_week7_mesh_monitoring() {
         // L10 Interface:MCP Mesh 量子事务
         let tx = pipeline
             .mesh
-            .execute_transaction(vec!["srv-1".into(), "srv-2".into()], "w7-query".into(), vec![])
+            .execute_transaction(
+                vec!["srv-1".into(), "srv-2".into()],
+                "w7-query".into(),
+                vec![],
+            )
             .await
             .expect("MCP 事务失败");
         assert!(tx.success, "MCP Mesh 2 服务器事务应成功");

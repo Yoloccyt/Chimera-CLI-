@@ -13,7 +13,7 @@
 //!
 //! ## 架构合规
 //!
-//! - ADR-026 决策 3: AgentTask wrapper **不修改** `nexus_core::Task`
+//! - ADR-026 决策 3: AgentTask wrapper **不修改** `nexus_contracts::domain::Task`
 //!   (§3.3.1 第 4 条领域类型稳定性)
 //! - `acceptable_latency` 使用 `std::time::Duration`(非 chrono::Duration,
 //!   因 chrono::Duration 不能用于 `tokio::time::sleep`)
@@ -25,11 +25,11 @@
 
 use chimera_mas::prelude::*;
 use chimera_mas::QualityLevel;
-use nexus_core::{Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Task, TaskStatus, ThinkingMode};
 use std::time::Duration;
 
 // ============================================================
-// 辅助函数 — 创建测试用 nexus_core::Task
+// 辅助函数 — 创建测试用 nexus_contracts::domain::Task
 // ============================================================
 
 /// 创建测试用 Task(Pending 状态,无依赖)
@@ -69,7 +69,7 @@ fn test_agent_task_new_with_all_five_fields() {
         QualityLevel::High,
     );
 
-    // 1. inner 字段正确包装 nexus_core::Task
+    // 1. inner 字段正确包装 nexus_contracts::domain::Task
     assert_eq!(agent_task.inner, task, "inner 字段应等于传入的 Task");
     // 2. complexity 字段
     assert_eq!(

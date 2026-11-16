@@ -36,7 +36,7 @@ impl TaskResult {
     }
 }
 
-/// 检查点元数据 — 用于内存索引,完整状态见 `nexus_core::Checkpoint`
+/// 检查点元数据 — 用于内存索引,完整状态见 `nexus_contracts::checkpoint::Checkpoint`
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CheckpointMeta {
     /// 所属 Quest ID

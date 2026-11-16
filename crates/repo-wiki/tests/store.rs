@@ -15,7 +15,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test/bench code idiom; E-5 targets production code
 use chrono::Utc;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::domain::{Quest, Task, ThinkingMode};
+use nexus_contracts::task::TaskStatus;
 use repo_wiki::{VectorIndex, WikiEntry, WikiGenerator, WikiStore};
 use std::time::{Duration, Instant};
 

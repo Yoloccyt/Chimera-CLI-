@@ -29,8 +29,9 @@ use std::sync::{Arc, RwLock};
 
 use sha2::{Digest, Sha256};
 
+use nexus_contracts::domain::Quest;
+
 use crate::error::NexusError;
-use crate::types::Quest;
 
 /// NexusState 内部状态 — 不对外公开,仅通过 NexusState 方法访问
 #[derive(Default)]
@@ -266,7 +267,8 @@ const _: () = {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
-    use crate::types::{Task, TaskStatus, ThinkingMode};
+    use nexus_contracts::domain::{Task, ThinkingMode};
+    use nexus_contracts::task::TaskStatus;
 
     fn make_quest(id: &str) -> Quest {
         Quest {

@@ -13,7 +13,7 @@ use chimera_mas::delegation::{DelegationExecutor, TaskRunner};
 use chimera_mas::prelude::*;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use event_bus::EventBus;
-use nexus_core::{Task, TaskStatus};
+use nexus_contracts::{Task, TaskStatus};
 use std::sync::Arc;
 use std::time::Duration;
 

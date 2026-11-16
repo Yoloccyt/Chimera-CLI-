@@ -125,11 +125,11 @@ mod tests {
             NexusState::with_listener(std::sync::Arc::new(BusStateChangeListener::new(bus)));
 
         state
-            .register_quest(nexus_core::Quest {
+            .register_quest(nexus_contracts::domain::Quest {
                 quest_id: "q-1".into(),
                 title: "测试".into(),
                 tasks: vec![],
-                thinking_mode: nexus_core::ThinkingMode::Standard,
+                thinking_mode: nexus_contracts::domain::ThinkingMode::Standard,
                 checkpoint_id: None,
                 priority: 128,
             })

@@ -820,10 +820,10 @@ mod tests {
 
     /// 构造指定优先级的 AgentTask（默认 Medium 复杂度）
     fn make_sched_task(id: &str, priority: TaskPriority) -> AgentTask {
-        let task = nexus_core::Task {
+        let task = nexus_contracts::domain::Task {
             task_id: id.into(),
             description: format!("task {id}"),
-            status: nexus_core::TaskStatus::Pending,
+            status: nexus_contracts::task::TaskStatus::Pending,
             dependencies: vec![],
         };
         AgentTask::new(

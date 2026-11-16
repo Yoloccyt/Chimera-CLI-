@@ -892,11 +892,11 @@ mod tests {
     // ============================================================
 
     /// 构造单个 Task(测试助手)
-    fn make_task(id: &str, description: &str, deps: &[&str]) -> nexus_core::Task {
-        nexus_core::Task {
+    fn make_task(id: &str, description: &str, deps: &[&str]) -> nexus_contracts::domain::Task {
+        nexus_contracts::domain::Task {
             task_id: id.to_string(),
             description: description.to_string(),
-            status: nexus_core::TaskStatus::Pending,
+            status: nexus_contracts::task::TaskStatus::Pending,
             dependencies: deps.iter().map(|d| d.to_string()).collect(),
         }
     }
@@ -916,12 +916,12 @@ mod tests {
         ctx
     }
 
-    fn wp_quest(tasks: Vec<nexus_core::Task>) -> Quest {
+    fn wp_quest(tasks: Vec<nexus_contracts::domain::Task>) -> Quest {
         Quest {
             quest_id: "quest-wpe".to_string(),
             title: "WP-E".to_string(),
             tasks,
-            thinking_mode: nexus_core::ThinkingMode::Standard,
+            thinking_mode: nexus_contracts::domain::ThinkingMode::Standard,
             checkpoint_id: None,
             priority: 128,
         }

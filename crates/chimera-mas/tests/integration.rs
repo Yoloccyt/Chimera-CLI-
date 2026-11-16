@@ -33,14 +33,14 @@
 use chimera_mas::prelude::*;
 use chimera_mas::MAX_AGENT_DEPTH;
 use event_bus::{EventBus, EventReceiver, NexusEvent};
-use nexus_core::{Task, TaskStatus};
+use nexus_contracts::{Task, TaskStatus};
 use std::time::Duration;
 
 // ============================================================
 // 辅助构造函数
 // ============================================================
 
-/// 构造测试用 nexus_core::Task(Pending 状态,无依赖)
+/// 构造测试用 nexus_contracts::domain::Task(Pending 状态,无依赖)
 fn make_task(task_id: &str, desc: &str) -> Task {
     Task {
         task_id: task_id.into(),

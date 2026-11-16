@@ -110,7 +110,7 @@ impl SubAgentQuestEngine {
                 }
                 let handle = tokio::runtime::Handle::current();
                 handle.block_on(async move {
-                    let intent = nexus_core::UserIntent {
+                    let intent = nexus_contracts::domain::UserIntent {
                         intent_id: uuid::Uuid::now_v7().to_string(),
                         raw_text: goal,
                         multimodal_inputs: Vec::new(),

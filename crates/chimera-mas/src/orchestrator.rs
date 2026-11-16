@@ -730,10 +730,10 @@ mod tests {
 
     fn make_delegate_task(task_id: &str, complexity: TaskComplexity) -> AgentTask {
         AgentTask::new(
-            nexus_core::Task {
+            nexus_contracts::domain::Task {
                 task_id: task_id.into(),
                 description: "GEA 接线测试".into(),
-                status: nexus_core::TaskStatus::Pending,
+                status: nexus_contracts::task::TaskStatus::Pending,
                 dependencies: vec![],
             },
             complexity,

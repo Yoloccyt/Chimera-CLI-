@@ -1,4 +1,4 @@
-﻿//! QuestEngine 实现 — 任务分解、生命周期管理与事件广播
+//! QuestEngine 实现 — 任务分解、生命周期管理与事件广播
 //!
 //! 对应架构层:L9 Quest
 //! 对应创新点:TTG(Thinking Toggle Governance)+ LHQP(Long-Horizon Quest Persistence)
@@ -1382,11 +1382,11 @@ mod tests {
             quest_id: "test-quest-2".to_string(),
             title: "test".to_string(),
             tasks: (0..12)
-                .map(|i| nexus_core::Task {
+                .map(|i| nexus_contracts::domain::Task {
                     task_id: format!("task-{i}"),
                     description: format!("任务 {i}"),
                     dependencies: vec![],
-                    status: nexus_core::TaskStatus::Pending,
+                    status: nexus_contracts::task::TaskStatus::Pending,
                 })
                 .collect(),
             thinking_mode: ThinkingMode::Standard,

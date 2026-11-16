@@ -10,7 +10,7 @@
 //!
 //! ## 架构合规
 //!
-//! - 复用 `nexus_core::ThinkingMode`(ADR-026 决策 6,不新建 ThinkingMode::Max)
+//! - 复用 `nexus_contracts::domain::ThinkingMode`(ADR-026 决策 6,不新建 ThinkingMode::Max)
 //! - AgentMeta/AgentType/AgentStatus 定义在 chimera-mas crate 内(§A.3.4 不下沉 nexus-core)
 //! - 序列化兼容(serde_json + rmp-serde 往返,ADR-004)
 
@@ -18,7 +18,7 @@
 #![forbid(unsafe_code)]
 
 use chimera_mas::prelude::*;
-use nexus_core::ThinkingMode;
+use nexus_contracts::ThinkingMode;
 
 // ============================================================
 // SubTask 7.1: AgentType / AgentStatus 基础不变量

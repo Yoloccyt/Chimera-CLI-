@@ -24,7 +24,8 @@ mod setup;
 use std::time::Duration;
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::domain::{Quest, Task, ThinkingMode};
+use nexus_contracts::task::TaskStatus;
 use nmc_encoder::PerceptionInput;
 use osa_coordinator::{OmniSparseCoordinator, RiskLevel as OsaRiskLevel, TaskProfile};
 use parliament::{Parliament, ParliamentConfig, Proposal};

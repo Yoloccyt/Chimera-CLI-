@@ -23,7 +23,8 @@
 //! # 快速示例
 //! ```
 //! use nexus_contracts::BudgetTier;
-//! use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+//! use nexus_contracts::domain::{Quest, Task, ThinkingMode};
+//! use nexus_contracts::task::TaskStatus;
 //! use quest_engine::{TtgGovernor, TtgConfig};
 //!
 //! let governor = TtgGovernor::new(TtgConfig::default());
@@ -823,7 +824,7 @@ fn mode_switch_reason_to_str(reason: &ModeSwitchReason) -> String {
 ///
 /// 算法:动态规划 + 拓扑序,`depth[v] = 1 + max(depth[u] for u in deps[v])`
 /// 无依赖的节点 depth = 1,空图返回 0。
-fn compute_dependency_depth(tasks: &[nexus_core::Task]) -> usize {
+fn compute_dependency_depth(tasks: &[nexus_contracts::domain::Task]) -> usize {
     if tasks.is_empty() {
         return 0;
     }
@@ -840,7 +841,7 @@ fn compute_dependency_depth(tasks: &[nexus_core::Task]) -> usize {
 
     fn depth_of(
         idx: usize,
-        tasks: &[nexus_core::Task],
+        tasks: &[nexus_contracts::domain::Task],
         id_to_idx: &HashMap<&str, usize>,
         memo: &mut [Option<usize>],
     ) -> usize {

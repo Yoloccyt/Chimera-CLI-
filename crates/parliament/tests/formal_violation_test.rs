@@ -9,7 +9,7 @@
 
 use event_bus::{EventBus, EventMetadata, NexusEvent};
 use nexus_contracts::behavior_contract::{BehaviorContract, ContractCheckOutcome, ContractContext};
-use nexus_core::{Quest, ThinkingMode};
+use nexus_contracts::{Quest, ThinkingMode};
 use parliament::formal_violation::{
     enforce_and_audit, handle_formal_violation, spawn_formal_violation_subscriber,
 };

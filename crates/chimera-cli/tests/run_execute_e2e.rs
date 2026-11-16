@@ -55,7 +55,7 @@ fn quest_with_tasks(descriptions: &[&str]) -> Quest {
                 dependencies: vec![],
             })
             .collect(),
-        thinking_mode: nexus_core::ThinkingMode::Standard,
+        thinking_mode: nexus_contracts::domain::ThinkingMode::Standard,
         checkpoint_id: None,
         priority: 128,
     }

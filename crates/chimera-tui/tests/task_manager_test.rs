@@ -26,7 +26,7 @@
 use chimera_tui::panels::Panel;
 use chimera_tui::{PanelId, SortMode, TaskManagerPanel, TuiCommand, TuiState};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 
 /// 构造指定 ID、标题与优先级的 Quest 样本
 fn sample_quest(id: &str, title: &str, priority: u8) -> Quest {

@@ -652,7 +652,7 @@ mod tests {
             quest_id: "q-test".into(),
             title: "测试 Quest".into(),
             tasks: vec![],
-            thinking_mode: nexus_core::ThinkingMode::Fast,
+            thinking_mode: nexus_contracts::domain::ThinkingMode::Fast,
             checkpoint_id: None,
             priority: 128,
         };
@@ -688,7 +688,7 @@ mod tests {
             quest_id: "q-wid1".into(),
             title: "WI-D1 测试 Quest".into(),
             tasks: vec![],
-            thinking_mode: nexus_core::ThinkingMode::Fast,
+            thinking_mode: nexus_contracts::domain::ThinkingMode::Fast,
             checkpoint_id: None,
             priority: 128,
         }
@@ -897,7 +897,7 @@ mod tests {
             quest_id: "q-disabled".into(),
             title: "禁用测试".into(),
             tasks: vec![],
-            thinking_mode: nexus_core::ThinkingMode::Fast,
+            thinking_mode: nexus_contracts::domain::ThinkingMode::Fast,
             checkpoint_id: None,
             priority: 128,
         };
@@ -1022,7 +1022,7 @@ mod tests {
             quest_id: quest_id.into(),
             title: "测试 Quest".into(),
             tasks: vec![],
-            thinking_mode: nexus_core::ThinkingMode::Fast,
+            thinking_mode: nexus_contracts::domain::ThinkingMode::Fast,
             checkpoint_id: None,
             priority: 128,
         }

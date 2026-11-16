@@ -15,7 +15,7 @@
 use std::time::{Duration, Instant};
 
 use event_bus::{EventBus, NexusEvent};
-use nexus_core::{MultimodalInput, TaskStatus, ThinkingMode, UserIntent};
+use nexus_contracts::{MultimodalInput, TaskStatus, ThinkingMode, UserIntent};
 use quest_engine::{QuestConfig, QuestEngine};
 use tokio::task::JoinSet;
 
@@ -205,7 +205,7 @@ async fn test_execution_completed_event_published() {
 
 #[tokio::test]
 async fn test_dag_cyclic_dependency_detected() {
-    use nexus_core::Task;
+    use nexus_contracts::Task;
     use quest_engine::QuestError;
 
     // 构造循环依赖:a → b → c → a
@@ -239,7 +239,7 @@ async fn test_dag_cyclic_dependency_detected() {
 
 #[tokio::test]
 async fn test_topological_order_correctness() {
-    use nexus_core::Task;
+    use nexus_contracts::Task;
 
     // 菱形依赖:a → b, a → c, b → d, c → d
     let tasks = vec![
@@ -356,7 +356,7 @@ async fn test_create_quest_preserves_decompose_sentence_order() {
 /// 堵住 HashMap drain 错序/丢任务这类真 bug。
 #[tokio::test]
 async fn test_sort_tasks_topologically_fixes_shuffled_input() {
-    use nexus_core::Task;
+    use nexus_contracts::Task;
 
     let task = |id: &str, deps: Vec<&str>| Task {
         task_id: id.into(),
@@ -394,7 +394,7 @@ async fn test_sort_tasks_topologically_fixes_shuffled_input() {
 /// (b) 把 `validate_dag` 从 `create_quest` 删掉而定序又不判环。
 #[tokio::test]
 async fn test_create_quest_dag_guards_reject_cyclic_and_dangling() {
-    use nexus_core::Task;
+    use nexus_contracts::Task;
     use quest_engine::QuestError;
 
     let task = |id: &str, deps: Vec<&str>| Task {
@@ -448,7 +448,8 @@ async fn test_concurrent_quest_creation() {
     let engine = std::sync::Arc::new(QuestEngine::new(bus));
 
     // 10 个并发 create_quest,使用 JoinSet 管理任务
-    let mut set: JoinSet<Result<nexus_core::Quest, quest_engine::QuestError>> = JoinSet::new();
+    let mut set: JoinSet<Result<nexus_contracts::domain::Quest, quest_engine::QuestError>> =
+        JoinSet::new();
     for i in 0..10 {
         let engine = engine.clone();
         set.spawn(async move {

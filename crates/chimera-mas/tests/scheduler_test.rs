@@ -15,7 +15,7 @@ use chimera_mas::scheduler::{
     wsjf_score, PriorityScheduler, PriorityThresholds, WsjfInput, WsjfWeights,
 };
 use event_bus::TaskPriority;
-use nexus_core::{Task, TaskStatus};
+use nexus_contracts::{Task, TaskStatus};
 use std::time::Duration;
 
 /// 构造指定优先级的 AgentTask(默认 Medium 复杂度)。

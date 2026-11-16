@@ -26,8 +26,8 @@ event-bus = { workspace = true }
 # 渲染不写 skip 标志);unicode-width 已是 ratatui 传递依赖,版本同源零新增下载。
 unicode-width = "0.2"
 
-# nexus-core 为 L1 Core 共享领域类型(Quest/Task 等),L10 向下依赖允许
-nexus-core = { workspace = true }
+# 领域类型(Quest/Task 等)已下沉 L0 nexus-contracts(B4d/ADR-311:nexus-core 的
+# `types` re-export 汇聚点退役),本 crate 直连 L0 ⇒ `nexus-core` 依赖摘除(零消费)。
 # WI-01 TUI dogfooding (2026-08-22): nexus-app-server protocol facade (L10 same-layer)
 nexus-app-server = { workspace = true }
 # Phase 10 §15.2b/§15.3:InjectionStrategyPanel 消费 L0 AtomicMemoryCard;

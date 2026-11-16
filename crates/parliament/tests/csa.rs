@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 
 use decb_governor::{BudgetTier, DecbConfig, DecbGovernor, QuestBudgetInput};
 use event_bus::EventBus;
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use parliament::{AhirtRedTeam, Parliament, ParliamentConfig, Proposal};
 use quest_engine::{TtgConfig, TtgGovernor};
 use seccore::{AsaAuditor, OperationAuditInput};

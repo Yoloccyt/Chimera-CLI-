@@ -26,7 +26,7 @@ use chimera_mas::prelude::*;
 use chimera_mas::MAX_AGENT_DEPTH;
 use chrono::Utc;
 use event_bus::{EventBus, EventMetadata, EventTopic, NexusEvent};
-use nexus_core::{Task, TaskStatus};
+use nexus_contracts::{Task, TaskStatus};
 use std::collections::HashSet;
 use std::time::Duration;
 
@@ -34,7 +34,7 @@ use std::time::Duration;
 // 辅助函数 — 创建测试用 AgentTask
 // ============================================================
 
-/// 创建测试用 nexus_core::Task(Pending 状态,无依赖)
+/// 创建测试用 nexus_contracts::domain::Task(Pending 状态,无依赖)
 fn make_task(id: &str, desc: &str) -> Task {
     Task {
         task_id: id.into(),

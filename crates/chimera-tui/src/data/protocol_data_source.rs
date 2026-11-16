@@ -162,10 +162,10 @@ mod tests {
             .expect("启动成功");
 
         // 核心侧序列化 Quest 进 payload（协议面全量数据）
-        let quest = nexus_core::Quest {
+        let quest = nexus_contracts::domain::Quest {
             quest_id: "goal-p1".into(),
             title: "协议模式完整数据".into(),
-            ..nexus_core::Quest::default()
+            ..nexus_contracts::domain::Quest::default()
         };
         let payload = serde_json::to_string(&quest).expect("序列化成功");
         let item = nexus_contracts::app::Item::new(

@@ -3,7 +3,7 @@
 //! ROLE:     核心状态与领域类型 — 维护 NexusState、UserIntent、CLV 等全局领域模型
 //! BACKEND:  memory
 //! PRODUCERS: 1 ClvSnapshotReported
-//! CONSUMERS: 21 chimera-cli,chimera-mas,chimera-tui,chtc-bridge,cmt-tiering…
+//! CONSUMERS: 19 chimera-cli,chimera-mas,chtc-bridge,cmt-tiering,csn-substitutor…
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! 核心状态与领域类型 — 维护 NexusState、UserIntent、CLV 等全局领域模型
@@ -12,15 +12,19 @@
 //! 对应创新点:CLV(Context Latent Vector,512-dim 潜在语言)
 //!
 //! # 核心职责
-//! - 提供 L1-L10 共享领域类型的 re-export 汇聚点(UserIntent、Quest、Task、Checkpoint
-//!   等已下沉 L0 nexus-contracts,ADR-054 决策 6 / Task 3.10;本 crate 保留
-//!   `use nexus_core::Quest` 路径兼容 30 依赖方)
+//! - 领域类型(UserIntent、Quest、Task、Checkpoint 等)**已下沉 L0 nexus-contracts**
+//!   (ADR-054 决策 6 / Task 3.10;ADR-222 D2 拆分为 `nexus-contracts-core`)。
+//!   本 crate 的 `types` 纯 re-export 汇聚点已随 B4d/ADR-311 退役,
+//!   **消费方一律直连 L0**:`use nexus_contracts::domain::{Quest, Task, ...}` /
+//!   `use nexus_contracts::task::TaskStatus` / `use nexus_contracts::checkpoint::Checkpoint`
 //! - 实现 CLV(512 维潜在向量),作为语义路由与记忆检索的统一表示
 //! - 维护 NexusState(线程安全全局状态),支持 Quest 注册、查询、快照哈希
 //!
 //! # 快速示例
 //! ```
-//! use nexus_core::{NexusState, Quest, Task, TaskStatus, ThinkingMode};
+//! use nexus_contracts::domain::{Quest, Task, ThinkingMode};
+//! use nexus_contracts::task::TaskStatus;
+//! use nexus_core::NexusState;
 //!
 //! let state = NexusState::new();
 //! let quest = Quest {
@@ -58,7 +62,11 @@ pub mod path_util;
 // 条件登记 ADR-311）。RL 闸门开启时按 L0 rl_hooks 契约（nexus-contracts-seams）重建。
 pub mod state;
 pub mod storage_traits;
-pub mod types;
+// NOTE(B4d/ADR-311): types 纯 re-export 汇聚点已退役——全部领域类型
+// （Quest/Task/UserIntent/Checkpoint/TaskStatus/ThinkingMode/MultimodalInput）
+// 由消费方直连 L0 nexus_contracts（B4a-d 约 70 条 use 同批迁移）；其编译期
+// 等价性守卫（reexported_types_are_identical_to_contracts）随模块退役，
+// 类型一致性由 L0 自身 tests/type_consistency_test.rs 承担。
 
 // === 关键类型重导出,简化外部导入 ===
 pub use clv::{cosine_similarity_slices, CLV};
@@ -67,7 +75,6 @@ pub use ids::{AgentId, CapabilityId, IntentId, ModelId, OperationId, QuestId, Ta
 // P1-1 观察者接线:状态变更类型 + 监听器 trait(依赖倒置,适配层在 L9 quest-engine)
 pub use state::{NexusState, StateChangeKind, StateChangeListener};
 pub use storage_traits::{apply_performance_pragmas, PragmaCapable};
-pub use types::{Checkpoint, MultimodalInput, Quest, Task, TaskStatus, ThinkingMode, UserIntent};
 
 /// 预导入模块 — 提供最常用类型
 pub mod prelude {
@@ -75,12 +82,10 @@ pub mod prelude {
     // NOTE(B1/ADR-309): compute 面已随 W4-1 迁出为 nexus-compute；shim 退役后
     // prelude 不再承载 compute 导出，消费方直接 `use nexus_compute::…`。
     // NOTE(B3/ADR-313): config 类型已迁回 chimera-cli，prelude 同步摘除。
+    // NOTE(B4d/ADR-311): L0 领域类型 re-export 已退役，消费方直连 nexus_contracts。
     pub use crate::error::NexusError;
     pub use crate::ids::{AgentId, CapabilityId, IntentId, ModelId, OperationId, QuestId, TaskId};
     // P1-1:状态变更观察者类型加入 prelude
     pub use crate::state::{NexusState, StateChangeKind, StateChangeListener};
     pub use crate::storage_traits::{apply_performance_pragmas, PragmaCapable};
-    pub use crate::types::{
-        Checkpoint, MultimodalInput, Quest, Task, TaskStatus, ThinkingMode, UserIntent,
-    };
 }

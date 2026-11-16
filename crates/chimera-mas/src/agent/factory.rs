@@ -13,7 +13,7 @@
 //! - **§4.4 反模式 8**:sync 方法用 `publish_blocking` 发布事件,
 //!   不用 `publish().await`(create_agent 非 async)。
 //! - **§6.2**:AgentTaskDelegated 是 Normal 级事件,走 broadcast(非 mpsc)。
-//! - **ADR-026 决策 3**:AgentTask wrapper 包装 `nexus_core::Task`,不修改核心领域类型。
+//! - **ADR-026 决策 3**:AgentTask wrapper 包装 `nexus_contracts::domain::Task`,不修改核心领域类型。
 //! - **1M Token 等效**:context_window = 1_048_576(128K 实际 + 8× 稀疏压缩)。
 //!
 //! ## Agent 组件关系

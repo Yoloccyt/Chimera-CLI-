@@ -10,7 +10,7 @@
 #![forbid(unsafe_code)]
 
 use nexus_contracts::BudgetTier;
-use nexus_core::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
 use quest_engine::{QuestError, TtgConfig, TtgGovernor};
 
 /// 构造测试用 Quest

@@ -28,8 +28,8 @@ use std::time::Duration;
 
 use chimera_tui::data::QuestSync;
 use event_bus::{EventBus, EventMetadata, NexusEvent};
+use nexus_contracts::domain::{MultimodalInput, UserIntent};
 use nexus_contracts::scaled_timeout;
-use nexus_core::{MultimodalInput, UserIntent};
 use quest_engine::{spawn_control_subscriber, QuestEngine};
 
 /// 构造测试用 UserIntent — 单句子对应单个 Task,最小化测试输入

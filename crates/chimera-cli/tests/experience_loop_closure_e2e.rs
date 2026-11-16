@@ -57,7 +57,7 @@ async fn quest_lifecycle_bridge_publishes_stop_ruling() {
     let _bridge = spawn_quest_lifecycle_bridge(bus.clone(), Arc::clone(&engine));
 
     // 创建 Quest(引擎广播 QuestCreated → 桥装配任务地图+搜索树)
-    let intent = nexus_core::UserIntent {
+    let intent = nexus_contracts::domain::UserIntent {
         intent_id: "intent-e2e".to_string(),
         raw_text: "端到端闭环验证任务".to_string(),
         multimodal_inputs: vec![],
