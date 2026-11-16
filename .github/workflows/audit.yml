@@ -11,6 +11,10 @@ on:
     paths:
       - 'Cargo.lock'
       - 'Cargo.toml'
+      # WHY: 真值源/对拍器自身变更必须触发对拍门 —— 否则改 toml 的 PR 合入前从不过门,
+      # 要等次日定时或某次 Cargo.lock PR 才暴露漂移(ADR-167 决策 4 的 CI 等价性闭环)
+      - 'scripts/audit_cmd.toml'
+      - 'scripts/audit_cmd_sync.py'
   workflow_dispatch:
 
 jobs:
@@ -36,6 +40,13 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-audit
+
+      # WHY 前置对拍(ADR-167 决策 4,单一机器真值源): cargo audit 口径的权威登记处是
+      # scripts/audit_cmd.toml。本步骤先于实跑对拍 —— 口径漂移时红在 cargo audit 执行
+      # 之前,错误信息直接指向真值源,而不是烧完一次 advisory DB 全量扫描才报命令不一致。
+      # 对拍器与真值源的自身变更由本 workflow 的 PR paths 触发把关。
+      - name: Audit command parity check (vs audit_cmd.toml)
+        run: python3 scripts/audit_cmd_sync.py --check-ci
 
       - name: Run security audit
         # WHY --ignore 6 个经评估确认不影响项目的 RUSTSEC 警告:

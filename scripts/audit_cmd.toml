@@ -1,0 +1,42 @@
+# =============================================================================
+# cargo audit 口径唯一机器真值源（ADR-167 决策 4 的单一事实登记处）
+#
+# WHY: 这条命令的判据曾以散文抄写三处 —— .github/workflows/audit.yml 的
+# `Run security audit` 步骤、AGENTS.md §7.2、.claude/CLAUDE.md §2/§5。
+# P5-T5(2026-08-28) 把 CI 侧 --deny warnings 改为 --deny unmaintained --deny
+# unsound 时两份文档没跟上 —— 本仓反复出现的"两份互相抄、其中一份不生效"
+# 病灶(A12),只是这次落在安全判据上。本文件是 scripts/audit_cmd_sync.py
+# 三模式(--check-ci / --check-docs / --selftest)共同对拍的唯一机器真值源,
+# 模式同 I9/I10/I12 阈值表对拍(机器可读源代替散文三写)。
+#
+# 顺序约定:ignores 登记顺序 = .github/workflows/audit.yml 的
+# `Run security audit` 步骤现取顺序(2026-11-17 核)。--check-ci 按有序序列
+# 严格对拍,序漂移即红;各条评估理由的权威说明仍在 audit.yml 步骤的 WHY
+# 注释里,此处不复制(单一事实,不二次登记)。
+#
+# 变更纪律:改本文件不自动改任何消费方 —— 对拍门会红,须同步改 audit.yml
+# 步骤与两份规则文档使三处重新与本文件一致;移除任一 ignore 前须先在 CI
+# 真实跑通无该 ignore 的 cargo audit。
+# =============================================================================
+
+[command]
+# 命令模板:{deny} 展开为 "--deny <x>" 序列,{ignores} 展开为 "--ignore <y>" 序列。
+# 占位符缺一即不可判定(脚本判 rc=2,不静默放过)。
+template = "cargo audit{deny}{ignores}"
+
+# --deny 旗标值(P5-T5 2026-08-28 起不用 --deny warnings,理由见 audit.yml 步骤注记)
+deny = ["unmaintained", "unsound"]
+
+# --ignore 清单(顺序以 audit.yml `Run security audit` 步骤现取为准)。
+# 各条一句话索引,评估全文见 audit.yml 该步骤的 WHY 注释:
+#   RUSTSEC-2026-0190 anyhow unsound        RUSTSEC-2026-0002 lru unsound
+#   RUSTSEC-2026-0253 lru pop panic-safety  RUSTSEC-2024-0436 paste unmaintained
+#   RUSTSEC-2025-0141 bincode unmaintained  RUSTSEC-2025-0119 number_prefix unmaintained
+ignores = [
+    "RUSTSEC-2026-0190",
+    "RUSTSEC-2026-0002",
+    "RUSTSEC-2026-0253",
+    "RUSTSEC-2024-0436",
+    "RUSTSEC-2025-0141",
+    "RUSTSEC-2025-0119",
+]

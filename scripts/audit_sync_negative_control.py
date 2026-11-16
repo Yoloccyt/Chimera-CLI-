@@ -9,12 +9,18 @@ import pathlib
 import shutil
 import tempfile
 
+# 与 audit_cmd_sync.py 对拍的来源清单。2026-11-17 W5a 起真值源改为
+# scripts/audit_cmd.toml（机器可读），散文三处降级为被对拍方 —— 本清单不再
+# 从被测模块 import TARGETS（旧内部名已随三模式重构退役），自带以固定契约。
+TARGETS = (".github/workflows/audit.yml", "AGENTS.md", ".claude/CLAUDE.md")
+TRUTH = "scripts/audit_cmd.toml"
+
 spec = importlib.util.spec_from_file_location("acs", "scripts/audit_cmd_sync.py")
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
 base = pathlib.Path(tempfile.mkdtemp(prefix="acs_nc_"))
-for rel in m.TARGETS:
+for rel in (*TARGETS, TRUTH):
     src = pathlib.Path(rel)
     if not src.exists():
         src = pathlib.Path(rel.lower())

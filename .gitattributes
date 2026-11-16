@@ -37,3 +37,21 @@
 
 /scripts/** text eol=lf
 *.sh      text eol=lf
+
+# 2026-11-17 addition: *.toml, measured the same way as above.
+#   `git ls-files --eol '*.toml'`: 76 blobs, ALL i/lf — adding this line cannot
+#   trigger a renormalisation storm; it only removes the smudge conversion.
+#   Coverage before this line: /scripts/** already pinned scripts/*.toml (e.g.
+#   perf_thresholds.toml reads eol:lf), but every toml the `TOML format check
+#   (taplo)` step in ci.yml actually checks lives OUTSIDE scripts/ —— deny.toml,
+#   .cargo/config.toml, .config/nextest.toml, fuzz/Cargo.toml, examples/*.toml,
+#   crates/mca-gateway/affinity.d/*.toml —— and none of them were pinned
+#   (git check-attr eol on each: unspecified). That step's own WHY note
+#   (ci.yml, `TOML format check (taplo)`) documents the double-faced gate:
+#   with core.autocrlf=true and no attribute, the Windows working tree is CRLF
+#   while the git blob is LF, taplo is eol-sensitive, so `taplo fmt --check`
+#   fails locally on identical HEAD content that stays green in CI (Linux
+#   checkout is LF). A gate that is red locally and green in CI on the same
+#   content is not a style gate, it is a host-configuration detector —— the
+#   same reproducibility defect class as the CRLF shell scripts above.
+*.toml    text eol=lf
