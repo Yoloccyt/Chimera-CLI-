@@ -189,6 +189,8 @@ jobs:
           # (rhi_judge run_bench 已于 2026-09-25 摘除: 其宿主 crate auto-dpo 于 38c72e6 物理删除，
           #  但 perf_thresholds.toml 2026-09-20 已删其键、此侧漏清→ I7 幽灵。见 ADR-190)
           run_bench bus_bench         cargo bench -p event-bus --bench bus_bench
+          # R6a（2026-11-16）：telemetry 饱和判定纯函数 bench（perf_thresholds.toml 同步登记）
+          run_bench saturation_bench  cargo bench -p nexus-telemetry --bench saturation_bench
           # P-6 升格（深审 2026-09-25）：cmt 热层 LRU，本地实测 median 45µs
           # （docs/reports/perf-slo-2026-09-25.md §1.2），与 perf_thresholds.toml 三表同步
           run_bench hot_lru           cargo bench -p cmt-tiering --bench hot_lru

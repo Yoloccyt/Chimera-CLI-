@@ -16,6 +16,12 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# R6a：饱和判定纯函数 micro-bench（criterion harness=false）
+criterion = { workspace = true }
+
+[[bench]]
+name = "saturation_bench"
+harness = false
 
 [lints]
 workspace = true

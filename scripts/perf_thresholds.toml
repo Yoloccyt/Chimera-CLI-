@@ -27,6 +27,11 @@
 [thresholds_ns]
 exit_code_matrix = 10000
 diff_engine_bench = 100000
+# R6a（2026-11-16）：telemetry 饱和判定纯函数两组。初值 1ms 宽松档（ns 级纯函数，
+# 余量 4-5 个数量级），首跑后按校准批次定档收紧（faae_scoring 先例同口径，
+# I4 只减不增棘轮允许收紧）。首跑数值【待验证：CI bench_check Run 步输出】。
+saturation_ratio_bp = 1000000
+report_needed = 1000000
 wal_recovery = 100000000
 degradation_chain = 1000
 render_bench = 16000000
@@ -257,6 +262,9 @@ llm_diag_micro = 80000
 
 [path_keywords]
 exit_code_matrix = ["exit_code"]
+# R6a：组名即 criterion benchmark_group 名（路径子串匹配）
+saturation_ratio_bp = ["saturation_ratio_bp"]
+report_needed = ["report_needed"]
 diff_engine_bench = ["diff_incremental_5pct", "diff_full_redraw"]
 wal_recovery = ["wal_append_single_fsync", "wal_recovery", "wal_read_empty", "wal_truncate_after_recovery"]
 degradation_chain = ["degradation"]
@@ -422,6 +430,12 @@ max_keyword_overlaps = 1
 alias = "exit_code_matrix"
 crate = "chimera-cli"
 bench = "exit_code_matrix"
+
+# R6a（2026-11-16）：telemetry 饱和判定纯函数 bench（守护不对称病灶闭合）
+[[run_bench]]
+alias = "saturation_bench"
+crate = "nexus-telemetry"
+bench = "saturation_bench"
 
 [[run_bench]]
 alias = "render_bench"
