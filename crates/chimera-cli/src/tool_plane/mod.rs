@@ -5,12 +5,14 @@
 
 pub mod config;
 pub mod echo;
+pub mod fs_tools;
 pub mod mcp;
 pub mod mcp_connect;
 pub mod process;
 
 pub use config::{ToolPlaneConfig, ToolPlaneMode};
 pub use echo::EchoToolProvider;
+pub use fs_tools::FsToolsProvider;
 pub use mcp::McpToolProvider;
 pub use mcp_connect::{assemble as assemble_mcp, FenceGate, McpPlane};
 pub use process::ProcessToolProvider;

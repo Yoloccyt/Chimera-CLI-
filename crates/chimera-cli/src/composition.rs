@@ -619,6 +619,10 @@ fn assemble_tool_plane(config: &ChimeraConfig) -> Result<SharedToolPlane> {
     registry.register(Arc::new(crate::tool_plane::ProcessToolProvider::new(
         plane.max_payload_bytes,
     )))?;
+    // W1（L2 方案 §7 W1-c）：fs 只读工具补齐进 tool_plane——LLM 发布面自此与
+    // 计划面共享同一 fs 工具集（实现同源 exec_plan，双面行为逐位一致）。
+    // 行为变化登记：LLM tools 表 +2（fs.read/fs.list，均 ReadOnly）。
+    registry.register(Arc::new(crate::tool_plane::FsToolsProvider::new()))?;
     // MCP provider 走"装配期发现快照"（ADR-235 S6）：只对 `enabled = true` 的
     // server 建连 + `initialize` + `tools/list`；单个 server 失败只跳过它自己，
     // 不阻塞启动（D6）。HTTP 传输不在本波范围 ⇒ 显式 warn 后跳过（D2）。

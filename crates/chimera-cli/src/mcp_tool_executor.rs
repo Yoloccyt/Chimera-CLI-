@@ -24,14 +24,17 @@ use crate::config::ChimeraConfig;
 use async_trait::async_trait;
 use gqep_executor::ToolExecutor;
 use mcp_mesh::{InProcessClient, McpMesh, MeshConfig, MeshServer, ParticipantClient};
+use nexus_contracts::tool_name::{
+    parse_tool_name as parse_tool_name_l0, ParsedToolName, ToolNameError,
+};
 use nexus_contracts::tool_plan::SideEffectDecl;
 
-/// 工具名命名空间前缀（ADR-256 D1）
-pub const MCP_TOOL_PREFIX: &str = "mcp.";
+// W1（L2 工具层重构方案 §6.1）：工具名解析真值源上提 L0（`nexus_contracts::
+// tool_name`）。本模块保留点号格式前缀常量别名以维持 ADR-256 D1 的既有引用面；
+// 斜杠格式（`mcp:<server>/<tool>`）自此等价接受——双格式归一，canonical 输出恒斜杠。
 
-/// server_id 白名单上界（ADR-256 D1：配置层 id 无校验，解析消歧在执行器入口收紧；
-/// 不动 L1 配置 schema，避免 parity 门重派生）
-const MAX_SERVER_ID_LEN: usize = 64;
+/// 工具名命名空间前缀（点号格式；ADR-256 D1 既有引用名，真值源 = L0 [`MCP_DOT_PREFIX`]）
+pub use nexus_contracts::tool_name::MCP_DOT_PREFIX as MCP_TOOL_PREFIX;
 
 /// MCP 工具名解析错误 — 语义归因 `route:`（ADR-256 D3：外层机制归因 Transport，
 /// 文案前缀保留 route 语义供诊断）
@@ -58,17 +61,9 @@ pub enum McpRouteErrorKind {
     EmptyTool,
 }
 
-/// server_id 白名单校验（ADR-256 D1）。
-///
-/// 规则：长度 1..=64；仅 `[a-zA-Z0-9_-]`；点号不在白名单内（保证「首点切分」
-/// 的解析无歧义——这是 [`parse_tool_name`] 把连续点号归入 [`McpRouteErrorKind::
-/// IllegalServerId`] 的语义依据）。
-fn is_legal_server_id(id: &str) -> bool {
-    (1..=MAX_SERVER_ID_LEN).contains(&id.len())
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
+// W1：server_id 白名单校验（ADR-256 D1：长度 1..=64、仅 `[a-zA-Z0-9_-]`）随解析
+// 真值源一并上提 L0（`nexus_contracts::tool_name::is_legal_server_id`）——本地
+// 镜像删除，防双真值源漂移。
 
 /// 生产 ephemeral mesh 的唯一构造点：进程内**零延迟**客户端 + 默认（durable）配置。
 ///
@@ -155,16 +150,17 @@ impl McpToolExecutor {
         self
     }
 
-    /// 命名解析（纯函数，供 proptest 穷举）：`mcp.<server>.<tool>` → (server, tool)。
+    /// 命名解析（纯函数，供 proptest 穷举）：MCP 工具名 → (server, tool)。
     ///
-    /// 切分规则（ADR-256 D1）：`server_id` 白名单排除点号 ⇒ **首个 `.` 即边界**；
-    /// tool 段 = 首点之后全部内容（允许内含点号，如 `mcp.a.b.c` → ("a", "b.c")）。
+    /// W1 起真值源 = L0 [`parse_tool_name_l0`]（双格式等价：`mcp.<s>.<t>` 与
+    /// `mcp:<s>/<t>` 归一；切分规则 ADR-256 D1——server 白名单排除分隔符 ⇒
+    /// **首个分隔符即边界**；tool 段 = 首个分隔符之后全部内容，允许内含分隔符，
+    /// 如 `mcp.a.b.c` → ("a", "b.c")）。
     ///
-    /// 错误归类：
-    /// - 无前缀体 / 前缀体全为分隔符 → `EmptySegment`；
-    /// - 无点号（缺 tool 段）或 tool 段为空 → `EmptyTool`；
-    /// - server 段非法（含空段——rest 以点号开头）或**连续点号**（首点后紧跟点号，
-    ///   server 白名单排除点号的消歧前提被破坏）→ `IllegalServerId`。
+    /// 错误归类（L0 [`ToolNameError`] → 本模块三类既有归因，语义逐位保持）：
+    /// - 非 MCP 前缀 / 前缀体全空 → `EmptySegment`；
+    /// - 缺 tool 段或 tool 段为空 → `EmptyTool`；
+    /// - server 段非法（含空段）或**连续分隔符**（消歧前提被破坏）→ `IllegalServerId`。
     pub fn parse_tool_name(tool_name: &str) -> Result<(String, String), McpRouteError> {
         let kind_err = |kind| {
             Err(McpRouteError {
@@ -172,27 +168,14 @@ impl McpToolExecutor {
                 raw: tool_name.to_string(),
             })
         };
-        let Some(rest) = tool_name.strip_prefix(MCP_TOOL_PREFIX) else {
-            return kind_err(McpRouteErrorKind::EmptySegment);
-        };
-        if rest.is_empty() {
-            return kind_err(McpRouteErrorKind::EmptySegment);
+        match parse_tool_name_l0(tool_name) {
+            Ok(ParsedToolName::Mcp { server_id, tool }) => Ok((server_id, tool)),
+            // 非 MCP 前缀：本执行器只受理 MCP 形态（守卫语义，fail-closed）
+            Ok(ParsedToolName::Plain { .. }) => kind_err(McpRouteErrorKind::EmptySegment),
+            Err(ToolNameError::EmptyServer(_)) => kind_err(McpRouteErrorKind::EmptySegment),
+            Err(ToolNameError::IllegalServerId(_)) => kind_err(McpRouteErrorKind::IllegalServerId),
+            Err(ToolNameError::MissingTool(_)) => kind_err(McpRouteErrorKind::EmptyTool),
         }
-        let Some((server, tool)) = rest.split_once('.') else {
-            // 无点号：只有 server 段，tool 缺失
-            return kind_err(McpRouteErrorKind::EmptyTool);
-        };
-        if !is_legal_server_id(server) {
-            return kind_err(McpRouteErrorKind::IllegalServerId);
-        }
-        if tool.is_empty() {
-            return kind_err(McpRouteErrorKind::EmptyTool);
-        }
-        if tool.starts_with('.') {
-            // 连续点号（如 `mcp.cai..tool`）：server 段边界歧义，归入白名单违规
-            return kind_err(McpRouteErrorKind::IllegalServerId);
-        }
-        Ok((server.to_string(), tool.to_string()))
     }
 
     /// 注册表查询（测试与诊断面；执行路径经 [`Self::execute`] 内部查询）
@@ -205,24 +188,19 @@ impl McpToolExecutor {
 #[async_trait]
 impl ToolExecutor for McpToolExecutor {
     async fn execute(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
-        // 1. 前缀守卫（防直接注入本执行器——组合根经 CompositeToolExecutor 前缀
-        //    分派，此守卫是独立防线：绕过复合器直调本执行器时 fail-closed）
-        let Some(rest) = tool_name.strip_prefix(MCP_TOOL_PREFIX) else {
-            return Err(format!(
-                "route: mcp executor received non-mcp tool: {tool_name}"
-            ));
-        };
-        let _ = rest;
-        // 2. 解析边界（Err 文案前缀 `route:`）
+        // 1. 双格式统一解析（W1：守卫 + 切分一体；L0 parse 恒返回本模块三类
+        //    `route:` 归因——非 MCP 前缀 → EmptySegment，防直接注入本执行器：
+        //    组合根经 CompositeToolExecutor 前缀分派，此解析是独立防线，绕过
+        //    复合器直调本执行器时同样 fail-closed）
         let (server_id, tool) = Self::parse_tool_name(tool_name).map_err(|e| e.to_string())?;
-        // 3. 目标服务器注册校验（真值源 = from_config 注册结果；运行时注册态错误
+        // 2. 目标服务器注册校验（真值源 = from_config 注册结果；运行时注册态错误
         //    走内联 Err 文案——`route:` 前缀供诊断，与解析错误同一语义前缀、不同机制，
         //    见 ADR-256 D3〔修订·审读〕裁决：parse 纯函数查不了注册表）
         let Some(server) = self.mesh.registry().get(&server_id) else {
             return Err(format!("route: mcp server not registered: {server_id}"));
         };
         let _ = server;
-        // 4. 经 2PC 参与者面执行（ADR-253 边界：复用 execute_transaction，不新造 JSON-RPC）
+        // 3. 经 2PC 参与者面执行（ADR-253 边界：复用 execute_transaction，不新造 JSON-RPC）
         let result = self
             .mesh
             .execute_transaction(
@@ -232,7 +210,7 @@ impl ToolExecutor for McpToolExecutor {
             )
             .await
             .map_err(|e| format!("transport: mcp transaction failed: {e}"))?;
-        // 5. 结果序列化为单层 JSON（勿双层编码）
+        // 4. 结果序列化为单层 JSON（勿双层编码）
         Ok(serde_json::json!({
             "success": result.success,
             "transaction_id": result.transaction_id,
@@ -276,7 +254,13 @@ impl CompositeToolExecutor {
 #[async_trait]
 impl ToolExecutor for CompositeToolExecutor {
     async fn execute(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
-        if tool_name.starts_with(MCP_TOOL_PREFIX) {
+        // W1：双格式前缀判定（`mcp.<s>.<t>` 与 `mcp:<s>/<t>` 均归 MCP 分支）。
+        // 解析失败的 MCP 形态（如 `mcp.a..t`）仍进 MCP 分支——由 execute 内的
+        // L0 parse 给出带 `route:` 归因的错误，而非落到 builtin 的
+        // "unknown builtin tool"（错误归因保留优先于廉价前缀跳过）。
+        if tool_name.starts_with(nexus_contracts::tool_name::MCP_DOT_PREFIX)
+            || tool_name.starts_with(nexus_contracts::tool_name::MCP_COLON_PREFIX)
+        {
             self.mcp.execute(tool_name, args_json).await
         } else {
             self.builtin.execute(tool_name, args_json).await
@@ -301,6 +285,7 @@ mod tests {
     use super::*;
 
     use crate::exec_plan::BuiltinToolExecutor;
+    use nexus_contracts::tool_name::MAX_SERVER_ID_LEN;
     use proptest::prelude::*;
 
     /// 结构锁（ADR-280 D2）：生产 ephemeral mesh 必须用零延迟客户端。
@@ -367,21 +352,41 @@ mod tests {
             "mcp.a b.tool",  // 空格不在白名单
             "mcp.c@i.tool",  // 非法字符
             "mcp.a..b",      // 连续点号变体
+            "mcp:cai//tool", // 连续斜杠 → 斜杠格式同款加固（W1）
+            "mcp:ca i/tool", // 空格不在白名单（斜杠格式 server 段）
         ] {
             let err = McpToolExecutor::parse_tool_name(raw).unwrap_err();
             assert_eq!(err.kind, McpRouteErrorKind::IllegalServerId, "raw={raw:?}");
         }
-        // 超长 server 段（>64）
+        // 超长 server 段（>64），两种格式同拒
         let long = format!("mcp.{}.t", "a".repeat(65));
         let err = McpToolExecutor::parse_tool_name(&long).unwrap_err();
+        assert_eq!(err.kind, McpRouteErrorKind::IllegalServerId);
+        let long_slash = format!("mcp:{}/t", "a".repeat(65));
+        let err = McpToolExecutor::parse_tool_name(&long_slash).unwrap_err();
         assert_eq!(err.kind, McpRouteErrorKind::IllegalServerId);
     }
 
     #[test]
     fn parse_rejects_empty_tool() {
-        for raw in ["mcp.server.", "mcp.server"] {
+        for raw in ["mcp.server.", "mcp.server", "mcp:server", "mcp:server/"] {
             let err = McpToolExecutor::parse_tool_name(raw).unwrap_err();
             assert_eq!(err.kind, McpRouteErrorKind::EmptyTool, "raw={raw:?}");
+        }
+    }
+
+    /// W1：双格式等价——斜杠格式与点号格式归一到同一 (server, tool) 结果。
+    #[test]
+    fn parse_accepts_slash_format_equivalently() {
+        assert_eq!(
+            McpToolExecutor::parse_tool_name("mcp:github/list_issues").unwrap(),
+            McpToolExecutor::parse_tool_name("mcp.github.list_issues").unwrap(),
+            "双格式必须归一到同一结果"
+        );
+        // 非 MCP 前缀的输入保持拒绝（守卫语义不变）
+        for raw in ["text.echo", "echo.echo", "", "mcp", "mcpX"] {
+            let err = McpToolExecutor::parse_tool_name(raw).unwrap_err();
+            assert_eq!(err.kind, McpRouteErrorKind::EmptySegment, "raw={raw:?}");
         }
     }
 
@@ -436,7 +441,8 @@ mod tests {
         assert_eq!(composite.capability_of("mcp.x.y"), None);
     }
 
-    // 任意串分派：合法形态 ⇔ 前缀 + 白名单 server 段 + 非空 tool 段
+    // 任意串分派：合法形态 ⇔ 双格式任一「前缀 + 白名单 server 段 + 非空且不以
+    // 分隔符开头的 tool 段」（W1：镜像谓词随 L0 双格式语义同步）
     // （block-named 语法，proptest 1.11+；WHY 普通注释而非 doc 注释：
     // rustdoc 不为宏调用生成文档，doc 注释触发 unused_doc_comment lint）
     proptest! {
@@ -444,17 +450,25 @@ mod tests {
 
         #[test]
         fn prop_parse_boundary(s in ".*") {
-            // 谓词：与 parse_tool_name 的判定逻辑同构（单真源=parse 本体，
+            // 谓词：与 parse_tool_name 的判定逻辑同构（单真源 = L0 parse 本体，
             // 谓词为独立推导的镜像——两者不一致即解析语义分叉）
-            let predicate = |s: &str| -> bool {
-                let Some(rest) = s.strip_prefix("mcp.") else { return false };
+            let legal_body = |rest: &str, sep: char| -> bool {
                 if rest.is_empty() {
                     return false;
                 }
-                let Some((server, tool)) = rest.split_once('.') else { return false };
+                let Some((server, tool)) = rest.split_once(sep) else { return false };
                 let legal = (1..=MAX_SERVER_ID_LEN).contains(&server.len())
                     && server.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-                legal && !tool.is_empty() && !tool.starts_with('.')
+                legal && !tool.is_empty() && !tool.starts_with(sep)
+            };
+            let predicate = |s: &str| -> bool {
+                if let Some(rest) = s.strip_prefix("mcp:") {
+                    legal_body(rest, '/')
+                } else if let Some(rest) = s.strip_prefix("mcp.") {
+                    legal_body(rest, '.')
+                } else {
+                    false
+                }
             };
             let parsed = McpToolExecutor::parse_tool_name(&s).is_ok();
             prop_assert_eq!(parsed, predicate(&s), "s={:?}", s);

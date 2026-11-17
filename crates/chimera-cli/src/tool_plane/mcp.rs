@@ -91,19 +91,23 @@ impl ToolProvider for McpToolProvider {
                 "mcp tool requires explicit approval".into(),
             ));
         }
-        let rest = inv
-            .tool
-            .strip_prefix("mcp:")
-            .ok_or_else(|| malformed(&inv.tool))?;
-        let (server_id, tool_name) = rest.split_once('/').ok_or_else(|| malformed(&inv.tool))?;
+        // W1（L2 方案 §6.1）：解析真值源上提 L0——tool_plane 发布面恒输出斜杠
+        // 格式，此处自然命中 `Mcp` 分支；server 白名单（ADR-256 D1 规则）自此
+        // 与计划面同源（此前本面不校验白名单，合法 id 集相同，行为不回退）。
+        let (server_id, tool_name) = match nexus_contracts::tool_name::parse_tool_name(&inv.tool) {
+            Ok(nexus_contracts::tool_name::ParsedToolName::Mcp { server_id, tool }) => {
+                (server_id, tool)
+            }
+            _ => return Err(malformed(&inv.tool)),
+        };
         let (server, _tool) = self
             .snapshot
-            .find(server_id, tool_name)
+            .find(&server_id, &tool_name)
             .ok_or_else(|| ToolError::InvalidArgs(format!("unknown MCP tool {}", inv.tool)))?;
         let arguments: serde_json::Value = serde_json::from_str(&inv.args_json)
             .map_err(|error| ToolError::InvalidArgs(format!("mcp args must be JSON: {error}")))?;
         let result = tokio::select! {
-            result = server.client.call_tool(tool_name, arguments) => result,
+            result = server.client.call_tool(&tool_name, arguments) => result,
             _ = cancel.cancelled() => return Err(ToolError::Cancelled(inv.call_id.clone())),
         };
         // 把 `tools/call` 的 result 原样序列化给上层（内容块由调用方解释）。

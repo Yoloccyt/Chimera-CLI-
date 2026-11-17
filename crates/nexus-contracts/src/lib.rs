@@ -287,6 +287,11 @@ pub use spec::tool_dispatch;
 /// 批派发准入契约 — BatchPlan/BatchReport 四段守恒（P-A，ADR-新-3）
 pub use spec::tool_admission;
 
+/// 工具名解析契约 — 双 MCP 命名格式单一解析入口（W1 / L2 工具层重构方案 §6.1）；
+/// 与 tool_plan/tool_dispatch/tool_admission 同为工具族根面叶子，
+/// root_reexport_freeze 同批显式登记（P-A 先例）。
+pub use spec::tool_name;
+
 /// 调度契约 — mas-sched 控制面类型先移 L0（P3-T2 补,ADR-033 先例）
 pub use spec::scheduler_contract;
 
@@ -464,6 +469,11 @@ pub const ADR_033_EXCEPTION_MODULES: &[&str] = &[
     // segment_counts / is_read_safe）达 G-119 派生逻辑检阈；与
     // tests/l0_exception_registry.rs 的 SUBSTANTIVE_LOGIC_MODULES 同批加入。
     "tool_admission",
+    // W1（L2 工具层重构方案 §6.1）：工具名解析纯函数族（parse_tool_name 双格式
+    // 结构分类 / is_legal_server_id 白名单 / canonical_name 归一）达 G-119 派生
+    // 逻辑检阈；与 tests/l0_exception_registry.rs 的 SUBSTANTIVE_LOGIC_MODULES
+    // 同批加入（l0_exception_registry 双向相等锁 + l0_logic_ledger FN 行同批）。
+    "tool_name",
 ];
 
 // ============================================================

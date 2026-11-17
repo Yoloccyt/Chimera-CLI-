@@ -61,6 +61,10 @@ const SUBSTANTIVE_LOGIC_MODULES: &[&str] = &[
     // （is_conserved 四段守恒计数 / segment_counts / is_read_safe）达 G-119
     // 派生逻辑检阈，与 lib.rs 登记表同批加入。
     "tool_admission",
+    // W1（L2 工具层重构方案 §6.1）：工具名解析契约的纯函数族
+    // （parse_tool_name 双格式结构分类 / is_legal_server_id 白名单 /
+    // canonical_name 归一）达 G-119 派生逻辑检阈，与 lib.rs 登记表同批加入。
+    "tool_name",
 ];
 
 /// W3 子模块化后的 10 个组模块（结构锁，防回退平铺）。

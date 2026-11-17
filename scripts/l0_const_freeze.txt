@@ -43,3 +43,6 @@ testutil/test_scale::ENV_TIMEOUT_SCALE
 testutil/test_scale::SCALE_MAX
 testutil/test_scale::SCALE_MIN
 vector_math/recall_fusion::DEFAULT_RRF_K
+spec/tool_name::MCP_COLON_PREFIX  # W1 canonical MCP 前缀(斜杠格式)
+spec/tool_name::MCP_DOT_PREFIX  # W1 计划面历史 MCP 前缀(点号格式,ADR-256 D1)
+spec/tool_name::MAX_SERVER_ID_LEN  # W1 server_id 白名单上界(ADR-256 D1 上提)

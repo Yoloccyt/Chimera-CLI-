@@ -275,3 +275,6 @@ vector_math/vector::is_empty
 vector_math/vector::is_near_capacity
 vector_math/vector::new
 vector_math/vector::new
+spec/tool_name::parse_tool_name  # W1 工具名统一解析(双 MCP 格式归一,L2 方案 §6.1)
+spec/tool_name::is_legal_server_id  # W1 server_id 白名单(ADR-256 D1 规则上提 L0)
+spec/tool_name::canonical_name  # W1 canonical 输出(斜杠格式单源)

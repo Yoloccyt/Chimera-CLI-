@@ -31,7 +31,11 @@ use crate::composition::AppContext;
 use crate::error::ChimeraCliError;
 
 /// `fs.read` 单文件上限（256 KiB）
-const FS_READ_MAX_BYTES: u64 = 256 * 1024;
+///
+/// W1 起提为 `pub(crate)`：fs 工具语义的唯一真值源，tool_plane 的
+/// [`crate::tool_plane::fs_tools::FsToolsProvider`] 与本执行器共享同一实现
+/// （双面装配收敛前，两面的 `fs.read`/`fs.list` 行为必须逐位一致）。
+pub(crate) const FS_READ_MAX_BYTES: u64 = 256 * 1024;
 
 /// 进程内置工具执行器 — `text.echo` / `fs.read` / `fs.list`
 ///
@@ -90,7 +94,9 @@ impl ToolExecutor for BuiltinToolExecutor {
 }
 
 /// `fs.read` — `{"path":"relative/file"}` → `{"content": "...", "bytes": n}`
-async fn fs_read(args_json: &str) -> Result<String, String> {
+///
+/// W1 起提为 `pub(crate)`（真值源共享语义见 [`FS_READ_MAX_BYTES`]）。
+pub(crate) async fn fs_read(args_json: &str) -> Result<String, String> {
     let value: serde_json::Value =
         serde_json::from_str(args_json).map_err(|e| format!("fs.read invalid args JSON: {e}"))?;
     let raw = value
@@ -115,7 +121,9 @@ async fn fs_read(args_json: &str) -> Result<String, String> {
 }
 
 /// `fs.list` — `{"path":"."}`（缺省 `.`）→ `{"entries": [名称...]}`（字典序）
-async fn fs_list(args_json: &str) -> Result<String, String> {
+///
+/// W1 起提为 `pub(crate)`（真值源共享语义见 [`FS_READ_MAX_BYTES`]）。
+pub(crate) async fn fs_list(args_json: &str) -> Result<String, String> {
     let value: serde_json::Value =
         serde_json::from_str(args_json).map_err(|e| format!("fs.list invalid args JSON: {e}"))?;
     let raw = value.get("path").and_then(|p| p.as_str()).unwrap_or(".");
@@ -141,7 +149,9 @@ async fn fs_list(args_json: &str) -> Result<String, String> {
 }
 
 /// 文件工具路径约束 — 仅相对路径，拒绝绝对路径、`..` 与根/盘符前缀
-fn safe_relative_path(raw: &str, tool: &str) -> Result<PathBuf, String> {
+///
+/// W1 起提为 `pub(crate)`（真值源共享语义见 [`FS_READ_MAX_BYTES`]）。
+pub(crate) fn safe_relative_path(raw: &str, tool: &str) -> Result<PathBuf, String> {
     if raw.is_empty() {
         return Err(format!("{tool} rejected empty path"));
     }
