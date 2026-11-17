@@ -292,6 +292,10 @@ pub use spec::tool_admission;
 /// root_reexport_freeze 同批显式登记（P-A 先例）。
 pub use spec::tool_name;
 
+/// 副作用真值源统一契约 — 判定纯函数 + O(1) 声明索引（W3 / L2 方案 §6.4）；
+/// 工具族根面叶子，root_reexport_freeze 同批显式登记。
+pub use spec::tool_effects;
+
 /// 调度契约 — mas-sched 控制面类型先移 L0（P3-T2 补,ADR-033 先例）
 pub use spec::scheduler_contract;
 
@@ -474,6 +478,10 @@ pub const ADR_033_EXCEPTION_MODULES: &[&str] = &[
     // 逻辑检阈；与 tests/l0_exception_registry.rs 的 SUBSTANTIVE_LOGIC_MODULES
     // 同批加入（l0_exception_registry 双向相等锁 + l0_logic_ledger FN 行同批）。
     "tool_name",
+    // W3（L2 方案 §6.4）：副作用真值源统一纯函数族（resolve_effect 三级判定 /
+    // resolve_effect_with_descriptor 四级 / SideEffectIndex O(1) 查表索引）
+    // 达 G-119 派生逻辑检阈；与 tests/l0_exception_registry.rs 同批加入。
+    "tool_effects",
 ];
 
 // ============================================================

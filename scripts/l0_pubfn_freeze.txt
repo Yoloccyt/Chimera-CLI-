@@ -278,3 +278,10 @@ vector_math/vector::new
 spec/tool_name::parse_tool_name  # W1 工具名统一解析(双 MCP 格式归一,L2 方案 §6.1)
 spec/tool_name::is_legal_server_id  # W1 server_id 白名单(ADR-256 D1 规则上提 L0)
 spec/tool_name::canonical_name  # W1 canonical 输出(斜杠格式单源)
+spec/tool_effects::resolve_effect  # W3 三级判定纯函数(PlanRunner 等价锁)
+spec/tool_effects::resolve_effect_with_descriptor  # W3 四级判定(LLM 面 W3b)
+spec/tool_effects::from_declarations  # W3 O(n) 构建声明索引
+spec/tool_effects::empty  # W3 空索引(fail-closed)
+spec/tool_effects::lookup  # W3 O(1) 查表
+spec/tool_effects::len  # W3 索引规模(诊断)
+spec/tool_effects::is_empty  # W3 空判

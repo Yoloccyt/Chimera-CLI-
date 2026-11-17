@@ -25,7 +25,7 @@
 #   NEW public types with no row are red, and a row whose type moved/disappeared is STALE
 #   red -- so a W3-style physical move must re-key rows in the same commit.
 #
-# CLAIM types=247 listed=247 open=64 closed=183
+# CLAIM types=248 listed=248 open=65 closed=183
 #
 # CURRENT STATE (machine-verified: G-115 recomputes the CLAIM line above from the live tree
 # plus these rows on every run, so this paragraph can no longer rot in silence -- ADR-218):
@@ -308,3 +308,4 @@ STRUCT | type=spec/tool_admission::BatchReport | class=open | reason=P-A: 报告
 # W1（L2 工具层重构方案 §6.1，2026-11）：工具名解析契约 2 类型——结构分类与错误面均为冻结契约
 ENUM | type=spec/tool_name::ParsedToolName | class=closed | reason=W1: 结构分类（Mcp/Plain）是归一语义的核心，加变体=破坏所有穷尽 match；新 provider 形态走 Plain 原样透传，无需扩档
 ENUM | type=spec/tool_name::ToolNameError | class=closed | reason=W1: 双格式（冒号/点号）解析失败面已穷尽（EmptyServer/IllegalServerId/MissingTool）；格式集冻结，演进走新枚举+版本化
+STRUCT | type=spec/tool_effects::SideEffectIndex | class=open | reason=W3: 数据容器随 W3b LLM 面演进（descriptor 源/来源标注字段），下游构造必经 from_declarations/empty

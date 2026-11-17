@@ -33,6 +33,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
+use nexus_contracts::tool_effects::{resolve_effect, SideEffectIndex};
 use nexus_contracts::tool_plan::{guards, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
@@ -318,6 +319,10 @@ pub struct PlanRunner {
     guards: PlanGuards,
     /// 只读层并发上界（有界,恒 ≥ 1）
     concurrency: usize,
+    /// W3：副作用声明索引 —— 构造时对 `executor.declared_side_effects()`
+    /// 做一次 O(n) 构建,每节点查表 O(1)（取代逐节点 clone 整 Vec + 线性
+    /// find 的热点;执行器声明在运行期内静态,构造时快照无漂移风险）。
+    declared_index: SideEffectIndex,
 }
 
 impl std::fmt::Debug for PlanRunner {
@@ -340,10 +345,13 @@ impl PlanRunner {
     /// 并发度只影响只读层的墙钟并行度）。
     #[must_use]
     pub fn new(executor: Box<dyn ToolExecutor>, guards: PlanGuards) -> Self {
+        // W3：声明索引一次构建（O(n) clone 一份取代每节点 O(n) clone+find）
+        let declared_index = SideEffectIndex::from_declarations(executor.declared_side_effects());
         Self {
             executor,
             guards,
             concurrency: Self::DEFAULT_CONCURRENCY,
+            declared_index,
         }
     }
 
@@ -383,6 +391,7 @@ impl PlanRunner {
                         n,
                         self.executor.as_ref(),
                         n.tool_name.as_deref().unwrap_or_default(),
+                        &self.declared_index,
                     ) != Some(SideEffectDecl::ReadOnly)
                 {
                     return Err(PlanError::IncompleteToolCall(n.id.clone()));
@@ -489,6 +498,7 @@ impl PlanRunner {
                         node,
                         self.executor.as_ref(),
                         node.tool_name.as_deref().unwrap_or_default(),
+                        &self.declared_index,
                     ) != Some(SideEffectDecl::ReadOnly)
                 {
                     return Err(PlanRunError::Invalid(PlanError::IncompleteToolCall(
@@ -546,7 +556,8 @@ impl PlanRunner {
                 };
                 let node = &plan.nodes[pos];
                 // 写屏障：读安全节点随时可填窗口；「可能写」节点必须等在飞排空（独占窗口）。
-                let read_safe = node_is_read_safe(node, self.executor.as_ref());
+                let read_safe =
+                    node_is_read_safe(node, self.executor.as_ref(), &self.declared_index);
                 if read_safe || in_flight.is_empty() {
                     graph.ready.pop_front();
                 } else {
@@ -689,7 +700,7 @@ impl PlanRunner {
     ) -> bool {
         let read_flags: Vec<bool> = layer
             .iter()
-            .map(|n| node_is_read_safe(n, self.executor.as_ref()))
+            .map(|n| node_is_read_safe(n, self.executor.as_ref(), &self.declared_index))
             .collect();
         if read_flags.iter().all(|r| *r) {
             return self
@@ -1145,42 +1156,47 @@ fn accumulate(
     env.insert(node.id.clone(), out);
 }
 
-/// 节点的有效副作用属性 —— 计划声明 > 执行器能力表 > 未知
+/// 节点的有效副作用属性 —— 计划声明 > 执行器能力表 > 配置声明索引 > 未知
 ///
 /// WHY 这个优先级次序:显式声明是计划作者的意图，实现方不得推翻它
 /// （否则接入方可把写操作自报为只读来换取并发，层内写序不再由计划决定，
-/// 可复现性与审计链同时失效）；两者都不知道时返回 `None`，
+/// 可复现性与审计链同时失效）；三者都不知道时返回 `None`，
 /// 由调用方 `node_is_read_safe` 按「可能写」保守处理。
+///
+/// W3（L2 方案 §6.4）：优先序实现收敛到 L0
+/// [`resolve_effect`](nexus_contracts::tool_effects::resolve_effect)（单一真值源,
+/// proptest 锁与旧三级形态逐位等价）;第三级查表从「每节点 clone 整 Vec + 线性
+/// find」换为 [`SideEffectIndex`] O(1) lookup（索引在 [`PlanRunner::new`]
+/// 构造时一次构建）。
 fn effective_side_effect(
     node: &ToolNode,
     executor: &dyn ToolExecutor,
     declared: &str,
+    index: &SideEffectIndex,
 ) -> Option<SideEffectDecl> {
-    if let Some(effect) = node
-        .side_effect
-        .or_else(|| executor.capability_of(declared))
-    {
-        return Some(effect);
-    }
-    // R9：配置驱动的批量声明（默认空集 ⇒ 既有行为逐字不变）
-    executor
-        .declared_side_effects()
-        .into_iter()
-        .find(|(name, _)| name == declared)
-        .map(|(_, effect)| effect)
+    resolve_effect(
+        node.side_effect,
+        executor.capability_of(declared),
+        index.lookup(declared),
+    )
 }
 
 /// 单节点是否「读安全」——纯数据算子恒安全；ToolCall 需有效副作用 == ReadOnly。
 ///
 /// 「有效副作用」按 `effective_side_effect` 取值：显式声明优先，其次执行器能力表，
-/// 两者皆无 ⇒ 按「可能写」保守处理（未声明 ≠ 只读）。WHY 保守：并发会让同层写入
-/// 顺序由调度器决定 ⇒ 结果不可复现、审计链失序（ADR-254 D1 / ADR-281）。
-fn node_is_read_safe(node: &ToolNode, executor: &dyn ToolExecutor) -> bool {
+/// 再次配置声明索引，皆无 ⇒ 按「可能写」保守处理（未声明 ≠ 只读）。WHY 保守：
+/// 并发会让同层写入顺序由调度器决定 ⇒ 结果不可复现、审计链失序（ADR-254 D1 / ADR-281）。
+fn node_is_read_safe(
+    node: &ToolNode,
+    executor: &dyn ToolExecutor,
+    index: &SideEffectIndex,
+) -> bool {
     node.op != ToolOp::ToolCall
         || effective_side_effect(
             node,
             executor,
             node.tool_name.as_deref().unwrap_or_default(),
+            index,
         ) == Some(SideEffectDecl::ReadOnly)
 }
 
@@ -1425,19 +1441,21 @@ mod tests {
     #[test]
     fn declared_side_effects_make_tool_read_safe_without_node_declaration() {
         let executor = DeclaringExecutor;
+        // W3:索引从执行器声明一次构建(与 PlanRunner::new 同构)
+        let index = SideEffectIndex::from_declarations(executor.declared_side_effects());
         let declared = tool_call_node("mcp.srv.audit", None);
         assert!(
-            node_is_read_safe(&declared, &executor),
+            node_is_read_safe(&declared, &executor, &index),
             "执行器批量声明为 ReadOnly ⇒ 计划未声明也应进入并发段"
         );
         let unknown = tool_call_node("mcp.srv.write", None);
         assert!(
-            !node_is_read_safe(&unknown, &executor),
+            !node_is_read_safe(&unknown, &executor, &index),
             "未声明工具必须按可能写保守串行（fail-closed 不扩散）"
         );
         let explicit_write = tool_call_node("mcp.srv.audit", Some(SideEffectDecl::Write));
         assert!(
-            !node_is_read_safe(&explicit_write, &executor),
+            !node_is_read_safe(&explicit_write, &executor, &index),
             "计划显式声明优先于执行器声明"
         );
     }
@@ -1445,9 +1463,10 @@ mod tests {
     #[test]
     fn default_executor_declares_no_side_effects() {
         assert!(MemExecutor.declared_side_effects().is_empty());
+        let index = SideEffectIndex::empty();
         let unknown = tool_call_node("mcp.srv.audit", None);
         assert!(
-            !node_is_read_safe(&unknown, &MemExecutor),
+            !node_is_read_safe(&unknown, &MemExecutor, &index),
             "默认空集 ⇒ 行为与改造前逐字一致（保守串行）"
         );
     }
