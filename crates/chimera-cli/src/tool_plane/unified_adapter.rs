@@ -40,6 +40,7 @@ use gqep_executor::toolplan_runner::NodeExecCtx;
 use gqep_executor::ToolExecutor;
 use nexus_contracts::tool_name::{canonical_name, parse_tool_name, ParsedToolName};
 use nexus_contracts::tool_plan::SideEffectDecl;
+use nexus_contracts::tool_result::{ToolExecResult, ToolExecStatus};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::ChimeraConfig;
@@ -144,6 +145,84 @@ impl UnifiedExecutorAdapter {
     }
 }
 
+/// [`ToolOutcome`] 终态 → 类型化结果（W4 精确映射——零前缀解析损失，
+/// `truncated`/`call_id` 直传）。与 [`map_outcome`] 同源双形态：后者是
+/// legacy 文案（`execute` 路径），前者是类型化终点（`execute_typed` 路径）。
+fn map_outcome_typed(outcome: ToolOutcome, call_id: &str) -> ToolExecResult {
+    use gqep_executor::tool_plane::ToolStatus;
+    let (status, payload) = match outcome.status {
+        ToolStatus::Ok => (ToolExecStatus::Ok, outcome.payload),
+        ToolStatus::NotFound => (
+            ToolExecStatus::Routed(nexus_contracts::tool_dispatch::DispatchError::Route(
+                format!("tool not found: {}", outcome.tool),
+            )),
+            None,
+        ),
+        ToolStatus::InvalidArgs => (
+            ToolExecStatus::InvalidArgs {
+                tool: outcome.tool.clone(),
+                reason: outcome.error.clone().unwrap_or_default(),
+            },
+            None,
+        ),
+        ToolStatus::Denied => (
+            ToolExecStatus::Denied(nexus_contracts::tool_dispatch::DispatchError::Policy(
+                outcome.error.clone().unwrap_or_default(),
+            )),
+            None,
+        ),
+        ToolStatus::AskRequired => (
+            ToolExecStatus::Denied(nexus_contracts::tool_dispatch::DispatchError::Policy(
+                format!(
+                    "approval required for {} (write-class or undeclared MCP tool)",
+                    outcome.tool
+                ),
+            )),
+            None,
+        ),
+        ToolStatus::Timeout => (
+            ToolExecStatus::Timeout {
+                tool: outcome.tool.clone(),
+                deadline_ms: outcome.duration_ms,
+            },
+            None,
+        ),
+        ToolStatus::Cancelled => (
+            ToolExecStatus::Cancelled {
+                tool: outcome.tool.clone(),
+            },
+            None,
+        ),
+        ToolStatus::Overloaded => (
+            ToolExecStatus::Routed(nexus_contracts::tool_dispatch::DispatchError::Route(
+                format!(
+                    "overloaded for {}: {}",
+                    outcome.tool,
+                    outcome.error.unwrap_or_default()
+                ),
+            )),
+            None,
+        ),
+        ToolStatus::Skipped => (
+            ToolExecStatus::Routed(nexus_contracts::tool_dispatch::DispatchError::Route(
+                format!("tool call skipped: {}", outcome.tool),
+            )),
+            None,
+        ),
+        ToolStatus::ProviderError => (
+            ToolExecStatus::Provider(nexus_contracts::tool_dispatch::DispatchError::Transport(
+                outcome.error.clone().unwrap_or_default(),
+            )),
+            None,
+        ),
+    };
+    if let ToolExecStatus::Ok = status {
+        ToolExecResult::ok(call_id, payload.unwrap_or_default()).with_truncated(outcome.truncated)
+    } else {
+        ToolExecResult::failed(call_id, status)
+    }
+}
+
 /// [`ToolOutcome`] 终态 → 四环链 Err 文案（保留语义前缀，W4 归因兼容）。
 fn map_outcome(outcome: ToolOutcome) -> Result<String, String> {
     let detail = || {
@@ -235,6 +314,45 @@ impl ToolExecutor for UnifiedExecutorAdapter {
             .unwrap_or_else(CancellationToken::new);
         self.invoke_via_plane(tool_name, args_json, approved, &cancel, call_id)
             .await
+    }
+
+    /// 类型化执行（W4 精确映射）：与 [`Self::execute_node`] 同语义（审批/取消/
+    /// call_id 全穿透），终点为 [`ToolExecResult`]——`truncated` 直传（层间
+    /// 熔断细粒度恢复的数据面，见 exec_plan_truncation 测试 W2 登记注释）。
+    async fn execute_typed(
+        &self,
+        ctx: &NodeExecCtx<'_>,
+        tool_name: &str,
+        args_json: &str,
+    ) -> ToolExecResult {
+        let is_mcp = parse_tool_name(tool_name)
+            .map(|p| matches!(p, ParsedToolName::Mcp { .. }))
+            .unwrap_or_else(|_| tool_name.starts_with("mcp:") || tool_name.starts_with("mcp."));
+        let approved = if is_mcp {
+            self.mcp_approved(tool_name, ctx.side_effect, ctx.plan.approve_writes)
+        } else {
+            true
+        };
+        let call_id = format!("{}-{}", ctx.plan.plan_id, ctx.node_id);
+        let canonical = Self::resolve_canonical(tool_name);
+        let invocation = ToolInvocation {
+            call_id: call_id.clone(),
+            tool: canonical,
+            args_json: args_json.to_string(),
+            timeout_ms: None,
+            priority: ToolPriority::Normal,
+            origin: ToolOrigin::Cli,
+            quest_id: None,
+            task_id: None,
+            approved,
+        };
+        let cancel = ctx
+            .plan
+            .cancel
+            .cloned()
+            .unwrap_or_else(CancellationToken::new);
+        let outcome = self.plane.invoke(invocation, &cancel).await;
+        map_outcome_typed(outcome, &call_id)
     }
 
     /// 能力视图：tool_plane 注册表 descriptor 声明（LLM 面同源，单真值）。

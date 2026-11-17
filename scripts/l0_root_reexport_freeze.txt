@@ -56,6 +56,7 @@ spec::tool_dispatch  # T1-1: L0 契约上提（gqep-executor tool_runtime 改 re
 spec::tool_admission  # P-A: 批派发准入契约（ADR-新-3；纯判定函数族 is_conserved/segment_counts/is_read_safe 达 G-119 检阈，沿 tool_dispatch 根面先例）
 spec::tool_name  # W1: 工具名解析契约（L2 方案 §6.1；与 tool_plan/tool_dispatch/tool_admission 同为工具族根面叶子，双 MCP 格式归一单一入口）
 spec::tool_effects  # W3: 副作用真值源统一契约（L2 方案 §6.4；判定纯函数 + O(1) 索引，工具族根面叶子）
+spec::tool_result  # W4: 类型化执行结果契约（L2 方案 §6.2；四层归因 + 三精确执行态，加性 execute_typed 载体）
 spec::tool_plan
 spec::variant
 testutil::test_scale

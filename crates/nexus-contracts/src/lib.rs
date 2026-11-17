@@ -296,6 +296,10 @@ pub use spec::tool_name;
 /// 工具族根面叶子，root_reexport_freeze 同批显式登记。
 pub use spec::tool_effects;
 
+/// 类型化工具执行结果契约 — 执行器边界类型化终点（W4 / L2 方案 §6.2）；
+/// 工具族根面叶子，root_reexport_freeze 同批显式登记。
+pub use spec::tool_result;
+
 /// 调度契约 — mas-sched 控制面类型先移 L0（P3-T2 补,ADR-033 先例）
 pub use spec::scheduler_contract;
 
@@ -482,6 +486,9 @@ pub const ADR_033_EXCEPTION_MODULES: &[&str] = &[
     // resolve_effect_with_descriptor 四级 / SideEffectIndex O(1) 查表索引）
     // 达 G-119 派生逻辑检阈；与 tests/l0_exception_registry.rs 同批加入。
     "tool_effects",
+    // W4（L2 方案 §6.2）：类型化执行结果纯函数族（from_legacy_err 前缀解析
+    // 脚手架 / error_text 重构 / ok 构造）达 G-119 派生逻辑检阈；同批加入。
+    "tool_result",
 ];
 
 // ============================================================

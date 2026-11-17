@@ -121,6 +121,30 @@ pub trait ToolExecutor: Send + Sync {
         self.execute(tool_name, args_json).await
     }
 
+    /// 类型化执行入口（W4 / L2 方案 §6.3 加性）——[`ToolExecResult`] 终点。
+    ///
+    /// # WHY 默认实现桥接 legacy `execute`（前缀解析脚手架）
+    /// 与 `execute_node` 同款加性纪律：10 个既有实现零改动即保持今日行为；
+    /// 默认实现把 `Err(String)` 经
+    /// [`ToolExecResult::from_legacy_err`](nexus_contracts::tool_result::
+    /// ToolExecResult::from_legacy_err) 前缀解析归因（**迁移脚手架**——
+    /// 全实现覆盖后随旧方法删除）。只有真能把内部状态映射为类型化结果的
+    /// 实现方（统一适配器 / 四环 dispatch）才覆盖本方法。
+    async fn execute_typed(
+        &self,
+        ctx: &NodeExecCtx<'_>,
+        tool_name: &str,
+        args_json: &str,
+    ) -> nexus_contracts::tool_result::ToolExecResult {
+        let call_id = format!("{}-{}", ctx.plan.plan_id, ctx.node_id);
+        match self.execute_node(ctx, tool_name, args_json).await {
+            Ok(payload) => nexus_contracts::tool_result::ToolExecResult::ok(call_id, payload),
+            Err(err) => {
+                nexus_contracts::tool_result::ToolExecResult::from_legacy_err(call_id, &err)
+            }
+        }
+    }
+
     /// 自报该工具的副作用属性 —— 计划未写 `side_effect` 时的**派生真值源**
     ///
     /// WHY 默认实现返回 `None`（＝未知）而不是让每个实现方都必须声明:

@@ -285,3 +285,9 @@ spec/tool_effects::empty  # W3 空索引(fail-closed)
 spec/tool_effects::lookup  # W3 O(1) 查表
 spec/tool_effects::len  # W3 索引规模(诊断)
 spec/tool_effects::is_empty  # W3 空判
+spec/tool_result::ok  # W4 成功构造(non_exhaustive 工厂)
+spec/tool_result::failed  # W4 失败构造(non_exhaustive 工厂)
+spec/tool_result::with_truncated  # W4 截断 builder
+spec/tool_result::from_legacy_err  # W4 前缀解析脚手架(随 legacy execute 退役)
+spec/tool_result::from_legacy_err  # W4 同名第二定义点(ToolExecStatus::from_legacy_err;multiset 纪律)
+spec/tool_result::error_text  # W4 legacy 风格文案重构(迁移期兼容面)

@@ -67,6 +67,8 @@ const SUBSTANTIVE_LOGIC_MODULES: &[&str] = &[
     "tool_name",
     // W3（L2 方案 §6.4）：副作用真值源统一纯函数族，与 lib.rs 登记表同批加入。
     "tool_effects",
+    // W4（L2 方案 §6.2）：类型化执行结果纯函数族，与 lib.rs 登记表同批加入。
+    "tool_result",
 ];
 
 /// W3 子模块化后的 10 个组模块（结构锁，防回退平铺）。
