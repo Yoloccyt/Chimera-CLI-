@@ -20,14 +20,12 @@ nexus-compute::rayon
 nexus-compute::thiserror
 nexus-compute::tokio
 nexus-compute::tracing
-nexus-core::chrono
 nexus-core::hex
 nexus-core::ndarray
 nexus-core::serde
 nexus-core::serde_json
 nexus-core::sha2
 nexus-core::thiserror
-nexus-core::tokio
 nexus-core::tracing
 nexus-telemetry::tokio
 nexus-telemetry::tracing
