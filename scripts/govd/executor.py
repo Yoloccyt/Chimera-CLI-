@@ -86,7 +86,7 @@ def resolve_argv(cmd, bash_path=None):
     return args
 
 
-# ADR-318 工具链批 TL-W3c：cargo 门应用层互斥。
+# ADR-319 工具链批 TL-W3c：cargo 门应用层互斥。
 #
 # WHY 模块级：整个门禁面跑在 govd 单进程内（cli.cmd_run 的 ThreadPoolExecutor），
 # 进程级 Semaphore(1) 正是「全进程同时至多一个 cargo 子进程」的正确作用域；
@@ -143,7 +143,7 @@ def is_cargo_argv(argv) -> bool:
 
 
 # N2（W4N）：间接 cargo 探测 —— semaphore 只锁 argv[0] 为 cargo 的**直接**门，
-# wrapper 门（python/bash/pwsh 包 cargo）从互斥面漏出（ADR-318 TL-W3c 的已知边界）。
+# wrapper 门（python/bash/pwsh 包 cargo）从互斥面漏出（ADR-319 TL-W3c 的已知边界）。
 # 本探针对这类 argv 做静态扫描并追加登记，供评估「互斥面缺口规模」：先量，再决定
 # 要不要把互斥延伸到 wrapper 门。纯观测位 —— 不改 rc、不强制互斥、默认关零开销
 # （env GOVD_CARGO_INDIRECT_PROBE=1 显式 opt-in，与 cargo_semaphore 同一开关纪律）。
@@ -274,7 +274,7 @@ def run_attempt(task, log_path, timeout_s, bash_path=None, root=None):
                 register_indirect_cargo(task.id, args, _indirect)
         except Exception:
             pass
-    # ADR-318 TL-W3c：cargo 门的进程级互斥。获取超时取本门预算的 1/10 ——
+    # ADR-319 TL-W3c：cargo 门的进程级互斥。获取超时取本门预算的 1/10 ——
     # 排队是互斥的预期形态，但等待必须有上限：一次 permit 泄漏（未来某次改动的
     # bug）会让此后所有 cargo 门无限挂起、整个 CI job 被静默吊死，那才是最难
     # 诊断的失败模式。超时按三态纪律记 UNKNOWN（rc=2，不可判定≠红），绝不用

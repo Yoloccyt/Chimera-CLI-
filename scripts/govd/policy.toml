@@ -24,7 +24,7 @@ default_timeout_s = 300
 heavy_timeout_s = 1800
 env_retry = 1
 mutating_prefixes = ["tmp/", "target/"]
-# ADR-318 工具链批 TL-W3c：cargo 门的应用层互斥开关。与 .cargo/config.toml
+# ADR-319 工具链批 TL-W3c：cargo 门的应用层互斥开关。与 .cargo/config.toml
 # 的 jobs = 4 互补 —— target-dir 文件锁只能挡同 target/ 的并发，挡不住 4 个门
 # 各自拉起 4 个 rustc 的内存峰值叠加（15.2GB 宿主内存墙前科：诊断报告 16 并发→0GB）。
 # true ⇒ executor 对所有 argv[0] 基名为 cargo 的门加进程级 Semaphore(1)。

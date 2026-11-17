@@ -1,6 +1,6 @@
 """W4N N2：间接 cargo 探测（cargo_indirect_registry）锁。
 
-背景：semaphore（ADR-318 TL-W3c）只锁 argv[0] 基名为 cargo 的**直接**门；
+背景：semaphore（ADR-319 TL-W3c）只锁 argv[0] 基名为 cargo 的**直接**门；
 wrapper 门（python/bash/pwsh 包 cargo）从互斥面漏出，「wrapper 门里藏了几个
 cargo 子进程」此前无人量过。本探针在 run_attempt 咽喉点对 wrapper argv 做静态
 扫描（cargo + {build,check,test,clippy,bench,doc} 邻接对），命中即追加登记

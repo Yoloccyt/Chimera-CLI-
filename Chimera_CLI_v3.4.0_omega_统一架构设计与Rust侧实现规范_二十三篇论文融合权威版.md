@@ -961,7 +961,7 @@ pub enum OmniMessage {
 > | D-29 | `nexus-core` 生产依赖实为 **9 个**（ndarray/serde/serde_json/thiserror/sha2/hex/event-bus/tracing/nexus-contracts） | tokio/chrono 摘除见 commit `66cad462`（chrono 降 dev 面，L1-R1/B2）；正文设计稿未涉及，无需回改 |
 > | D-30 | L1 层成员**三口径并存** | ① AGENTS.md §2.1 三成员（nexus-core/event-bus/nexus-telemetry）② 本文档 §4.1 图两成员（nexus-core/event-bus，其余为预留提案）③ ADR-222 L0-B 命名四成员（+nexus-compute）；机器层号 1 集合以 `check_dependency_rules.sh` 为准，口径统一待后续批次 |
 > | D-31 | `NexusState` 的 `global_budget`/`model_registry_snapshot` **生产零读者** | 仅测试代码与 setter 自引用命中；退役评估中，未裁决前不回改 |
-> | D-32 | **ADR-312 悬空引用待补落** | ADR-312 无独立物理文件，占位登记于 `ADR-311-l1-batch-closure.md` D2.1 子章节；引用补落属后续批次 |
+> | D-32 | **ADR-312 登记形态更正** | ADR-312 无独立物理文件是**有意设计**（adr_index.md 明示其为 ADR-311 D2.1 子章节占位），非悬空；后续无需补落物理文件 |
 
 ### 6.1 经验卡片Event Bus
 

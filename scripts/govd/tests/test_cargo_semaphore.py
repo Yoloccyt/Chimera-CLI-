@@ -1,4 +1,4 @@
-"""ADR-318 工具链批 TL-W3c: cargo 门应用层互斥（cargo_semaphore）锁。
+"""ADR-319 工具链批 TL-W3c: cargo 门应用层互斥（cargo_semaphore）锁。
 
 背景：159 门中只有 4 道直接以 cargo 起头的门（G-12~G-15，恰好也是仅有的
 exclusive = "cargo" 门）；其余 cargo 类门经 wrapper 间接调起，靠 target-dir

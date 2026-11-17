@@ -52,7 +52,7 @@ TASK_ID_RE = re.compile(r"^(R|E|X|D)-\d+$")
 PROFILE_KEYS = {"include_heavy", "jobs", "allow_mutating"}
 EXEC_KEYS = {"whitelist", "default_timeout_s", "heavy_timeout_s", "env_retry",
              "mutating_prefixes",
-             # ADR-318 工具链批 TL-W3c：cargo 门应用层互斥开关（executor 直读）。
+             # ADR-319 工具链批 TL-W3c：cargo 门应用层互斥开关（executor 直读）。
              "cargo_semaphore"}
 ROLE_KEYS = {"profiles"}
 # Only the release lane may ever allow mutating tasks: pr/nightly/local are the
@@ -151,7 +151,7 @@ def validate_policy(doc):
         if "env_retry" in exec_row and (not _is_int(exec_row["env_retry"])
                                         or not 0 <= exec_row["env_retry"] <= 3):
             bad("POLICY_RETRY", "exec.env_retry must be 0..3 (environment-only)")
-        # ADR-318 TL-W3c：互斥开关只能是 bool。写成 1/"true" 都按类型错误红，
+        # ADR-319 TL-W3c：互斥开关只能是 bool。写成 1/"true" 都按类型错误红，
         # 与 allow_mutating 同纪律 —— 开关值的类型松动是「写了没人读」的近亲。
         if "cargo_semaphore" in exec_row and not isinstance(exec_row["cargo_semaphore"], bool):
             bad("POLICY_TYPE", "exec.cargo_semaphore must be a bool")
