@@ -10,10 +10,10 @@
 #![forbid(unsafe_code)]
 
 use chimera_cli::composition::build;
-use chimera_cli::ChimeraConfig;
 use chimera_cli::config_types::{
     McpConfig, McpServerConfig, ToolPolicyAction, ToolPolicyConfig, ToolPolicyRuleDef,
 };
+use chimera_cli::ChimeraConfig;
 use gqep_executor::tool_runtime::{DispatchError, DispatchRequest};
 
 /// 带 mcp server 注册的配置（TEST-NET-1 文档段地址——SSRF 白名单放行，

@@ -214,7 +214,10 @@ impl BatchReport {
     /// 构造批回执
     #[must_use]
     pub fn new(outcomes: Vec<CallOutcome>, truncated: Option<TruncationCause>) -> Self {
-        Self { outcomes, truncated }
+        Self {
+            outcomes,
+            truncated,
+        }
     }
 
     /// 四段计数（succeeded, failed, denied, not_started）
@@ -274,9 +277,18 @@ mod tests {
     fn four_segment_conservation_holds() {
         let report = BatchReport::new(
             vec![
-                CallOutcome::Succeeded { seq: 0, output: "ok".into() },
-                CallOutcome::Failed { seq: 1, error: "boom".into() },
-                CallOutcome::Denied { seq: 2, reason: DenyReason::Overloaded },
+                CallOutcome::Succeeded {
+                    seq: 0,
+                    output: "ok".into(),
+                },
+                CallOutcome::Failed {
+                    seq: 1,
+                    error: "boom".into(),
+                },
+                CallOutcome::Denied {
+                    seq: 2,
+                    reason: DenyReason::Overloaded,
+                },
                 CallOutcome::NotStarted,
             ],
             None,

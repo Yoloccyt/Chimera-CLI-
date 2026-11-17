@@ -54,7 +54,9 @@ pub mod execution {
         DispatchError, DispatchFuture, DispatchOutcome, DispatchRequest, DispatchRequestRef,
         ToolDispatcher,
     };
-    pub use crate::tool_plan::{guards, PlanEdge, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan};
+    pub use crate::tool_plan::{
+        guards, PlanEdge, PlanError, SideEffectDecl, ToolNode, ToolOp, ToolPlan,
+    };
 }
 
 /// 安全与治理契约面。
@@ -79,8 +81,8 @@ pub mod governance {
         ErrorLayer, EventFailure, NexusError, Recoverable, RecoveryStrategy, ToolFailure,
     };
     pub use crate::formal_props::{
-        EmptyFormalProvider, FormalProperty, FormalResultProvider, InvariantSpec,
-        PropertyCategory, VerificationMethod, VerificationResult, VerifiedWithStrength,
+        EmptyFormalProvider, FormalProperty, FormalResultProvider, InvariantSpec, PropertyCategory,
+        VerificationMethod, VerificationResult, VerifiedWithStrength,
     };
     pub use crate::quota::{NamespaceQuota, QuotaError, QuotaLimits};
     pub use crate::sensitive::{

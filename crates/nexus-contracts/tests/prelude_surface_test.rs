@@ -108,7 +108,10 @@ fn parse_entries(body: &str) -> Result<Vec<Entry>, String> {
         }
         let face = toks[i].clone();
         if face != "prelude" && face != "top" {
-            return Err(format!("模块 {module} 的派发面标记 `{}` 非法（应为 prelude|top）", face));
+            return Err(format!(
+                "模块 {module} 的派发面标记 `{}` 非法（应为 prelude|top）",
+                face
+            ));
         }
         i += 1;
         if i >= toks.len() || toks[i] != "{" {
@@ -132,7 +135,10 @@ fn parse_entries(body: &str) -> Result<Vec<Entry>, String> {
                 syms.push(toks[i].clone());
                 i += 1;
             } else {
-                return Err(format!("模块 {module} 的符号列表混入非法 token `{}`", toks[i]));
+                return Err(format!(
+                    "模块 {module} 的符号列表混入非法 token `{}`",
+                    toks[i]
+                ));
             }
         }
         entries.push(Entry { module, face, syms });
@@ -153,7 +159,9 @@ fn is_ident(s: &str) -> bool {
 fn top_view(entries: &[Entry]) -> BTreeMap<String, BTreeSet<String>> {
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for e in entries {
-        out.entry(e.module.clone()).or_default().extend(e.syms.iter().cloned());
+        out.entry(e.module.clone())
+            .or_default()
+            .extend(e.syms.iter().cloned());
     }
     out
 }
@@ -162,7 +170,9 @@ fn top_view(entries: &[Entry]) -> BTreeMap<String, BTreeSet<String>> {
 fn prelude_view(entries: &[Entry]) -> BTreeMap<String, BTreeSet<String>> {
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for e in entries.iter().filter(|e| e.face == "prelude") {
-        out.entry(e.module.clone()).or_default().extend(e.syms.iter().cloned());
+        out.entry(e.module.clone())
+            .or_default()
+            .extend(e.syms.iter().cloned());
     }
     out
 }
@@ -175,7 +185,9 @@ fn stray_literal_value_reexports(src: &str) -> Vec<String> {
     let mut i = 0usize;
     while let Some(rel) = src[i..].find("pub use ") {
         let start = i + rel + "pub use ".len();
-        let Some(end) = src[start..].find(';') else { break };
+        let Some(end) = src[start..].find(';') else {
+            break;
+        };
         let stmt = &src[start..start + end];
         i = start + end + 1;
         if let Some(open) = stmt.find("::{") {
@@ -321,7 +333,8 @@ fn lock_bites_on_planted_defects() {
     let entries = parse_entries(body).expect("夹具主体应可解析");
     let bad = wellformed_violations(&entries);
     assert!(
-        bad.iter().any(|m| m.contains("capability_token: 重复声明 2 次")),
+        bad.iter()
+            .any(|m| m.contains("capability_token: 重复声明 2 次")),
         "重复模块必须被点名: {bad:?}"
     );
     assert!(
@@ -330,8 +343,5 @@ fn lock_bites_on_planted_defects() {
     );
     let err = parse_entries("omni_masks sideways { OmniSparseMasks }")
         .expect_err("非法派发面标记必须解析失败");
-    assert!(
-        err.contains("sideways"),
-        "解析错误必须点名非法标记: {err}"
-    );
+    assert!(err.contains("sideways"), "解析错误必须点名非法标记: {err}");
 }

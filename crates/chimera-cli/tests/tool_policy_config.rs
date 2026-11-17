@@ -20,8 +20,8 @@
 #![forbid(unsafe_code)]
 
 use chimera_cli::composition::{build, tool_runtime_policy};
-use chimera_cli::ChimeraConfig;
 use chimera_cli::config_types::{ToolPolicyAction, ToolPolicyConfig, ToolPolicyRuleDef};
+use chimera_cli::ChimeraConfig;
 use gqep_executor::tool_runtime::{DispatchError, DispatchRequest};
 
 /// 构造带指定策略段的配置（其余段取缺省）。

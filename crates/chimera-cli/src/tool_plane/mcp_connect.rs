@@ -18,13 +18,13 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::config_types::McpServerConfig;
 use mcp_mesh::protocol::{
     ClientConfig, CommandGate, DiscoveredServer, DiscoverySnapshot, McpClient, StdioTransport,
     DEFAULT_REQUEST_TIMEOUT_MS,
 };
 use mcp_mesh::McpError;
 use nexus_contracts::command_validation::CommandPolicy;
-use crate::config_types::McpServerConfig;
 use seccore::os_backend::{ProcessFence, SandboxMode};
 
 /// 生产闸门：把 SecCore [`ProcessFence`] 适配成 `CommandGate`。
