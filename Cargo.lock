@@ -3676,6 +3676,7 @@ dependencies = [
 name = "nexus-telemetry"
 version = "2.29.0-omega"
 dependencies = [
+ "criterion",
  "event-bus",
  "proptest",
  "tokio",
