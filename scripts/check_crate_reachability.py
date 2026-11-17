@@ -67,7 +67,18 @@ def workspace_members(root):
     """根 Cargo.toml 的 workspace.members -> {crate 目录名}。
 
     WHY 以 members 而非 `ls crates/` 为权威源: members 才是 Cargo 真正编译的集合。
+    WHY ws_snapshot 优先(ADR-319 TL-W3b 接线批): ~80 个门禁脚本各自重复解析
+    根 Cargo.toml 是已确诊的多源解析病灶;快照以内容指纹失配无损重建,
+    成员语义与直接解析逐字等价(归一化同为 basename 集)。
+    快照不可用时(导入失败/tmp 不可写/任何解析异常)回退本函数内直接解析——
+    快照是优化非权威,故 fail-safe 而非 fail-closed:任何失败模式都落在
+    与今日完全相同的解析路径上,不会把优化失效升级为门禁失效。
     """
+    try:
+        import ws_snapshot
+        return set(ws_snapshot.load(root).members)
+    except Exception:
+        pass  # 快照路径失效 → 回退直接解析(权威源不变,语义零漂移)
     data = load_toml(os.path.join(root, "Cargo.toml"))
     paths = data.get("workspace", {}).get("members", [])
     return {os.path.basename(str(p).rstrip("/\\")) for p in paths}
