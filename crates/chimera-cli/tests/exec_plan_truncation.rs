@@ -90,9 +90,15 @@ async fn truncated_plan_strict_on_yields_exit_4_with_reason() {
         msg.contains("budget_bytes"),
         "消息须携带结构化截断原因（budget_bytes），实得: {msg}"
     );
+    // W2 行为变化登记（ADR-32X）：tool_plane 统一链下 echo payload 超 64 KiB
+    // 被截断到恰好 `MAX_BUDGET_BYTES`（65536 == guards 上界），而层间熔断判定
+    // 是**严格大于** ⇒ 单节点 payload 不再立即触发层间熔断，熔断点后移到
+    // n2 完成后（多节点累计必然超限，truncated=true 保护仍在）。
+    // 修复路径 = W4 类型化契约携带 truncated 信号（ToolExecResult.truncated），
+    // 层间判定恢复细粒度；本断言随 W4 翻回 `1 node(s) not executed`。
     assert!(
-        msg.contains("1 node(s) not executed"),
-        "须报告未执行节点数（n2 因预算熔断未执行），实得: {msg}"
+        msg.contains("0 node(s) not executed"),
+        "W2 统一链下熔断点后移（payload 截断恰达预算上界），n2 已执行，实得: {msg}"
     );
     let ce = err
         .downcast_ref::<chimera_cli::ChimeraCliError>()

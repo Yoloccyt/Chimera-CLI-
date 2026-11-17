@@ -1,12 +1,14 @@
-//! P1 / ADR-256 集成验收 — `McpToolExecutor` 四环接入接线矩阵（deepdive §6.4）。
+//! 工具面集成验收 — 四环接入接线矩阵（deepdive §6.4 / P1-ADR-256 → W2 修订）。
 //!
-//! 覆盖面：四环前置无旁路（policy/sandbox 对 `mcp.*` 同样生效）、默认档
-//! InProcessClient 零网络、ADR-244 D2 回归（unknown builtin 文案不变）、
-//! 组合根唯一装配反向断言、ADR-253 调和（零第二 JSON-RPC 栈）。
+//! 覆盖面：四环前置无旁路（policy/sandbox 对 `mcp.*` 同样生效）、**W2 fail-loud
+//! 语义**（url 型 server 显式失败，不再伪造 success:true）、未知工具 route 归因、
+//! 组合根唯一装配反向断言（UnifiedExecutorAdapter）、ADR-253 调和
+//! （零第二 JSON-RPC 栈）、R11 W1 声明表穿透 + MCP 并行解封。
 //!
 //! 运行：`cargo test -p chimera-cli --test mcp_tool_executor_wiring -- --test-threads=1`
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test code idiom; E-5 targets production code
+#![allow(deprecated)] // McpToolExecutor/CompositeToolExecutor 于 W2 退役；proptest 段仍直测其固有行为
 #![forbid(unsafe_code)]
 
 use chimera_cli::composition::build;
@@ -48,8 +50,10 @@ fn config_with_deny_rule(pattern: &str) -> ChimeraConfig {
     }
 }
 
-/// 集成 1（deepdive §6.4）：未注册 server → Err 含 `route: mcp server not
-/// registered`。空 config ⇒ registry 空 ⇒ 零 mesh 注册也零网络（InProcessClient）。
+/// 集成 1（deepdive §6.4 / W2 语义）：未注册 server → Err 含 `route: tool not
+/// found`。W2 起 transport delegate = UnifiedExecutorAdapter → tool_plane 注册表
+/// resolve miss ⇒ NotFound 归因（原 2PC 面 `mcp server not registered` 文案随
+/// 模拟路径一并退役）。
 #[tokio::test]
 async fn unregistered_server_fails_with_route_text() {
     let ctx = build(&ChimeraConfig::default()).expect("组合根装配应成功");
@@ -61,20 +65,23 @@ async fn unregistered_server_fails_with_route_text() {
     match &result {
         Err(DispatchError::Transport(msg)) => {
             assert!(
-                msg.contains("route: mcp server not registered: ghost"),
-                "错误文案须携带 route 语义段，实际: {msg}"
+                msg.contains("route: tool not found"),
+                "错误文案须携带 route 语义段（tool_plane 注册表 miss 归因），实际: {msg}"
             );
         }
-        other => panic!("未注册 server 应归因 Transport（内联 route: 文案），实际: {other:?}"),
+        other => panic!("未注册 server 应归因 Transport（adapter route: 文案），实际: {other:?}"),
     }
 }
 
-/// 集成 2：默认档（InProcessClient + TEST-NET-1 注册）→ 协议级 ACK 成功回执，
-/// 全程零 socket。**ADR-256 D8 诚实性**：该成功回执是协议级 ACK（默认档
-/// prepare/commit 恒 ACK），非业务级工具结果——断言回执含 success/transaction_id
-/// 即止，不虚构业务语义。
+/// 集成 2（W2 fail-loud 核心登记）：url 型 server 调用**显式失败**。
+///
+/// 修复前：2PC InProcessClient 模拟面返回编造的 `{success:true}`（调用从未
+/// 到达真实 server——方案病灶 P2 的语义伪造）。W2 后：tool_plane 注册表对
+/// url 型 server 无条目（ADR-235 D2：HTTP 传输未实现，装配期 warn 跳过）⇒
+/// resolve miss ⇒ `route: tool not found`。**假成功 → 显式失败是本批的目的
+/// 而非回归**；url 型全链打通随 ADR-235 D2 HTTP 传输批次恢复。
 #[tokio::test]
-async fn inprocess_default_zero_network() {
+async fn url_server_fails_loud_not_fake_success() {
     let cfg = config_with_mcp_server("docsrv", "http://192.0.2.55:8080");
     let ctx = build(&cfg).expect("组合根装配应成功");
     let req = DispatchRequest {
@@ -83,25 +90,23 @@ async fn inprocess_default_zero_network() {
     };
     let result = ctx.tool_runtime.dispatch(&req).await;
     match &result {
-        Ok(outcome) => {
-            let v: serde_json::Value =
-                serde_json::from_str(&outcome.content_json).expect("回执应为单层 JSON");
-            let payload = outcome.content_json.clone();
+        Err(DispatchError::Transport(msg)) => {
             assert!(
-                v["success"].as_bool().unwrap_or(false),
-                "协议级 ACK: {payload}"
-            );
-            assert!(
-                v["transaction_id"].as_str().is_some(),
-                "回执须携带事务 ID: {payload}"
+                msg.contains("route: tool not found"),
+                "url 型 server 必须 fail-loud（不再伪造 success:true），实际: {msg}"
             );
         }
-        other => panic!("InProcessClient 默认档应协议级 ACK，实际: {other:?}"),
+        Ok(outcome) => panic!(
+            "url 型 server 不得返回模拟成功（病灶 P2 已根除），实得: {:?}",
+            outcome.content_json
+        ),
+        other => panic!("url 型 fail-loud 应归因 Transport，实际: {other:?}"),
     }
 }
 
-/// 集成 3（回归，ADR-244 D2）：非 mcp 未知工具仍走 builtin 失败——复合分派
-/// 不改变既有归因文案。
+/// 集成 3（W2 回归）：非 mcp 未知工具经 adapter → tool_plane 注册表 miss 失败。
+/// 原文案 `unknown builtin tool`（Composite builtin 分派）随模拟面退役；新文案
+/// `route: tool not found` 归因同源（transport 环把 delegate Err 包成 Transport）。
 #[tokio::test]
 async fn unknown_builtin_still_fails() {
     let cfg = config_with_mcp_server("docsrv", "http://192.0.2.55:8080");
@@ -114,8 +119,8 @@ async fn unknown_builtin_still_fails() {
     match &result {
         Err(DispatchError::Transport(msg)) => {
             assert!(
-                msg.contains("unknown builtin tool"),
-                "ADR-244 D2 文案须不变，实际: {msg}"
+                msg.contains("route: tool not found"),
+                "未知工具须携带 route 语义段，实际: {msg}"
             );
         }
         other => panic!("unknown builtin 应归因 Transport，实际: {other:?}"),
@@ -161,12 +166,15 @@ async fn sandbox_still_guards_mcp_args() {
     );
 }
 
-/// 集成 6（反向，组合根唯一装配）：`McpToolExecutor::from_config` /
-/// `CompositeToolExecutor::new` 全 src 命中仅 composition.rs 与自身模块。
+/// 集成 6（反向，组合根唯一装配 / W2 反转）：`UnifiedExecutorAdapter::
+/// from_shared_plane` 全 src 命中仅 composition.rs 与自身模块；旧构造器
+/// （McpToolExecutor::from_config / CompositeToolExecutor::new）**零生产装配**
+/// （W2 模拟面退役——只在 deprecated 定义模块自身与测试内合法出现）。
 #[test]
 fn composition_root_single_assembly() {
     let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let mut hits: Vec<(String, usize)> = Vec::new();
+    let mut adapter_hits: Vec<(String, usize)> = Vec::new();
+    let mut legacy_hits: Vec<(String, usize)> = Vec::new();
     let mut stack = vec![src_root.clone()];
     while let Some(dir) = stack.pop() {
         for entry in std::fs::read_dir(&dir).expect("读 src 目录应成功") {
@@ -175,28 +183,44 @@ fn composition_root_single_assembly() {
                 stack.push(path);
             } else if path.extension().is_some_and(|e| e == "rs") {
                 let text = std::fs::read_to_string(&path).unwrap_or_default();
-                let n = text.matches("McpToolExecutor::from_config").count()
+                let adapter_n = text
+                    .matches("UnifiedExecutorAdapter::from_shared_plane")
+                    .count();
+                let legacy_n = text.matches("McpToolExecutor::from_config").count()
                     + text.matches("CompositeToolExecutor::new").count();
-                if n > 0 {
-                    hits.push((path.display().to_string(), n));
+                if adapter_n > 0 {
+                    adapter_hits.push((path.display().to_string(), adapter_n));
+                }
+                if legacy_n > 0 {
+                    legacy_hits.push((path.display().to_string(), legacy_n));
                 }
             }
         }
     }
-    hits.sort();
-    // 不变量：装配构造只允许出现在组合根（composition.rs，from_config ×1 +
-    // Composite::new ×1）与定义模块自身（模块内单测合法使用自己的构造器）；
-    // 其余任何 src 文件出现即第二装配点 = 门红。
-    let others: Vec<_> = hits
+    // 新装配点唯一：adapter 构造只允许出现在组合根（composition.rs ×1）与
+    // 定义模块自身（unified_adapter.rs，模块内单测合法）；其余 = 第二装配点 = 红。
+    adapter_hits.sort();
+    let others: Vec<_> = adapter_hits
         .iter()
-        .filter(|(p, _)| !p.ends_with("composition.rs") && !p.ends_with("mcp_tool_executor.rs"))
+        .filter(|(p, _)| !p.ends_with("composition.rs") && !p.ends_with("unified_adapter.rs"))
         .collect();
     assert!(others.is_empty(), "发现第二装配点: {others:?}");
-    let comp = hits.iter().find(|(p, _)| p.ends_with("composition.rs"));
+    let comp = adapter_hits
+        .iter()
+        .find(|(p, _)| p.ends_with("composition.rs"));
     match comp {
-        Some((_, n)) => assert_eq!(*n, 2, "组合根装配形态 = from_config ×1 + Composite::new ×1"),
-        None => panic!("组合根未装配 CompositeToolExecutor"),
+        Some((_, n)) => assert_eq!(*n, 1, "组合根装配形态 = from_shared_plane ×1"),
+        None => panic!("组合根未装配 UnifiedExecutorAdapter"),
     }
+    // 旧模拟面构造器：生产 src 零装配（deprecated 定义模块自身除外）
+    let legacy_others: Vec<_> = legacy_hits
+        .iter()
+        .filter(|(p, _)| !p.ends_with("mcp_tool_executor.rs"))
+        .collect();
+    assert!(
+        legacy_others.is_empty(),
+        "旧模拟面构造器不得再出现在生产装配面: {legacy_others:?}"
+    );
 }
 
 /// 集成 7（ADR-253 调和）：零第二 JSON-RPC 栈——模块源无 wire 级 jsonrpc

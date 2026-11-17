@@ -55,11 +55,14 @@ async fn composition_root_wires_tool_runtime() {
     };
     let result = ctx.tool_runtime.dispatch(&req).await;
     match result {
-        // 已接线传输环：未知内置工具如实 fail-closed，归因 Transport
+        // 已接线传输环：未知内置工具如实 fail-closed，归因 Transport。
+        // W2 语义：delegate = UnifiedExecutorAdapter → tool_plane 注册表
+        // resolve miss ⇒ `route: tool not found`（原 Composite builtin
+        // 分派文案 `unknown builtin tool` 随模拟面退役）
         Err(DispatchError::Transport(msg)) => {
             assert!(
-                msg.contains("unknown builtin tool"),
-                "未知工具必须由传输环如实拒绝（unknown builtin tool），实际: {msg}"
+                msg.contains("route: tool not found"),
+                "未知工具必须由传输环如实拒绝（route: tool not found），实际: {msg}"
             );
         }
         // 沙箱层拦截注入形态 —— 也是合法路径，但归因必须是 Sandbox 而非 Transport

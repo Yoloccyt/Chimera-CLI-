@@ -55,7 +55,8 @@ fn tool_list_shows_echo_and_process() {
     );
     let json = parse(&output);
     assert_eq!(json["status"], "ok");
-    assert_eq!(json["data"]["count"], 2);
+    // W1 翻转：fs.read/fs.list 接入 ⇒ 2 → 4（echo/proc/fs.read/fs.list）
+    assert_eq!(json["data"]["count"], 4);
     let names: Vec<&str> = json["data"]["tools"]
         .as_array()
         .expect("tools array")

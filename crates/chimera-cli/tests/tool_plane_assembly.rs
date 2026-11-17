@@ -42,9 +42,11 @@ fn default_assembly_exposes_echo_and_proc_only() {
         .map(|descriptor| descriptor.provider.clone())
         .collect();
 
+    // W1 翻转（L2 方案 §7 W1-c / ADR-233 追加节六翻转条件）：fs 只读工具
+    // 补齐进 tool_plane —— LLM 发布面与计划面共享同一 fs 工具集。
     assert_eq!(
         providers,
-        BTreeSet::from(["echo".to_string(), "proc".to_string()]),
+        BTreeSet::from(["echo".to_string(), "fs".to_string(), "proc".to_string()]),
         "默认装配的工具面组成变了 —— 若这是有意接入新 provider，请连同本测试与 \
          ADR-233 追加节六的翻转条件一起更新，而不是改期望值了事"
     );

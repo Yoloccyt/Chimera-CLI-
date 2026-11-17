@@ -77,6 +77,18 @@ pub(crate) fn in_process_mesh() -> McpMesh {
 }
 
 /// MCP 工具执行器 — 组合根长持的 ephemeral mesh 委托（ADR-256 D2/D4）
+///
+/// # W2 退役（L2 方案 §6.5）
+///
+/// **deprecated**：组合根四环链 transport delegate 已切换为
+/// [`crate::tool_plane::UnifiedExecutorAdapter`]（tool_plane 真 MCP 执行）。
+/// 本类型经 2PC `InProcessClient` 的执行路径**从未到达真实 MCP server**
+/// （模拟 RTT 直接返回 ACK）——保留一个版本窗仅供 `chimera mcp` 诊断命令
+/// 与既有测试引用，物理删除随下版本批次（进 CODE_WIKI §3.12 退役登记）。
+#[deprecated(
+    since = "2.30.0-omega",
+    note = "组合根已切换 UnifiedExecutorAdapter（真 MCP 执行）；本类型 2PC 路径为模拟语义，仅诊断命令保留"
+)]
 pub struct McpToolExecutor {
     /// 进程内 ephemeral mesh（同 mcp.rs 范式；executor 与宿主同生命周期）
     mesh: McpMesh,
@@ -84,6 +96,7 @@ pub struct McpToolExecutor {
     declared_side_effects: Vec<(String, SideEffectDecl)>,
 }
 
+#[allow(deprecated)]
 impl McpToolExecutor {
     /// 组合根唯一构造入口。注册语义逐字复用 commands/mcp.rs:102-137：
     /// url 型注册 + SSRF 拒绝 warn 跳过；stdio 型（无 url）warn 跳过；空 id warn 跳过。
@@ -186,6 +199,7 @@ impl McpToolExecutor {
 }
 
 #[async_trait]
+#[allow(deprecated)]
 impl ToolExecutor for McpToolExecutor {
     async fn execute(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
         // 1. 双格式统一解析（W1：守卫 + 切分一体；L0 parse 恒返回本模块三类
@@ -233,15 +247,25 @@ impl ToolExecutor for McpToolExecutor {
 
 /// 复合执行器 — Builtin 与 Mcp 两个 delegate 的前缀分派组合（ADR-256 D2）
 ///
+/// # W2 退役（L2 方案 §6.5）
+///
+/// **deprecated**：组合根 delegate 已切换为 [`crate::tool_plane::
+/// UnifiedExecutorAdapter`]。保留一个版本窗供既有测试引用，随下版本删除。
 /// WHY 独立类型而非 enum dispatch：两分支生命周期/构造依赖不同。
 /// WHY 能力/路由表只转发 Builtin：mcp 分支 `None`/空集是诚实声明（副作用未知
 /// fail-closed、路由走 fallback），转发 Builtin 保持 ADR-254 D4 路由表语义——
 /// `mcp.*` 不进路由表 ⇒ 恒走 fallback 进 mcp 分支（组合根装配后自动成立）。
+#[deprecated(
+    since = "2.30.0-omega",
+    note = "组合根已切换 UnifiedExecutorAdapter；本类型随 McpToolExecutor 一起退役"
+)]
 pub struct CompositeToolExecutor {
     builtin: crate::exec_plan::BuiltinToolExecutor,
+    #[allow(deprecated)]
     mcp: McpToolExecutor,
 }
 
+#[allow(deprecated)]
 impl CompositeToolExecutor {
     /// 组合根唯一构造入口（builtin 与 mcp 双 delegate 注入；分派规则见
     /// [`ToolExecutor for CompositeToolExecutor`] 实现）。
@@ -252,6 +276,7 @@ impl CompositeToolExecutor {
 }
 
 #[async_trait]
+#[allow(deprecated)]
 impl ToolExecutor for CompositeToolExecutor {
     async fn execute(&self, tool_name: &str, args_json: &str) -> Result<String, String> {
         // W1：双格式前缀判定（`mcp.<s>.<t>` 与 `mcp:<s>/<t>` 均归 MCP 分支）。
@@ -281,6 +306,7 @@ impl ToolExecutor for CompositeToolExecutor {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
 

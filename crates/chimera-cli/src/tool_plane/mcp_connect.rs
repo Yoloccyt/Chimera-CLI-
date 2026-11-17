@@ -87,27 +87,48 @@ impl McpPlane {
 }
 
 /// 对 `enabled = true` 的 server 建连并发现；其余一律不动。
+///
+/// WHY 发现跑在独立 OS 线程（W2）：本函数是同步签名，而 W2 起组合根 `build()`
+/// 在四环链装配前预触发共享 tool_plane（[W2-b]）——`build()` 的既有调用方
+/// 可能已身处 tokio runtime（如协议宿主/测试的 `#[tokio::test]`），私有
+/// runtime 的 `block_on` 会触发「Cannot start a runtime from within a
+/// runtime」panic。独立线程内建 runtime + block_on 对**任何调用方上下文**
+/// 都安全；装配是一次性动作，线程 spawn 开销（≈293µs，ADR-275 D2 读数）
+/// 相对冷启动发现（秒级）可忽略。会话 runtime 由 [`McpPlane::_runtime`]
+/// 保活，与发现 runtime 同体——drop 即全会话终止（既有语义不变）。
 #[must_use]
 pub fn assemble(servers: &[McpServerConfig], gate: Arc<dyn CommandGate>) -> McpPlane {
     let enabled: Vec<McpServerConfig> = servers.iter().filter(|s| s.enabled).cloned().collect();
     if enabled.is_empty() {
         return McpPlane::empty();
     }
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
-        .enable_all()
-        .build()
-    {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            tracing::warn!(%error, "MCP runtime unavailable; skipping discovery (startup continues)");
-            return McpPlane::empty();
+    // 发现与会话共用一个 runtime（spawn 的 MCP 客户端任务跑在它上面）；
+    // join handle 失败（线程 panic）按 D6 fail-closed：跳过发现不拖住启动。
+    let discovery = std::thread::spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                tracing::warn!(%error, "MCP runtime unavailable; skipping discovery (startup continues)");
+                return None;
+            }
+        };
+        let snapshot = runtime.block_on(discover_all(enabled, gate));
+        Some((snapshot, runtime))
+    });
+    match discovery.join() {
+        Ok(Some((snapshot, runtime))) => McpPlane {
+            snapshot: Arc::new(snapshot),
+            _runtime: Some(runtime),
+        },
+        Ok(None) => McpPlane::empty(),
+        Err(_) => {
+            tracing::warn!("MCP discovery thread panicked; skipping discovery (startup continues)");
+            McpPlane::empty()
         }
-    };
-    let snapshot = runtime.block_on(discover_all(enabled, gate));
-    McpPlane {
-        snapshot: Arc::new(snapshot),
-        _runtime: Some(runtime),
     }
 }
 
