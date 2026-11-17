@@ -1,24 +1,31 @@
-//! ADR-234 D4 —— `ToolDescriptor::max_concurrency` **声明未强制**的阳性对照锁
+//! ADR-234 D4 —— `ToolDescriptor::max_concurrency` **声明生效**的翻转锁
 //!
 //! 对应架构层：L7 Execution（gqep-executor）
 //! 上游决议：`docs/architecture/ADR-234-perf-parallelism-verification-limits.md` D4
+//! 翻转裁决：L2 工具层重构方案 §7 W5a（2026-11-17 批）+ ADR-32X —— per-provider
+//! 额度 = **min(config 值, descriptor 声明)**（`scheduler.rs::provider_semaphore`）。
 //!
-//! # 这条测试证明什么
-//! 描述符上的 `max_concurrency` 没有任何读取方：per-provider 的并发额度实际来自
-//! `ToolRuntimeConfig::max_provider_inflight`（见 `scheduler.rs` 的
-//! `provider_semaphore`，它只用 provider id 作键、用 config 值作容量）。
-//! 于是"文档里有这个字段"与"这个字段生效"是两件事，本仓此前只有前者。
+//! # 文件名说明
 //!
-//! # 为什么是"对照"而不是"断言字段无效"
-//! 两个 provider 只差声明值（1 与 8）。若字段被读取，两者峰值必然不同；
-//! 实测**相同**才证明它没被读取。再加一条 `峰值 == config 额度` 的断言，
-//! 把"两个峰值恰好都等于 1"这种巧合（可能来自车道限流、也可能来自
-//! provider 自身没并发）一并排除 —— 缺了这条，等值断言是恒真的空转。
+//! 文件名保留历史锁名 `not_enforced`（重命名需同步 bench/gate 引用面，随
+//! W7 批处理）；**内容已是生效断言**（语义与文件名相反是刻意的——文件名
+//! 记录的是「曾经锁过的状态」，doc 注释记录现状）。
 //!
-//! # 将来真要启用这个字段时
-//! 本测试会红。那是**预期的**：启用属收紧（实测声明值 proc=2 < 现额度 8，
-//! 会直接压低进程面并发），必须由治理裁决显式删除/改写本文件，
-//! 而不是让它静默腐烂成一个总在绿的装饰。
+//! # 本文件历史（「未实现」对照 → 「生效」翻转）
+//!
+//! 本文件原名 `tool_descriptor_concurrency_not_enforced`：证明声明值**无读取方**
+//! （两个声明值差 16 倍的 provider 峰值相同且等于 config 额度）。W5a 接通后该
+//! 「未实现」状态不复存在——按原文件 §将来真要启用时的裁决（「必须由治理裁决
+//! 显式删除/改写本文件」）改写为生效断言；这是**治理裁决驱动的状态翻转**，
+//! 不是删测试。
+//!
+//! # 生效语义的三条判据
+//!
+//! 1. **字段被读取**：声明值差倍数的两 provider 峰值必然不同（旧对照的等值断言
+//!    反转）；
+//! 2. **声明收紧**：decl=1 < config=4 ⇒ 峰值恰为 1（声明生效）；
+//! 3. **config 兜底**：decl=8 > config=4 ⇒ 峰值恰为 4（min 的 config 侧归因，
+//!    向后兼容）。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)] // test code idiom; E-5 targets production code
 #![forbid(unsafe_code)]
@@ -35,11 +42,11 @@ use gqep_executor::tool_plane::{
 use nexus_contracts::tool_plan::SideEffectDecl;
 use tokio_util::sync::CancellationToken;
 
-/// per-provider 额度（config 侧），也是本测试预期的真实峰值
+/// per-provider 额度（config 侧）
 const PROVIDER_BOUND: usize = 4;
 /// 每个 provider 投多少条（须 > PROVIDER_BOUND，否则限流不发生，峰值等于条数）
 const PER_PROVIDER_CALLS: usize = 6;
-/// 车道额度取大值，确保"峰值 = PROVIDER_BOUND"只可能来自 provider 额度而非车道
+/// 车道额度取大值，确保峰值只可能来自 provider 额度而非车道
 const LANE_BOUND: usize = 32;
 
 /// 记录自身在飞峰值的 provider；两个实例之间**只有声明的 `max_concurrency` 不同**
@@ -91,7 +98,7 @@ impl ToolProvider for DeclaringProvider {
         vec![ToolDescriptor {
             name: format!("{}.op", self.id),
             provider: self.id.to_string(),
-            description: "declares a max_concurrency nobody reads".to_string(),
+            description: "declares an enforced max_concurrency (W5a)".to_string(),
             side_effect: SideEffectDecl::ReadOnly,
             timeout_ms: 5_000,
             // 本测试唯一的自变量：1 与 PROVIDER_BOUND*2
@@ -141,9 +148,10 @@ fn runtime(providers: Vec<Arc<DeclaringProvider>>) -> Arc<ToolRuntime> {
     ))
 }
 
-/// 声明 1 与声明 8 的两个 provider，在飞峰值必须**相同且等于 config 额度**。
+/// W5a 生效判据：decl=1 与 decl=8（> config）的两 provider 峰值分别为
+/// min(config, decl) —— 1 与 4。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn declared_max_concurrency_is_not_read() {
+async fn declared_max_concurrency_is_enforced() {
     let tight = Arc::new(DeclaringProvider::new("p-tight", 1));
     let loose = Arc::new(DeclaringProvider::new("p-loose", PROVIDER_BOUND * 2));
     let runtime = runtime(vec![Arc::clone(&tight), Arc::clone(&loose)]);
@@ -170,24 +178,21 @@ async fn declared_max_concurrency_is_not_read() {
     let tight_peak = tight.peak();
     let loose_peak = loose.peak();
 
-    // 判据 ①（非空转）：峰值必须真的达到过并发，否则下面的等值断言恒真
+    // 判据 ①（非空转）：峰值必须真的达到过并发，否则后面的精确断言恒真
     assert!(
-        tight_peak > 1 && loose_peak > 1,
-        "阳性对照失效：峰值 {tight_peak}/{loose_peak} 未超过 1，说明根本没有并发，\n\
-         '两者相等'就只是'两边都被按住'的巧合，本文件将永远绿而证明不了任何东西"
+        tight_peak >= 1 && loose_peak > 1,
+        "阳性对照失效：峰值 {tight_peak}/{loose_peak} 未达到预期并发形态"
     );
-    // 判据 ②（字段未被读取）：声明值差 16 倍，峰值必须相同
+    // 判据 ②（字段被读取）：声明收紧生效——decl=1 ⇒ 峰值恰为 1
     assert_eq!(
-        tight_peak,
+        tight_peak, 1,
+        "decl=1 < config={PROVIDER_BOUND} ⇒ 声明必须收紧（实测 {tight_peak}）"
+    );
+    // 判据 ③（config 兜底）：decl=8 > config ⇒ 峰值恰为 config 额度（min 归因）
+    assert_eq!(
         loose_peak,
-        "声明 max_concurrency=1 与 ={} 的峰值必须相同（实测 {tight_peak} vs {loose_peak}）；\n\
-         一旦不同，说明这个字段开始被消费 —— 那是收紧，要重走 ADR-234 D4 的裁决",
+        PROVIDER_BOUND,
+        "decl={} > config={PROVIDER_BOUND} ⇒ min 取 config（实测 {loose_peak}）",
         PROVIDER_BOUND * 2
-    );
-    // 判据 ③（归因）：相等的那个值必须来自 config 额度，而不是别处的挤压
-    assert_eq!(
-        tight_peak, PROVIDER_BOUND,
-        "峰值应恰为 ToolRuntimeConfig::max_provider_inflight={PROVIDER_BOUND}\
-         （实测 {tight_peak}）；小于它说明瓶颈在别处（车道/取消），本对照的归因不成立"
     );
 }

@@ -1,3 +1,6 @@
+//! DEPRECATED(W6 / L2 工具层重构方案 §7 W6):零消费者的最小骨架(WI-22 ENOSPC 重建)——
+//! 真实发现面由 protocol/discovery.rs 的 DiscoverySnapshot 承担;随下版本物理删除
+//! (进 CODE_WIKI §3.12 退役登记)。
 //! MCP 客户端闭环 — 发现(Discovery) + Schema 缓存 + 路由注册(WI-22 / ADR-150)
 //!
 //! 对应任务:WI-22 MCP client_v2 客户端闭环(发现 + schema 缓存 + 路由注册,ADR-150)

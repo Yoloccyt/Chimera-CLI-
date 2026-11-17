@@ -94,7 +94,7 @@ impl BoundedToolScheduler {
         }
     }
 
-    fn provider_semaphore(&self, provider: &str) -> Arc<Semaphore> {
+    fn provider_semaphore(&self, provider: &str, declared: Option<usize>) -> Arc<Semaphore> {
         let mut map = self
             .per_provider
             .lock()
@@ -108,9 +108,20 @@ impl BoundedToolScheduler {
         if let Some(existing) = map.get(provider) {
             return Arc::clone(existing);
         }
+        // W5a（L2 方案 §5.5 / §7 W5a）：descriptor 声明值生效——per-provider
+        // 额度 = min(config 值, descriptor 声明)；无声明取 config 值（向后兼容）。
+        // ADR-234 D4 治理裁决 + `tool_descriptor_concurrency_not_enforced`
+        // 对照测试同批翻转（「未实现」状态不复存在）。
+        // 已知偏差（登记）：同一 provider 的多个 descriptor 声明值不同时，
+        // 首个 acquire 的调用者决定容量——现实分布（echo=8/mcp=4/proc=2）内
+        // 同 provider 声明一致，跨值混布出现时升级为 provider 级聚合。
+        let capacity = declared
+            .map(|d| self.max_provider_inflight.min(d.max(1)))
+            .unwrap_or(self.max_provider_inflight)
+            .max(1);
         Arc::clone(
             map.entry(provider.to_string())
-                .or_insert_with(|| Arc::new(Semaphore::new(self.max_provider_inflight))),
+                .or_insert_with(|| Arc::new(Semaphore::new(capacity))),
         )
     }
 
@@ -143,7 +154,9 @@ impl ToolScheduler for BoundedToolScheduler {
         };
 
         let lane = self.lane(inv.priority);
-        let provider = self.provider_semaphore(&desc.provider);
+        // W5a：descriptor 声明值生效（0 = 无声明，取 config 值）
+        let declared_cap = (desc.max_concurrency > 0).then_some(desc.max_concurrency);
+        let provider = self.provider_semaphore(&desc.provider, declared_cap);
 
         // WHY 取序是 provider 先、lane 后（`ADR-234` A2-1 / `ADR-233` 追加节九 D3）：
         // 车道是**全局**槽位，provider 槽位只约束它自己那个 provider。反过来取

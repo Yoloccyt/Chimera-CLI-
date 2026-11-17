@@ -46,6 +46,11 @@ impl SideEffect {
     /// 从工具名推断分类 — 名称前缀约定:读类以 `read:` / `query:` / `search:` 开头
     /// （接入方可按注册表覆盖;未识别默认 Write=保守,WI-07 同口径）
     #[must_use]
+    /// 真值源登记(W6 / L2 方案 §2.6 D6 修正):本前缀表是**活代码**——
+    /// streaming 派发面自用(下方 dispatch 流);PlanRunner 路径的真值源已
+    /// 上移执行器 capability(W3 收敛 L0 resolver),但 streaming 面独立存在。
+    /// 退役前置 = streaming 派发面的真值源同款上移(独立批,行为面 = 流式
+    /// 读写分类),本处只登记不弃用(弃用活代码=自相矛盾)。
     pub fn classify(name: &str) -> Self {
         let lower = name.to_ascii_lowercase();
         if lower.starts_with("read:") || lower.starts_with("query:") || lower.starts_with("search:")
