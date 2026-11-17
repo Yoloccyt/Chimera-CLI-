@@ -99,6 +99,9 @@ dist/
 !docs/reports/agent-runtime-deep-optimization-2026-11-10.md
 # 例外：全链路性能与资源效率四阶段工单集（阶段0-3 + 契约变更清单；T0~T5 的证据锚点与 baseline 实测需入库存证）
 !docs/reports/agent-runtime-workorders-2026-11-11.md
+# 例外：第二轮工具链+L1 批次收口报告（ADR-318 中段载体；T0/W5/W6/W4 批的
+# 验证证据、V3 慢测试鉴别实验与磁盘事件处置需入库存证）
+!docs/reports/toolchain-l1-round2-closure-2026-11-16.md
 # 例外：R8 上下文/记忆层执行报告（ADR-288/289 决策链的波次结算与量化收益证据）
 !docs/reports/toolchain-r8-context-memory-execution-2026-11-12.md
 # 例外：R9 HCW v3 蓝图执行报告（ADR-291 决策链 + 双会话同树事件裁决与无冲突子集证据）
