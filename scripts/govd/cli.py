@@ -9,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,28 @@ ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "scripts" / "gate_manifest.toml"
 POLICY = ROOT / "scripts" / "govd" / "policy.toml"
 TASKS = ROOT / "scripts" / "govd" / "tasks.toml"
+
+
+def resolve_jobs(explicit_jobs, profile, root=None):
+    """并发度决策：返回 (jobs, 说明)。
+
+    显式 `--jobs` 压倒一切（用户明确要 8 就给 8，不做资源压制）；缺省时取
+    profile 声明值，并让本机资源上限**向下**压制它（见 policy.derive_jobs）。
+
+    WHY 显式值不压制：资源探测是"替我决定"的兜底，不是"否决我的指令"的闸门。
+    显式值一旦被压制，`--jobs` 就成了装饰旗标 —— 与 policy.toml 的
+    `jobs = 4` 一样，"写了没人读"是最容易被忽略的一类假绿。
+    """
+    if explicit_jobs and explicit_jobs > 0:
+        return int(explicit_jobs), "explicit"
+    res = pol.probe_resources(root if root is not None else ROOT)
+    jobs = pol.derive_jobs(profile.jobs, res.cores, res.mem_gb, res.disk_free_gb)
+    note = "profile=%d" % profile.jobs
+    if jobs != profile.jobs:
+        note += (" capped by host resources (cores=%d mem=%.1fGiB disk_free=%.1fGiB)"
+                 % (res.cores, res.mem_gb, res.disk_free_gb))
+    return jobs, note
+
 
 
 def _git(args, default=""):
@@ -83,6 +106,8 @@ def cmd_list(args):
         print("[UNDECIDABLE] %s" % role_err)
         return 2
     profile = policy.profiles[args.profile]
+    jobs, jobs_note = resolve_jobs(args.jobs, profile)
+    print("[JOBS] profile=" + args.profile + " jobs=" + str(jobs) + " (" + jobs_note + ")")
     ordered, skipped = planner.plan(tasks, profile, args.allow_mutating)
     try:
         ordered, shard_note = planner.apply_shard(ordered, args.shard)
@@ -270,6 +295,18 @@ def cmd_run(args):
     order = {t.id: i for i, t in enumerate(tasks)}
 
     def execute(task):
+        # 真红即停（fail-fast）：第一个 mismatch 出现后，尚未开始的门不再启动。
+        #
+        # WHY 取消而不是继续跑完：真红 = 仓库已经坏了，剩下的门不会改变这个结论，
+        # 继续跑只是消耗机器时间；而且真红之后的门往往也是被同一处缺陷带崩的，
+        # 让它们各写一份 tmp/ 证据只会制造噪声。
+        #
+        # WHY 已启动的门绝不 kill：它们可能正在往 tmp/ 里写证据，杀掉会留下半写的
+        # 文件（"门没跑完"被读成"门跑完了但红了"）。已启动的门一律让它自然结束，
+        # 它的判决照常进台账 —— 半写文件比晚一点结束贵得多。
+        if stop.is_set():
+            return Attempt(task.id, 0, Verdict.CANCELLED, None, 0.0,
+                           "cancelled:fail-fast", cmd_digest=task.cmd_digest())
         if task.kind == "heavy" and task.disk_gb:
             # WHY 磁盘余额在执行点现取，而不是循环外采样一次：并发下越靠后的门用的
             # 是越旧的读数，于是 UNKNOWN（"这道门真的不可判"）会退化成"来不及看"。
@@ -287,7 +324,14 @@ def cmd_run(args):
             return Attempt(task.id, 0, Verdict.OK, 0, 0.0,
                            "reused-ok from " + hit[0], cmd_digest=task.cmd_digest(),
                            reused=True, reused_from=hit[0])
-        return _execute_one(task, policy, bash_path, journal.logs, 1)
+        attempt = _execute_one(task, policy, bash_path, journal.logs, 1)
+        # 只有 mismatch 停表：env-fail / unknown 都不停（见 test_govd 的三态传播断言）。
+        # WHY 只有真红停：env-fail 是环境问题（另一个门可能好着），unknown 是资源不足
+        # （磁盘门槛），两者都不构成"仓库坏了"的结论，继续跑才能把"有多少门受同一处
+        # 环境拖累"说清楚。mismatch 才是真红。
+        if attempt.verdict is Verdict.MISMATCH:
+            stop.set()
+        return attempt
 
     def record(att):
         # 逐条落盘，不是攒齐再写：Ctrl-C 之后 events.jsonl 仍能证明哪些门真的跑过。
@@ -309,11 +353,13 @@ def cmd_run(args):
             print("  " + task.id + " " + prior[task.id] + " (resumed, not re-run)")
     futs = []
     cancelled = False
-    # `--jobs` 显式优先；未指定（默认 0）时落到 profile 的 jobs。
-    # WHY 这里必须有兜底：policy.toml 声明的 pr=4 / nightly=2 / release=1 / local=1
-    # 在全仓没有任何读取方（唯一消费者曾且只有 `args.jobs`），于是"并发档位"是死配置，
-    # 验证面恒串行 —— 静默忽略型解析器：传了不认，也不报错。
-    jobs = args.jobs if args.jobs > 0 else profile.jobs
+    # 并发度决策：显式 `--jobs` > profile 声明值经资源压制（见 resolve_jobs）。
+    jobs, jobs_note = resolve_jobs(args.jobs, profile)
+    print("[JOBS] profile=" + args.profile + " jobs=" + str(jobs) + " (" + jobs_note + ")")
+    # 真红即停（fail-fast）：第一个 mismatch 出现后，尚未开始的门不再启动。
+    # WHY threading.Event 而不是共享变量：并发下多线程需要原子可见性；Event 是 stdlib
+    # 提供的最小同步原语，比 `bool` 加锁便宜，比 `list.append` 语义明确。
+    stop = threading.Event()
     # ADR-315 W-T1: resource mutual exclusion.
     #
     # WHY this is not `needs`: the manifest header records the measured fact

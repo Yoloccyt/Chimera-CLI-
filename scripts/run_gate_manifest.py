@@ -11,6 +11,7 @@
     py -3 scripts/run_gate_manifest.py              # 只跑 light（默认）
     py -3 scripts/run_gate_manifest.py --with-heavy # 连 heavy 一起（受磁盘门槛约束）
     py -3 scripts/run_gate_manifest.py --list       # 只列清单不执行
+    py -3 scripts/run_gate_manifest.py --jobs 4     # 显式并发度（缺省交给 profile 与资源探测）
 退出码：0 全部符合期望 / 1 有不符合 / 2 清单失真或资源不足（不可判定）
 """
 import hashlib
@@ -188,9 +189,10 @@ def classify(rc, expect, log_text, cmd):
 KNOWN_FLAGS = ("--selftest", "--list", "--with-heavy")
 ENGINES = ("legacy", "govd")
 USAGE = ("用法: py -3 scripts/run_gate_manifest.py [--list] [--selftest] [--with-heavy]\n"
-         "                              [--engine legacy|govd]\n"
+         "                              [--engine legacy|govd] [--jobs N]\n"
          "  无参数 = 跑全部 light 判据（heavy 需显式 --with-heavy）\n"
          "  --engine govd = 默认：同一清单交给 scripts.govd 执行（--engine legacy 保留回滚面）\n"
+         "  --jobs N = 显式并发度；缺省（0）由 govd 按 profile 声明值 + 本机资源上限决定\n"
          "  ⚠ 未知参数不再静默降级为「跑全部」，而是退 2（不可判定）")
 
 
@@ -223,9 +225,35 @@ def unknown_flags(argv):
             continue
         if arg.startswith("--engine="):
             continue
+        if arg == "--jobs":
+            skip = True
+            continue
+        if arg.startswith("--jobs="):
+            continue
         if arg not in KNOWN_FLAGS:
             out.append(arg)
     return out
+
+
+def jobs_of(argv):
+    """解析 --jobs N（或 --jobs=N），返回 (int, error)。缺省 0 = 交给 profile/资源探测。
+
+    显式 --jobs 1 必须仍然可用，作为安全回退态（配置级回滚路径）。
+    """
+    for i, arg in enumerate(argv):
+        if arg == "--jobs":
+            if i + 1 >= len(argv):
+                return None, "--jobs 需要一个整数参数"
+            try:
+                return int(argv[i + 1]), None
+            except ValueError:
+                return None, "--jobs 必须是整数"
+        if arg.startswith("--jobs="):
+            try:
+                return int(arg.split("=", 1)[1]), None
+            except ValueError:
+                return None, "--jobs 必须是整数"
+    return 0, None
 
 
 def is_launcher_absent(err: OSError) -> bool:
@@ -294,12 +322,31 @@ def mode_selftest():
         ("flags-positional", ["gate"], 1),
         ("flags-engine-value", ["--engine", "govd"], 0),
         ("flags-engine-equals", ["--engine=govd"], 0),
+        ("flags-jobs-value", ["--jobs", "4"], 0),
+        ("flags-jobs-equals", ["--jobs=4"], 0),
+        ("flags-jobs-one-rollback", ["--jobs", "1"], 0),
     ]
     for name, argv_in, want_unknown in flag_cases:
         got = len(unknown_flags(argv_in))
         ok = got == want_unknown
         fails += 0 if ok else 1
         print(f"  [{'PASS' if ok else 'FAIL'}] selftest-{name} (want_unknown={want_unknown} got={got})")
+    # --jobs 的取值本身也要有夹具：拼错的旗标不是通过，也不是红，是不可判定。
+    jobs_cases = [
+        ("jobs-default-unspecified", [], 0, False),
+        ("jobs-explicit", ["--jobs", "4"], 4, False),
+        ("jobs-equals-form", ["--jobs=8"], 8, False),
+        ("jobs-rollback-one", ["--jobs", "1"], 1, False),
+        ("jobs-missing-value", ["--jobs"], None, True),
+        ("jobs-not-a-number", ["--jobs", "many"], None, True),
+        ("jobs-negative", ["--jobs", "-2"], -2, False),
+    ]
+    for name, argv_in, want_jobs, want_err in jobs_cases:
+        got_jobs, got_err = jobs_of(argv_in)
+        ok = (got_jobs == want_jobs) and bool(got_err) == want_err
+        fails += 0 if ok else 1
+        print(f"  [{'PASS' if ok else 'FAIL'}] selftest-{name} "
+              f"(want_jobs={want_jobs} got={got_jobs} err={got_err!r})")
     # --engine 的值本身也要有夹具：未知引擎必须退 2，不得悄悄回落到 legacy。
     engine_cases = [
         ("engine-default", [], "govd", False),
@@ -335,7 +382,8 @@ def mode_selftest():
         ok = got == want
         fails += 0 if ok else 1
         print(f"  [{'PASS' if ok else 'FAIL'}] selftest-{name} (want={want} got={got})")
-    total = (len(cases) + len(launcher_cases) + len(flag_cases) + len(engine_cases) + len(verdict_cases))
+    total = (len(cases) + len(launcher_cases) + len(flag_cases) + len(jobs_cases)
+             + len(engine_cases) + len(verdict_cases))
     print(f"  RESULT: {'FAIL' if fails else 'PASS'} ({fails}/{total} assertion(s) violated)")
     return 1 if fails else 0
 
@@ -409,13 +457,13 @@ def usable_bash():
     return None, "; ".join(rejected) or "无可用 bash"
 
 
-def run_govd(list_only, with_heavy):
+def run_govd(list_only, with_heavy, jobs=0):
     """Thin adapter: same gate_manifest.toml, govd executor.
 
-    The adapter deliberately runs serially (`--jobs 1`) so that the parity run
-    compares like with like; parallelism is a govd flag the caller can opt into
-    directly via `python -m scripts.govd`. `--engine legacy` remains available
-    as the rollback surface for one version.
+    并发度不再由本适配器钉死为 1：`--jobs` 缺省（0）时交给 govd 按 profile 声明值
+    与本机资源上限决定（见 govd.cli.resolve_jobs）；显式 `--jobs N` 才覆盖，
+    其中 `--jobs 1` 仍是安全回退态（配置级回滚路径）。
+    `--engine legacy` 保留为回滚面。
     """
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
@@ -424,8 +472,8 @@ def run_govd(list_only, with_heavy):
 
     profile = "nightly" if with_heavy else "pr"
     argv = ["list" if list_only else "run", "--profile", profile]
-    if not list_only:
-        argv += ["--jobs", "1"]
+    if not list_only and jobs > 0:
+        argv += ["--jobs", str(jobs)]
     return govd_cli.main(argv)
 
 def main(argv):
@@ -444,12 +492,21 @@ def main(argv):
         print("[UNDECIDABLE] --engine 只接受 legacy|govd（收到 %r）——未执行任何判据"
               % (engine if engine else engine_err))
         return 2
+    jobs, jobs_err = jobs_of(argv)
+    if jobs_err:
+        print(USAGE)
+        print("[UNDECIDABLE] %s——未执行任何判据" % jobs_err)
+        return 2
+    if jobs < 0:
+        print(USAGE)
+        print("[UNDECIDABLE] --jobs 必须是非负整数（收到 %d）——未执行任何判据" % jobs)
+        return 2
     if "--selftest" in argv:
         return mode_selftest()
     list_only = "--list" in argv
     with_heavy = "--with-heavy" in argv
     if engine == "govd":
-        return run_govd(list_only, with_heavy)
+        return run_govd(list_only, with_heavy, jobs)
     try:
         gates, problems = load()
     except Exception as e:

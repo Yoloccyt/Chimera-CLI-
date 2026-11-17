@@ -39,19 +39,29 @@ use tracing::warn;
 use crate::bus::EventBus;
 use crate::causal::{CausalRelation, VectorClock};
 use crate::error::EventBusError;
-use crate::shadow_diff::event_fingerprint;
+use crate::shard::fnv1a;
 use crate::types::NexusEvent;
+
+/// 事件指纹 — 全量 Debug 哈希（同实例双路径观测确定性成立）
+///
+/// L1-B-2 波次从 `shadow_diff` 迁入本模块：该纯函数是归因链上唯一存活的
+/// 消费点（`spawn_attribution_tap` 每事件取指纹），而 `shadow_diff` 模块其余
+/// 公开类型零生产装配，已随本波次物理退役。
+#[must_use]
+pub fn event_fingerprint(event: &NexusEvent) -> u64 {
+    fnv1a(format!("{event:?}").as_bytes())
+}
 
 /// 归因时间窗（毫秒;Ch12 W23 原文:5s 窗口）
 pub const ATTRIBUTION_WINDOW_MS: u64 = 5_000;
 
-/// 台账默认容量（环形上限;与 shadow_diff MAX_ENTRIES 同量级）
+/// 台账默认容量（环形上限;与已退役的 shadow_diff 环形上限同量级）
 pub const DEFAULT_ATTRIBUTION_CAPACITY: usize = 4_096;
 
 /// 单条归因记录 — 指纹 + 因果时钟 + 墙钟时间
 #[derive(Debug, Clone)]
 struct AttributionRecord {
-    /// 事件指纹（shadow_diff::event_fingerprint 输出）
+    /// 事件指纹（`event_fingerprint` 输出）
     fingerprint: u64,
     /// 事件因果时钟（发布方随事件记录）
     clock: VectorClock,

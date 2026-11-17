@@ -37,6 +37,9 @@
 //! | `membrane`（`MembraneFilter`） | 约 1k 行 | **已退役**：仅本 crate bench 消费（`publish_membrane` 方法对零生产调用方） |
 //! | `pattern_index`（`PatternIndex`） | 约 0.3k 行 | **已退役**：仅本 crate bench 消费 |
 //! | `dynamic_registry` | 404 行 | 引用方：nexus-hook/event_bridge.rs（轨二注册，P4-T3）+ chimera-cli 组合根生产构造点（ADR-258，2026-11-08 注记修正——原「零引用」为 nexus-hook 接线前旧态，与现势矛盾） |
+//! | `telemetry`（OTel 风格轻量遥测） | 约 0.2k 行 | **已退役**（L1-B-1 波次，2026-11-16）：模块内四个公开类型（Span 生命周期对、延迟直方图、状态枚举）全库生产零消费，仅本 crate 单测引用；ADR-174 早已记「埋点覆盖 = 0」，模块本体已物理删除（git 历史可恢复） |
+//! | `shadow_diff`（影子双跑 diff 采集） | 约 0.5k 行 | **已退役**（L1-B-2 波次，2026-11-16）：模块内四个公开类型（双跑采集器、跨实例比对、规范化指纹、≥7 天台账）零生产消费；唯一存活的事件指纹纯函数已迁入 [`attribution`]，模块本体物理删除 |
+//! | `formal`（事件因果一致性形式化验证） | 约 0.25k 行 | **已退役**（L1-B-3 波次，2026-11-16）：模块内唯一公开类型（因果一致性验证器）生产 crate 零消费；类型迁入根 E2E 测试夹具（`tests/e2e/causal_consistency_support.rs`），生产 crate 本体物理删除 |
 //!
 //! # 三个“看似同族、实则已接线”的模块（不得一并归入上表）
 //!
@@ -45,15 +48,17 @@
 //! - [`credit_flow`]：`EventBus` 的流控本体——`credit_flow: Arc<CreditFlow>` 是总线字段
 //!   （:329），三处构造点（:567/:596/:629），发送路径上 `try_acquire(1)`/`release(1)` 实际
 //!   生效（:443/:464/:900），并由 `shard` worker 持有与批量归还（`shard.rs:248/254/429`）。
-//! - [`causal`] / [`shadow_diff`]：均被**已接线**的 [`attribution`] 引用（`attribution.rs:40` 取
-//!   `causal::{CausalRelation, VectorClock}`、`:42` 取 `shadow_diff::event_fingerprint`，且 `VectorClock`
-//!   在 `:57/:114/:315` 真实构造），而 `spawn_attribution_tap` 经组合根 `experience_loop.rs` 装配
-//!   ⇒ **这两个模块处在已生效的归因链内，不是死码**。
-//!   粒度订正（本轮自查）：“模块被用”不等于“模块里每个公开类型都被构造”——`CausalConsistencyChecker`
-//!   与 `ShadowDiffRecorder` 本身仍无任何生产构造点。判“零装配”必须按**类型粒度**，否则就会把
-//!   已用部分与未用部分同批抹掉（这正是本批在上游清单上抓到的错的镜像面）。
+//! - [`causal`]：被**已接线**的 [`attribution`] 引用（取 `causal::{CausalRelation, VectorClock}`，
+//!   且 `VectorClock` 真实构造），而 `spawn_attribution_tap` 经组合根 `experience_loop.rs` 装配
+//!   ⇒ **该模块处在已生效的归因链内，不是死码**。
+//! - `shadow_diff`：原先同样被 [`attribution`] 引用，但唯一存活的只是纯函数 `event_fingerprint`
+//!   ——该函数已于 L1-B-2 波次迁入 [`attribution`]，模块本体随之退役（见上表）。
 //!
-//! 因此本 crate 的“撤主张”面是上表五个（合计约 2.7k 行），而非八个。数字校正已入
+//!   粒度订正（2026-10 自查，后由 L1-B 波次落实）：“模块被用”不等于“模块里每个公开类型都被构造”——
+//!   三个被误列为“已接线”的模块里，其验证器与采集器类型本身无任何生产构造点。判“零装配”必须按
+//!   **类型粒度**，否则就会把已用部分与未用部分同批抹掉（这正是本批在上游清单上抓到的错的镜像面）。
+//!
+//! 因此本 crate 的“撤主张”面是上表八个（合计约 3.4k 行），而非八个模块。数字校正已入
 //! v3.5 总账 §7.2 漂移表；拿“八个”做后续工作量估算会高估约 1.5k 行可删面。
 //!
 //! 已被 crate **外部**真实装配的只有 [`attribution`]（`spawn_attribution_tap`）与
@@ -132,14 +137,6 @@ pub mod error;
 /// 承载 ExperienceCardBus（broadcast + mpsc 分级投递 + task/node/factor/error
 /// 四索引 + 全局统计），使经验卡片成为 Event Bus 一级公民。
 pub mod experience_card_bus;
-/// FormalVerifier M1 — 事件因果一致性形式化验证(P7-T4,ADR-047 Property #4)
-///
-/// 验证 EventMetadata 序列(event_id 时序/同 source 时间戳/唯一性),
-/// 与 107+ 事件变体载荷解耦;类型复用 `nexus_contracts::formal_props`(L0)。
-///
-/// 状态(ADR-181):VERIFIER-EVIDENCE-ONLY —— 仅供形式化验证证据链
-/// (FormalVerifierGate 7 验证器之一,经根 E2E 消费),非生产运行时路径;不退役。
-pub mod formal;
 pub mod logging;
 // NOTE(B5/ADR-312): membrane / pattern_index / segment_per / token_ledger 四个
 // 撤主张面子系统已随 2026-11-15 破坏式重构物理退役（生产装配点为零，仅
@@ -162,12 +159,8 @@ mod registry;
 // 消费(grep 实证),按 ADR-175 删除口径(验证零消费 → 删除+配套声明清理 →
 // grep 零残留 + check/test 回归)执行。设计意图与完整实现(含 16 项测试)保留于
 // git 基线 tag `baseline-2026-09-13`,未来内环需要 RCU 原语时从历史恢复。
-/// P4-T4: 影子双跑 diff 采集（串行影子 vs 分片实投逐事件比对 + ≥7 天台账）
-///
-/// 状态(ADR-181):EXPERIMENTAL-UNWIRED(运维工具态)—— 双跑观察经
-/// scripts/run_shadow_sojourn.ps1 手动触发,未接 CI/生产进程;分片转正决策
-/// 的数据源即本台账(转正后按 ADR-181 决策 2 归档 examples)。
-pub mod shadow_diff;
+// NOTE(L1-B-2,2026-11-16):`shadow_diff` 模块(双跑采集器 / 跨实例比对 / 规范化指纹 / ≥7 天台账)
+// 已按零装配口径物理退役;唯一存活的事件指纹纯函数已迁入 `attribution`(见 crate 顶部撤主张表)。
 /// ShardedBus 分片核心 — 非 Critical 事件的分片扇出(P1-T12,手册 §8.5)
 ///
 /// Lane 三车道判定(Critical/OrderSensitive/Unordered)+ 64 片无锁队列扇出
@@ -180,11 +173,6 @@ pub mod shadow_diff;
 /// 详见 [`shard::ShardedEventBus`]。
 pub mod shard;
 pub mod subscriber;
-/// P2-T11: OTel 风格轻量遥测（v4.0 WI-28 落地,ADR-143:event-bus 增强）
-///
-/// Turn Span 生命周期 + 延迟直方图（AtomicU64 无锁热路径,开销 <5% CPU）;
-/// 完整 OTLP 导出器留 Phase 3。与 L9 efficiency-monitor 分工:本模块=基础设施追踪。
-pub mod telemetry;
 pub mod topic;
 pub mod types;
 
@@ -192,24 +180,19 @@ pub mod types;
 // 注:`pressure_latch_next` 已于 ADR-314 W6(BC-05)降级为 `pub(crate)` ——
 // 它是总线内部降采样状态机的纯函数核,外部零引用(2026-11-16 实测)。
 pub use backpressure::{is_critical_event, BackpressurePolicy, SlowConsumerDetector};
-// FormalVerifier M1:事件因果一致性验证器重导出(P7-T4)
 pub use bus::{
     deserialize_json, deserialize_msgpack, serialize_json, serialize_msgpack, EventBus,
     EventReceiver, CRITICAL_MPSC_VARIANTS, CRITICAL_TOTAL, DEFAULT_CAPACITY, LANE_FORBIDDEN_SHARD,
 };
 // P3-T10: 事件双轨注册表公开 API（WI-21/ADR-149）
-// P4-T4: 双跑采集公开 API
+// P4-T4: 归因链公开 API（事件指纹随 L1-B-2 波次由 shadow_diff 迁入 attribution）
 pub use attribution::{
-    is_attribution_trigger, spawn_attribution_tap, AttributionNode, AttributionResult,
-    AttributionTapHandle, CausalAttributionLedger, ATTRIBUTION_DUMP_ENV,
+    event_fingerprint, is_attribution_trigger, spawn_attribution_tap, AttributionNode,
+    AttributionResult, AttributionTapHandle, CausalAttributionLedger, ATTRIBUTION_DUMP_ENV,
     ATTRIBUTION_TRIGGER_VARIANTS, ATTRIBUTION_WINDOW_MS,
 };
 pub use dynamic_registry::{
     DynamicEventRegistry, RegisterOutcome, RegistryAuditEntry, NAMESPACE_QUOTA,
-};
-pub use shadow_diff::{
-    canonical_fingerprint, compare_cross_instance, event_fingerprint, DiffEntry,
-    ShadowDiffRecorder, ShadowDiffReport, ShadowSojournLedger,
 };
 // §16.5 L1 吞吐量周期报告器(Phase 10 Wave 6)
 pub use crate::bus::spawn_throughput_reporter;
@@ -218,7 +201,6 @@ pub use error::EventBusError;
 pub use credit_flow::{
     CreditError, CreditFlow, CreditStats, Priority, DEFAULT_CREDITS, HIGH_PRIORITY_WAIT_WINDOW,
 };
-pub use formal::CausalConsistencyChecker;
 // B-a(M0): Critical 保底送达 sink(可插拔落点 + 默认日志实现)
 pub use critical_sink::{CriticalSink, FileWalCriticalSink, LogCriticalSink};
 pub use logging::BusLogger;

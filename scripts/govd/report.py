@@ -30,6 +30,8 @@ def sum_line(attempts, skipped, total):
                c["unknown"], c["skipped"], accounted, total))
     if c["reused"]:
         line += " reused=%d(not executed)" % c["reused"]
+    if c["cancelled"]:
+        line += " cancelled=%d(not started)" % c["cancelled"]
     return line
 
 

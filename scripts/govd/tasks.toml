@@ -75,3 +75,15 @@ source = "external"
 timeout_s = 900
 owner = "aegis-owners"
 note = "全量 helpers 套件：实测 Ran 129 tests / OK (skipped=6) / rc 0（2026-10-29，py3.11 + Windows）。6 个 skip 是 benchmark 族的模块级 SkipTest（fcntl/resource//proc/PR_SET_CHILD_SUBREAPER 为 POSIX-only，Linux CI 仍全量跑）。原 2 failures 已修（is_junction 的 3.11 reparse-tag 回退、注册表单比较 canonical 形式）；原 1 error 已修（copilot-session-start.ps1 钉 UTF-8 输出 + 测试钉 encoding/errors）；原 1 error 是 `tests.helpers` 不是包导致的永久 ImportError，已按同目录写法改 top-level import。方向：expect=0 是棘轮——Aegis 侧任何回归立刻变红，不再把已知红冻结为期望。"
+
+[[task]]
+id = "D-01"
+profiles = ["release"]
+spec_ref = "L1-B-4（零装配面登记门的诊断侧登记）"
+cmd = "{python} scripts/check_l1_dead_surface.py"
+expect = 0
+kind = "light"
+source = "diagnostic"
+timeout_s = 300
+owner = "governance"
+note = "零装配面登记门的**诊断侧**登记（L1-B 波次，2026-11-16）。本脚本的正式门身份在 gate_manifest.toml 的 G-161/G-162（一条正式门 + 一条 --selftest 自测门）；本行只把同一脚本登记进 govd 的工具台账，使 `govd list` / 收口报告能看到它在本仓的位置，并让脚本在 release 车道有一个确定的执行归属。判据来源：L0-B 四个核心基础面（event-bus / nexus-core / nexus-compute / nexus-telemetry）的 pub 项零生产装配清单，与 scripts/l1_dead_surface_freeze.txt 双向对账；纯静态只读（零 cargo、零编译），实测 1.8s。"

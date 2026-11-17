@@ -1,0 +1,76 @@
+# L1/L0-B zero-assembly public surface ledger (L1-B-4).
+#
+# WHAT THIS IS
+#   Every public item of the four L0-B core-foundation crates
+#   (event-bus / nexus-core / nexus-compute / nexus-telemetry) that NO
+#   production code keeps alive. "Production code" = `crates/*/src/**`
+#   only; `tests/`, `benches/` and `examples/` never count as assembly.
+#
+# ROW FORMAT
+#   <crate>::<module>::<name>
+#     crate  - the L0-B crate that owns the item
+#     module - crate-relative module path ("lib" is the crate root,
+#              "hts/cgroup" is a nested module)
+#     name   - the public item name (module / struct / enum / trait /
+#              fn / const / static / type)
+#   Comment lines start with '#'. Blank lines are ignored.
+#
+# HOW TO READ IT (both directions are enforced)
+#   [NEW]   a zero-assembly surface appeared and is NOT registered here
+#           -> wire it up in production code, or register it here with a
+#              reason (an allowed, known-unwired surface).
+#   [STALE] a registered row no longer exists (the item was deleted or
+#           finally got wired up) -> delete the row in the SAME commit.
+#   equal   -> the tree and this file agree.
+#
+# WHY IT IS A REGISTER AND NOT A BLOCKLIST
+#   "Zero assembly" is not automatically a defect: a type may be a seam
+#   point, an extension hook, or a contract kept for the next wave. What
+#   is a defect is a zero-assembly surface nobody has DECIDED about. This
+#   file is the decision ledger: every unwired surface is either wired up
+#   or consciously registered.
+#
+# HOW THIS BASELINE WAS MEASURED
+#   `python scripts/check_l1_dead_surface.py --emit` (items=202 live=182
+#   dead=20 at the L1-B wave, 2026-11-16). The L1-B-1..L1-B-3 deletions
+#   (event-bus telemetry / shadow_diff / formal) are NOT listed here: they
+#   were removed from the tree, so their rows were removed with them --
+#   that is exactly what the STALE direction is for.
+#
+# KNOWN CONTENTS (what the 20 rows are)
+#   event-bus::backpressure::SlowConsumerDetector
+#       live only in the crate's own unit tests.
+#   event-bus::causal::CausalBuffer(+Error, DEFAULT_CAUSAL_BUFFER_CAPACITY)
+#       the causal buffer of the (assembled) causal module is itself
+#       unwired; only VectorClock / CausalRelation are on the live path.
+#   nexus-compute::hts/cgroup::*
+#       cgroup core-count correction (CgroupProbe / effective_cores /
+#       parse_cpu_max) is re-exported but never called in production.
+#   nexus-compute::seam::*
+#       the whole dependency-injection seam (Clock / Fs / Net backends) is
+#       defined but not wired: neither the production backends
+#       (SystemClock / OsFs / ChaCha8Rng) nor the test doubles
+#       (FixedClock / MemFs / MockNet / SeedRng42) have a production caller.
+#   nexus-core::decay::apply_exponential_decay, nexus-core::lib::newtype
+#       unwired helpers on the L0-B core face.
+
+event-bus::backpressure::SlowConsumerDetector
+event-bus::causal::CausalBuffer
+event-bus::causal::CausalBufferError
+event-bus::causal::DEFAULT_CAUSAL_BUFFER_CAPACITY
+nexus-compute::hts/cgroup::CgroupProbe
+nexus-compute::hts/cgroup::effective_cores
+nexus-compute::hts/cgroup::parse_cpu_max
+nexus-compute::hts::cgroup
+nexus-compute::seam::ChaCha8Rng
+nexus-compute::seam::Clock
+nexus-compute::seam::FixedClock
+nexus-compute::seam::Fs
+nexus-compute::seam::MemFs
+nexus-compute::seam::MockNet
+nexus-compute::seam::Net
+nexus-compute::seam::OsFs
+nexus-compute::seam::SeedRng42
+nexus-compute::seam::SystemClock
+nexus-core::decay::apply_exponential_decay
+nexus-core::lib::newtype

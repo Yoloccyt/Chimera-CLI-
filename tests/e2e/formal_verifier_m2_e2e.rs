@@ -11,7 +11,7 @@
 //! | 1 | GSOE 谱系 DAG 完整性 | LineageChecker | gsoe-evolution | M0 |
 //! | 2 | AEGIS Critic 单调性 | CriticMonotonicityChecker | gsoe-evolution | M0 |
 //! | 3 | AutoDPO 偏好对一致性 | PreferenceConsistencyChecker | auto-dpo | M1 |
-//! | 4 | 事件因果一致性 | CausalConsistencyChecker | event-bus | M1 |
+//! | 4 | 事件因果一致性 | CausalConsistencyChecker | 根 E2E 夹具 `tests/e2e/causal_consistency_support.rs`（L1-B-3 波次迁出生产 crate） | M1 |
 //! | 5 | 学习单调性 | LearningMonotonicityChecker | omega-learner | M1 |
 //! | **6** | **能力衰减一致性** | **DecayConsistencyChecker** | **decay-engine** | **M2** |
 //! | **7** | **全系统不变量传递闭包** | **InvariantClosureChecker** | **gsoe-evolution** | **M2** |

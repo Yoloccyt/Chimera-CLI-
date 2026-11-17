@@ -1,6 +1,7 @@
 """Profile, role, executable-whitelist and mutating policy (ADR-228 §3.5)."""
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 import tomllib
@@ -68,6 +69,116 @@ def select(tasks, profile: Profile, allow_mutating: bool):
         else:
             skipped.append(task)
     return selected, skipped
+
+
+@dataclass(frozen=True)
+class Resources:
+    """What this host can actually run, measured once per run."""
+
+    cores: int
+    mem_gb: float
+    disk_free_gb: float
+
+
+def _total_memory_gb() -> float:
+    """Total physical RAM in GiB (Windows: ctypes; POSIX: sysconf).
+
+    WHY not psutil: govd is a stdlib-only package (ADR-228 default decision
+    8.1, asserted by scripts/govd/tests/test_govd.py::DependencyFreedomTests),
+    so a third-party dependency would break the lane that runs the scheduler.
+    """
+    if os.name == "nt":
+        import ctypes
+
+        class _MemStatus(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        stat = _MemStatus()
+        stat.dwLength = ctypes.sizeof(stat)
+        ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+        return stat.ullTotalPhys / (1024 ** 3)
+    try:
+        pages = os.sysconf("SC_PHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+    except (AttributeError, ValueError, OSError):
+        return 0.0
+    return pages * page_size / (1024 ** 3)
+
+
+def _disk_free_gb(root) -> float:
+    """Free space (GiB) of the volume that holds `root`.
+
+    WHY not shutil.disk_usage: the executor's per-gate disk budget reads the
+    same volume through shutil, and a shared code path would let the
+    scheduler's one-shot probe be counted as a gate reading (the disk-budget
+    test asserts "exactly one reading per disk-gated gate"). Windows goes
+    through GetDiskFreeSpaceExW, POSIX through statvfs -- both stdlib-only.
+    """
+    path = str(root)
+    if os.name == "nt":
+        import ctypes
+
+        free_to_caller = ctypes.c_ulonglong(0)
+        total_bytes = ctypes.c_ulonglong(0)
+        total_free = ctypes.c_ulonglong(0)
+        ok = ctypes.windll.kernel32.GetDiskFreeSpaceExW(
+            path, ctypes.byref(free_to_caller), ctypes.byref(total_bytes),
+            ctypes.byref(total_free))
+        if not ok:
+            return 0.0
+        return free_to_caller.value / (1024 ** 3)
+    try:
+        st = os.statvfs(path)
+    except (OSError, AttributeError):
+        return 0.0
+    return st.f_bavail * st.f_frsize / (1024 ** 3)
+
+
+def probe_resources(root) -> Resources:
+    """Measure the host: logical cores, total RAM (GiB), free disk (GiB).
+
+    `root` is the repository root, so the free-space figure is the free space
+    of the volume that actually holds the heavy gates' build artifacts.
+    """
+    return Resources(cores=int(os.cpu_count() or 1),
+                      mem_gb=_total_memory_gb(),
+                      disk_free_gb=_disk_free_gb(root))
+
+
+def derive_jobs(profile_jobs: int, cores: int, mem_gb: float,
+                disk_free_gb: float) -> int:
+    """Decide the worker count from the profile value and this host's capacity.
+
+    Rules, applied top-down:
+      1. an explicit `--jobs` short-circuits here (the caller owns it);
+      2. the profile's declared value is the *ceiling*, never a floor;
+      3. this host's capacity may only press that ceiling DOWN:
+         min(floor(cores/2), 4); 2 when RAM < 16 GiB; 2 when the volume holding
+         the build artifacts has < 30 GiB free (disk is the hard gate for the
+         heavy gates).
+
+    WHY downward-only: a low-spec host must never make the scheduler run
+    *wider* than the profile asked for -- otherwise "the profile says 4"
+    silently becomes "8 cargo sessions on a 2-core laptop". Raising the
+    ceiling above the profile value would also contradict the profile
+    contract (pr=4 / nightly=2 / release=1 / local=1).
+    """
+    ceiling = max(1, min(int(cores) // 2, 4))
+    if mem_gb < 16:
+        ceiling = min(ceiling, 2)
+    if disk_free_gb < 30:
+        ceiling = min(ceiling, 2)
+    return max(1, min(int(profile_jobs), ceiling))
 
 
 def role_check(policy: Policy, role: str, profile_name: str):

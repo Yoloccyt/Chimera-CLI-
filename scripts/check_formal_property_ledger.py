@@ -15,7 +15,9 @@
 #              CriticMonotonicityChecker(gsoe/formal/critic_monotonicity.rs:27)
 #              invariant_closure 模块(gsoe/formal/invariant_closure.rs)
 #              DecayConsistencyChecker(decay-engine/formal.rs:96)
-#              CausalConsistencyChecker(event-bus/formal.rs)
+#              CausalConsistencyChecker(根 E2E 夹具 tests/e2e/causal_consistency_support.rs;
+#                                      L1-B-3 波次 2026-11-16 自 event-bus/src/formal.rs 迁出:
+#                                      生产面零消费 ⇒ 迁入测试夹具,验证能力不减)
 #              LearningMonotonicityChecker(omega-learner/formal.rs)
 #              ConsensusSafetyChecker(parliament/formal/consensus_safety.rs:50)
 #
@@ -48,7 +50,7 @@ ROSTER = [
     ("critic-monotonicity", "crates/gsoe-evolution/src/formal/critic_monotonicity.rs"),
     ("invariant-closure", "crates/gsoe-evolution/src/formal/invariant_closure.rs"),
     ("decay-consistency", "crates/decay-engine/src/formal.rs"),
-    ("causal-consistency", "crates/event-bus/src/formal.rs"),
+    ("causal-consistency", "tests/e2e/causal_consistency_support.rs"),
     ("learning-monotonicity", "crates/omega-learner/src/formal.rs"),
     ("consensus-safety", "crates/parliament/src/formal/consensus_safety.rs"),
 ]

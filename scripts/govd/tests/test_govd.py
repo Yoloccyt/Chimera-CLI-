@@ -26,14 +26,15 @@ MANIFEST = ROOT / "scripts" / "gate_manifest.toml"
 POLICY = ROOT / "scripts" / "govd" / "policy.toml"
 
 # Single pinned census of gate_manifest.toml. Adding or removing a gate must
-# update these three numbers in the same commit (G-147 wiring: 157 =
-# 150 light + 7 heavy; 2026-11-14 合流 = HEAD 144 道 + feat 侧 5 道，两门重号按
+# update these three numbers in the same commit (G-147 wiring: 159 =
+# 152 light + 7 heavy; 2026-11-14 合流 = HEAD 144 道 + feat 侧 5 道，两门重号按
 # G-148/G-149 顺延，见 gate_manifest.toml 的「合流裁决」块；ADR-315 W-T1 新增
-# G-160 exclusive 互斥负控 ⇒ 156 → 157). Every other assertion in this file derives from here
+# G-160 exclusive 互斥负控 ⇒ 156 → 157；L1-B-4 新增 G-161/G-162 零装配面登记门
+# (正式门 + --selftest 自测门，均 light) ⇒ 157 → 159). Every other assertion in this file derives from here
 # instead of repeating the literals -- on the wiring day three separate
 # assertions failed for what is one fact, which is the cost of duplicating it.
-# 自锁已实测：只加门不改这三值 ⇒ 本文件自己的 test_real_census 先红（157 != 156）。
-CENSUS_TOTAL, CENSUS_LIGHT, CENSUS_HEAVY = 157, 150, 7
+# 自锁已实测：只加门不改这三值 ⇒ 本文件自己的 test_real_census 先红（159 != 157）。
+CENSUS_TOTAL, CENSUS_LIGHT, CENSUS_HEAVY = 159, 152, 7
 PR_SUM_LINE = f"selected={CENSUS_LIGHT} total={CENSUS_TOTAL} skipped={CENSUS_HEAVY}"
 
 def make_task(**kw):
@@ -1100,8 +1101,15 @@ class JobsAndDiskSamplingTests(TempDirTest):
     def _attempt(self, task):
         return Attempt(task.id, 1, Verdict.OK, 0, 0.01, "rc=0")
 
-    def drive(self, tasks, flags, profile, disk_free_gib=None, pool_spy=None):
-        """Run `cmd_run` over stubbed execution; return (rc, stdout, executed ids)."""
+    def drive(self, tasks, flags, profile, disk_free_gib=None, pool_spy=None,
+              probe=None):
+        """Run `cmd_run` over stubbed execution; return (rc, stdout, executed ids).
+
+        `probe` overrides the host-resource probe (cores / mem / disk) that
+        `resolve_jobs` uses to press `profile.jobs` DOWN. Defaults to a
+        generous fixture so that the "profile N lands on pool N" assertions
+        are host-independent.
+        """
         calls = []
 
         def execute(task, _policy, bash_path, logs, n):
@@ -1109,11 +1117,18 @@ class JobsAndDiskSamplingTests(TempDirTest):
             return self._attempt(task)
 
         args = cli.build_parser().parse_args(["run", "--profile", profile] + flags)
+        # 默认探测值：宽裕，让 profile 声明值不受压制。
+        # 真实 derive_jobs 会在磁盘 < 30GiB 时压 ceiling=2；单元测试不依赖真实主机。
+        default_probe = policy.Resources(cores=16, mem_gb=32.0,
+                                          disk_free_gb=500.0)
         patches = [
             mock.patch.object(cli, "ROOT", self.tmp),
             mock.patch.object(cli, "load_all", lambda name="": (tasks, self.pol)),
             mock.patch.object(policy, "snapshot", side_effect=[set(), set()]),
             mock.patch.object(cli, "_execute_one", side_effect=execute),
+            mock.patch.object(policy, "probe_resources",
+                              return_value=(probe if probe is not None
+                                            else default_probe)),
         ]
         if disk_free_gib is not None:
             readings = iter([g * 1024 ** 3 for g in disk_free_gib])

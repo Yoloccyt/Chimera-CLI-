@@ -71,7 +71,7 @@ pub mod storage_traits;
 // === 关键类型重导出,简化外部导入 ===
 pub use clv::{cosine_similarity_slices, CLV};
 pub use error::NexusError;
-pub use ids::{AgentId, CapabilityId, IntentId, ModelId, OperationId, QuestId, TaskId};
+pub use ids::{CapabilityId, OperationId, QuestId, TaskId};
 // P1-1 观察者接线:状态变更类型 + 监听器 trait(依赖倒置,适配层在 L9 quest-engine)
 pub use state::{NexusState, StateChangeKind, StateChangeListener};
 pub use storage_traits::{apply_performance_pragmas, PragmaCapable};
@@ -84,7 +84,7 @@ pub mod prelude {
     // NOTE(B3/ADR-313): config 类型已迁回 chimera-cli，prelude 同步摘除。
     // NOTE(B4d/ADR-311): L0 领域类型 re-export 已退役，消费方直连 nexus_contracts。
     pub use crate::error::NexusError;
-    pub use crate::ids::{AgentId, CapabilityId, IntentId, ModelId, OperationId, QuestId, TaskId};
+    pub use crate::ids::{CapabilityId, OperationId, QuestId, TaskId};
     // P1-1:状态变更观察者类型加入 prelude
     pub use crate::state::{NexusState, StateChangeKind, StateChangeListener};
     pub use crate::storage_traits::{apply_performance_pragmas, PragmaCapable};

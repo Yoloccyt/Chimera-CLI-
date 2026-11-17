@@ -1,33 +1,20 @@
-//! FormalVerifier M1 — 事件因果一致性形式化验证(P7-T4)
+//! FormalVerifier M1 — 事件因果一致性验证器（测试夹具）
 //!
-//! 对应架构层: L4 FormalVerifier(event-bus 内验证器实现)
-//! 状态(ADR-181):VERIFIER-EVIDENCE-ONLY —— 仅供 FormalVerifierGate
-//!             证据链(经根 E2E 消费),非生产运行时路径;不退役。
+//! 对应架构层: L4 FormalVerifier
 //! 对应 ADR: ADR-047(M1 Property #4:跨层事件因果一致性)
-//! 对应计划: `IMPLEMENTATION_PLAN_Harness_Engineering_V3.md` Phase 7 P7-T4
 //!
-//! # 核心保证(Property #4)
+//! # 为什么住在测试侧而不是生产 crate
 //!
-//! 本模块提供三个纯函数验证器,确保事件流的元数据满足因果一致性:
+//! L1-B-3 波次（2026-11-16）把该类型从 `event-bus/src/formal.rs` 迁到本夹具：
+//! 它的**唯一**消费方是根 E2E（`formal_verifier_m1_e2e.rs`），生产 crate 内零消费。
+//! 按「零装配面物理删除」口径，把只服务验证证据链的代码留在生产 crate 里，
+//! 等于让生产二进制背着一条永不执行的验证路径——迁移到夹具后，生产面干净，
+//! 而**验证能力一条不少**（三条属性判据与其全部单测原样随迁）。
 //!
-//! 1. **event_id 时序性**: UUIDv7 event_id 按发布序单调递增
-//!    (UUIDv7 前 48 位是毫秒时间戳,乱序 = 事件重放/时钟回拨/伪造注入)
-//! 2. **timestamp 单调性**: 同一 source 的事件时间戳非减
-//!    (违反 = 该发布者时钟异常或事件被乱序重排)
-//! 3. **event_id 唯一性**: 流内无重复 event_id
-//!    (重复 = 事件被重复投递,下游幂等假设被破坏)
-//!
-//! # 设计决策(WHY)
-//!
-//! - **验证 EventMetadata 序列而非 NexusEvent**: 因果性质只依赖元数据
-//!   (event_id/timestamp/source),与 107+ 事件变体的载荷解耦——
-//!   变体演进(append-only)不影响验证器
-//! - **同 source 才约束 timestamp**: 跨 source 时钟不可比
-//!   (分布式常识),全局序由 UUIDv7 的 event_id 承载
-//! - **纯函数 + `VerificationResult`**: 与 gsoe/parliament/auto-dpo/
-//!   omega-learner 验证器同款模式,FormalVerifier 管线统一消费
+//! 归属登记：`scripts/check_formal_property_ledger.py` 的名册↔checker 对账行
+//! 已同步指向本文件（checker 仍然存在，只是宿主换了）。
 
-use crate::EventMetadata;
+use event_bus::EventMetadata;
 use nexus_contracts::formal_props::VerificationResult;
 use std::collections::{HashMap, HashSet};
 
@@ -124,7 +111,8 @@ impl CausalConsistencyChecker {
             };
         }
 
-        let mut seen: HashSet<uuid::Uuid> = HashSet::with_capacity(events.len());
+        // 类型由 `meta.event_id` 推断（避免在夹具里引入 uuid 直接依赖）
+        let mut seen: HashSet<_> = HashSet::with_capacity(events.len());
         let mut violations: Vec<String> = Vec::new();
         for (i, meta) in events.iter().enumerate() {
             if !seen.insert(meta.event_id) {

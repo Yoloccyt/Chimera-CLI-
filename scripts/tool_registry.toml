@@ -330,9 +330,9 @@ evidence = "从本任务 transcript 取回\"原计划 §5 红线合规自检 / �
 
 [[tool]]
 script = "scripts/run_shadow_sojourn.ps1"
-status = "diagnostic"
+status = "retired"
 owner = "governance"
-evidence = "影子双跑长跑驱动包装（P4-T7） | not referenced by gate_manifest.toml or .github/workflows/*.yml (measured 2026-10-29)"
+evidence = "影子双跑长跑驱动包装（P4-T7）——随 L1-B-2 波次（2026-11-16）退役：其唯一被驱动的 event-bus shadow_sojourn 示例与 shadow_diff 台账类型零生产装配、已物理删除，包装脚本无对象可包（git 历史可恢复）"
 
 [[tool]]
 script = "scripts/s7_relock_measure.py"

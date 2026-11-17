@@ -11,7 +11,7 @@
 //! | 1 | GSOE 谱系 DAG 完整性 | LineageChecker | gsoe-evolution | M0(既有) |
 //! | 2 | AEGIS Critic 单调性 | CriticMonotonicityChecker | gsoe-evolution | M0(既有) |
 //! | 3 | AutoDPO 偏好对一致性 | PreferenceConsistencyChecker | auto-dpo | **M1 新增** |
-//! | 4 | 事件因果一致性 | CausalConsistencyChecker | event-bus | **M1 新增** |
+//! | 4 | 事件因果一致性 | CausalConsistencyChecker | event-bus（测试夹具 `tests/e2e/causal_consistency_support.rs`，L1-B-3 波次迁出生产 crate） | **M1 新增** |
 //! | 5 | 学习单调性 | LearningMonotonicityChecker | omega-learner | **M1 新增** |
 //!
 //! # 测试覆盖
@@ -27,7 +27,6 @@
 
 // use auto_dpo::formal::PreferenceConsistencyChecker;
 // use auto_dpo::types::{PreferencePair, SampleQuality};
-use event_bus::formal::CausalConsistencyChecker;
 use event_bus::EventMetadata;
 use gsoe_evolution::formal::critic_monotonicity::CriticMonotonicityChecker;
 use gsoe_evolution::formal::lineage_checker::{
@@ -39,6 +38,13 @@ use nexus_contracts::formal_props::{
 use omega_learner::formal::LearningMonotonicityChecker;
 use omega_learner::s2_memory::TaskPhase;
 use omega_learner::s8_mem_pi::{S8Context, S8Learner, S8Reward};
+
+/// 属性 #4 的验证器已随 L1-B-3 波次（2026-11-16）迁出生产 crate：
+/// `event-bus/src/formal.rs` 的 `CausalConsistencyChecker` 生产面零消费，
+/// 现落在同目录测试夹具里——验证能力不变，生产二进制不再背着永不执行的路径。
+#[path = "causal_consistency_support.rs"]
+mod causal_consistency;
+use causal_consistency::CausalConsistencyChecker;
 
 // 属性 #3 构造器 pair()/PreferencePair 随 auto-dpo 退役移除,
 // RL 全栈接入后恢复(见文件头 TODO)。

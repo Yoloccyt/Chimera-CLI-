@@ -545,6 +545,7 @@ function Clear-DeepCleanTarget {
         [string]$Path,
         [string]$Category = 'cache',
         [string]$KeepIf = '',
+        [string[]]$KeepNames = @(),
         [switch]$RemoveDir,
         [switch]$SkipWhitelist
     )
@@ -563,7 +564,7 @@ function Clear-DeepCleanTarget {
         Remove-FullDirectory -Path $Path
     } else {
         Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -ne $KeepIf } |
+            Where-Object { $_.Name -ne $KeepIf -and $KeepNames -notcontains $_.Name } |
             ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
@@ -614,8 +615,10 @@ function Invoke-DeepClean {
             Write-Host "  [SKIP ] target/debug (不存在)" -ForegroundColor DarkGray
         }
 
-        Clear-DeepCleanTarget -Path (Join-Path $root 'tmp_podman') -Category '临时 tmp_podman'
-        Clear-DeepCleanTarget -Path (Join-Path $root 'tmp')      -Category '临时 tmp'
+        # WHY KeepNames: RETENTION_POLICY:52 + live gate/CI state (ci.yml:1098, store.py:80) +
+        # non-regenerable baseline (perf_thresholds.toml:116) + active host dir (qoder-cli-cn).
+        Clear-DeepCleanTarget -Path (Join-Path $root 'tmp_podman') -Category '临时 tmp_podman' -KeepNames @('trae-agent-toolhost','qoder-cli-cn')
+        Clear-DeepCleanTarget -Path (Join-Path $root 'tmp')      -Category '临时 tmp' -KeepNames @('govd','gate_selfreport','audit','x1_criterion_backup')
         Clear-DeepCleanTarget -Path (Join-Path $root 'scripts\__pycache__') -Category 'Python 缓存' -RemoveDir
         Clear-DeepCleanTarget -Path (Join-Path $root 'tmp\__pycache__')     -Category 'Python 缓存' -RemoveDir
         foreach ($s in @('.superpowers','.zcode','.workbuddy')) {

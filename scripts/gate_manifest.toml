@@ -1944,3 +1944,31 @@ group = "governance"
 concurrency = 4
 resource = "io"
 note = "exclusive 资源互斥的变异负控：在临时副本上变异掉 cli.py 的互斥判定，证明 govd ExclusiveSemanticsTests 的并发断言非恒真（变异后互斥断言必须变红、其余三条保持绿）。负控自身带副本路径守卫（cli.__file__ 必须指向副本），防真实包覆盖副本导致变异从未生效"
+
+[[gate]]
+id = "G-161"
+spec_ref = "L1-B-4（零装配面登记门——L1-B-1/2/3 退役三块零生产装配公共面后的防复发机制）"
+cmd = "{python} scripts/check_l1_dead_surface.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+group = "l0-contract"
+concurrency = 8
+resource = "cpu"
+exclusive = ""
+note = "零装配面登记门：扫描 L0-B 四面（event-bus / nexus-core / nexus-compute / nexus-telemetry）的 pub 项，按**引用图**判生产装配——注释与字符串用 G-99/G-105 同一 lexer 抹除（导入不复制）、cfg(test) 尾遮蔽、pub use 重导出不算消费（否则 crate 根重导出块会把每个死类型都撑成活的）；活性沿 crate 内引用边传播（只被死构造器造出来的类型同样是死的）；模块是命名空间而非面（其内任一项被装配 ⇒ 模块被装配，否则会把经 crate 根重导出可达的模块误判为死）。判据 = <crate>::<module>::<name> 键集双向对账 scripts/l1_dead_surface_freeze.txt：NEW（出现未登记的零装配面）⇒红，STALE（登记项已不存在/已被接线）⇒红须同批删行，两边相等⇒绿。台账缺文件/行畸形/重复行/扫到 pub 项低于地板 ⇒ 退 2 不判绿。本门证明的是「零装配面不会静默增加」——L1-B 波次退役 telemetry / shadow_diff / formal 三块公共面后，该缺口从此可机检而非靠人记。"
+ci_exempt = "纯静态只读门（零编译、零 cargo）；本次波次未接 CI workflow，收口时由 run_gate_manifest.py 承载（run_gate_manifest 覆盖本清单全部门）"
+
+[[gate]]
+id = "G-162"
+spec_ref = "L1-B-4 配套（门自身有牙）"
+cmd = "{python} scripts/check_l1_dead_surface.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+group = "l0-contract"
+concurrency = 8
+resource = "cpu"
+exclusive = ""
+note = "夹具双向有牙：生产 use 使面变活 / cfg(test) 尾与 pub use 重导出不得使面变活 / 只被死构造器造出的类型同样判死 / 未登记面 NEW 必红 / 登记项已不存在 STALE 必红 / 重复行与畸形行退 2 / 台账缺失退 2 / 扫到 pub 项低于地板退 2。夹具走的是生产判据同一函数（judge），不是另写一套。断言条数由门自报，台账不写死。"
+ci_exempt = "纯静态只读门（零编译、零 cargo）；本次波次未接 CI workflow，收口时由 run_gate_manifest.py 承载（run_gate_manifest 覆盖本清单全部门）"
