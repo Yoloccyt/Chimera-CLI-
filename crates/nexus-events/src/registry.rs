@@ -374,3 +374,470 @@ define_event_registry! {
     // v2.3 (b.2): 黑板条目 —— 广播级 Normal,不走 mpsc 旁路(Critical 清单不变)
     BlackboardEntry => Normal, Memory;
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use nexus_contracts::behavior_contract::ContractContext;
+
+    /// Critical 变体规模 —— 与 `event-bus` 侧常量的**对齐点**。
+    ///
+    /// WHY 单一权威:全量 155 变体的总数与三档分布(Critical/Info/Normal)由
+    /// `crates/event-bus/tests/variant_count_test.rs` 的
+    /// `VARIANT_COUNT_LOCK`/`CRITICAL_LOCK` 持有,本 crate **不重复**那份
+    /// 155 条构造清单(两份清单会各自漂移)。此处只锁「本文件 severity() 判为
+    /// Critical 的构造样本集合」的规模,与 `event-bus/src/bus/mod.rs` 的
+    /// `CRITICAL_TOTAL` 同值;任何定级改动(如 SandboxViolation
+    /// Normal→Critical)都会让本断言与外部锁同时红灯。
+    const EXPECTED_CRITICAL_TOTAL: usize = 22;
+
+    /// 全部 22 个 Critical 变体的最小构造样本。
+    ///
+    /// 名单 = 注册表中 `Critical` 定级行。其中 18 个是 `bus::is_critical_mpsc_event()`
+    /// 的 mpsc 旁路成员;差的 4 个(CheckpointSaved / ConsensusReached /
+    /// SlowConsumerDropped / OrphanCallDetected)历史上只走 broadcast,
+    /// 故本集合 ⊇ mpsc 旁路集合。
+    ///
+    /// WHY 逐变体构造而非枚举反射:Rust 无枚举反射,"全部变体"在运行时只能
+    /// 来自人工清单;构造器与 enum 字段一一对应 ⇒ 变体改名/删字段立即编译错误。
+    fn critical_samples() -> Vec<NexusEvent> {
+        vec![
+            NexusEvent::CheckpointSaved {
+                metadata: EventMetadata::new("probe"),
+                quest_id: "q".into(),
+                checkpoint_id: "c".into(),
+                memory_snapshot_hash: "h".into(),
+            },
+            NexusEvent::ConsensusReached {
+                metadata: EventMetadata::new("probe"),
+                quest_id: "q".into(),
+                decision_hash: "h".into(),
+                dpo_pair_id: None,
+            },
+            NexusEvent::ShadowBreakerTripped {
+                metadata: EventMetadata::new("probe"),
+                reason: "r".into(),
+            },
+            NexusEvent::FormalVerificationFailed {
+                metadata: EventMetadata::new("probe"),
+                property: "p".into(),
+                counterexample: "ce".into(),
+                generation: 1,
+            },
+            NexusEvent::BudgetExceeded {
+                metadata: EventMetadata::new("probe"),
+                budget_type: "b".into(),
+                current: 1,
+                limit: 1,
+            },
+            NexusEvent::SandboxViolation {
+                metadata: EventMetadata::new("probe"),
+                violation_type: "v".into(),
+                detail: "d".into(),
+            },
+            NexusEvent::SlowConsumerDropped {
+                metadata: EventMetadata::new("probe"),
+                subscriber_id: "s".into(),
+                lag: 1,
+                dropped_count: 1,
+            },
+            NexusEvent::OrphanCallDetected {
+                metadata: EventMetadata::new("probe"),
+                operation_id: "o".into(),
+                spawn_location: "l".into(),
+            },
+            NexusEvent::SkepticVeto {
+                metadata: EventMetadata::new("probe"),
+                quest_id: "q".into(),
+                veto_reason: "r".into(),
+                frozen_capabilities: vec![],
+            },
+            NexusEvent::VetoOverridden {
+                metadata: EventMetadata::new("probe"),
+                quest_id: "q".into(),
+                proposal_id: "p".into(),
+                veto_reason: "vr".into(),
+                override_reason: "or".into(),
+                override_by: "ob".into(),
+            },
+            NexusEvent::RedTeamAudit {
+                metadata: EventMetadata::new("probe"),
+                vulnerability_type: "v".into(),
+                failed_probes: 1,
+                total_probes: 1,
+                detection_rate: 0.5,
+                remediation_suggestion: "s".into(),
+            },
+            NexusEvent::AsaIntervention {
+                metadata: EventMetadata::new("probe"),
+                operation_id: "o".into(),
+                action: "a".into(),
+                safety_score: 0.5,
+                block_reason: None,
+                alternative_suggestion: None,
+            },
+            NexusEvent::AgentTaskFailed {
+                metadata: EventMetadata::new("probe"),
+                from: "a".into(),
+                to: "b".into(),
+                task_id: "t".into(),
+                error: "e".into(),
+                retry_count: 1,
+            },
+            NexusEvent::R1ShadowRollbackFailed {
+                metadata: EventMetadata::new("probe"),
+                reason: "r".into(),
+                trigger_type: crate::payloads::RollbackTriggerType::Unknown,
+                triggered_at: None,
+                details: "d".into(),
+                diagnostic: crate::payloads::RollbackDiagnosticContext::default(),
+            },
+            NexusEvent::R2FreezeViolation {
+                metadata: EventMetadata::new("probe"),
+                violation_type: "v".into(),
+                evidence: "e".into(),
+            },
+            NexusEvent::R2FreezeRollbackFailed {
+                metadata: EventMetadata::new("probe"),
+                reason: "r".into(),
+            },
+            NexusEvent::AffinityQuotaExhausted {
+                metadata: EventMetadata::new("probe"),
+                route_key: "k".into(),
+                reason: "r".into(),
+            },
+            NexusEvent::FormalViolation {
+                metadata: EventMetadata::new("probe"),
+                contract_id: "c".into(),
+                target_type: "t".into(),
+                violations: vec![],
+                context: ContractContext::Runtime,
+            },
+            NexusEvent::StopRulingIssued {
+                metadata: EventMetadata::new("probe"),
+                quest_id: "q".into(),
+                reason: "r".into(),
+                preserve_best: true,
+            },
+            NexusEvent::ErrorSignatureMatched {
+                metadata: EventMetadata::new("probe"),
+                error_hash: "h".into(),
+                matched_card_ids: vec![],
+            },
+            NexusEvent::CertifyIssued {
+                metadata: EventMetadata::new("probe"),
+                claim_ref: "c".into(),
+                subject: "s".into(),
+                verifier: "v".into(),
+            },
+            NexusEvent::FailureRegistered {
+                metadata: EventMetadata::new("probe"),
+                signature: "s".into(),
+                affected_component: "c".into(),
+                fix_status: "f".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn critical_severity_set_matches_expected_total() {
+        let samples = critical_samples();
+        assert_eq!(
+            samples.len(),
+            EXPECTED_CRITICAL_TOTAL,
+            "Critical 构造样本数与 EXPECTED_CRITICAL_TOTAL 不一致"
+        );
+        for event in &samples {
+            assert_eq!(
+                event.severity(),
+                EventSeverity::Critical,
+                "{} 在注册表中应为 Critical",
+                event.type_name()
+            );
+        }
+    }
+
+    #[test]
+    fn broadcast_only_criticals_remain_critical() {
+        // 这 4 个是 severity()=Critical 但不在 mpsc 旁路清单的历史成员:
+        // 若有人把它们降级为 Normal,双清单"⊇"关系就被破坏(broadcast 集会
+        // 变成 mpsc 集的真子集之外),此处作为本 crate 内的定级锚点。
+        let names: Vec<&str> = critical_samples()
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e.type_name(),
+                    "CheckpointSaved"
+                        | "ConsensusReached"
+                        | "SlowConsumerDropped"
+                        | "OrphanCallDetected"
+                )
+            })
+            .map(|e| e.type_name())
+            .collect();
+        assert_eq!(names.len(), 4, "4 个历史 broadcast-only Critical 未被识别");
+        assert!(critical_samples()
+            .iter()
+            .filter(|e| names.contains(&e.type_name()))
+            .all(|e| e.severity() == EventSeverity::Critical));
+    }
+
+    #[test]
+    fn type_name_is_non_empty_and_unique_over_critical_samples() {
+        let mut seen = std::collections::HashSet::new();
+        for event in critical_samples() {
+            let name = event.type_name();
+            assert!(!name.is_empty(), "type_name() 不得为空");
+            assert!(name.starts_with(char::is_uppercase), "{name} 应为变体名");
+            assert!(seen.insert(name), "type_name() 重复: {name}");
+        }
+        assert_eq!(seen.len(), EXPECTED_CRITICAL_TOTAL);
+    }
+
+    #[test]
+    fn severity_and_topic_land_in_legal_sets() {
+        let legal_topics = crate::topic::EventTopic::all();
+        for event in critical_samples() {
+            assert!(
+                matches!(
+                    event.severity(),
+                    EventSeverity::Critical | EventSeverity::Info | EventSeverity::Normal
+                ),
+                "{} 的 severity 落在合法枚举集之外",
+                event.type_name()
+            );
+            assert!(
+                legal_topics.contains(&event.topic()),
+                "{} 的 topic 不在 EventTopic 的合法变体集内",
+                event.type_name()
+            );
+        }
+    }
+
+    #[test]
+    fn metadata_returns_the_first_field_and_is_mutable() {
+        for mut event in critical_samples() {
+            assert_eq!(
+                event.metadata().source,
+                "probe",
+                "{} 的 metadata() 未返回构造时传入的 EventMetadata",
+                event.type_name()
+            );
+            event.metadata_mut().source = "rewritten".into();
+            assert_eq!(
+                event.metadata().source,
+                "rewritten",
+                "{} 的 metadata_mut() 未写回同一字段",
+                event.type_name()
+            );
+        }
+    }
+
+    #[test]
+    fn samples_cover_all_ten_topics() {
+        // 7 个 Critical 主题 + 3 个仅由 Normal 样本覆盖的主题
+        // (Routing/Memory/Storage) —— 保证 topic() 十条臂都被至少一个
+        // 构造样本走过,而不是只靠外部 155 变体清单兜底。
+        let mut samples = critical_samples();
+        samples.push(NexusEvent::ExpertRegistered {
+            metadata: EventMetadata::new("probe"),
+            tool_id: "t".into(),
+        });
+        samples.push(NexusEvent::NmcEncoded {
+            metadata: EventMetadata::new("probe"),
+            modality: "Text".into(),
+            content_hash: "h".into(),
+            clv_dimension: 512,
+        });
+        samples.push(NexusEvent::CacheHit {
+            metadata: EventMetadata::new("probe"),
+            cache_key: "k".into(),
+        });
+
+        let covered: std::collections::HashSet<crate::topic::EventTopic> =
+            samples.iter().map(|e| e.topic()).collect();
+        assert_eq!(
+            covered.len(),
+            10,
+            "构造样本应覆盖全部 10 类 EventTopic,实际覆盖 {covered:?}"
+        );
+        for event in &samples[EXPECTED_CRITICAL_TOTAL..] {
+            assert_ne!(
+                event.severity(),
+                EventSeverity::Critical,
+                "{} 是 Normal 样本,不应被判为 Critical",
+                event.type_name()
+            );
+        }
+    }
+
+    #[test]
+    fn type_name_matches_variant_identifier_for_sampled_variants() {
+        // WHY 手写期望串:type_name() 由 `stringify!` 生成,变体改名而注册表
+        // 行照抄旧名时,编译器只会在"枚举里没有这个变体"时报警——若有人把
+        // 变体与注册表行同时改名,type_name() 会静默跟着变。跨进程线格式的
+        // `type` tag 直接取该值,所以这 12 条逐字对照是名单漂移的嗅探器。
+        let meta = || EventMetadata::new("probe");
+        let samples: Vec<(NexusEvent, &str)> = vec![
+            (
+                NexusEvent::QuestCreated {
+                    metadata: meta(),
+                    quest_id: "q".into(),
+                    title: "t".into(),
+                    task_count: 1,
+                },
+                "QuestCreated",
+            ),
+            (
+                NexusEvent::UserIntentEncoded {
+                    metadata: meta(),
+                    intent_id: "i".into(),
+                    raw_text: "r".into(),
+                    risk_level: 0,
+                },
+                "UserIntentEncoded",
+            ),
+            (
+                NexusEvent::CheckpointSaved {
+                    metadata: meta(),
+                    quest_id: "q".into(),
+                    checkpoint_id: "c".into(),
+                    memory_snapshot_hash: "h".into(),
+                },
+                "CheckpointSaved",
+            ),
+            (
+                NexusEvent::BudgetExceeded {
+                    metadata: meta(),
+                    budget_type: "token".into(),
+                    current: 2,
+                    limit: 1,
+                },
+                "BudgetExceeded",
+            ),
+            (
+                NexusEvent::SkepticVeto {
+                    metadata: meta(),
+                    quest_id: "q".into(),
+                    veto_reason: "r".into(),
+                    frozen_capabilities: vec![],
+                },
+                "SkepticVeto",
+            ),
+            (
+                NexusEvent::CertifyIssued {
+                    metadata: meta(),
+                    claim_ref: "c".into(),
+                    subject: "s".into(),
+                    verifier: "v".into(),
+                },
+                "CertifyIssued",
+            ),
+            (
+                NexusEvent::AgentHeartbeat {
+                    metadata: meta(),
+                    from: "a".into(),
+                    status: crate::payloads::AgentStatus::Idle,
+                    current_task: None,
+                    token_usage: 0,
+                    memory_usage_mb: 0,
+                },
+                "AgentHeartbeat",
+            ),
+            (
+                NexusEvent::TuiChatSubmitted {
+                    metadata: meta(),
+                    session_id: "s".into(),
+                    query: "q".into(),
+                    slash_command: None,
+                },
+                "TuiChatSubmitted",
+            ),
+            (
+                NexusEvent::R2FreezeViolation {
+                    metadata: meta(),
+                    violation_type: "v".into(),
+                    evidence: "e".into(),
+                },
+                "R2FreezeViolation",
+            ),
+            (
+                NexusEvent::StopRulingIssued {
+                    metadata: meta(),
+                    quest_id: "q".into(),
+                    reason: "r".into(),
+                    preserve_best: true,
+                },
+                "StopRulingIssued",
+            ),
+            (
+                NexusEvent::FailureRegistered {
+                    metadata: meta(),
+                    signature: "s".into(),
+                    affected_component: "c".into(),
+                    fix_status: "f".into(),
+                },
+                "FailureRegistered",
+            ),
+            (
+                NexusEvent::BlackboardEntry {
+                    metadata: meta(),
+                    key: "k".into(),
+                    summary: "s".into(),
+                    ttl_secs: 1,
+                    epistemic: "e".into(),
+                    provenance: None,
+                },
+                "BlackboardEntry",
+            ),
+        ];
+        for (event, expected) in samples {
+            assert_eq!(
+                event.type_name(),
+                expected,
+                "type_name() 与变体标识符不一致 —— serde `type` tag 会跟着漂移"
+            );
+        }
+    }
+
+    #[test]
+    fn known_critical_variants_report_critical_severity() {
+        // 三条红线级定级的显式锚点(与 bus.rs 的 mpsc 旁路清单独立):
+        // BudgetExceeded = 预算红线,BudgetExceeded 降级会直接触发 OOM 路径;
+        // SkepticVeto = 安全否决,SkepticVeto 降级会让高风险操作继续;
+        // CertifyIssued = 验证器独占签发,CertifyIssued 降级等于"生成者自评"。
+        for event in [
+            NexusEvent::BudgetExceeded {
+                metadata: EventMetadata::new("probe"),
+                budget_type: "token".into(),
+                current: 1,
+                limit: 1,
+            },
+            NexusEvent::SkepticVeto {
+                metadata: EventMetadata::new("probe"),
+                quest_id: "q".into(),
+                veto_reason: "r".into(),
+                frozen_capabilities: vec![],
+            },
+            NexusEvent::CertifyIssued {
+                metadata: EventMetadata::new("probe"),
+                claim_ref: "c".into(),
+                subject: "s".into(),
+                verifier: "v".into(),
+            },
+        ] {
+            assert_eq!(
+                event.severity(),
+                EventSeverity::Critical,
+                "{} 必须定级 Critical(架构红线不可降级)",
+                event.type_name()
+            );
+            assert!(
+                EventTopic::all().contains(&event.topic()),
+                "{} 的 topic 不在 EventTopic 合法集内",
+                event.type_name()
+            );
+        }
+    }
+}

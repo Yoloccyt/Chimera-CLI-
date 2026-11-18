@@ -42,3 +42,21 @@ impl CriticalEventDropped {
         self.dropped_count
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dropped_count_roundtrip_at_u64_boundaries() {
+        for count in [0_u64, 1, u64::MAX] {
+            let value = CriticalEventDropped::new(count);
+            assert_eq!(value.dropped_count(), count);
+            let json = serde_json::to_string(&value).unwrap();
+            let back: CriticalEventDropped = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, value);
+            assert_eq!(back.dropped_count(), count);
+        }
+    }
+}

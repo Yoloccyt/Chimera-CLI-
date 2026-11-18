@@ -15,5 +15,9 @@ chrono = { workspace = true }
 # Quest 领域类型的宿主。L0-B -> L0-A 恒允许(ADR-222 D1/D3)。
 nexus-contracts = { workspace = true }
 
+[dev-dependencies]
+# 内联单测的线格式断言用;workspace 已收编同一版本,只声明不新增外部依赖。
+serde_json = { workspace = true }
+
 [lints]
 workspace = true

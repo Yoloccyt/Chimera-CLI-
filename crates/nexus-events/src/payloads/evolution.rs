@@ -153,3 +153,58 @@ impl RollbackDiagnosticContext {
         self
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rollback_trigger_type_roundtrip_and_snake_case_wire_format() {
+        // `#[serde(rename_all = "snake_case")]` 是跨进程线格式契约:
+        // 改名会静默破坏在途回滚诊断记录的反序列化。
+        for (value, wire) in [
+            (
+                RollbackTriggerType::ConsecutiveRegression,
+                "\"consecutive_regression\"",
+            ),
+            (RollbackTriggerType::AsaIntervention, "\"asa_intervention\""),
+            (RollbackTriggerType::EwmaCollapse, "\"ewma_collapse\""),
+            (RollbackTriggerType::RecallRateDrop, "\"recall_rate_drop\""),
+            (RollbackTriggerType::Unknown, "\"unknown\""),
+        ] {
+            assert_eq!(serde_json::to_string(&value).unwrap(), wire);
+            let back: RollbackTriggerType = serde_json::from_str(wire).unwrap();
+            assert_eq!(back, value);
+            assert!(!value.description().is_empty());
+        }
+        // 默认值必须是 Unknown(未知触发条件不得被误归类为具体退化模式)
+        assert_eq!(RollbackTriggerType::default(), RollbackTriggerType::Unknown);
+    }
+
+    #[test]
+    fn diagnostic_context_defaults_from_empty_object() {
+        // 全字段 `#[serde(default)]`:旧版本事件(无该结构体字段)反序列化为全 None
+        let back: RollbackDiagnosticContext = serde_json::from_str("{}").unwrap();
+        assert_eq!(back, RollbackDiagnosticContext::empty());
+        assert_eq!(back.ewma_level, None);
+        assert_eq!(back.observation_days, None);
+        assert_eq!(back.regression_streak, None);
+        assert_eq!(back.recall_rate_drop, None);
+        assert_eq!(back.rollback_target_version, None);
+    }
+
+    #[test]
+    fn diagnostic_context_roundtrip_fully_populated_and_at_boundaries() {
+        let empty_strings_are_none_free = RollbackDiagnosticContext::default()
+            .with_ewma_level(0.0)
+            .with_observation_days(0)
+            .with_regression_streak(u32::MAX)
+            .with_recall_rate_drop(1.0)
+            .with_rollback_target_version(0);
+        let json = serde_json::to_string(&empty_strings_are_none_free).unwrap();
+        let back: RollbackDiagnosticContext = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, empty_strings_are_none_free);
+        assert_eq!(back.regression_streak, Some(u32::MAX));
+    }
+}

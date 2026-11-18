@@ -92,3 +92,77 @@ pub enum CompatLevel {
     /// 拒绝:版本不可调和,banner 警告 + orchestrated 命令只读化
     Refused,
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn roundtrip<T>(value: &T) -> T
+    where
+        T: Serialize + for<'de> Deserialize<'de>,
+    {
+        let json = serde_json::to_string(value).unwrap();
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn chat_message_payload_roundtrip_at_boundaries() {
+        // 空串边界:两个字段都为空时线格式不得丢字段
+        let empty = TuiChatMessagePayload {
+            role: String::new(),
+            content: String::new(),
+        };
+        assert_eq!(roundtrip(&empty), empty);
+
+        let filled = TuiChatMessagePayload {
+            role: "assistant".into(),
+            content: "多行\n内容\u{1F600}".into(),
+        };
+        assert_eq!(roundtrip(&filled), filled);
+    }
+
+    #[test]
+    fn consult_urgency_roundtrip_all_variants() {
+        for value in [
+            ConsultUrgency::Low,
+            ConsultUrgency::Medium,
+            ConsultUrgency::High,
+            ConsultUrgency::Critical,
+        ] {
+            assert_eq!(roundtrip(&value), value);
+        }
+    }
+
+    #[test]
+    fn action_source_and_chat_status_roundtrip() {
+        for value in [
+            ActionSource::Chat,
+            ActionSource::Palette,
+            ActionSource::Panel,
+        ] {
+            assert_eq!(roundtrip(&value), value);
+        }
+        for value in [
+            ChatStatus::Thinking,
+            ChatStatus::ToolExecuting,
+            ChatStatus::Idle,
+        ] {
+            assert_eq!(roundtrip(&value), value);
+        }
+        // 派生 Default 的语义锚点:会话初始态是"空闲"
+        assert_eq!(ChatStatus::default(), ChatStatus::Idle);
+    }
+
+    #[test]
+    fn compat_level_roundtrip_including_empty_degradation_list() {
+        for value in [
+            CompatLevel::Full,
+            CompatLevel::Refused,
+            CompatLevel::Degraded(Vec::new()),
+            CompatLevel::Degraded(vec!["m4-channel".into(), String::new()]),
+        ] {
+            assert_eq!(roundtrip(&value), value);
+        }
+    }
+}

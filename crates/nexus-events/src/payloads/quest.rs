@@ -64,3 +64,39 @@ impl std::str::FromStr for VoteValue {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vote_value_as_str_and_from_str_roundtrip() {
+        for value in [VoteValue::Yes, VoteValue::No, VoteValue::Abstain] {
+            let text = value.as_str();
+            assert_eq!(text.parse::<VoteValue>(), Ok(value));
+            // 大小写不敏感是命令面板 :vote 的解析约定
+            assert_eq!(text.to_uppercase().parse::<VoteValue>(), Ok(value));
+        }
+        assert_eq!("maybe".parse::<VoteValue>(), Err(()));
+    }
+
+    #[test]
+    fn vote_and_quest_status_wire_format_has_no_rename() {
+        // 无 `#[serde(rename_all)]`:单元变体按变体名字符串编码。
+        // 这是跨进程契约,改名/加 rename 会静默破坏在途命令与面板数据。
+        assert_eq!(serde_json::to_string(&VoteValue::Yes).unwrap(), "\"Yes\"");
+        assert_eq!(
+            serde_json::from_str::<VoteValue>("\"Abstain\"").unwrap(),
+            VoteValue::Abstain
+        );
+        assert_eq!(
+            serde_json::to_string(&QuestStatus::Completed).unwrap(),
+            "\"Completed\""
+        );
+        assert_eq!(
+            serde_json::from_str::<QuestStatus>("\"Cancelled\"").unwrap(),
+            QuestStatus::Cancelled
+        );
+    }
+}

@@ -343,7 +343,11 @@ def cmd_run(args):
             return Attempt(task.id, 0, Verdict.OK, 0, 0.0,
                            "reused-ok from " + hit[0], cmd_digest=task.cmd_digest(),
                            reused=True, reused_from=hit[0])
-        attempt = _execute_one(task, policy, bash_path, journal.logs, 1)
+        tel.gate_entered()
+        try:
+            attempt = _execute_one(task, policy, bash_path, journal.logs, 1)
+        finally:
+            tel.gate_left()
         # 只有 mismatch 停表：env-fail / unknown 都不停（见 test_govd 的三态传播断言）。
         # WHY 只有真红停：env-fail 是环境问题（另一个门可能好着），unknown 是资源不足
         # （磁盘门槛），两者都不构成"仓库坏了"的结论，继续跑才能把"有多少门受同一处
@@ -383,6 +387,9 @@ def cmd_run(args):
     # WHY threading.Event 而不是共享变量：并发下多线程需要原子可见性；Event 是 stdlib
     # 提供的最小同步原语，比 `bool` 加锁便宜，比 `list.append` 语义明确。
     stop = threading.Event()
+    # TC-D-1 schedule telemetry: peak concurrency, wall clock and exclusive-domain
+    # waiting are measured where gates are dispatched, then rendered by report.py.
+    tel = rp.Telemetry()
     # ADR-315 W-T1: resource mutual exclusion.
     #
     # WHY this is not `needs`: the manifest header records the measured fact
@@ -422,7 +429,11 @@ def cmd_run(args):
         chain = exclusive_groups[key]
         out = []
         for task in chain:
-            out.append(execute(task))
+            tel.exclusive_gate_started(key)
+            try:
+                out.append(execute(task))
+            finally:
+                tel.exclusive_gate_finished(key)
         return out
 
     try:
@@ -431,8 +442,10 @@ def cmd_run(args):
                 # Exclusive chains are submitted as unit jobs: one future per
                 # resource key, each running its chain sequentially. Free tasks
                 # are submitted individually.
-                chain_futs = {key: pool.submit(run_exclusive_chain, key)
-                              for key in ordered_exclusive}
+                chain_futs = {}
+                for key in ordered_exclusive:
+                    tel.exclusive_enqueued(key)
+                    chain_futs[key] = pool.submit(run_exclusive_chain, key)
                 free_futs = [pool.submit(execute, t) for t in free_tasks]
                 for fut in as_completed(list(chain_futs.values()) + free_futs):
                     result = fut.result()
@@ -443,6 +456,7 @@ def cmd_run(args):
                         record(result)
         else:
             for key in ordered_exclusive:
+                tel.exclusive_enqueued(key)
                 for att in run_exclusive_chain(key):
                     record(att)
             for task in free_tasks:
@@ -457,6 +471,7 @@ def cmd_run(args):
 
     # 汇总按 manifest 序，不看完成先后：并发不能让报告顺序变成调度噪声。
     attempts.sort(key=lambda a: order.get(a.task_id, 10 ** 9))
+    tel.stop()
 
 
     after = pol.snapshot(ROOT)
@@ -466,12 +481,14 @@ def cmd_run(args):
         print("POLICY-VIOLATION " + ",".join(extra))
 
 
-    (journal.dir / "report.json").write_text(rp.to_json(meta, attempts, reported_skipped), encoding="utf-8")
+    (journal.dir / "report.json").write_text(
+        rp.to_json(meta, attempts, reported_skipped, telemetry=tel),
+        encoding="utf-8")
     (journal.dir / "junit.xml").write_text(rp.to_junit(attempts, reported_skipped), encoding="utf-8")
     sha = journal.append("run_end", {"counts": dict(rp.counts(attempts, reported_skipped))})
 
 
-    summary = rp.step_summary(meta, attempts, reported_skipped, sha)
+    summary = rp.step_summary(meta, attempts, reported_skipped, sha, telemetry=tel)
     if shard_note:
         summary = summary.replace("profile=" + args.profile,
                                   "profile=" + args.profile + " shard=" + shard_note)

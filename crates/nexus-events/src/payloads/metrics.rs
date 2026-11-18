@@ -159,3 +159,82 @@ impl ClvSummary {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn budget_metrics_payload_field_names_are_frozen() {
+        // 字段名是跨进程线格式契约:efficiency-monitor 聚合后经 event-bus
+        // 交给 TUI 面板,改名会让消费端静默失配(默认值或反序列化错误)。
+        // 此处硬编码完整期望串,JSON 片段即契约本体。
+        let payload = BudgetMetricsPayload {
+            total_consumption: 10.0,
+            remaining_budget: 2.5,
+            utilization_rate: 0.8,
+            current_tier: "High".into(),
+            coefficient: 1.0,
+            is_exceeded: false,
+            alert: None,
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert_eq!(
+            json,
+            r#"{"total_consumption":10.0,"remaining_budget":2.5,"utilization_rate":0.8,"current_tier":"High","coefficient":1.0,"is_exceeded":false,"alert":null}"#
+        );
+        let back: BudgetMetricsPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, payload);
+    }
+
+    #[test]
+    fn router_stats_nested_hot_capabilities_roundtrip() {
+        let payload = RouterStatsPayload {
+            hit_rate: 0.75,
+            p50_latency_us: 10,
+            p95_latency_us: 20,
+            p99_latency_us: 30,
+            hot_capabilities: vec![("grep".into(), 7), ("edit".into(), 3)],
+        };
+        let value = serde_json::to_value(&payload).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 5);
+        // (String, u64) 元组在 JSON 里编码为二元数组,顺序即 (能力, 调用次数)
+        assert_eq!(value["hot_capabilities"][0][0], serde_json::json!("grep"));
+        assert_eq!(value["hot_capabilities"][0][1], serde_json::json!(7));
+        let back: RouterStatsPayload =
+            serde_json::from_str(&serde_json::to_string(&payload).unwrap()).unwrap();
+        assert_eq!(back, payload);
+    }
+
+    #[test]
+    fn clv_summary_block_means_norm_and_top_dims_roundtrip() {
+        // 16 维切片:block_size = 2,块均值可手算片上验证
+        let slice: Vec<f32> = (1..=16).map(|v| v as f32).collect();
+        let summary = ClvSummary::from_clv_slice(&slice);
+        assert_eq!(summary.block_means.len(), 8);
+        assert_eq!(summary.block_means[0], 1.5);
+        assert_eq!(summary.block_means[7], 15.5);
+        assert!((summary.l2_norm - 1496.0_f32.sqrt()).abs() < 1e-3);
+        assert_eq!(summary.top_dims.len(), 8);
+        assert_eq!(summary.top_dims[0], (15, 16.0));
+
+        // 嵌套结构线格式:top_dims 是 [[维度索引, 值], ...]
+        let value = serde_json::to_value(&summary).unwrap();
+        assert_eq!(value.as_object().unwrap().len(), 3);
+        assert!(value["block_means"].is_array());
+        assert!(value["l2_norm"].is_number());
+        assert_eq!(value["top_dims"][0][0], serde_json::json!(15));
+        assert_eq!(value["top_dims"][0][1], serde_json::json!(16.0));
+
+        let back: ClvSummary =
+            serde_json::from_str(&serde_json::to_string(&summary).unwrap()).unwrap();
+        assert_eq!(back, summary);
+
+        // 边界:空切片不得除零/越界,且零向量无显著维度
+        let empty = ClvSummary::from_clv_slice(&[]);
+        assert!(empty.block_means.is_empty());
+        assert_eq!(empty.l2_norm, 0.0);
+        assert!(empty.top_dims.is_empty());
+    }
+}

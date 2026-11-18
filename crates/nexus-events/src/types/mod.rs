@@ -84,3 +84,95 @@ impl NexusEvent {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// 固定元数据:event_id/timestamp 由字面量反序列化,使线格式快照可逐字比对。
+    const FIXED_META_JSON: &str = r#"{"event_id":"018f5a2e-0000-7000-8000-000000000001","timestamp":"2026-01-02T03:04:05Z","source":"nexus-events-test","payload_version":1,"graph_identity":null,"trace_id":null}"#;
+
+    fn fixed_metadata() -> EventMetadata {
+        serde_json::from_str(FIXED_META_JSON).unwrap()
+    }
+
+    #[test]
+    fn nexus_event_uses_adjacent_tag_and_content_representation() {
+        // `#[serde(tag = "type", content = "data")]` 的外化证据:顶层恰有两个键
+        let event = NexusEvent::QuestCreated {
+            metadata: fixed_metadata(),
+            quest_id: "q-1".into(),
+            title: "hello".into(),
+            task_count: 2,
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        let obj = value.as_object().unwrap();
+        assert_eq!(obj.len(), 2, "顶层只允许 type/data 两个键");
+        assert_eq!(value["type"], serde_json::json!("QuestCreated"));
+        assert_eq!(value["data"]["quest_id"], serde_json::json!("q-1"));
+        assert!(value["data"]["metadata"].is_object());
+
+        // 回环:线格式 → 枚举(跨进程消费端的最小验证)
+        let json = serde_json::to_string(&event).unwrap();
+        let back: NexusEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, event);
+    }
+
+    #[test]
+    fn quest_created_json_snapshot_is_frozen() {
+        let event = NexusEvent::QuestCreated {
+            metadata: fixed_metadata(),
+            quest_id: "q-1".into(),
+            title: "hello".into(),
+            task_count: 2,
+        };
+        assert_eq!(
+            serde_json::to_string(&event).unwrap(),
+            concat!(
+                r#"{"type":"QuestCreated","data":{"metadata":{"event_id":"018f5a2e-0000-7000-8000-000000000001","#,
+                r#""timestamp":"2026-01-02T03:04:05Z","source":"nexus-events-test","payload_version":1,"#,
+                r#""graph_identity":null,"trace_id":null},"quest_id":"q-1","title":"hello","task_count":2}}"#
+            )
+        );
+    }
+
+    #[test]
+    fn budget_exceeded_json_snapshot_is_frozen() {
+        let event = NexusEvent::BudgetExceeded {
+            metadata: fixed_metadata(),
+            budget_type: "token".into(),
+            current: 10,
+            limit: 5,
+        };
+        assert_eq!(
+            serde_json::to_string(&event).unwrap(),
+            concat!(
+                r#"{"type":"BudgetExceeded","data":{"metadata":{"event_id":"018f5a2e-0000-7000-8000-000000000001","#,
+                r#""timestamp":"2026-01-02T03:04:05Z","source":"nexus-events-test","payload_version":1,"#,
+                r#""graph_identity":null,"trace_id":null},"budget_type":"token","current":10,"limit":5}}"#
+            )
+        );
+    }
+
+    #[test]
+    fn certify_claim_ref_reads_only_certify_issued() {
+        let certify = NexusEvent::CertifyIssued {
+            metadata: fixed_metadata(),
+            claim_ref: "claim-42".into(),
+            subject: "s".into(),
+            verifier: "v".into(),
+        };
+        assert_eq!(certify.certify_claim_ref(), Some("claim-42"));
+
+        let other = NexusEvent::QuestCreated {
+            metadata: fixed_metadata(),
+            quest_id: "q-1".into(),
+            title: "t".into(),
+            task_count: 1,
+        };
+        assert_eq!(other.certify_claim_ref(), None);
+        // 访问器纯只读:调用后事件本体不变
+        assert_eq!(certify.certify_claim_ref(), Some("claim-42"));
+    }
+}

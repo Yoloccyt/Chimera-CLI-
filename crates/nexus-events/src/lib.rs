@@ -65,3 +65,23 @@ pub mod prelude {
     pub use crate::topic::EventTopic;
     pub use crate::types::*;
 }
+
+#[cfg(test)]
+mod tests {
+    // prelude 是外部消费方最常用的入口:能编译即证明 NexusEvent /
+    // EventMetadata / EventTopic 三者都在 glob 面内且无遮蔽。
+    use crate::prelude::*;
+
+    #[test]
+    fn prelude_exposes_event_types_and_constructors() {
+        let event = NexusEvent::QuestCreated {
+            metadata: EventMetadata::new("prelude-probe"),
+            quest_id: "q-1".into(),
+            title: "t".into(),
+            task_count: 1,
+        };
+        assert_eq!(event.type_name(), "QuestCreated");
+        assert_eq!(event.topic(), EventTopic::Quest);
+        assert_eq!(event.metadata().source, "prelude-probe");
+    }
+}
