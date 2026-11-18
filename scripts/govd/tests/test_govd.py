@@ -34,7 +34,10 @@ POLICY = ROOT / "scripts" / "govd" / "policy.toml"
 # instead of repeating the literals -- on the wiring day three separate
 # assertions failed for what is one fact, which is the cost of duplicating it.
 # 自锁已实测：只加门不改这三值 ⇒ 本文件自己的 test_real_census 先红（159 != 157）。
-CENSUS_TOTAL, CENSUS_LIGHT, CENSUS_HEAVY = 159, 152, 7
+# L1-F 波次（2026-11-18）新增 G-165/G-166（L1 公开面棘轮）与 G-167/G-168
+# （L1 错误模型）四条 light 门 ⇒ 159 → 163；同时把 G-163/G-164 漏登的 +2 补齐
+# （实测量尺 = 165 = 158 light + 7 heavy）。
+CENSUS_TOTAL, CENSUS_LIGHT, CENSUS_HEAVY = 165, 158, 7
 PR_SUM_LINE = f"selected={CENSUS_LIGHT} total={CENSUS_TOTAL} skipped={CENSUS_HEAVY}"
 
 def make_task(**kw):

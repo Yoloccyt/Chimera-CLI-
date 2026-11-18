@@ -1,0 +1,29 @@
+# L1 public-surface ledger (L1-F-3). One row per L1 core-foundation
+# crate; every count is an only-decrease ratchet.
+#
+# LEDGER FORMAT
+#   <crate> pub_items=<N> pub_fns=<N> features=<N> error_variants=<N>
+#
+# COUNTS
+#   pub_items      pub struct|enum|type|trait|union|const|static|fn
+#                  declarations in crates/<crate>/src/**/*.rs
+#                  (pub(crate) excluded; #[cfg(test)] mod X; files and
+#                  inline #[cfg(test)] mod tests { } tails excluded)
+#   pub_fns        the pub fn subset of pub_items (diagnostic)
+#   features       keys under [features] in crates/<crate>/Cargo.toml
+#   error_variants variants of pub enum *Error and thiserror-derived
+#                  pub enum bodies
+#
+# RATCHET
+#   An increase is a surface growth: red. A decrease means the ledger
+#   must shrink in the SAME commit: red until the row is updated.
+#
+# MEASURED
+#   command: py -3 scripts/check_l1_surface.py --emit
+#   date:    2026-11-18
+#   scanned: 164 public item(s) across 5 crate(s)
+event-bus pub_items=71 pub_fns=11 features=0 error_variants=9
+nexus-core pub_items=9 pub_fns=3 features=0 error_variants=6
+nexus-compute pub_items=55 pub_fns=16 features=0 error_variants=9
+nexus-telemetry pub_items=15 pub_fns=9 features=0 error_variants=0
+nexus-events pub_items=14 pub_fns=0 features=0 error_variants=0

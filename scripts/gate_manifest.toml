@@ -2000,3 +2000,60 @@ resource = "cpu"
 exclusive = ""
 note = "夹具双向有牙：宏体内 pub enum NexusEvent 必须被扫到 / 纯事件符号改 nexus_events / 载体专有符号不动 / 混合组按归属拆成两行且各自保序 / 单元素花括号去掉 / as 别名逐字保留 / self 组拒收且字节不变 / 子模块路径只拆出归属名 / #[cfg(test)] mod X; 指向的外部测试文件不计入 / --apply 幂等 / 未知旗标退 2。夹具走生产同一函数（collect_symbols + rewrite_text + apply_tree），不是另写一套。断言条数由门自报，台账不写死。"
 ci_exempt = "纯静态只读门（零编译、零 cargo）；本次波次未接 CI workflow，收口时由 run_gate_manifest.py 承载"
+
+[[gate]]
+id = "G-165"
+spec_ref = "L1-F-3（L1 公开面棘轮——零装配面台账之外的第二把锁）"
+cmd = "{python} scripts/check_l1_surface.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+group = "l0-contract"
+concurrency = 8
+resource = "cpu"
+exclusive = ""
+note = "L1 核心基础面（event-bus / nexus-core / nexus-compute / nexus-telemetry / nexus-events）的公开面四个计数只能减不能增：pub_items（pub struct|enum|type|trait|union|const|static|fn 声明数，pub(crate) 不计）、pub_fns（pub fn 子集，诊断用）、features（Cargo.toml [features] 键数，无该段记 0）、error_variants（pub enum *Error 与 thiserror 派生枚举的变体数）。扫描面 crates/<crate>/src/**/*.rs，排除 #[cfg(test)] mod X; 指向的独立测试文件（与 G-161 同一函数 check_l1_dead_surface._test_module_files，本仓第 5 处复用，不抄第二份）与内联 #[cfg(test)] 尾。增加 ⇒ 退 1 并打印字段/旧值/新值；减少 ⇒ 也退 1，要求同 commit 缩表（否则台账会烂成猜值）；相等 ⇒ 退 0。台账 scripts/l1_surface_freeze.txt 由 --emit 实测生成（2026-11-18：164 pub 项 / 5 crate）。扫到 pub 项低于地板退 2 不判绿。"
+ci_exempt = "纯静态只读门（零编译、零 cargo）；本次波次未接 CI workflow，收口时由 run_gate_manifest.py 承载（run_gate_manifest 覆盖本清单全部门）"
+
+[[gate]]
+id = "G-166"
+spec_ref = "G-165 配套（门自身有牙）"
+cmd = "{python} scripts/check_l1_surface.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+group = "l0-contract"
+concurrency = 8
+resource = "cpu"
+exclusive = ""
+note = "夹具走生产同一判据：四个计数各自的口径（pub(crate) 不计 / pub fn 子集 / [features] 键数且缺段为 0 / 只有 *Error 枚举体计变体）+ 外部 #[cfg(test)] mod X; 文件与内联尾均不进公开面 + 属性行与多行变体各只计一次；台账相等必绿、任一字段增加必红并打印「旧 -> 新」、减少必红并要求缩表、缺 crate 行必红、未知 crate 行必红、畸形行/重复 crate 行/台账缺失/扫面低于地板/ crate src 目录缺失一律退 2。"
+ci_exempt = "纯静态只读门（零编译、零 cargo）；本次波次未接 CI workflow，收口时由 run_gate_manifest.py 承载（run_gate_manifest 覆盖本清单全部门）"
+
+[[gate]]
+id = "G-167"
+spec_ref = "L1-F-4（L1 错误模型约定：库层 thiserror + #[non_exhaustive]，禁 anyhow）"
+cmd = "{python} scripts/check_l1_error_model.py"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+group = "l0-contract"
+concurrency = 8
+resource = "cpu"
+exclusive = ""
+note = "三个 family。E1：L1 五 crate 的 src/**（排除 #[cfg(test)] mod X; 指向的外部测试文件与内联 #[cfg(test)] 尾）不得出现 anyhow —— 词法先行 blank_rust 抹掉注释与字符串，所以「文档里提到 anyhow」不算命中。E2：pub enum *Error / pub struct *Error 必须带 #[non_exhaustive]，除非在 scripts/l1_error_model_exempt.txt 里登记且写明理由；台账只准登记「缺属性」这一件事（E1 无豁免通道），登记项已不存在时为 STALE 必红，倒逼台账缩表。E3：错误 Display 参与控制流判定（err.to_string() / format!(\"{}\", err) 与 if/match/== 同行）只报 WARN 不阻断 —— 精确判定需要类型信息。E1/E2 命中退 1；仅 E3 零售 0（仍打印清单）；豁免台账畸形、扫到的 *Error 低于地板、crate 目录缺失退 2。2026-11-18 实测：E1 = 0，E2 = 7 个存量类型（已登记债务），E3 = 0。"
+ci_exempt = "纯静态只读门（零编译、零 cargo）；本次波次未接 CI workflow，收口时由 run_gate_manifest.py 承载（run_gate_manifest 覆盖本清单全部门）"
+
+[[gate]]
+id = "G-168"
+spec_ref = "G-167 配套（门自身有牙）"
+cmd = "{python} scripts/check_l1_error_model.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+group = "l0-contract"
+concurrency = 8
+resource = "cpu"
+exclusive = ""
+note = "夹具证明 E1/E2 双向：use anyhow 必红且点名行号 / 缺 #[non_exhaustive] 必红且给出豁免键 / 带属性必绿 / pub struct *Error 同样受检 / 豁免台账命中必绿而其他类型仍红 / 登记项已消失必红 / 无理由的豁免行退 2 / 注释里的 anyhow 与 E3 痕迹不误报 / 仅 E3 命中退 0 且打印 WARN / #[cfg(test)] mod X; 外部测试文件不在扫描面 / 扫面低于地板与 crate 目录缺失退 2。夹具走生产同一 judge，不是另写一套。"
+ci_exempt = "纯静态只读门（零编译、零 cargo）；本次波次未接 CI workflow，收口时由 run_gate_manifest.py 承载（run_gate_manifest 覆盖本清单全部门）"
+

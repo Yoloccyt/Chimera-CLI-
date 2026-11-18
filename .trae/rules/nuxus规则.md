@@ -4,7 +4,7 @@
 >
 > **历史溯源**:早期为重定向占位(2026-08-11 之前的 nuxus规则.md 由 AGENTS.md 完全托管);自 2026-08-11 v2.26.0-omega 同步后,本文件升级为**速查 + 基线 + 硬约束**三重定位,与 `AGENTS.md`(全量规则)+ `项目域记忆`(持久记忆，2026-10-19 起其索引 `MEMORY.md` 为唯一召回面；口径见 `AGENTS.md` §10.4)形成"快速 / 详细 / 历史"三层规则体系。
 >
-> **最后更新**:2026-10-11(文档系统纠漂批次:NexusEvent 152、Critical mpsc 16/总 20、ADR 磁盘主编号已至 211(不登记上限,一律现取)、G 门 G-01~G-98;继承 2026-10-07 Wave 0:ADR-193 两批次 41→39(router-traits 整 crate 退役、lsct-tiering 整并入 cmt-tiering)+ TUI 面板 30(焦点环 29)+ slash 54 条;基线口径:crate 数以 `Cargo.toml` `workspace.members` 为准(39) + ADR 索引见 `docs/architecture/adr_index.md` + 可达性棘轮由 `scripts/check_crate_reachability.sh` 现测(2026-10-02:30 生产可达 / 0 冻结孤岛 / 9 GATED,`mca-gateway` 经 ADR-177 重分类);上一已发 tag = v2.28.2-omega(2026-09-08),现行 `Cargo.toml` = 2.29.0-omega(2026-09-27 本地发布,tag v2.29.0-omega 未 push);协作流程类规则(分支/提交/PR/发布)的唯一权威源为根目录 [CONTRIBUTING.md](../../../CONTRIBUTING.md);**RL 开发闸门决策持续有效**:Rust-First,Python 侧仅规划)
+> **最后更新**:2026-11-18(文档系统纠漂批次 v2:L1-D/L1-E 结构拆分与事件目录迁出之后 —— NexusEvent 152→**155**、Critical mpsc 16/总 20→**18/22**、crate 数 46→**48**(新增 nexus-events)、G 门上限 G-01~**G-168**;继承 2026-10-11 纠漂批次:ADR 磁盘主编号已至 211(不登记上限,一律现取)、继承 2026-10-07 Wave 0:ADR-193 两批次 41→39(router-traits 整 crate 退役、lsct-tiering 整并入 cmt-tiering)+ TUI 面板 30(焦点环 29)+ slash 54 条;基线口径:crate 数以 `Cargo.toml` `workspace.members` 为准 + ADR 索引见 `docs/architecture/adr_index.md` + 可达性棘轮由 `scripts/check_crate_reachability.sh` 现测;上一已发 tag = v2.28.2-omega(2026-09-08),现行 `Cargo.toml` = 2.29.0-omega;协作流程类规则(分支/提交/PR/发布)的唯一权威源为根目录 [CONTRIBUTING.md](../../../CONTRIBUTING.md);**RL 开发闸门决策持续有效**:Rust-First,Python 侧仅规划)
 > **生成方式**:trae-remote-official:staff-engineer-mode + superpowers-main + praxis + brooks-lint + product-lifecycle-workbench 多 agent 工具分布式深度分析
 
 ---
@@ -170,7 +170,7 @@ L1   Core ─────── nexus-core · event-bus · nexus-events · nexus
 
 **Critical 事件清单**(必须 mpsc 旁路;**权威源 `event-bus/src/bus.rs::is_critical_mpsc_event()` matches 臂,规模由同文件 `CRITICAL_MPSC_VARIANTS` / `CRITICAL_TOTAL` 常量 + D-8 双清单测试守护,行号勿抄**):
 `SkepticVeto` / `RedTeamAudit` / `BudgetExceeded` / `AgentTaskFailed` / `AsaIntervention` / `AffinityQuotaExhausted` / `R2FreezeViolation` / `R2FreezeRollbackFailed` / `FormalViolation` / `VetoOverridden` / `R1ShadowRollbackFailed` / `StopRulingIssued` / `ErrorSignatureMatched` / `FormalVerificationFailed` / `CertifyIssued` / `FailureRegistered`
-> 口径(2026-10-11 实测):mpsc 旁路 = **16**;severity()=Critical 总数 = **20** = 16 + 4 个历史上只走 broadcast 的 Critical(`CheckpointSaved` / `ConsensusReached` / `SlowConsumerDropped` / `OrphanCallDetected`)。v2.3 补入 `CertifyIssued`/`FailureRegistered`(旧文档值 14 由此而来);`FormalVerificationFailed` 曾按 ADR-159 被当作 `GsoeError` 变体剔除,复证后已进旁路。清单以代码 matches 臂为唯一事实源,文档不登记规模数字。
+> 口径(**2026-11-18 现取**):mpsc 旁路 = **18**;severity()=Critical 总数 = **22** = 18 + 4 个历史上只走 broadcast 的 Critical(`CheckpointSaved` / `ConsensusReached` / `SlowConsumerDropped` / `OrphanCallDetected`)。取值命令:`Select-String -Path crates/event-bus/src/bus/mod.rs -Pattern 'CRITICAL_MPSC_VARIANTS|CRITICAL_TOTAL'`(2026-10-11 曾记 16/20,本行为纠漂后的现势值)。v2.3 补入 `CertifyIssued`/`FailureRegistered`(旧文档值 14 由此而来);`FormalVerificationFailed` 曾按 ADR-159 被当作 `GsoeError` 变体剔除,复证后已进旁路。**清单以代码 matches 臂为唯一事实源,文档不登记规模数字**——上列数字仅为某时点读数,任何结论必须现取。
 
 ---
 
@@ -319,6 +319,7 @@ pwsh scripts/check_perf_redlines.ps1
 | 2026-10-07 | Wave 0 同步:/bench 斜杠命令接线(54 条)、TUI 面板 30(焦点环 29)口径更新 | Wave 0 波次 |
 | 2026-10-11 | v2.29.0-omega 现态纠漂同步:NexusEvent 152、Critical mpsc 16/总 20、ADR 磁盘主编号 211(不登记上限)、G 门 G-01~G-98;流程类规则权威源移交 CONTRIBUTING.md | 文档系统纠漂批次 |
 | 2026-10-11 | 仓库治理批次:新增本附录 §C 变更历史机制(与 INDEX.md §一 规则文档索引联动) | 仓库治理执行团队(Trae 多 agent) |
+| 2026-11-18 | L1-D/L1-E 重构后纠漂:NexusEvent 152→155、Critical mpsc 16/总 20→18/22、crate 46→48(新增 nexus-events,ADR-322)、G 门 →G-168;变体清单权威源改指 `crates/nexus-events/src/types/` | L1 深度重构 + 工具链并行调度波次 |
 
 ---
 

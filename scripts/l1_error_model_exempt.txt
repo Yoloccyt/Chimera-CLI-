@@ -1,0 +1,33 @@
+# L1 error-model exemption ledger (L1-F-4 / E2).
+#
+# WHAT THIS IS
+#   `pub enum *Error` / `pub struct *Error` in the five L1 core-foundation
+#   crates must carry `#[non_exhaustive]`. A type that does not (yet) is
+#   listed here, one row per type, with a reason. Rows are keyed
+#   <crate>::<module>::<Type> where <module> is the crate-relative module
+#   path ("lib" is the crate root, "bridge/mod" is nested).
+#
+# RULES
+#   * Every row MUST carry a "# reason" -- a row without one is
+#     undecidable (exit 2), not an exemption.
+#   * A row whose type no longer exists is STALE and red: delete it in the
+#     same commit, otherwise the ledger rots into a permission slip.
+#   * The ledger only permits MISSING `#[non_exhaustive]`. It never permits
+#     `anyhow` in library code (E1 has no exemption channel).
+#
+# WHY THIS LEDGER IS NOT EMPTY
+#   Measured 2026-11-18: all seven L1 `pub *Error` types lack
+#   `#[non_exhaustive]`. Adding the attribute is a change to crates/**,
+#   which this wave is explicitly forbidden to touch, so each type is
+#   registered as debt here instead. Deleting a row is the shrinking action
+#   once the attribute lands.
+#
+# MEASURED BY
+#   py -3 scripts/check_l1_error_model.py
+event-bus::causal/buffer::CausalBufferError  # debt: attribute lands with the next crates/** batch (no crates/** edits in this wave)
+event-bus::credit_flow::CreditError  # debt: same; adding the attribute is a library API change, needs its own commit
+event-bus::error::EventBusError  # debt: same; public surface of L1 event plane, must change together with consumers
+nexus-core::error::NexusError  # debt: same; L1 core error type consumed across the workspace
+nexus-compute::bridge::ComputeError  # debt: same; compute-bridge contract type
+nexus-compute::hts/sequential_test::HtsError  # debt: same; sequential-test contract type
+nexus-compute::seam::SeamError  # debt: same; seam contract type
