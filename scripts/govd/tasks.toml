@@ -87,3 +87,15 @@ source = "diagnostic"
 timeout_s = 300
 owner = "governance"
 note = "零装配面登记门的**诊断侧**登记（L1-B 波次，2026-11-16）。本脚本的正式门身份在 gate_manifest.toml 的 G-161/G-162（一条正式门 + 一条 --selftest 自测门）；本行只把同一脚本登记进 govd 的工具台账，使 `govd list` / 收口报告能看到它在本仓的位置，并让脚本在 release 车道有一个确定的执行归属。判据来源：L0-B 四个核心基础面（event-bus / nexus-core / nexus-compute / nexus-telemetry）的 pub 项零生产装配清单，与 scripts/l1_dead_surface_freeze.txt 双向对账；纯静态只读（零 cargo、零编译），实测 1.8s。"
+
+[[task]]
+id = "D-02"
+profiles = ["release"]
+spec_ref = "ADR-322 compat-2x 移除前置（v2.31.0-omega 下游事件导入机械迁移）"
+cmd = "{python} scripts/migrate_l1_event_imports.py --check"
+expect = 1
+kind = "light"
+source = "diagnostic"
+timeout_s = 300
+owner = "governance"
+note = "事件导入迁移盘的**诊断侧**登记（ADR-322 波次，2026-11-18）。正式门身份在 gate_manifest.toml 的 G-163（--check，expect=1 表示 compat-2x 移除前按设计恒红）与 G-164（--selftest）；本行只把同一脚本登记进 govd 工具台账，使 `govd list` 与收口报告能看到它。判据：以 crates/nexus-events/src/** 的公开面为符号归属单一事实源，扫 crates/*/src/**（排除 event-bus / nexus-events 自身与 #[cfg(test)] mod X; 外部测试文件）里 `use event_bus::<事件符号>` 的待改项。纯静态只读，不执行 --apply。"

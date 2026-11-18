@@ -55,8 +55,10 @@
 #       defined but not wired: neither the production backends
 #       (SystemClock / OsFs / ChaCha8Rng) nor the test doubles
 #       (FixedClock / MemFs / MockNet / SeedRng42) have a production caller.
-#   nexus-core::decay::apply_exponential_decay, nexus-core::lib::newtype
-#       unwired helpers on the L0-B core face.
+#   nexus-core::lib::newtype
+#       unwired helper on the L0-B core face.
+#   （2026-11-18 注：`nexus-core::decay::apply_exponential_decay` 已按 L1-C-2
+#     物理删除,故本表同步删行 —— 这正是 STALE 方向该做的事,不是放宽。）
 
 event-bus::backpressure::SlowConsumerDetector
 event-bus::causal/buffer::CausalBuffer
@@ -76,5 +78,4 @@ nexus-compute::seam::Net
 nexus-compute::seam::OsFs
 nexus-compute::seam::SeedRng42
 nexus-compute::seam::SystemClock
-nexus-core::decay::apply_exponential_decay
 nexus-core::lib::newtype

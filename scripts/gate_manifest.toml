@@ -1972,3 +1972,31 @@ resource = "cpu"
 exclusive = ""
 note = "夹具双向有牙：生产 use 使面变活 / cfg(test) 尾与 pub use 重导出不得使面变活 / 只被死构造器造出的类型同样判死 / 未登记面 NEW 必红 / 登记项已不存在 STALE 必红 / 重复行与畸形行退 2 / 台账缺失退 2 / 扫到 pub 项低于地板退 2。夹具走的是生产判据同一函数（judge），不是另写一套。断言条数由门自报，台账不写死。"
 ci_exempt = "纯静态只读门（零编译、零 cargo）；本次波次未接 CI workflow，收口时由 run_gate_manifest.py 承载（run_gate_manifest 覆盖本清单全部门）"
+
+[[gate]]
+id = "G-163"
+spec_ref = "ADR-322 compat-2x 移除前置（v2.31.0-omega 下游事件导入机械迁移盘点）"
+cmd = "{python} scripts/migrate_l1_event_imports.py --check"
+expect = 1
+kind = "light"
+test_kind = "cross_crate"
+group = "l0-contract"
+concurrency = 8
+resource = "cpu"
+exclusive = ""
+note = "本门在 compat-2x 移除前按设计恒红：event-bus 现保留一版纯路径 re-export（pub use nexus_events::{...}），下游仍可 use event_bus::<事件符号> 编译；本门统计这些待改项并判红（rc=1），expect=1 表示“按设计为红”而非放行 —— run_gate_manifest 的判据是 ok = rc == expect，因此 rc=1 被记为符合期望，rc=0 才会变红（说明待改项已清零）。compat-2x 段删除后应把本门改为 expect=0 并删除此门。符号归属单一事实源是 crates/nexus-events/src/** 的公开面现扫（NexusEvent 在 macro_rules! 体内，靠允许缩进的声明正则取到）；扫不到 NexusEvent 或面 < 10 个名字则退 2 不判绿。"
+ci_exempt = "纯静态只读门（零编译、零 cargo）；迁移窗口内恒红，接 CI 会把“按设计为红”变成噪声，收口时由 run_gate_manifest.py 承载"
+
+[[gate]]
+id = "G-164"
+spec_ref = "ADR-322 compat-2x 移除前置（迁移工具自测）"
+cmd = "{python} scripts/migrate_l1_event_imports.py --selftest"
+expect = 0
+kind = "light"
+test_kind = "cross_crate"
+group = "l0-contract"
+concurrency = 8
+resource = "cpu"
+exclusive = ""
+note = "夹具双向有牙：宏体内 pub enum NexusEvent 必须被扫到 / 纯事件符号改 nexus_events / 载体专有符号不动 / 混合组按归属拆成两行且各自保序 / 单元素花括号去掉 / as 别名逐字保留 / self 组拒收且字节不变 / 子模块路径只拆出归属名 / #[cfg(test)] mod X; 指向的外部测试文件不计入 / --apply 幂等 / 未知旗标退 2。夹具走生产同一函数（collect_symbols + rewrite_text + apply_tree），不是另写一套。断言条数由门自报，台账不写死。"
+ci_exempt = "纯静态只读门（零编译、零 cargo）；本次波次未接 CI workflow，收口时由 run_gate_manifest.py 承载"

@@ -68,24 +68,6 @@ pub fn exponential_decay_factor(delta_seconds: f64, tau_seconds: f64) -> f64 {
     (-delta / tau_seconds).exp()
 }
 
-/// 应用指数衰减后的值:value × exp(-Δt / τ)
-///
-/// 适用于"初始值 × 衰减因子"的场景:
-/// - cmt-tiering:`priority = access_count × decay_factor`
-/// - decay-engine(指数模式):`level = level × decay_factor`
-///
-/// # 参数
-/// - `value`:初始值
-/// - `delta_seconds`:距上次事件的时间(秒)
-/// - `tau_seconds`:衰减时间常数 τ(秒)
-///
-/// # 返回
-/// 衰减后的值:value × exp(-Δt / τ)
-#[inline]
-pub fn apply_exponential_decay(value: f64, delta_seconds: f64, tau_seconds: f64) -> f64 {
-    value * exponential_decay_factor(delta_seconds, tau_seconds)
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
@@ -150,28 +132,5 @@ mod tests {
         let factor_large = exponential_decay_factor(100.0, 1000.0);
         // τ=10 时 e^(-10) ≈ 0.000045 < τ=1000 时 e^(-0.1) ≈ 0.905
         assert!(factor_small < factor_large);
-    }
-
-    // ============================================================
-    // apply_exponential_decay 测试
-    // ============================================================
-
-    #[test]
-    fn test_apply_zero_delta() {
-        let result = apply_exponential_decay(100.0, 0.0, 86400.0);
-        assert!((result - 100.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_apply_one_tau() {
-        // 100 × 1/e ≈ 36.7879
-        let result = apply_exponential_decay(100.0, 86400.0, 86400.0);
-        assert!((result - 36.787944).abs() < 1e-2);
-    }
-
-    #[test]
-    fn test_apply_zero_value() {
-        let result = apply_exponential_decay(0.0, 100.0, 86400.0);
-        assert!(result.abs() < 1e-6);
     }
 }
