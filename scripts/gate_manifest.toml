@@ -1944,6 +1944,7 @@ group = "governance"
 concurrency = 4
 resource = "io"
 note = "exclusive 资源互斥的变异负控：在临时副本上变异掉 cli.py 的互斥判定，证明 govd ExclusiveSemanticsTests 的并发断言非恒真（变异后互斥断言必须变红、其余三条保持绿）。负控自身带副本路径守卫（cli.__file__ 必须指向副本），防真实包覆盖副本导致变异从未生效"
+ci_exempt = "由 ci.yml 的独立阻塞 step 执行，不经 run_gate_manifest 驱动：本门的**预期产物**就是一段 unittest traceback（负控要求被变异的那条断言变红），而清单执行器的环境故障分类器只看日志前 5 行里的 'Traceback (most recent call last)'（run_gate_manifest.py::env_failure_reason / govd/classify.py 同源），会把这份**预期**输出判成 env ⇒ rc=2 假红。判据本身未变，只换执行通道"
 
 [[gate]]
 id = "G-161"

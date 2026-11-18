@@ -554,6 +554,56 @@ fn unsaturated_bridge_does_not_degrade() {
     assert_eq!(b.kind_counters().saturations(), 0, "未超阈不得记观测");
 }
 
+/// L1-H-1 回归:池内 panic 必须记在**发生它的实例**上,不得写全局单例的计数器
+///
+/// 病灶(修复前):`spawn_compute_batch` 的池路径 panic 分支写 `bridge().counters`,
+/// 于是非单例实例(A)的失败被错记到全局桥(B)——A 的 `failures` 恒为 0、B 被污染。
+/// WHY 必须用「独立实例 + 全局桥」双实例对照:单例自比(A 就是全局桥)永远看不出
+/// 归属错误,只有两个互不相同的实例才能把「计到谁头上」暴露成可断言的事实。
+///
+/// WHY 选 `NmcEncode`:本文件其余 panic 用例分别落在全局桥的 `Generic` 与自有实例的
+/// `CscCollapseScore`,故全局桥在该类型上的失败计数不会被他测并发改动（同进程并行）。
+#[test]
+fn pool_panic_is_attributed_to_owning_instance_not_global_bridge() {
+    let kind = TaskKind::NmcEncode;
+    let global_before = bridge().kind_counters().failures_of(kind);
+
+    let b = ComputeBridge::test_bridge(2);
+    assert_eq!(
+        b.kind_counters().failures_of(kind),
+        0,
+        "新建实例的失败计数必须从 0 开始"
+    );
+
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {})); // 静音预期 panic,避免污染测试输出
+    let out = b.spawn_compute_batch(
+        kind,
+        vec![
+            Box::new(|| 1u32) as Box<dyn FnOnce() -> u32 + Send>,
+            Box::new(|| -> u32 { panic!("注入池内 panic") }) as Box<dyn FnOnce() -> u32 + Send>,
+        ],
+    );
+    std::panic::set_hook(prev);
+
+    assert_eq!(out[0], Ok(1), "同批其他任务不受影响");
+    assert_eq!(
+        out[1],
+        Err(ComputeError::Panicked),
+        "panic 必须隔离成 Err 而不跨线程传播"
+    );
+    assert_eq!(
+        b.kind_counters().failures_of(kind),
+        1,
+        "panic 必须记在发生它的实例上（修复前此处恒为 0）"
+    );
+    assert_eq!(
+        bridge().kind_counters().failures_of(kind),
+        global_before,
+        "非单例实例的 panic 不得污染全局桥的归因计数"
+    );
+}
+
 #[test]
 fn inline_panic_is_counted_as_failure_not_zero_value() {
     let (b, counter) = saturated_bridge(SaturationMode::Degrade);

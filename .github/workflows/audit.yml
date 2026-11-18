@@ -32,6 +32,14 @@ jobs:
           workspaces: '.'
         # WHY: 加速 cargo-audit 安装与 Cargo.lock 解析,典型缓存命中可省 30-60s
 
+      # WHY 钉解释器（G-121/PINPARITY）：下面 "Audit command parity check" 跑
+      # python3 scripts/audit_cmd_sync.py，此前吃 ubuntu 镜像预装的 python3 —— 该脚本
+      # 依赖 tomllib(3.11+)，浮动版本一变就从"口径对拍通过"变成"解释器不支持"，
+      # 而后者会被读成口径漂移。与 ci.yml 同口径钉 3.11。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       # WHY 预编译安装(2026-09-28):cargo-audit 源码编译约 2-4 分钟/轮,而本 job
       # 每日 02:00 也要跑一次;taiki-e/install-action 直接下载官方 release 二进制
       # 并校验 SHA256。原实现未钉版本(上游解析即最新),此处沿用该口径,
@@ -83,9 +91,18 @@ jobs:
 
   # ============================================================
   # 依赖过期观测 job(报告 §3.6 行动项 6)——非阻塞
-  # WHY: cargo-outdated 是信息型工具(只报告不更新),依赖过期是常态,
-  #      设为 continue-on-error 避免阻塞 PR;配合 cargo upgrade(cargo-edit)手动执行。
-  #      真实 API 兼容性由 cargo-semver-checks 定位(仅库发布场景)。
+  # ① 现状: cargo-outdated 是信息型工具(只报告不更新),依赖过期是常态,
+  #    设为 continue-on-error 避免阻塞 PR;真实 API 兼容性由 cargo-semver-checks
+  #    定位(仅库发布场景),依赖安全由本文件 audit job 阻塞兜底。
+  # ② 转阻塞的机检条件(二者同时满足即必须改 continue-on-error: false):
+  #    (a) `gh run list --workflow audit.yml --limit 40 --json conclusion,createdAt`
+  #        里 outdated job 连续 5 次 conclusion=success(即 `cargo outdated
+  #        --workspace --exit-code 1` 连续 5 次 rc=0,零过期依赖);
+  #    (b) 该 5 次窗口内无 attempt>1(重跑不算连绿)。
+  #    数据源与判定口径沿用 scripts/check_coe_observability.py 的既有形状;
+  #    切换前需把本 job 登记为它的一个观察面(否则条件满足也无人发现 = "永远观察")。
+  # ③ 责任批次: 报告 §3.6 行动项 6(P5-T5 口径);升格动作需与 audit job 的
+  #    `--deny` 口径同批评估(过期 ≠ 不安全,二者不得合并成一个门)。
   # ============================================================
   outdated:
     runs-on: ubuntu-latest

@@ -65,6 +65,11 @@ def _task_from(g: dict) -> Task:
     exclusive = g.get("exclusive", "")
     if not isinstance(exclusive, str):
         raise ManifestError("%s: exclusive must be a string" % gid)
+    # CI 面声明：非空字符串 = 该门按设计不接 CI。类型错必须报错而不是退化成
+    # "属于 CI 面"（后者会让一条笔误把本地门塞进阻塞面）。
+    ci_exempt = g.get("ci_exempt", "")
+    if not isinstance(ci_exempt, str):
+        raise ManifestError("%s: ci_exempt must be a string" % gid)
     return Task(
         id=gid, cmd=str(g["cmd"]), expect=g["expect"], kind=g["kind"],
         spec_ref=str(g["spec_ref"]), note=str(g["note"]),
@@ -73,7 +78,7 @@ def _task_from(g: dict) -> Task:
         owner=str(g.get("owner", "")), disk_gb=float(g.get("disk_gb", 0)),
         source=str(g.get("source", "gate")),
         group=group, concurrency=concurrency, resource=resource,
-        exclusive=exclusive,
+        exclusive=exclusive, ci_exempt=ci_exempt,
     )
 
 def read_gates(path) -> list[dict]:

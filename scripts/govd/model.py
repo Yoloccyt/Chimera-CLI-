@@ -69,6 +69,11 @@ class Task:
     concurrency: int = 1
     resource: str = ""
     exclusive: str = ""
+    # gate_manifest.toml 的 `ci_exempt = "<reason>"`：该门按设计**不接 CI**
+    # （仅本地/收口执行）。govd 只有在调用方显式要求 CI 面（`--ci`）时才据此
+    # 过滤；缺省(None→"") 表示该门属于 CI 面。WHY 让调度器认识这个字段而不是
+    # 让 workflow 自行枚举：CI 面的定义已经写在清单里，第二份枚举必然漂移。
+    ci_exempt: str = ""
 
     def selected_by(self, profile_name: str, include_heavy: bool,
                     allow_mutating: bool) -> bool:
@@ -100,6 +105,7 @@ class Task:
             "disk_gb": self.disk_gb, "source": self.source,
             "group": self.group, "concurrency": self.concurrency,
             "resource": self.resource, "exclusive": self.exclusive,
+            "ci_exempt": self.ci_exempt,
         }
 
 

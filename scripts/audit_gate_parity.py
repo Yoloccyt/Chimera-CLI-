@@ -40,6 +40,13 @@ MANIFEST = os.path.join(HERE, "gate_manifest.toml")
 WORKFLOWS_GLOB = os.path.join(ROOT, ".github", "workflows", "*.yml")
 SCRIPT_RE = re.compile(r"([\w./-]+\.(?:py|sh|ps1))\b")
 COE_RE = re.compile(r"^\s*continue-on-error:\s*true\s*$")
+# 清单驱动的执行面（TC-C）：ci.yml 不再逐条枚举零 cargo 的静态门，改由
+# `scripts/run_gate_manifest.py --ci` 一条命令驱动整张清单。若仍要求"脚本名逐字
+# 出现在某个 run 行里"，这条执行面一落地，全部判据都会被报成 MISSING —— 那是
+# 假红，不是发现。故方向 B（MISSING）接受第二种接线证据：某 workflow **执行**
+# 驱动脚本（且不在 continue-on-error 语境下）即视为覆盖它在 pr profile 里选中的门。
+DRIVER_TOKEN = "scripts/run_gate_manifest.py"
+_RUNLIKE = re.compile(r"(run:|bash |pwsh |py |python3? |sh |\|\s*$)")
 # 解释器/包装词：跳过它们以取脚本后的第一个参数（子命令/flag）作为签名区分。
 _INTERP = {"bash", "sh", "pwsh", "powershell", "py", "python", "python3", "{python}"}
 
@@ -175,12 +182,95 @@ def all_scripts_in_workflows(wf_glob):
     return used
 
 
-def check(manifest_path, wf_glob):
+def gate_blocks(manifest_path):
+    """Return [[line, ...], ...] — one block per [[gate]] row (raw lines)."""
+    if not os.path.isfile(manifest_path):
+        return []
+    with open(manifest_path, "rb") as f:
+        raw = f.read().decode("utf-8-sig")
+    blocks, cur = [], None
+    for line in raw.splitlines():
+        if line.strip() == "[[gate]]":
+            if cur is not None:
+                blocks.append(cur)
+            cur = []
+            continue
+        if cur is not None:
+            cur.append(line)
+    if cur is not None:
+        blocks.append(cur)
+    return blocks
+
+
+def driver_covered(manifest_path):
+    """(basename, first-arg) signatures the manifest driver runs on pr profile.
+
+    口径与 check_ci_manifest_parity.driver_covered 一致，且同样是**保守**的：
+    只认 kind=light、未声明 profiles、未声明 mutating 的行 —— 这正是 govd 的
+    pr profile 无附加旗标时会选中的集合（权威实现 govd/model.py::Task.selected_by）。
+    证不出来的行留在外面，仍然要求逐字接线：宁可漏报"已接线"，不可虚报。
+    """
+    covered = set()
+    for block in gate_blocks(manifest_path):
+        cmd, kind, has_profiles, mutating = None, None, False, False
+        for line in block:
+            s = line.strip()
+            if s.startswith("cmd") and "=" in s and cmd is None:
+                cmd = s.split("=", 1)[1].strip().strip('"')
+            elif s.startswith("kind") and "=" in s:
+                kind = s.split("=", 1)[1].strip().strip('"')
+            elif re.match(r"profiles\s*=", s):
+                has_profiles = True
+            elif re.match(r"mutating\s*=\s*true", s):
+                mutating = True
+        if not cmd or kind != "light" or has_profiles or mutating:
+            continue
+        covered |= set(script_signatures(cmd))
+    return covered
+
+
+def driver_contexts(wf_glob):
+    """(blocking, nonblocking) — is the manifest driver executed, and in which 语境?
+
+    `--selftest` 行不算：它证明的是驱动器的分类器有牙，而不是跑了任何一道门。
+    把它算成覆盖，等于让"从未执行清单"的 workflow 看起来接线完整。
+    """
+    blocking = nonblocking = False
+    for wf in sorted(glob.glob(wf_glob)):
+        with open(wf, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        coe_indent = None
+        for line in lines:
+            if COE_RE.match(line):
+                coe_indent = len(line) - len(line.lstrip())
+                continue
+            if coe_indent is not None:
+                ind = len(line) - len(line.lstrip())
+                if line.strip() and ind < coe_indent:
+                    coe_indent = None
+            if DRIVER_TOKEN in line and "--selftest" not in line and _RUNLIKE.search(line):
+                if coe_indent is None:
+                    blocking = True
+                else:
+                    nonblocking = True
+    return blocking, nonblocking
+
+
+def check(manifest_path, wf_glob, covered=None, driver_blocking=False,
+          driver_nonblocking=False):
     blocking, exempt, advisory = blocking_gate_scripts(manifest_path)
     if blocking is None:
         return None
     nonblock = nonblocking_scripts_in_workflows(wf_glob)
     used = all_scripts_in_workflows(wf_glob)
+    if covered and driver_blocking:
+        for sig in covered:
+            used.setdefault(sig, set()).add("run_gate_manifest.py")
+    elif covered and driver_nonblocking:
+        # 驱动脚本挂在 continue-on-error 下 = 整张清单被非阻塞执行 ⇒ 与"某门被吞"
+        # 同一病灶，必须照样记成 gap，否则这条扩展反而成了新的静默通道。
+        for sig in covered:
+            nonblock.setdefault(sig, set()).add("run_gate_manifest.py(continue-on-error)")
     # advisory 门从 gap 断言里扣除，但**不**从 MISSING 里扣除（见 blocking_gate_scripts docstring）
     gaps = sorted((blocking - advisory) & set(nonblock.keys()))
     # 反向断言：expect=0 且未声明 ci_exempt 的门，必须被某个 workflow 真正调用过
@@ -291,6 +381,23 @@ def mode_selftest():
            miss_typo == [("C.py", "--gate")])
     # 清单缺失 → check 返回 None（不可判定）
     expect("selftest-5 missing manifest -> None", check(os.path.join(tmp, "nope.toml"), wfdir) is None)
+    # 清单驱动执行面（TC-C）：驱动器阻塞执行 ⇒ 视作覆盖；COE 下执行 ⇒ 仍记 gap；
+    # --selftest-only ⇒ 什么也不算。这三条是"扩展不放松判据"的证据。
+    with open(man, "w", encoding="utf-8") as f:
+        f.write('[[gate]]\nid = "Y"\ncmd = "bash scripts/B.py"\nexpect = 0\nkind = "light"\n')
+    with open(os.path.join(wfdir, "t.yml"), "w") as f:
+        f.write("jobs:\n  g:\n    steps:\n"
+                "      - run: |\n          python3 scripts/run_gate_manifest.py --ci --jobs 4\n")
+    _g, _nb, _bl, miss_drv = check(man, os.path.join(wfdir, "*.yml"),
+                                   {("B.py", "")}, True, False)
+    expect("selftest-16 driver-blocking covers a light gate (no MISSING)", miss_drv == [])
+    _g2, _nb2, _bl2, miss_drv_off = check(man, os.path.join(wfdir, "*.yml"))
+    expect("selftest-17 driver coverage is opt-in, not silent",
+           miss_drv_off == [("B.py", "")])
+    gaps_drv, _nb3, _bl3, _miss3 = check(man, os.path.join(wfdir, "*.yml"),
+                                         {("B.py", "")}, False, True)
+    expect("selftest-18 driver under continue-on-error is still a GAP",
+           gaps_drv == [("B.py", "")])
     # 入口契约（F35）：未知旗标必须"没跑任何判据"并退 2，不能当作"没给旗标"而跑真对拍
     expect("selftest-10 unknown flag is undecidable, no check ran", main(["--nope"]) == 2)
     import shutil
@@ -300,12 +407,17 @@ def mode_selftest():
 
 
 def mode_check():
-    res = check(MANIFEST, WORKFLOWS_GLOB)
+    covered = driver_covered(MANIFEST)
+    drv_block, drv_nonblock = driver_contexts(WORKFLOWS_GLOB)
+    res = check(MANIFEST, WORKFLOWS_GLOB, covered, drv_block, drv_nonblock)
     if res is None:
         print("[UNDECIDABLE] gate_manifest not readable —— 未执行任何对拍")
         return 2
     gaps, nonblock, blocking, missing = res
-    print(f"[info] expect=0 gate scripts: {len(blocking)}; non-blocking-context scripts in CI: {len(nonblock)}")
+    print(f"[info] expect=0 gate scripts: {len(blocking)}; "
+          f"non-blocking-context scripts in CI: {len(nonblock)}")
+    print(f"[info] manifest driver (run_gate_manifest.py): "
+          f"blocking={drv_block} nonblocking={drv_nonblock} covered={len(covered)}")
     if gaps:
         print(f"[FAIL] {len(gaps)} gate(s) the closure list requires-passing run under continue-on-error in CI:")
         for g in gaps:

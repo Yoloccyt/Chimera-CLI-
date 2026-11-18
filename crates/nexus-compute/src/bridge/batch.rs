@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use super::{bridge, ComputeBridge, ComputeError};
+use super::{ComputeBridge, ComputeError};
 use crate::calibration::{self, CalibrationMode, ExecPath};
 use crate::dispatch::TaskKind;
 use crate::telemetry::SaturationMode;
@@ -102,6 +102,10 @@ impl ComputeBridge {
 
         // WI-34 探针:每任务闭包内守卫配对（执行即计,完成/panic 均归还）
         let active = Arc::clone(&self.active);
+        // WHY 取实例计数器的借用而非闭包内 `bridge()`:失败归因必须落在**发生 panic
+        // 的那个实例**上;走全局单例会把非单例实例（测试/多池场景）的失败错记到全局
+        // 桥,统计失真（L1-H-1）。
+        let counters = &self.counters;
 
         // self.pool.scope 把任务调度到本桥专用池(而非 rayon 全局池,纪律④ 桥接唯一)
         self.pool.scope(|s| {
@@ -112,7 +116,7 @@ impl ComputeBridge {
                     let _guard = active.enter();
                     let r =
                         std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|_| {
-                            bridge().counters.record_failure(kind);
+                            counters.record_failure(kind);
                             ComputeError::Panicked
                         });
                     // 任务内全部 catch_unwind,锁不 poison;unwrap_or_else 兜底防御

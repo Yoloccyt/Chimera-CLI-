@@ -99,8 +99,25 @@ def load_all(profile_name=""):
     return mf._finalize(tuple(tasks)), pol.load(str(POLICY))
 
 
+def ci_surface(tasks):
+    """CI 面 = 清单里未声明 `ci_exempt` 的门。
+
+    WHY 由清单定义而不是由 workflow 自行枚举：`ci_exempt = "<reason>"` 已经是
+    "该门按设计不接 CI"（Windows 权威执行体、收口期审计项等）的唯一登记处。
+    在 CI 里跑它们只会把 rc=2 或"按设计为红"读成阻塞门红。
+    过滤在 `_finalize` 之后调用：needs 图的完整性校验针对完整清单，不随执行面收缩。
+    """
+    kept = tuple(t for t in tasks if not t.ci_exempt)
+    if len(kept) != len(tasks):
+        print("[CI] ci_exempt gates excluded: %d (kept %d)"
+              % (len(tasks) - len(kept), len(kept)))
+    return kept
+
+
 def cmd_list(args):
     tasks, policy = load_all(args.profile)
+    if getattr(args, "ci", False):
+        tasks = ci_surface(tasks)
     role_err = pol.role_check(policy, args.role, args.profile)
     if role_err:
         print("[UNDECIDABLE] %s" % role_err)
@@ -221,6 +238,8 @@ def report_surface(run_dir, kind):
 
 def cmd_run(args):
     tasks, policy = load_all(args.profile)
+    if getattr(args, "ci", False):
+        tasks = ci_surface(tasks)
     role_err = pol.role_check(policy, args.role, args.profile)
     if role_err:
 
@@ -566,6 +585,10 @@ def build_parser():
                             "mode: debt census + A/B pairing against a complete run)")
         s.add_argument("--shard", default="",
                       help="run only shard k of n, e.g. 2/4 (deterministic round-robin)")
+        s.add_argument("--ci", action="store_true",
+                       help="run the CI surface only: drop gates declaring "
+                            "ci_exempt in gate_manifest.toml (the manifest is the "
+                            "single definition of what CI is supposed to run)")
         s.add_argument("--resume", default="")
         s.add_argument("--report", choices=("text", "json", "junit", "all"),
                        default="all",
@@ -582,6 +605,9 @@ def build_parser():
                      help="same as `run --no-fail-fast`; resume must accept it or a "
                           "resumed full-ledger run would silently re-arm fail-fast")
     res.add_argument("--shard", default="")
+    res.add_argument("--ci", action="store_true",
+                     help="same as `run --ci`; resume must accept it or a resumed "
+                          "CI-surface run would silently re-add the ci_exempt gates")
     res.add_argument("--report", choices=("text", "json", "junit", "all"), default="all")
     # --reuse-ok belongs to `run` only: `list` must not silently accept a flag it
     # ignores (the F24/F29 silent-default family that check_entry_contract C3 judges).

@@ -186,11 +186,12 @@ def classify(rc, expect, log_text, cmd):
     return ("ok", None) if rc == expect else ("mismatch", None)
 
 
-KNOWN_FLAGS = ("--selftest", "--list", "--with-heavy", "--no-fail-fast")
+KNOWN_FLAGS = ("--selftest", "--list", "--with-heavy", "--no-fail-fast", "--ci")
 ENGINES = ("legacy", "govd")
-USAGE = ("用法: py -3 scripts/run_gate_manifest.py [--list] [--selftest] [--with-heavy]\n"
+USAGE = ("用法: py -3 scripts/run_gate_manifest.py [--list] [--selftest] [--with-heavy] [--ci]\n"
          "                              [--engine legacy|govd] [--jobs N] [--no-fail-fast]\n"
          "  无参数 = 跑全部 light 判据（heavy 需显式 --with-heavy）\n"
+         "  --ci = 只跑 CI 面：跳过清单里声明 ci_exempt 的门（CI 的定义就在清单里）\n"
          "  --engine govd = 默认：同一清单交给 scripts.govd 执行（--engine legacy 保留回滚面）\n"
          "  --no-fail-fast = 真红后仍跑完全部门（存量债普查 / A/B 推论所需的完整台账）\n"
          "  --jobs N = 显式并发度；缺省（0）由 govd 按 profile 声明值 + 本机资源上限决定\n"
@@ -326,6 +327,8 @@ def mode_selftest():
         ("flags-jobs-value", ["--jobs", "4"], 0),
         ("flags-jobs-equals", ["--jobs=4"], 0),
         ("flags-jobs-one-rollback", ["--jobs", "1"], 0),
+        ("flags-ci", ["--ci"], 0),
+        ("flags-ci-with-list", ["--ci", "--list"], 0),
     ]
     for name, argv_in, want_unknown in flag_cases:
         got = len(unknown_flags(argv_in))
@@ -458,13 +461,15 @@ def usable_bash():
     return None, "; ".join(rejected) or "无可用 bash"
 
 
-def run_govd(list_only, with_heavy, jobs=0, no_fail_fast=False):
+def run_govd(list_only, with_heavy, jobs=0, no_fail_fast=False, ci=False):
     """Thin adapter: same gate_manifest.toml, govd executor.
 
     并发度不再由本适配器钉死为 1：`--jobs` 缺省（0）时交给 govd 按 profile 声明值
     与本机资源上限决定（见 govd.cli.resolve_jobs）；显式 `--jobs N` 才覆盖，
     其中 `--jobs 1` 仍是安全回退态（配置级回滚路径）。
     `--engine legacy` 保留为回滚面。
+    `--ci` 原样下传：过滤依据是清单自身的 `ci_exempt` 字段，不在本适配器里
+    维护第二份「哪些门进 CI」的名单。
     """
     here = os.path.dirname(os.path.abspath(__file__))
     if here not in sys.path:
@@ -473,6 +478,8 @@ def run_govd(list_only, with_heavy, jobs=0, no_fail_fast=False):
 
     profile = "nightly" if with_heavy else "pr"
     argv = ["list" if list_only else "run", "--profile", profile]
+    if ci:
+        argv += ["--ci"]
     if not list_only and jobs > 0:
         argv += ["--jobs", str(jobs)]
     if not list_only and no_fail_fast:
@@ -509,8 +516,9 @@ def main(argv):
     list_only = "--list" in argv
     with_heavy = "--with-heavy" in argv
     no_fail_fast = "--no-fail-fast" in argv
+    ci = "--ci" in argv
     if engine == "govd":
-        return run_govd(list_only, with_heavy, jobs, no_fail_fast)
+        return run_govd(list_only, with_heavy, jobs, no_fail_fast, ci)
     try:
         gates, problems = load()
     except Exception as e:
@@ -518,6 +526,12 @@ def main(argv):
         # 与“判据失败”同码，会把人引向去改仓库而不是去修工具。
         print(f"[TOOL-ERROR] 清单加载失败（不可判定，不等于判据通过）：{type(e).__name__}: {e}")
         return 2
+    # --ci 在 legacy 引擎上与 govd 同口径：过滤依据是清单的 ci_exempt 字段。
+    # 两个引擎必须同意"CI 面是哪几条"——否则回滚面会静默跑另一套判据集。
+    if ci:
+        kept = [g for g in gates if not g.get("ci_exempt")]
+        print(f"[CI] ci_exempt 判据已排除：{len(gates) - len(kept)} 条（保留 {len(kept)}）")
+        gates = kept
     # 先校验每条判据引用的脚本存在。否则会出现“死判据”：如 kind=heavy 的条目在 light 模式下
     # 永远不跑，即使目标脚本根本不存在也不会暴露（本工具实测踩过）。
     dead = []

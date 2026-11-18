@@ -84,6 +84,17 @@ jobs:
     # 真实耗时只能在 CI 侧量（本地无 Linux runner 且全量 cargo 已被占），故本行
     # 只声明它是 guard；若超时被 kill，本 job 是红不是静默通过 —— 但预算是否
     # 够需首次 schedule 跑后用时长读数再定档（已列入待裁）。
+    #
+    # WHY 逐条串行 run_bench（TC-C 复核结论：**不要**改成 matrix 并行）:
+    #   ① 计时完整性：criterion 的 median 是判据本体，同一 runner 上并发跑多个
+    #      bench 会让 CPU/内存带宽互相争抢，读数直接失真 —— "阈值判定结果必须与
+    #      串行基线一致"这条硬约束排除了"同 job 并行"。
+    #   ② 跨 job matrix 需要把各 leg 的 target/criterion/ 合并回一个裁决面；而
+    #      `check_perf_redlines.py thresholds` 对**零匹配**的键是 advisory
+    #      [SKIP-GHOST]（不致命，见其 mode_thresholds 注释），故任何一条产物在
+    #      合并时丢失都会被静默读成"该键没跑"而不是红 —— 正是本波要消灭的假绿形态。
+    #      ⇒ 要做并行必须先建"合并 + 产物数量对拍（缺一份即红）"的配套门，
+    #      属独立子波次，不在本次执行面收敛范围。
     steps:
       - name: Checkout
         uses: actions/checkout@v4

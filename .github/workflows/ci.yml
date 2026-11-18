@@ -83,7 +83,6 @@ jobs:
       - name: Setup sccache
         uses: mozilla/sccache-action@v0.0.11
 
-      # WHY: 先跑零编译依赖的文档一致性巡检，若架构文档 crate 数与 Cargo.toml 漂移则快速失败(F4)。
       # WHY 钉解释器（2026-10-16）：本 job 的多个步骤跑 scripts/*.py 门（具体数量以
       # scripts/check_ci_manifest_parity.py 自报的 ci_steps/ci_refs 为准，本行不抄数——
       # 抄进来的计数必然比步骤先腐烂）。脚本面经 ast 扫描确认只依赖 stdlib + 同目录
@@ -96,9 +95,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
-      - name: Doc consistency (crate count vs Cargo.toml)
-        run: bash scripts/check_doc_consistency.sh
 
       # E3(报告附录 E): workflow 静态检查门禁——actionlint 是 GitHub Actions
       # 事实标准(语法/表达式类型/action 输入/脚本注入),零编译依赖,秒级反馈。
@@ -115,580 +111,48 @@ jobs:
       - name: Run actionlint
         run: actionlint -color
 
-      # WHY: 依赖铁律机械闸门(ADR-054 决策 5,check_dependency_rules.sh 头注释)——
-      # L(N)→L(N+1) 向上依赖 / 内环越界 / 图完整性违规必须阻塞合入,禁止静默落地 main。
-      # 退出码 0=通过 / 非 0=违规;selftest 模式(--selftest)由脚本自身内嵌 mock 图自检。
-      - name: Dependency iron-law audit
-        run: bash scripts/check_dependency_rules.sh
-
-      # WHY: 层图双源对拍门(C10,2026-09-04)——铁律门以 .sh(CI 调用)/.ps1(本地)
-      # 两份手写实现各自内嵌 crate→层表,2026-08-29 曾实际漂移(.ps1 升 43 而 .sh
-      # 滞留 38,5 个 crate 静默漏检)。本门四方互锁 .sh case 表/layered_crates 列表、
-      # .ps1 $layerMap 与 Cargo.toml workspace.members,任一侧单改必红;
-      # 先跑 --selftest(fixture 负控,证明门有牙齿)再跑真实裁决,沿 reachability 先例。
-      - name: Layer map parity (sh vs ps1 vs Cargo.toml)
-        run: |
-          python3 scripts/check_layer_map_parity.py --selftest
-          python3 scripts/check_layer_map_parity.py
-
-      # WHY: L0 契约层纯度机器门(G-99, ADR-033 追加节 2026-10-09 自陈缺口的收口)——
-      # ADR-033 规定 nexus-contracts 为「纯类型 + 受控纯逻辑」(无 IO/async/网络/随机,
-      # 依赖仅 serde/chrono/uuid/thiserror)。此前「受控」二字无机器判据,仅靠 WI-G1
-      # 人工审计 + 单测;check_dependency_rules.ps1 Check B 只拦 crate 级向上依赖,
-      # 不拦「经合法依赖或 std 引入的 impure 符号」。本门双刃:①[dependencies] 白名单,
-      # ②注释/字符串先 blank 后再扫禁用符号(避免误判文档里的 tokio::spawn/URL 提及,
-      # 正是 ADR-033 追加节「先确认计数口径」教训的机器化)。零编译秒级 light 门,
-      # 沿 check_layer_map_parity/check_accel_exclusion 的 --selftest 双向夹具先例。
-      - name: L0 contracts purity gate (G-99)
-        run: |
-          python3 scripts/check_l0_surface.py purity --selftest
-          python3 scripts/check_l0_surface.py purity
-
-      # WHY: ADR-222 D1 把 L0 拆为 0A 纯契约 / 0B 核心基础面，但机器层号 0/1 刻意
-      # 不重排（116+ 份 ADR 以 L4 seccore 等层号引用历史证据，重排会让整条证据链
-      # 失真）。层号不动 ⇒ 「谁属于 L0-A」无法从数字直接读出，故需一道门专判方向：
-      # L0-A 不得声明依赖 L0-B，L0-B 不得依赖 L2+；层表多源一致仍由 G-45/G-46 负责
-      # （轴分工，不互抄基线）。亚层成员来自 .sh/.ps1 双源并互相对拍。
-      - name: L0 sub-layer direction (G-125)
-        run: |
-          python3 scripts/check_l0_surface.py sublayer --selftest
-          python3 scripts/check_l0_surface.py sublayer
-
-      # WHY: L0-B 公共 API 签名第三方后端类型泄露门(ADR-225 D6 / R2 M37+M46+M47)——
-      # G-131 只锁 L0-B 的外部*依赖行*,并在自己 note 里自陈“L0-B public fn 面不在本门
-      # 辖区”;G-99 属 L0-A,G-125 只判方向。结果是上层可以经 `pub fn` 签名拿到 tokio
-      # 类型而全仓无任何门统计。R1 M37 只登记未改码且只数返回位,R2 实测参数位才是
-      # 耦合最强面(event-bus shard.rs::spawn_workers 直接交出 broadcast::Sender 与
-      # tokio::runtime::Handle,等价于要求调用方自备 runtime)。本门 only-decrease 锁
-      # ret|arg|bound 三类位置,依赖词表取 l0b_dep_freeze.txt 实测集而非任何散文
-      # 白名单(G-125 note 的三值集与实测 27 行仅 16 行相符,据它立门首跑即产 11 条
-      # 伪红)。零编译毫秒级 light 门,沿 check_l0_sublayer / check_l0b_dep_surface 的
-      # --selftest 双向夹具先例:先证门有牙,再跑真实裁决。
-      - name: L0-B public signature leak gate (G-135/G-136)
-        run: |
-          python3 scripts/check_pub_api_leak.py --selftest
-          python3 scripts/check_pub_api_leak.py
-
-      # WHY: G-137/G-138 把「清单 vs CI 两个执行面」和「清单自身 schema」变成机器门
-      # (ADR-228 3.6, PYG-F01)。此前 136 门清单与 108 个硬编码 CI 步骤无人对拍，
-      # 一条门可以从 CI 静默消失而清单仍显示已登记；v2 字段写错也只在调度器跑到一半时崩。
-      # 先跑 selftest 证门有牙，再跑真实裁决。
-      - name: Manifest schema + CI parity (G-137..G-140)
-        run: |
-          python3 scripts/check_manifest_schema.py --selftest
-          python3 scripts/check_manifest_schema.py
-          python3 scripts/check_ci_manifest_parity.py --selftest
-          python3 scripts/check_ci_manifest_parity.py
-
-      # WHY: govd（验证调度器）的 84 条行为断言此前只存在于手跑面——把 jobs 解析、
-      # 磁盘余额取数位置、重试/取消/普查计数任何一条改坏，PR 都能全绿合入(ADR-234 S6/S9)。
-      # 接在本组之后：G-137 方向 B 要求"cmd 指名脚本且非 ci_exempt 的门必须出现在某个
-      # workflow"，所以门与这一步必须同批落——只登记门会判红，只加这一步则成孤儿步骤判
-      # [UNMATCHED]。放 check job(阻塞面)，不进下面 governance-shadow 的 continue-on-error
-      # 语境：expect=0 的门在 COE 下运行正是 audit_gate_parity(G-25) 要抓的病。
-      - name: govd scheduler self-tests (G-147)
-        run: python3 scripts/govd/tests/test_govd.py
-
-      # WHY(ADR-315 W-T1): exclusive 资源互斥的**变异负控**必须与 G-147 同批落地——
-      # G-147 锁的是"互斥实现正确"，本步锁的是"互斥断言非恒真"。并发断言最大的风险
-      # 就是永远通过、却什么都没锁（恒真）。本步在临时副本上变异掉 cli.py 的互斥判定，
-      # 期望 G-147 里的互斥断言变红、其余三条保持绿；变异若没生效（真实包覆盖副本）
-      # 本步自身判红——负控方法的失败模式必须可见，不能静默变成"通过"。
+      # WHY（ADR-315 W-T1 / G-160）：exclusive 资源互斥的**变异负控**必须与 G-147 同批落地——
+      # G-147 锁的是"互斥实现正确"，本步锁的是"互斥断言非恒真"。本步刻意**不**并入下面的
+      # 清单驱动步（清单该门已标 ci_exempt）：本门的预期产物就是一段 unittest traceback，
+      # 而清单执行器的环境故障分类器会把日志前 5 行里的 Traceback 读成 env ⇒ rc=2 假红。
       - name: exclusive mutex negative control (G-160)
         run: python3 scripts/check_exclusive_mutex_negative.py
 
-      # WHY: ADR-229 的三层倒置与 ADR-232 的四条默认值承诺,都是编译期与既有测试
-      # 看不见的那类约束——给 L7 加一条 chimera-cli 依赖照样编译,把 max_turns 从 8
-      # 改成 800、给 LlmLoopOutcome 加 #[derive(Default)]、把启用面扩成 `_ => true`
-      # 全都照样绿。G-08/G-45 读的是 cargo metadata 解析后的依赖图,optional 与
-      # feature-gated 边在那里的形态与本组的 manifest/源码文本判据不同,属第二方法
-      # 而非重复登记。先 --selftest 证门有牙,再跑真实裁决;不设 continue-on-error
-      # ——expect=0 的门在 CI 被吞会被 audit_gate_parity(G-25)记成 GAP。
-      - name: Tool plane and LLM loop contract gates (G-143..G-146)
+      # ============================================================
+      # 静态判据执行面（TC-C 收敛）—— 一个 step 驱动整张清单
+      # WHY: 此前本 job 逐条手写零 cargo 的静态门 step，而 scripts/gate_manifest.toml
+      # 早已登记同一批判据。两个执行面并存 ⇒ 新门可能只进清单（CI 静默不跑），也可能
+      # 只进 ci.yml（清单看不见）；逐条枚举还让 50+ 次 step 启动开销成为 PR 快轨的固定税。
+      # 现改为清单驱动：govd 调度器按 `--jobs` 并行执行，判据语义逐字不变（清单的
+      # cmd/expect 原样执行）。逐门的判定理由在清单的 note/spec_ref 里，不在本文件复制。
+      # 与 cargo step 的关系：`exclusive="cargo"` 的门全部是 heavy（pr profile 不选），
+      # 故本步不会与下方保留的 fmt/clippy/nextest 抢 target/。
+      # 失败定位：rc 语义 0 符合 / 1 与期望不符 / 2 不可判定；逐门打印 `<id> <verdict> rc=`
+      # 与末尾 `[SUM]` 五态记账；台账（report.json / junit.xml / events.jsonl）落在
+      # tmp/govd/runs/<run_id>/，由本 job 末尾的 artifact step 上传。
+      # 刻意保留为独立 step 的：cargo fmt / fmt(fuzz) / clippy / nextest（sccache 命中
+      # 与失败定位）、工具安装、actionlint（校验 workflow 自身，非清单判据）、
+      # git 可追溯性断言。
+      # ============================================================
+      - name: Static gates (manifest-driven, parallel)
         run: |
-          python3 scripts/check_tool_plane_contract.py --selftest
-          python3 scripts/check_tool_plane_contract.py
-          python3 scripts/check_llm_loop_defaults.py --selftest
-          python3 scripts/check_llm_loop_defaults.py
-
-      # WHY: PowerShell 5.1 parity 守门(ADR-198 G-85)——本仓将 .ps1 定位为
-      # “Windows 权威执行体”，但 CI 与 gate_manifest 均以 pwsh（默认 UTF-8）调用，
-      # 而无 BOM 且含非 ASCII 的文件在 5.1 下会按 ANSI 解码。2026-10-02 实测：
-      # 工作树副本 24 个 .ps1 中 17 个无 BOM 且含非 ASCII，其中 11 个在 5.1 下根本解析失败
-      # （此前由根 e2e dependency_rules_inner_ring_test 调用；该 target 已按 ADR-213 R3 退役，
-      #  本步骤判据不变——.ps1 孪生仍由本地 pwsh 与 check_gate_predicates_parity 对拍面调用），
-      # 而全量 cargo test 当时仍报绿——即“Windows 侧从未跑成”被沉默吞噬。
-      # 本门为字节级检查（不依赖平台），故 Linux runner 同样有效。
-      - name: PowerShell UTF-8 BOM gate (Windows 5.1 parity)
-        run: |
-          python3 scripts/check_ps1_bom_gate.py --selftest
-          python3 scripts/check_ps1_bom_gate.py
-
-      # WHY(ADR-222 R8-9): 2026-10-20 的重复键使整份 check_dependency_rules.ps1
-      # 无法被 PowerShell 加载，而所有门仍绿——因为 CI 只跑 .sh，G-45/46 与 G-125
-      # 都用 Python 读表（dict 折叠重复键），没有任何执行体真正解析过 .ps1。
-      # 本步用 Parser::ParseFile 真解析，只判「能否解析」；内容一致与亚层方向
-      # 分别仍由 G-45/46 与 G-125 负责（轴分工，不互抄基线）。
-      - name: PowerShell syntax gate (G-127)
-        run: |
-          python3 scripts/check_ps1_syntax.py --selftest
-          python3 scripts/check_ps1_syntax.py
-
-      # WHY(ADR-223 D3/D1): 1+6 拆分后 sibling 成为独立装配单元；G-91 只数定义消费者，看不见“某 sibling 被静默摘掉”。
-      # 本步锁 Cargo 装配边（only-decrease）；另一步锁 L0-B 外部依赖面。
-      - name: L0-A sibling assembly ratchet (G-129)
-        run: |
-          python3 scripts/check_l0_surface.py assembly --selftest
-          python3 scripts/check_l0_surface.py assembly
-
-      - name: L0-B dependency surface ratchet (G-131)
-        run: |
-          python3 scripts/check_l0_surface.py dep-surface --selftest
-          python3 scripts/check_l0_surface.py dep-surface
-
-      # WHY: 加速器/推理栈排除门(ADR-195 V1/D5)——把"零 GPU 依赖"从一次性人工核对升为
-      # 机器判据。当前排除靠 feature 非激活而非结构隔离:nmc-encoder 直接依赖
-      # mel_spec="0.4",其可选 feature 面(wgpu/cuda/ort-tensor,default=[])可在零 ADR、
-      # 零评审可见决策下把 GPU/ONNX-Runtime 栈拖入 Cargo.lock(ort 仅 MSVC 破 windows-gnu
-      # 钉定,wgpu 路径触发 ADR-195 D5 E1 无先例的 forbid(unsafe)×bytemuck::Pod 未决)。
-      # 本门断言 Cargo.lock 中 wgpu/naga/ash/d3d12/candle/burn/ort 族 0 命中。先跑 --selftest
-      # 守护检测器自身不退化(沿 check_ps1_bom_gate 先例)。
-      - name: Accelerator / inference-stack exclusion gate (ADR-195 V1)
-        run: |
-          python3 scripts/check_accel_exclusion.py --selftest
-          python3 scripts/check_accel_exclusion.py
-
-      # WHY: 第三轮收口(2026-10-05, F-U1/决策 3/F-P3+F-A2)——把"并行卸载生产可达性"
-      # (组合根唯一口径,棘轮禁静默升降级)、"同步卸载 async 边界必须 worker 让出保护"
-      # (flavor 双分支强制模式)与"分片总线热点片事实 + 静默丢发唯一豁免"三件事
-      # 从散文升为机器判据。均为零编译秒级 light 门,沿 --selftest 双向夹具先例。
-      - name: Compute offload reachability gate (G-87)
-        run: |
-          python3 scripts/check_compute_offload_reachability.py --selftest
-          python3 scripts/check_compute_offload_reachability.py
-
-      - name: Sync offload guard gate (G-88)
-        run: |
-          python3 scripts/check_sync_offload_guard.py --selftest
-          python3 scripts/check_sync_offload_guard.py
-
-      - name: Bus shard hotspot gate (G-89)
-        run: |
-          python3 scripts/check_bus_shard_hotspot.py --selftest
-          python3 scripts/check_bus_shard_hotspot.py
-
-      # WHY: nexus-core 最小依赖机器门(WI-F1,2026-10-06 用户裁决解锁)——L1 枢纽 crate
-      # 的生产依赖面是最小性论证的事实基座,本门把"集合不得无评审增减"升为机器判据
-      # (NEW/STALE 双向棘轮),同时校验全部生产声明走 workspace 继承,关闭 ADR-196 D5
-      # 实录的空档(grep 式检查只认 workspace=true 行,`foo = "1.0"` 外部版本钉死声明
-      # 静默漏检)。dev-dependencies 不在冻结面(测试/bench 依赖不进生产图)。
-      # 先 --selftest 证明门有牙再跑真实裁决;零 cargo、秒级。
-      - name: Nexus-core dependency freeze gate (G-90)
-        run: |
-          python3 scripts/check_nexus_core_dep_freeze.py --selftest
-          python3 scripts/check_nexus_core_dep_freeze.py
-
-      # WHY: L0 契约">=2 消费者"门(WI-A1,2026-10-07)——契约类型诞生即须有两个以上
-      # 工作区消费方,否则"先占位后接线"的幽灵契约(recall_fusion/price_vector 先例)
-      # 会长期冒充能力。只减登记册 scripts/contract_consumer_baseline.txt 首跑为
-      # 全量豁免态;与 check_dead_contract_apis.py(ADR-197 A6)互认。
-      # 先 --selftest 证明门有牙(含 DEFS<50 真空守卫),再跑真实裁决;零 cargo、秒级。
-      - name: Contract consumers gate (G-91)
-        run: |
-          python3 scripts/check_contract_consumers.py --selftest
-          python3 scripts/check_contract_consumers.py
-
-      # WHY: G-91 的 >=2 消费者规则在豁免台账覆盖面等于缺陷全集时失去约束力——新增一个
-      # 零消费者公共类型只要顺手补一行基线就永久静默(ADR-220 决策 1)。本门用 exact key-set
-      # 的机器派生台账补这一段:台账禁手编、每个字段每次重算逐字 diff,消费者口径 import 自
-      # G-91 本体(两道锁:declared_in 第二遍必须等于 cc 的 defs 集;zero∪one 必须等于 cc 的
-      # gap 集,否则退 2 判不了而非判红)。先 --selftest 证明有牙(含方言锁反事实与已接进
-      # 生产路径的 defs 地板),再跑真实裁决;零 cargo、秒级。
-      - name: Zero-consumer contract ledger (G-123)
-        run: |
-          python3 scripts/check_contract_zero_consumers.py --selftest
-          python3 scripts/check_contract_zero_consumers.py
-
-      # WHY: ADR-213 残余债务波把四支「有牙但从没咬」的检查升为阻塞门。
-      # G-101(check_dead_contract_apis.py)按 ADR-197 D5「暂不登记」长期以 advisory 存在、
-      # ci.yml 此前只在注释里提过它(原 :171)而从未执行;G-103(check_gates_provenance.py)
-      # 方向 B 专抓「脚本自带 --selftest 却未登记 gate_manifest」,而执行这条纪律的门自身
-      # 此前也未登记(它首轮实跑就抓到了自己)。两支升格已同批删除
-      # gate_provenance_exemptions.txt 对应豁免行——该文件 :17-19 自订纪律:升为门未删行
-      # ⇒豁免成为与清单冲突的第二真值源。
-      # G-105/G-107 是本轮新建的 L0 只减棘轮:G-91 的 DEF_RE 只枚举
-      # pub struct|enum|trait|type,L0 的 pub fn 面(现读 255)与 crate 根 re-export 面
-      # (现读 53,W3 刻意保留的双路径)此前不受任何门统计——新增公开项不会让任何东西变红。
-      # 四支门均先 --selftest 证明有牙(含真空守卫与畸形台账退 2),再跑真实裁决;零 cargo、秒级。
-      - name: L0 contract-surface ratchets (G-105, G-107)
-        run: |
-          python3 scripts/check_l0_surface.py pubfn-ratchet --selftest
-          python3 scripts/check_l0_surface.py pubfn-ratchet
-          python3 scripts/check_l0_surface.py root-surface --selftest
-          python3 scripts/check_l0_surface.py root-surface
-
-      - name: L0 const surface and sibling surface (G-150~G-153)
-        run: |
-          python3 scripts/check_l0_surface.py const-ratchet --selftest
-          python3 scripts/check_l0_surface.py const-ratchet
-          python3 scripts/check_l0_surface.py sibling-surface --selftest
-          python3 scripts/check_l0_surface.py sibling-surface
-
-      - name: Fuzz config static gate (G-156)
-        run: bash scripts/check_fuzz_config.sh
-
-      - name: Version single-source-of-truth sync (G-158, G-159)
-        run: |
-          python3 scripts/check_version_sync.py --selftest
-          python3 scripts/check_version_sync.py
-
-      - name: Gate provenance and contract-member ledger (G-101, G-103)
-        run: |
-          python3 scripts/check_dead_contract_apis.py --selftest
-          python3 scripts/check_dead_contract_apis.py
-          python3 scripts/check_gates_provenance.py --selftest
-          python3 scripts/check_gates_provenance.py
-
-      # WHY (2026-10-30): an unquoted `- name: Format check (isolated workspace: fuzz)`
-      # made ci.yml unparsable, and GitHub reacts by dropping *every* job in the file --
-      # including the actionlint job below, which therefore can never validate its own
-      # workflow. zizmor also exits 0 after "failed to parse input", so neither tool
-      # gives a usable local signal. This gate is the lexical tripwire for that class;
-      # its selftest carries the exact regression line as a real file fixture.
-      - name: Workflow YAML lexical guard (G-141, G-142)
-        run: |
-          python3 scripts/check_workflow_yaml_lexical.py --selftest
-          python3 scripts/check_workflow_yaml_lexical.py
-
-      # WHY (R11 W1 / ADR-295 D1): ToolExecutor 能力视图有三个转发方法,declared_side_effects
-      # 是 R9 后加的——四处包装器(ToolRuntime/exec_plan 三装饰器/ExecPolicy)当时只转发
-      # 前两个,配置驱动的批量声明表在装饰器链被静默丢弃,MCP 并行封顶保持 0(实测 R11 前
-      # MCP 工具恒整层串行)。本门锁「覆写了 capability_of + declared_tools 的 impl 必须
-      # 同时覆写 declared_side_effects」,防止未来新增包装件再次只转发一半。先 --selftest
-      # 证明门有牙再跑真实裁决(缺目录/0 文件退 2 致盲守卫)。
-      - name: ToolExecutor side-effect forwarding guard (G-143, G-144)
-        run: |
-          python3 scripts/check_executor_side_effect_forwarding.py --selftest
-          python3 scripts/check_executor_side_effect_forwarding.py
-
-      # WHY: 源文件级可达性门(ADR-213 D-18)。ADR-160 的可达性棘轮数的是 crate,而 cargo
-      # 对「某个 .rs 没有任何 mod 指向它」一个警告都不给:该文件从不被解析,其 #[cfg(test)]
-      # 测试永不运行,其 pub 项不在 API 里,只会随时间腐坏。2026-10-13 实测发现 9 个此类
-      # 文件(chimera-tui 5 / parliament 3 / quest-engine 1),其中 parliament 的
-      # delegation·event_pipeline·scheduler 三文件在 `cargo test -p parliament --lib --list`
-      # 里贡献 0 个测试——即"已交付"叙事下不参与编译的死码。台账是可见债务而非许可:
-      # 每行须补 mod 或删文件并同批删行;新增孤儿必红。先 --selftest 证明门有牙再跑真实裁决。
-      - name: Source-file reachability ledger (G-109)
-        run: |
-          python3 scripts/check_src_module_reachability.py --selftest
-          python3 scripts/check_src_module_reachability.py
-
-      # WHY: ADR-213 R8.2 冻结了「位置式(MessagePack array)持久类型的字段序」、R9 禁止给这类
-      # 类型新增 default+skip 字段,但两条裁决此前**判据为零**(台账文件不存在、无门引用)。它们
-      # 守的是唯一不产生信号的失败形态,且是实测的:nexus-contracts/tests/wire_format_compat.rs
-      # 钉住的矩阵显示 array 下「同类型两字段交换声明顺序」解码 Ok 而值静默互换——无编译错、
-      # 无测试失败、无解码点异常(中间插入反而大声报 invalid length)。具名 map 形态免疫,故本门
-      # 刻意只判 to_vec 站点。现取实况:799 个 src 文件中 2 处生产位置式写点,一处在 G-109 孤儿
-      # 台账(wal.rs,不参与编译;一旦接线即落入本门面判 NEW),一处经取证为弹窗内存态 hex 预览
-      # (popup.rs,EXEMPT)⇒ Class B 现存 0 员,本门是新增准入而非存量清算。先 --selftest 证牙。
-      - name: Positional field-order freeze (G-113)
-        run: |
-          python3 scripts/check_positional_field_order_freeze.py --selftest
-          python3 scripts/check_positional_field_order_freeze.py
-
-      # WHY: L0 实测 103 pub enum + 124 pub struct 且 #[non_exhaustive] 命中 0 ⇒ 每个公共类型
-      # 都是封闭的,新增任一变体/字段即对 30+ 消费 crate 造成源码级破坏。但"全加 non_exhaustive"
-      # 也不对:本仓刻意依赖反向机制——event-bus/registry.rs 的 define_event_registry! 展开 5 个
-      # 无通配 match,靠"新变体必须被每个消费方处理"当安全属性。故政策按类型定档并锁成
-      # class=open ⇔ 带属性:开一个类型须同批翻行+加属性,只做一半即 CLASS_MISMATCH 红。
-      # floor 守卫排在 --emit 之前,致盲的解析器不得把致盲写成一份"干净"基线。
-      - name: L0 extensibility class ledger (G-115)
-        run: |
-          python3 scripts/check_l0_surface.py extensibility --selftest
-          python3 scripts/check_l0_surface.py extensibility
-      # WHY: ADR-212 7.1 raised ImmutableSurface Critical coverage to 17 (=16 mpsc +
-      # CheckpointSaved), but all five bus-side locks live inside event-bus: a new
-      # mpsc-Critical variant turns those red while L0 stays silent -- the spec could
-      # silently drop the delivery guarantee for an event that advertises it. This gate
-      # judges set parity in BOTH directions (MISSING = in mpsc but not in L0; EXTRA =
-      # in L0 while neither mpsc nor a registered broadcast-only row).
-      # Parsing lock: comment/string blanking imported from the G-99 lexer; bus side
-      # cross-checked against the CRITICAL_MPSC_VARIANTS count const in the same file.
-      - name: ImmutableSurface <-> mpsc parity (G-117)
-        run: |
-          python3 scripts/check_immutable_surface_parity.py --selftest
-          python3 scripts/check_immutable_surface_parity.py
-      # WHY: G-99 judges the dependency whitelist plus forbidden symbols, so a real
-      # algorithm added to L0 leaves it green -- an algorithm is not a forbidden symbol.
-      # ADR-033's addendum (2026-10-09) and ADR-212 decision 3 both recorded that the
-      # word "controlled" had no machine judgement behind it; ADR-218 closes it here.
-      # Judgement form is completeness pairing, not a size ratchet: the key set is
-      # C (derived fns) U T (D7 policy tables) U R (registered modules the derivation
-      # cannot see), required EXACTLY equal to scripts/l0_logic_ledger.txt. No row for
-      # a derived construct = NEW red (this is the hole); row without its construct =
-      # STALE red; class contradicting the parse = CLASS_MISMATCH red; header CLAIM
-      # disagreeing with reality = red; four size floors make a blind parser rc=2
-      # instead of "clean". Lexer, cfg(test) tail mask and module-key shape are
-      # imported from G-99/G-105 -- two copies of "what is production code" is the
-      # drift class this repository already fights.
-      - name: L0 controlled-logic ledger (G-119)
-        run: |
-          python3 scripts/check_l0_surface.py logic-ledger --selftest
-          python3 scripts/check_l0_surface.py logic-ledger
-      # WHY: the 120 gates above judge Rust; nothing judged the 92 scripts/*.py that
-      # *implement* those gates (`grep -riE ruff|flake8|mypy|pylint|black|pyright` over
-      # .github/workflows and scripts/*.toml = 0 hits, while Rust has fmt+clippy+typos+
-      # taplo). That asymmetry already cost defects: 8 dead module-level imports nobody
-      # caught, 3 governance .sh materializing as CRLF so `bash scripts/check_doc_drift.sh`
-      # died locally while the same gate passed in CI, and the interpreter floated with
-      # the runner image while run_gate_manifest.py needs tomllib (3.11+). ADR-219.
-      # Baseline is zero-violation, so the gate ships blocking with NO exemption ledger.
-      - name: Python tooling health (G-121)
-        run: |
-          python3 scripts/check_py_tooling_health.py --selftest
-          python3 scripts/check_py_tooling_health.py
-
-
-      # WHY: 生产可达性棘轮(ADR-160)——依赖铁律只判"方向对不对",不判"有没有被装配"。
-      # 2026-08-29 冗余审计实测:43 个 crate 中仅 28 个从组合根 chimera-cli 沿生产
-      # [dependencies] 边可达,15 个孤岛合计 50,604 src LOC(15.2%),而同期
-      # `cargo test --workspace` 10836 全绿——测试与 bench 覆盖掩盖了"从未接线"。
-      # 判据:dev-dependencies 与 optional(feature 门控)边一律不计入装配面;
-      # 已知孤岛登记在 scripts/crate_reachability_freeze.txt 作为可见债务(只减不增),
-      # 新增未登记孤岛 → 退出码非 0 阻塞合入。先跑 --selftest 守护治理工具自身不退化。
-      - name: Crate reachability ratchet
-        run: |
-          bash scripts/check_crate_reachability.sh --selftest
-          bash scripts/check_crate_reachability.sh
-
-      # WHY: Top-K sort_by 例外登记表守护门(C9, ADR-160 同族)——该表此前登记无门
-      # (零消费者, 与 coverage_baseline/crate_reachability 同族的"有登记无牙齿"反模式)。
-      # 现补一条只 enforce 登记表自身不退化的静态门(格式/重复/失效/裁决词/只减不增),
-      # 刻意不做启发式 sort_by 扫描(避免误报红)。先 --selftest 证明门有牙再跑真实裁决,
-      # 沿 check_layer_map_parity/check_crate_reachability 先例。全部零 cargo、秒级。
-      - name: Top-K sort_by registry ratchet
-        run: |
-          python3 scripts/check_topk_registry.py --selftest
-          python3 scripts/check_topk_registry.py
-
-      # WHY: 覆盖率门的静态面(WS-B, 审计 P0 #1)——真实 JSON 裁决在 nightly
-      # (coverage.yml, 去 continue-on-error 后判定生效);PR 只校"配置自洽 + 棘轮单调 +
-      # 门自身有牙",全部零 cargo、秒级。首跑校准前 min 暂留 50(见 coverage_baseline.toml)。
-      - name: Coverage config & ratchet gate (static, zero-cargo)
-        run: |
-          python3 scripts/coverage_gate.py --selftest
-          python3 scripts/coverage_gate.py --validate-config
-
-      # WHY: 反馈链路一致性门(审计 finding #4)——交叉校验 gate_manifest 中 expect=0
-      # (收口必绿)的门脚本,是否在某个 workflow 的 continue-on-error 语境被吞(=清单说
-      # 阻塞、实际丢弃,coverage 旧版此病)。全部零 cargo、秒级。先 --selftest 再真实裁决。
-      - name: Gate parity (manifest expect vs CI continue-on-error)
-        run: |
-          python3 scripts/audit_gate_parity.py --selftest
-          python3 scripts/audit_gate_parity.py
-
-      # WHY: 持锁跨 await 门(架构重构方向 2 交付, gate_manifest G-26/G-27)。
-      # 2026-09-11 反馈链路核查发现: audit_gate_parity.py 只校验"CI 中出现的门是否被
-      # continue-on-error 吞掉", **不**校验"gate_manifest 里的门是否都已注册进 CI"
-      # (未注册的被判为 intentionally absent) —— 即只登记 manifest 而不接进 CI,门等于没装。
-      # 故本步显式把该门接入 CI,沿用其它门一致的 "--selftest 先证明有牙,再跑真实裁决" 范式。
-      # 全部零 cargo、秒级。
-      - name: Await-across-lock gate
-        run: |
-          python3 scripts/check_await_across_guard.py --selftest
-          python3 scripts/check_await_across_guard.py
-
-      # rusqlite→spawn_blocking 词法门（四维深审 P-3，gate_manifest G-77/G-78）：
-      # async fn 内、spawn_blocking（含仓内 with_*_async/with_read_conn 同义 wrapper）
-      # 闭包外的 DB 调用=红；存量 3 笔真阳性冻结于 sqlite_blocking_allowlist.txt（只减
-      # 不增，STALE 必红）。沿用 --selftest 先证明有牙再裁决先例；零 cargo、秒级。
-      - name: SQLite-in-async blocking gate (P-3)
-        run: |
-          python3 scripts/check_sqlite_blocking.py --selftest
-          python3 scripts/check_sqlite_blocking.py
-
-      # subscribe-before-spawn 词法门（四维深审 E-6 v2，gate_manifest G-79/G-80）：
-      # spawn 闭包体内裸 .subscribe*()=红（broadcast 不回放，晚订阅丢触发事件）；
-      # 现值零违例（基线空），防的是未来回退；TypeState builder 继续守 builder 面。
-      - name: Subscribe-order blocking gate (E-6)
-        run: |
-          python3 scripts/check_subscribe_order.py --selftest
-          python3 scripts/check_subscribe_order.py
-
-      # workspace.lints opt-in 棘轮门（四维深审 E-5 首片，gate_manifest G-81/G-82）：
-      # [workspace.lints] unwrap_used/expect_used=warn 对未 opt-in crate 惰性；登记集
-      # lint_ratchet_crates.txt 只增，新 opt-in 需先 clippy --all-targets 零告警。
-      - name: Lint-ratchet blocking gate (E-5)
-        run: |
-          python3 scripts/check_lint_ratchet.py --selftest
-          python3 scripts/check_lint_ratchet.py
-
-      # 前序静态只读门并接（四维深审 G-25 收口）：11 个零 cargo、秒级的登记/对等/漂移门
-      # 此前登记于 gate_manifest 但无 workflow 接刃（G-25 判“expect=0 却永不在 CI 跑”）。
-      # 全量 manifest 实测每项 rc=0，阻断接入防“注册了但没人执行”的静默回退；
-      # parity 按 (script, flag) 级对账，故 selftest/多形态项逐一与 normal 同列。
-      - name: Static read-only audit gates (G-25 wiring)
-        run: |
-          python3 scripts/check_config_sample_parity.py --selftest
-          python3 scripts/check_config_sample_parity.py
-          python3 scripts/check_contract_consumers_parity.py --selftest
-          python3 scripts/check_contract_consumers_parity.py
-          python3 scripts/check_deleted_crate_registry.py --selftest
-          python3 scripts/check_deleted_crate_registry.py
-          python3 scripts/check_doc_pointer_integrity.py --selftest
-          python3 scripts/check_doc_pointer_integrity.py
-          python3 scripts/check_event_ownership.py --selftest
-          python3 scripts/check_event_ownership.py
-          python3 scripts/check_certify_whitelist.py
-          python3 scripts/check_write_sensitive_instrumentation.py --selftest
-          python3 scripts/check_write_sensitive_instrumentation.py
-          python3 scripts/check_gated_wiring_substance.py --selftest
-          python3 scripts/check_gated_wiring_substance.py
-          python3 scripts/check_impl_maturity_claims.py --selftest
-          python3 scripts/check_impl_maturity_claims.py
-          python3 scripts/check_manifest_path_deps.py --selftest
-          python3 scripts/check_manifest_path_deps.py
-          python3 scripts/check_retired_crate_residue.py --selftest
-          python3 scripts/check_retired_crate_residue.py
-          python3 scripts/check_test_surface_liveness.py --selftest
-          python3 scripts/check_test_surface_liveness.py
-          python3 scripts/crate_contract.py --selftest
-          python3 scripts/crate_contract.py --check
-          python3 scripts/emit_architecture_views.py --selftest
-          python3 scripts/emit_architecture_views.py --check
-          python3 scripts/emit_architecture_views.py --verify
-
-      # WHY: P0-③（调度层 v2.0 §7-bis）——把此前以 ci_exempt 豁免在册的判据门接进
-      # CI 阻塞轨，关闭「清单看着不是红、实际从未裁决」病理（§5.2 断点 2）。
-      # G-38/G-39 的 P3|Check A 分歧已随 ADR-187（α′）双侧退役消除（expect 翻 0）；
-      # G-93~G-98 为 v3.5 门底座（dev-dep 方向 / 形式化名册 / v3.4.0 提案三态）。
-      # 全部门 2026-10-12 本机实跑 rc=0、--selftest 全绿；零 cargo、秒级。
-      # 沿既有「先 --selftest 证明有牙，再跑真实裁决」范式。
-      - name: Gate predicate parity (G-38/G-39, Q15)
-        run: |
-          python3 scripts/check_gate_predicates_parity.py --selftest
-          python3 scripts/check_gate_predicates_parity.py
-
-      - name: Dev-dependency direction gate (G-93/G-94)
-        run: |
-          python3 scripts/check_dev_dep_direction.py --selftest
-          python3 scripts/check_dev_dep_direction.py
-
-      - name: Formal property ledger gate (G-95/G-96)
-        run: |
-          python3 scripts/check_formal_property_ledger.py --selftest
-          python3 scripts/check_formal_property_ledger.py
-
-      - name: v3.4.0 crate proposals tri-state gate (G-97/G-98)
-        run: |
-          python3 scripts/check_v340_crate_proposals.py --selftest
-          python3 scripts/check_v340_crate_proposals.py
-
-      # WHY: 组合根装配门(架构重构方向 B-c 交付, gate_manifest G-28/G-29)——
-      # chimera-cli/src/composition.rs 是唯一合法装配点;实测(2026-09-12)生产路径
-      # 9 处 EventBus::new 中 8 条命令路径绕过组合根,导致 Critical 送达仅 1/9 生效
-      # (B-a 已在总线层兜底,但"N 个互不可见总线"的结构债仍在)。本门以 exact-count
-      # 只减不增棘轮冻结存量(scripts/composition_root_baseline.txt, cap 必须等于
-      # 实测数),新增绕过必红、债务迁移后忘删豁免必红。先 --selftest 证明有牙再跑
-      # 真实裁决,沿 await-across-lock/check_topk_registry 范式。全部零 cargo、秒级。
-      - name: Composition-root assembly gate
-        run: |
-          python3 scripts/check_composition_root.py --selftest
-          python3 scripts/check_composition_root.py
-
-      # WHY: 依赖真实性门(架构重构方向 E 交付, gate_manifest G-30/G-31)——
-      # Check D 按 manifest 计数 chimera-mas 内部依赖(实测 13/16),但其中 2 条
-      # (mlc-engine/cmt-tiering)src/ 零引用,棘轮运行在虚高基数上。本门把
-      # "声明"与"实际引用"对齐:src/ 引用=正确;仅 benches/tests 引用=应移
-      # [dev-dependencies];全零引用=真幽灵。范围限定内部 workspace crate 与
-      # [dependencies] 段(外部 crate 有 derive/属性魔法,文本判定会误报)。
-      # 先 --selftest 证明有牙再跑真实裁决,沿 await-across-lock 范式,零 cargo 秒级。
-      - name: Declared-vs-used dependency gate
-        run: |
-          python3 scripts/check_declared_dep_usage.py --selftest
-          python3 scripts/check_declared_dep_usage.py
-
-      # WHY: 内部依赖边冻结门(架构方向 G' 交付, gate_manifest G-32/G-33)——
-      # 铁律 Check B 只禁向上边:新增 L10->L2 边与 L10->L9 边同样放行,分层对
-      # 边增长没有约束力(实测 140 条装配边中 82.9% 为越级向下)。本门把
-      # "边集合"以 only-decrease 棘轮冻结(dep_edge_freeze.txt):新增任何内部
-      # 装配边必须显式登记并对照层图评审;删除则收缩基线。与 E-a 门共享
-      # manifest 解析(模块导入,单一方言)。先 --selftest 再真实裁决,零 cargo 秒级。
-      - name: Dependency-edge freeze gate
-        run: |
-          python3 scripts/check_dep_edge_freeze.py --selftest
-          python3 scripts/check_dep_edge_freeze.py
-
-      # WHY: 外环->内环直连边棘轮（ADR-187 / Q3 §4.2）——"外环只能经 event-bus
-      # 依赖内环"这一半此前完全无门（Check B 只拦向上边，这些是向下的跨环直连
-      # 边）。only-decrease 冻结当前 9 条（组合根 chimera-cli/nexus-app-server 豁免），
-      # 新直连内环边即红。非 Check A 复活。gate_manifest G-75/G-76。
-      - name: Outer->inner ratchet gate
-        run: |
-          python3 scripts/check_outer_inner_ratchet.py --selftest
-          python3 scripts/check_outer_inner_ratchet.py
-
-      # WHY: 性能红线与 bench 清单静态门(R1-T5, 审计发现 F-R4-01)——本门禁原以
-      # .ps1(429 行) + .sh(246 行) 两份手写实现存在, 而 CI 中零次调用(全 .github/
-      # 唯一命中是 bench_check.yml 的一句注释), 即 6 项 SLO + RL-01~11 + 120 bench
-      # 三态登记只在开发者手动敲一次 pwsh 时才生效。现表体已外置为单一真值源、逻辑
-      # 收敛到 scripts/check_perf_redlines.py, 本步把"有门"从记性变机制。
-      # --static-only = lint(32 子检查) + inventory(三态, 未知即红) + invariants
-      # (两表键集对等/兜底债棘轮/重叠对棘轮) + ignored 归属门; 全部零 cargo 调用、
-      # 秒级, 故挂在无 paths 过滤的 check job 而非 bench_check(PR 带 paths 过滤且排在
-      # 3-8min bench 之后)。故意不写 continue-on-error: 兜脏等于再写一个不跑的门。
-      - name: Perf redline inventory & lint gate
-        run: |
+          # 负控（--selftest）前导：下列形参在 gate_manifest.toml 里没有独立登记行
+          # （清单登记的是裁决形态；新增门需另议），故收敛时必须原样保留，否则
+          # "门有牙"的自证会随被删的 step 一起消失。
+          python3 scripts/run_gate_manifest.py --selftest
           bash scripts/check_perf_redlines.sh --selftest
-          bash scripts/check_perf_redlines.sh --static-only
+          python3 scripts/check_ps1_bom_gate.py --selftest
+          python3 scripts/check_accel_exclusion.py --selftest
+          python3 scripts/check_compute_offload_reachability.py --selftest
+          python3 scripts/check_sync_offload_guard.py --selftest
+          python3 scripts/check_bus_shard_hotspot.py --selftest
+          python3 scripts/check_nexus_core_dep_freeze.py --selftest
+          python3 scripts/check_contract_consumers.py --selftest
+          bash scripts/check_crate_reachability.sh --selftest
+          # --ci = 只跑 CI 面（跳过清单声明 ci_exempt 的门）；缺少该旗标会把
+          # Windows 权威执行体（.ps1）与收口审计项一起拖进阻塞面并被读成红。
+          python3 scripts/run_gate_manifest.py --ci --jobs 4
 
-      # WHY: 持锁跨 await 静态门(M3 / 架构重构路线图方向5后半)——faae-router tests/
-      # lock_holding.rs 是 workspace 唯一运行时死锁回归且只覆单 crate;本门对 crates/*/src
-      # 全量静态扫描 guard 存活域跨 .await 的形态(acquire-await/snapshot 块/spawn_blocking
-      # 闭包/drop 先行释放均不误报,判定粒度宁缺毋滥)。存量违规冻结于
-      # scripts/lock_await_freeze.txt(DESIGN/SCANNER-DEBT 两级,源自 2026-09-10 人工复核
-      # 清单):未登记违规=红、登记失效=红、冻结只减不增。沿 "--selftest 先证明有牙,再跑
-      # 真实裁决" 先例;全部零 cargo、秒级。与上方 check_await_across_guard.py 同名单审计
-      # 互补(M3 交付物为 bash 单实现,便于无 python 环境复跑)。
-      - name: Lock-held-across-await static gate (M3)
-        run: |
-          bash scripts/check_lock_await.sh --selftest
-          bash scripts/check_lock_await.sh
-
-      # WHY: 文档计数漂移门(M3 / 方向6)——计数口径曾现 144 vs 145(NexusEvent)、9 类 vs
-      # 10 类(EventTopic)漂移,且 .sh 层图滞留 38 曾致依赖铁律 job 为红;本门以代码实测为
-      # 锚(NexusEvent 变体 / EventTopic 类 / workspace crate 三计数,awk 直测 types.rs /
-      # topic.rs / Cargo.toml),锁定值单点存 scripts/doc_count_freeze.txt(--update-baseline
-      # 有意更新);文档声明与锁定值不符:未登记=红、已登记=可见债(修复后删行,滞留=红)、
-      # 锚点消失=红(防锚点锈蚀成永绿假门)。目标缺失退 2 不静默放过,沿 audit_cmd_sync.py
-      # (ADR-167 决策 4)先例;全部零 cargo、秒级。
-      - name: Doc count drift gate (M3)
-        run: |
-          bash scripts/check_doc_drift.sh --selftest
-          bash scripts/check_doc_drift.sh
-
-      # Concord W5:斜杠命令词表防退化——断言 24 条主流竞品同名命令均存在于
-      # SlashCommandRegistry 且 tier 正确(W2 check_slash_vocab 口径提升为 CI 门禁;
-      # 退出码 0=通过 / 非 0=词表漂移阻塞合入)。i18n 硬编码防退化由
-      # chimera-tui 的 i18n_hardcode_invariant_test 随 workspace 测试覆盖。
-      - name: Slash vocab regression
-        run: bash scripts/check_slash_vocab.sh
-
-      # WHY: 函数长度红线(单函数 ≤200 行,nuxus规则.md §6.1)审计脚本的冒烟测试——
-      # fixture 构造一个 >200 行函数断言 audit_fnlen.py / fn_scan.py 均检出且无误报,
-      # 防止治理工具自身退化后红线静默失效(工具已入库,见 scripts/audit_fnlen.py)。
-      - name: Function-length audit scripts smoke test
-        run: bash scripts/test_fnlen_smoke.sh
-
-      # WHY(M15/C-05): 并行红线静态门(G-133)——check_parallel_redlines.ps1(P1-T13)
-      # 自述「零命中是波次收口门禁」,十六源手册 §5.3 红线 3(阻塞 IO 永不进 rayon)与
-      # ADR-202 §4 I11 把它当门禁复测判据引用,但此前 gate_manifest 与全部 workflow
-      # 均零登记零调用(「手册有文、脚本在盘、门册无号」三脱节),判据载体不存在。
-      # 本步接入与 .ps1 逐条等价的 bash 形态(四条禁令:禁自旋/IO-on-rayon/
-      # rayon::join 多闭包/同步锁持锁跨 await);.ps1 仍为 Windows 权威执行体
-      # (G-134,沿 G-04/G-05 双源先例)。零 cargo、秒级。
-      - name: Parallel redlines static gate (G-133)
-        run: bash scripts/check_parallel_redlines.sh
 
       # WHY: ubuntu-latest 预装 stable 工具链;显式补齐 rustfmt/clippy 组件以防缺失。
       - name: Ensure rustfmt & clippy components
@@ -809,6 +273,17 @@ jobs:
       - name: sccache stats
         if: always()
         run: sccache --show-stats || true
+
+
+      # WHY(TC-C): 阻塞步的失败证据必须可下载 —— govd 的逐门日志与台账在
+      # tmp/govd/runs/<run_id>/，与 governance-shadow 的上传口径同路径。
+      - name: Upload govd run artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: govd-check-${{ github.run_number }}
+          path: tmp/govd/runs/**/*
+          if-no-files-found: warn
 
   # ============================================================
   # E2E/压测独立 job(与 check 并行)
@@ -1026,10 +501,17 @@ jobs:
 
   # ============================================================
   # P1-7: repo-wiki CI benchmark 阈值断言(可选,不阻塞合并)
-  # WHY: benchmark 在 CI 环境波动较大,设为 continue-on-error 避免误报阻塞 PR。
-  # 主要目的是捕获数量级退化(如 10× 以上),而非精确性能回归。
-  # 仅运行 10K entry 快速 benchmark(~30s),100K 在 release/local 验证。
-  # 阈值表见 scripts/check_repo_wiki_benchmark.sh 头部注释。
+  # ① 现状: benchmark 在 CI 环境波动较大(共享 runner 的 CPU 争抢),设为
+  #    continue-on-error 避免误报阻塞 PR;目的是捕获数量级退化(如 10× 以上),
+  #    而非精确性能回归。仅跑 10K entry(~30s),100K 在 release/local 验证。
+  #    同脚本在 gate_manifest 登记为 G-49,并带 `ci_advisory` 理由(升格须 Q33 授权)。
+  # ② 转阻塞的机检条件(三者同时满足):
+  #    (a) gate_manifest.toml 的 G-49 行**不再**带 ci_advisory(授权落地的机器表达);
+  #    (b) 该 job 连续 5 次 conclusion=success(数据源 `gh run list --workflow
+  #        ci.yml --limit 40 --json conclusion,attempt`,零超阈值 rc=1);
+  #    (c) 该 5 次窗口内无 attempt>1。
+  #    判定形状沿用 scripts/check_coe_observability.py(切换前把本 job 登记为观察面)。
+  # ③ 责任批次: P1-7(报告 §3.6);升格授权 = Q33(见 G-49 的 ci_advisory 理由)。
   # ============================================================
   benchmark:
     name: repo-wiki benchmark 阈值
@@ -1063,11 +545,18 @@ jobs:
 
   # ============================================================
   # governance-shadow — govd pr profile, deliberately non-blocking (ADR-228 §3.6 / I7)
-  # WHY: the hard-coded steps above are the legacy execution surface. Before
-  # retiring any of them, run the whole pr-profile light set through govd for 3
-  # green runs (continue-on-error) and compare [SUM]/JUnit artifacts. Only then
-  # flip this job to blocking and delete steps in batches. `--report junit` is
-  # accepted for forward compatibility; govd always writes report.json/junit.xml.
+  # ① 现状: 本 job 是 govd 执行面的影子通道 —— 它与 check job 里已转为**阻塞**的
+  #    "Static gates (manifest-driven, parallel)" 步跑同一份 pr profile 清单，
+  #    存在的价值只剩"同 ref 两执行面的 [SUM] 逐键对拍"(证明并发调度与串行枚举
+  #    判定一致)。它自身非阻塞，故冲突不会因此被吞:阻塞面已是 check job。
+  # ② 转阻塞/退场的机检条件(满足任一即删本 job，而不是把它翻成阻塞 — 翻成阻塞
+  #    等于同一批判据跑两遍并各写一份台账):
+  #    (a) 同一 run 的 check job 与 shadow 的 `[SUM] ok/mismatch/env-fail/unknown/skip`
+  #        五个计数逐项相等，且满足此条件连续 3 次(GitHub 上按 run 号区间取,
+  #        数据源 `gh run view --json jobs` + 两个 job 的 artifact）；
+  #    (b) 或 `--ci` 面落地后 shadow 的 ci_exempt 差集非空(说明两侧清单边界已不同,
+  #        影子对拍不再有意义)。
+  # ③ 责任批次: ADR-228 §3.6 / I7 的迁移条款;执行面收敛见 TC-C 批次(本步)。
   # 计数不在此登记(ADR-234 S9 顺带订正：旧文案钉死过 "133 light gates"，而现值是
   # 清单自报数——门数每次增减都会让这句话变陈旧，故改为不写数)。
   # ============================================================

@@ -57,6 +57,15 @@
 #       (FixedClock / MemFs / MockNet / SeedRng42) have a production caller.
 #   nexus-core::lib::newtype
 #       unwired helper on the L0-B core face.
+#   nexus-compute::dispatch::DispatchPlan::Async  [enum VARIANT -- NOT a row]
+#       L1-H-3 verdict (b): every registered TaskKind is CPU-only, so
+#       `TaskKind::is_io_bound()` is constantly false and this variant is an
+#       unreachable reserved state (marked `#[doc(hidden)]`, kept to preserve
+#       downstream `match` exhaustiveness). A variant is not a standalone
+#       `pub` item, so this gate's PUB_ITEM_RE never scans it: registered here
+#       as a comment only, deliberately NOT added as a row.
+#       Lift the reservation by adding an IO-bound TaskKind (is_io_bound ->
+#       true) and removing both `#[doc(hidden)]` and this note.
 #   （2026-11-18 注：`nexus-core::decay::apply_exponential_decay` 已按 L1-C-2
 #     物理删除,故本表同步删行 —— 这正是 STALE 方向该做的事,不是放宽。）
 

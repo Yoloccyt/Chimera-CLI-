@@ -34,7 +34,18 @@ jobs:
     name: 1000-iter stress / stability
     runs-on: ubuntu-latest
     timeout-minutes: 60  # 压测可能耗时较长(1000-iter × 单 iter ~10ms = ~10s;含 setup 1-2 min)
-    # P9-T2: 压测波动大,失败不阻塞合入,记录到 docs/reports/nextest-stress.json 供后续分析
+    # ① 现状：压测波动大（共享 runner 的 CPU/IO 争抢 + 1000-iter 长尾），失败只记录
+    #    不阻塞合入，产物落 docs/reports/nextest-stress.json 供趋势分析（P9-T2）。
+    # ② 转阻塞的机检条件（三者同时满足）：
+    #    (a) `gh run list --workflow stress.yml --limit 40 --json conclusion,attempt`
+    #        连续 5 次 conclusion=success（近 5 个 nightly 全绿）；
+    #    (b) 该窗口内无 attempt>1（重跑不算连绿）；
+    #    (c) `-E 'binary(/stress/)'` 的 target 集合无变化（口径稳定才可比）——
+    #        以 scripts/ignored_test_inventory_freeze.txt 的登记为基线。
+    #    判定形状与 slo.yml/perf_redline.yml 同族，切换前须把本 job 登记为
+    #    scripts/check_coe_observability.py 的观察面（否则条件满足也无人发现）。
+    # ③ 责任批次：P9-T2（stress profile 独立化）；升格需与 ci.yml 快轨的
+    #    `-E 'not binary(/stress/)'` 排除式同批评估（两处过滤式的并集必须是全集）。
     continue-on-error: true
     env:
       RUSTC_WRAPPER: sccache

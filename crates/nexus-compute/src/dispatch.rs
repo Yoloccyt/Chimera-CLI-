@@ -26,6 +26,17 @@ pub enum DispatchPlan {
     /// CPU 密集且条目数 >= 阈值:进 L-a 全局池(ComputeBridge 独立 rayon 池)
     Rayon,
     /// IO 密集:进 L-b tokio 结构化并发(JoinSet/FuturesUnordered,不进 rayon 池)
+    ///
+    /// **预留态 — 当前不可达（L1-H-3 裁决 b）**:[`TaskKind`] 已登记的十类全为
+    /// CPU 计算型（无 IO / 网络 / 磁盘语义）,故 [`TaskKind::is_io_bound`] 恒为
+    /// `false`,`route` 对任何登记类型与任何规模都不会返回本变体。
+    /// WHY 保留而不删除:删除公开变体会破坏下游 `match` 的穷尽性与既有分支语义
+    /// （SemVer 破坏）;保留并以 `#[doc(hidden)]` 标注预留身份,是「减法优先序」
+    /// 下不产生下游破坏的最小处置。
+    /// 解除条件 = 新增语义上 IO 密集的 `TaskKind` 变体并让其 `is_io_bound()`
+    /// 返回 `true`（届时同步移除本属性与 `scripts/l1_dead_surface_freeze.txt`
+    /// 中的预留登记）。
+    #[doc(hidden)]
     Async,
 }
 
@@ -93,6 +104,17 @@ impl TaskKind {
     /// 十类均为 CPU 计算型,返回 `false`;IO 类任务（LLM 网络调用 / 网络检索等）
     /// 按 v4.0 §7.5.1 分类应归 L-b tokio 面,登记时经此处返回 `true`,
     /// 由 HTS 阈值表（T9 序贯检验）统一驱动——本骨架不预登记 IO 类。
+    ///
+    /// # WHY 恒为 false（L1-H-3 裁决 b,勿删）
+    /// 十类登记（`ClvSimilarity` / `OsaMask` / `KnnSearch` / `GsoeEvaluate` /
+    /// `CscCollapseScore` / `Generic` / `HcwEntryScore` / `NmcEncode` /
+    /// `ExpertScore` / `DecayBatch`）**全部是纯 CPU 计算负载**,没有任何 IO /
+    /// 网络 / 磁盘语义 —— 因此 [`DispatchPlan::Async`] 在当前登记面是**预留
+    /// 不可达态**,而非「漏了接线」。若在此凭空返回 `true`,会把 CPU 任务错派到
+    /// tokio 面（既违「IO 不上 rayon」的对偶纪律,也无任何 IO 可供 await）。
+    /// **解除条件**:新增 IO 型变体后在此按变体返回 `true`,并同批撤掉 `Async`
+    /// 的 `#[doc(hidden)]` 与冻结登记。裁决由集成测试
+    /// `dispatch_async_is_reserved_or_reachable` 锁定,防止静默漂移。
     #[must_use]
     pub const fn is_io_bound(self) -> bool {
         false

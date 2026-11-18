@@ -16,6 +16,10 @@
 #   ⏱ 切换阻塞条件：连续 2 晚全绿且无 SKIP（rc=2）后，把该 job 改为 false，
 #      并在 ADR-278 记录切换提交。SKIP 表示判据未命中预期对象 —— 不得以放宽
 #      filter/阈值的方式消掉它，应修正 filter 或登记 [[excluded]]（owner+expiry）。
+#   🤖 机检入口：`python scripts/check_coe_observability.py`（观察面 3）每日判
+#      "条件已满足而仍挂着 continue-on-error"= rc 1（漏翻转红）；gh 缺席 = rc 2
+#      （不可判定）。改上面的条件时先改此处头注，再同步该脚本的参数。
+#   责任批次：ADR-278（本 workflow 的唯一执行面）；观察期计划沿 R1-T10 口径。
 # =============================================================================
 name: Perf contract execution (SLO + RL)
 

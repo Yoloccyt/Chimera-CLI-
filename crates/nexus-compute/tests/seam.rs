@@ -82,6 +82,27 @@ fn mem_fs_read_of_unknown_path_is_a_fail_closed_error() {
 }
 
 #[test]
+fn mem_fs_list_is_segment_exact_and_sorted() {
+    // 契约（`Fs::list` 文档）:非递归、只返回**直接子项**、输出有序。
+    // 病灶（修复前）:`starts_with` 前缀过滤 + 不排序 —— `list("a")` 会把同级的
+    // 文件 "ab" 误判为 "a" 的子项（前缀匹配 ≠ 路径段匹配）。
+    let fs = MemFs::new();
+    for p in ["a", "ab", "a/b", "a/c"] {
+        fs.write(Path::new(p), b"x").expect("MemFs 写入应成功");
+    }
+
+    assert_eq!(
+        fs.list(Path::new("a")).expect("list 应成功"),
+        vec![PathBuf::from("a/b"), PathBuf::from("a/c")],
+        "list 只回直接子项（不含同级 'ab'）且必须排序"
+    );
+    assert!(
+        fs.list(Path::new("ab")).expect("list 应成功").is_empty(),
+        "list 不得递归、不得跨前缀串味（'ab' 没有子项）"
+    );
+}
+
+#[test]
 fn mem_fs_list_filters_by_prefix_and_ignores_other_dirs() {
     // 契约:list 只回本前缀下的条目（非递归语义由 starts_with 组件匹配承担）
     let fs = MemFs::new();

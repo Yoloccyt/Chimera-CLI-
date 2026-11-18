@@ -26,6 +26,10 @@
 #   ⚠ 若观察期内任一测试 retry 命中率 > 10%：按 RK-P28 退回 `manual-only`
 #   并在登记表写理由，**不得**靠放宽阈值了事（kvbsr scale.rs 的
 #   >5×→>3×→>2× 就是那条路的终点）。
+#   🤖 机检入口：`python scripts/check_coe_observability.py`（观察面 1/2）每日判
+#      "条件已满足而仍挂着 continue-on-error"= rc 1（漏翻转红）；gh 缺席 = rc 2。
+#      即上面的 ①② 不是散文，而是该脚本的可执行判据（改条件须同批改两边）。
+#   责任批次：R1-T10 观察期计划 + ADR 侧的 RK-P 缓冲台账。
 # =============================================================================
 name: SLO red-line gate (perf p95)
 
@@ -165,8 +169,14 @@ jobs:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # 本 job 语义上永久非阻塞（它的产物是趋势数据，不是判据）；
-    # 真正需要"切阻塞"决策的只有上面的 A1 门。
+    # ① 现状：本 job 语义上**永久**非阻塞 —— 它的产物是趋势数据（scale=4 的比值/宽松
+    #    阈值档），不是判据；真正需要"切阻塞"决策的只有上面的 A1 门。
+    # ② 转阻塞的机检条件：**无**（本 job 不承担裁决，翻 false 没有语义）。若将来要把
+    #    A2 升为判据，前置是可机器判定的两步：把 CHIMERA_PERF_SCALE 从 '4' 收到 '1.0'
+    #    并登记进 scripts/ignored_test_inventory_freeze.txt 的 A2 段，然后
+    #    `python scripts/check_coe_observability.py` 的观察面须连续 10 次无 failure
+    #    （该脚本当前只判 A1 与 perf_redline，扩面时数据源同 `gh run list`）。
+    # ③ 责任批次：R1-T10 观察期计划的 A2 档。
     continue-on-error: true
     env:
       RUSTC_WRAPPER: sccache

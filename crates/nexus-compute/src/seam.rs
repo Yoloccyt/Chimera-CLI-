@@ -251,7 +251,18 @@ impl Fs for MemFs {
 
     fn list(&self, dir: &Path) -> Result<Vec<PathBuf>, SeamError> {
         let map = self.map.lock().unwrap_or_else(|p| p.into_inner());
-        Ok(map.keys().filter(|p| p.starts_with(dir)).cloned().collect())
+        // 契约（trait 文档）:非递归、只回**直接子项**、输出有序。
+        // WHY 用 `parent()` 相等而非 `starts_with`:`starts_with` 只保证「以该路径段
+        // 开头」,会把目录自身（`a` 之于 `a`）与更深层条目（`a/b/c` 之于 `a`）一并
+        // 命中,与「直接子项」的语义不符;父路径相等才是路径段边界上的精确判据。
+        let mut out: Vec<PathBuf> = map
+            .keys()
+            .filter(|p| p.parent() == Some(dir))
+            .cloned()
+            .collect();
+        // WHY 排序:HashMap 迭代顺序不确定,不排序会让「列表内容」类断言成为 flaky 源。
+        out.sort();
+        Ok(out)
     }
 }
 
