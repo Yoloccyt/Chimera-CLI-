@@ -34,6 +34,15 @@ ndarray
 # batch that removed the shim -- nexus-core no longer depends on nexus-compute;
 # consumers直连. Reverse direction remains rejected (would close a crate cycle).
 nexus-contracts
+# ADR-322/ADR-324 (2026-11-19) L1-E-2 last mile: `nexus-events` added after
+# minimality + layer-direction review. Why it is minimal: nexus-core consumes
+# ONLY the pure event catalogue types (NexusEvent / EventMetadata / ClvSummary
+# used by clv.rs); it has no bus runtime need. Why not event-bus: binding the
+# type-only face to the runtime crate would pull tokio/sharding/backpressure
+# into L0-B -- exactly the coupling ADR-322 extracted away. Direction: L0-B ->
+# L0-B, same machine layer 1, no cycle (nexus-events depends on
+# nexus-contracts only). Registered in dep_edge_freeze.txt in the same batch.
+nexus-events
 serde
 serde_json
 sha2

@@ -4,7 +4,7 @@
 //! BACKEND:  memory
 //! PRODUCERS: 4 GatherCompleted,GatherTimedOut,OperationTimedOut,OrphanCallDetected
 //! CONSUMERS: 1 chimera-cli
-//! MATURITY: SIMPLIFIED-CN
+//! MATURITY: NOT-IMPL-CN|SIMPLIFIED-CN
 //! CRATE-CONTRACT END
 //! 聚集查询执行协议 — 并发异步操作的聚集汇聚与超时治理
 //!

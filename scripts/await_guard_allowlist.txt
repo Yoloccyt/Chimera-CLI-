@@ -51,11 +51,11 @@ crates/nexus-app-server/src/sse.rs:121         # DESIGN SSE writer: single-conne
 # not a re-key. Its twin key in lock_await_freeze.txt was deleted in the same
 # batch (G-27 machine-checks the two key sets 1:1).
 # Tooth check: revert shutdown() to the multi-line chain -> G-27/G-35 must redden.
-crates/decb-governor/src/governor.rs:564            # SCANNER `current_total` is `*total` copy; state guard already block-scoped
+crates/decb-governor/src/governor.rs:565            # SCANNER `current_total` is `*total` copy; state guard already block-scoped
 # 合流裁决（2026-11-14）：与 lock_await_freeze.txt 同步保留 HEAD 的现役键 :604
 # （feat 侧删的是已被 :604 取代的旧键 :556；G-27 机器校验两表键集 1:1，本行必须成对存在）。
 # Re-keyed 2026-11-07: c6eb9b6 (ADR-253 D1 args 透传) 在本文件上方加行,把
-crates/pvl-layer/src/producer.rs:123                # SCANNER `strategy` is `*read()` Copy value; read guard dies at stmt end
+crates/pvl-layer/src/producer.rs:124                # SCANNER `strategy` is `*read()` Copy value; read guard dies at stmt end
 # Re-keyed 2026-11-14: R9b/R10 的 writer.rs EMA/关闭标志重构移动了 has_pending
 # 值提取点（同款 SCANNER 场景 B：guard 在 map 闭包内消费、语句末 drop，await
 # 发生在锁释放后的 flush 调用）。口径注记：CI scanner 的 acquisition line 定位

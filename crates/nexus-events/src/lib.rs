@@ -1,9 +1,9 @@
 //! CRATE-CONTRACT BEGIN
 //! LAYER:    L1
-//! ROLE:     事件目录（NexusEvent 155 变体 + payload + registry），ADR-322 自 event-bus 迁出
+//! ROLE:     事件目录 — NEXUS-OMEGA 跨层通信的纯类型契约面(ADR-322)
 //! BACKEND:  memory
 //! PRODUCERS: 0 -
-//! CONSUMERS: 1 event-bus
+//! CONSUMERS: 35 chimera-cli,chimera-mas,chimera-tui,chtc-bridge,cmt-tiering…
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! 事件目录 — NEXUS-OMEGA 跨层通信的纯类型契约面(ADR-322)
