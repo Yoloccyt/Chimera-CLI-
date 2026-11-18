@@ -56,7 +56,7 @@ ADR-049 的"0 新增 crate"是 v2.7 阶段控膨胀的**预算约束**，其治�
 - `event_bus::topic::EventTopic`：由 `topic.rs` 的 `pub use nexus_events::topic::EventTopic` 提供；
 - `event_bus::registry`：迁出前即为**私有** `mod registry`（零 pub 项），故无路径需要转出——下游从未可引用，无需垫片。
 
-**退役时点：v2.31.0-omega**。届时下游按 `nexus_events::` 机械改写（L1-E-2 波次），本段整段删除。
+**退役时点：v2.31.0-omega**。届时下游按 `nexus_events::` 机械改写（L1-E-2 波次），本段整段删除。**退役预案见 ADR-324**（含现取符号清单与机器前置检查；2026-11-19 实测全限定内联路径仍有 89 处残留，退役动作阻塞于该前置）。
 
 ### 1.4 155 变体如何拆分而不改契约
 

@@ -174,6 +174,10 @@ git grep -oh 'CHIMERA_[A-Z0-9_]*' -- "*.rs" "*.ps1" "*.sh" "*.yml" | Sort-Object
 ```bash
 # 0. 发布前完整门禁见 agents.md §7.2 与 .claude/CLAUDE.md「发布前检查清单」(check/clippy/fmt/全量测试/audit/perf 门)
 
+# 0.5 v2.31.0-omega 必做：compat-2x 退役（ADR-324）
+#     按 docs/architecture/ADR-324-compat-2x-retirement.md §3 六项机器前置逐条复核；
+#     第 2 项（生产面全限定路径 event_bus::<符号> = 0）未清零前不得执行删除。
+
 # 1. 更新版本号
 # 编辑 Cargo.toml: [workspace.package] version = "X.Y.Z-omega"
 # 编辑 Dockerfile: ARG VERSION=X.Y.Z-omega

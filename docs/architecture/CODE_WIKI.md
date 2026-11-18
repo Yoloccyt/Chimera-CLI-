@@ -1860,3 +1860,37 @@ my-crate/
 >
 > **★ Phase 10 §16 跨层协同闭环已发布收编**：v2.27.0-omega（2026-08-19）正式发布（W1-W7 全波次闭环），v2.27.1-omega（2026-08-20）为 GPG 签名补发 + MCA E2E 超时加固。ADR-085 双态治理已收编：权威口径从 136（v2.26.0-omega）升级为 144（v2.27.0-omega），`check_doc_consistency.ps1` GAP-F2 自然消除。在途 8 事件见 §5.6 已转为发布记录。
 
+---
+
+## 14. v3.4.0 §4.1/§4.2 三态差异登记（2026-11-19 现取）
+
+> **判据口径**：本仓「**代码是事实源，文档是投影**」；仅当主张属安全/契约硬约束时以文档为准——本节登记的条目**均不属**该类。
+> **判定三态**：`已一致` / `文档滞后` / `代码待补`。
+> **取数纪律**：每条「事实源」列都是 2026-11-19 当场实跑的命令或磁盘路径；未取数的写「未取数」。
+> **覆盖范围说明**：本节登记 §4.1 的 6 条结构/计数主张 + §4.2 的 10 条组件主张（抽样自该表 60+ 行）。§4.2 剩余行多为同一病根（「落地方案」列写成「新增 crate」而实际落在既有 crate 子模块），按本节同一判据处理，需要时按「事实源」范式增量补登。
+
+| 文档主张 | 代码现状 | 判定 | 事实源 | 处置 |
+|---|---|---|---|---|
+| §4.1 L1 把 `token-ledger`、`segment-aware-per` 列为 `event-bus` 内部扩展 | 两子系统已随 ADR-312 物理退役（B5 提交 `2abc977b`：token_ledger 603 行 / segment_per 479 行删除） | `文档滞后` | `crates/event-bus/src/lib.rs:141-143`（四撤主张面退役 NOTE）；`git grep -n "segment_aware" -- "crates/**/*.rs"` = 0 命中 | 改文档：该两行标「已退役（ADR-312）」 |
+| §4.1 L1 把 `model-router` 列入扩展清单 | crate 已物理删除 | `文档滞后` | `Test-Path crates/model-router` = False；本文 §3.12 表（提交 `38c72e6`，ADR-172） | 改文档：删条目并指向 §3.12 |
+| §4.1 L3 把 `lsct-tiering` 列为独立 crate | 已整 crate 并入 `cmt-tiering` | `文档滞后` | `Test-Path crates/lsct-tiering` = False；`crates/cmt-tiering/src/lsct/` 在盘；本文 §3.12 表（`bd3b10a`，ADR-193 批次二） | 改文档：标「已并入 cmt-tiering」 |
+| §4.1 L8 把 `acb-governor` 列为 crate | 已退役删除（ADR-182，M10 2026-09-16） | `文档滞后` | `Test-Path crates/acb-governor` = False；`Cargo.toml:279` 注释；本文 §3.12 表（`697b6c2`） | 改文档：删条目并指向 §3.12 |
+| §4.1 L10 写 `chimera-tui(22面板…)` | 现取 `PanelId` = **30**；焦点环 `REGISTERED_FOCUS_ORDER` = **29** | `文档滞后` | `crates/chimera-tui/src/types.rs:50`（enum）、`:288-326`（焦点环 29 项）、`:337`（`ALL`，30 项）；不变式 `ALL == REGISTERED_FOCUS_ORDER ∪ {InjectionStrategy}`（`:335`） | 改文档：写「面板数以 `PanelId` 现取为准」 |
+| §4.1 基线「38 crate / 144 NexusEvent / 10836 tests」与「基线 38 + 新增 ~15 = ~53 crates」 | 现取 `workspace.members` = **48**；`nexus_event_variants` = **155**；测试 passed 数不登记 | `文档滞后` | `Cargo.toml` `workspace.members`（48 条）；`scripts/doc_count_freeze.txt:25`（`nexus_event_variants = 155`） | 改文档：删计数，改权威源指针 |
+| §4.2 `experience-card-bus`（L1 / 🟢 / `event-bus` 内部扩展） | 已实现：`ExperienceCardBus` + `GlobalCardStats` | `已一致` | `crates/event-bus/src/experience_card_bus.rs`；`crates/event-bus/src/lib.rs:139`（`pub mod`）/`:220`（导出） | 无需动作 |
+| §4.2 `experience-card-viz`（L10 / 🟢 / `chimera-tui` 新增面板） | 已实现且注册进焦点环 | `已一致` | `crates/chimera-tui/src/panels/experience_card_viz.rs`；`crates/chimera-tui/src/types.rs:319` | 无需动作 |
+| §4.2 `conflict-degradation`（L2 / 🟢 / `mlc-engine` 内部扩展） | 已实现为 `DegradationChain`（Hybrid/SemanticOnly/KeywordOnly/Empty 四态） | `已一致` | `crates/mlc-engine/src/pyramid.rs:124`（`DegradationChain`）/`:108-111`（检索策略） | 可选：文档补模块名 `DegradationChain` |
+| §4.2 `six-class-feedback-integrator`（L4 / 🟢 / 「`error-signature-collector` 内部」） | 已实现，但载体是 seccore 的**兄弟模块**而非 `error-signature-collector` | `已一致`（落地方案列偏差） | `crates/seccore/src/execution_feedback.rs:32`（`ExecutionFeedbackIntegrator`）/`:26`（消费 `nexus_contracts::experience_card::ExecutionStatus`） | 改文档：落地方案列改为 `seccore/src/execution_feedback.rs` |
+| §4.2 `injection-strategy`（L2 / 🟢 / 「`hcw-window` 内部扩展」） | 已实现为 `MemoryPyramid::inject_context`，载体在 `mlc-engine` | `已一致`（载体偏差） | `crates/mlc-engine/src/pyramid.rs:417`（`inject_context`）/`:436-444`（动态卡片→用户消息前、人格→系统提示末尾） | 改文档：落地方案列改为 `mlc-engine/src/pyramid.rs` |
+| §4.2 `variant-pool`（L5 / 落地方案「新增 `variant-pool` crate」） | 实际为 `parliament` 内模块 | `文档滞后` | `crates/parliament/src/variant_pool.rs`；`crates/parliament/src/lib.rs:110` `pub mod variant_pool;`；`Test-Path crates/variant-pool` = False；ADR-051 决策「不新建 crate」 | 改文档：落地方案改「`parliament` 内部扩展」 |
+| §4.2 `hils-attention`（L2 / 🟡 新增 crate `crates/hils-attention`） | 已实现，但内嵌 `hcw-window` | `文档滞后` | `crates/hcw-window/src/hils.rs:6`（注明「ADR-049 决策 1（hils-attention 内嵌 hcw-window，保持 38 crate 基线）」）；`crates/hcw-window/src/lib.rs:69` `pub mod hils;`；`Test-Path crates/hils-attention` = False | 改文档：标「内嵌 hcw-window」 |
+| §4.2 `error-signature-collector`（L4 / 「新增 `error-signature-collector` crate」） | 实际为 `seccore` 内模块 | `文档滞后` | `crates/seccore/src/error_signature_collector.rs`；`Test-Path crates/error-signature-collector` = False | 改文档：落地方案改「`seccore` 内部扩展」 |
+| §4.2 `runtime-auditor`（L10 / 「新增 `runtime-auditor` crate」） | 实际为 `efficiency-monitor` 内的 `auditor` 模块 | `文档滞后` | `crates/efficiency-monitor/src/auditor.rs`；`Test-Path crates/runtime-auditor` = False | 改文档：落地方案改「`efficiency-monitor` 内部模块」 |
+| §4.2 `rl-client`（L1 / 🟢 / 「`rl-client` 升级」） | 实际为 `chimera-cli` 内的 feature-gated 模块（默认 off） | `文档滞后` | `crates/chimera-cli/src/rl_client.rs:1-4`；`crates/chimera-cli/src/lib.rs:110-111`（`pub mod rl_client;`）；`Test-Path crates/rl-client` = False | 改文档：落地方案改「`chimera-cli` 内 feature-gated 模块」 |
+| §4.2 `experience-card-system` 与 `on-demand-synthesizer`（L2 / 「新增 crate」） | 两者均为 `mlc-engine` 内模块 | `文档滞后` | `crates/mlc-engine/src/lib.rs:58` / `:76`（`pub mod`）+ `:126-127`（导出）；`Test-Path crates/experience-card-system` / `crates/on-demand-synthesizer` 均 False | 改文档：落地方案改「`mlc-engine` 内部模块」 |
+| §4.2 `experience-card-generator`（L7 / 「新增 `experience-card-generator` crate」） | 实际为 `pvl-layer` 内模块 `card_generator` | `文档滞后` | `crates/pvl-layer/src/card_generator.rs`（`ExperienceCardGenerator`）；`Test-Path crates/experience-card-generator` = False | 改文档：落地方案改「`pvl-layer` 内部扩展」 |
+| §4.2 `process-score-calculator`（L7 / 「新增 `process-score-calculator` crate」） | 实际为 `pvl-layer` 内模块 `process_score` | `文档滞后` | `crates/pvl-layer/src/process_score.rs`；`Test-Path crates/process-score-calculator` = False | 改文档：落地方案改「`pvl-layer` 内部扩展」 |
+| §4.2 `dynamic-verification-depth`（L7 / 「新增 `dynamic-verification-depth` crate」） | 实际为 `pvl-layer` 内模块 `dynamic_depth` | `文档滞后` | `crates/pvl-layer/src/dynamic_depth.rs:28`（`VerificationDepth`）；`Test-Path crates/dynamic-verification-depth` = False | 改文档：落地方案改「`pvl-layer` 内部扩展」 |
+
+**本节小结（2026-11-19 现取）**：登记 **20** 条主张 —— `已一致` **5** 条 / `文档滞后` **15** 条 / `代码待补` **0** 条。`文档滞后` 的主导病根是「落地方案」列把既有 crate 子模块写成「新增 crate」（13 条），其余 2 条为已删/已并 crate 仍留在 §4.1 架构图与基线计数（`model-router`/`acb-governor`/`lsct-tiering`/`token-ledger`/`segment-aware-per`、22 面板、38/144/10836）；`已一致` 的 5 条中 2 条存在「落地方案列载体写错」的局部偏差（`six-class-feedback-integrator` 与 `injection-strategy`），功能本身已落地。**未发现「文档主张为硬约束且代码未做到」的条目，故 `代码待补` 为 0** —— 若后续新增安全/契约类硬约束主张，须按「文档为准」单独裁决。
+
