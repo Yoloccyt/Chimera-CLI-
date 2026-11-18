@@ -466,7 +466,7 @@ mod tests {
         let mut panel = ClvVectorPanel::new();
         let mut state = TuiState::new();
         // 构造含 Top-3 维度的 CLV 摘要
-        state.clv_summary = Some(event_bus::ClvSummary {
+        state.clv_summary = Some(nexus_events::ClvSummary {
             block_means: vec![0.1; 8],
             l2_norm: 2.5,
             top_dims: vec![(10, 0.5), (20, -0.3), (30, 0.8)],
@@ -515,7 +515,7 @@ mod tests {
     fn test_clv_vector_panel_scroll_to_top_bottom() {
         let mut panel = ClvVectorPanel::new();
         let mut state = TuiState::new();
-        state.clv_summary = Some(event_bus::ClvSummary {
+        state.clv_summary = Some(nexus_events::ClvSummary {
             block_means: vec![0.1; 8],
             l2_norm: 2.5,
             top_dims: vec![(0, 0.5), (1, 0.4), (2, 0.3), (3, 0.2), (4, 0.1)],
@@ -577,7 +577,7 @@ mod tests {
         // 连续按 j 超过列表长度,应钳位在最后一项
         let mut panel = ClvVectorPanel::new();
         let mut state = TuiState::new();
-        state.clv_summary = Some(event_bus::ClvSummary {
+        state.clv_summary = Some(nexus_events::ClvSummary {
             block_means: vec![0.1; 8],
             l2_norm: 2.5,
             top_dims: vec![(0, 0.5), (1, 0.4), (2, 0.3)],

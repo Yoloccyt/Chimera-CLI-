@@ -226,7 +226,7 @@ impl Parliament {
         if !review.is_certify_eligible() {
             return false;
         }
-        let event = event_bus::NexusEvent::CertifyIssued {
+        let event = nexus_events::NexusEvent::CertifyIssued {
             metadata: nexus_contracts::EventMetadata::new("parliament"),
             claim_ref: review.claim_id().to_string(),
             subject: format!("claim:{}", review.claim_id()),

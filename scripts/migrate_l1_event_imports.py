@@ -248,7 +248,58 @@ def rewrite_text(text, symbols, relpath):
         sep = "\r\n" if "\r\n" in text else "\n"
         return sep.join(plan["lines"])
 
-    return USE_RE.sub(replace, text), records
+    rewritten = USE_RE.sub(replace, text)
+    rewritten, tail = rewrite_fullpaths(rewritten, symbols, relpath)
+    return rewritten, records + tail
+
+
+# Inline (non-`use`) references, e.g. `event_bus::EventMetadata::new(..)`.
+# WHY a second pass exists: the `use`-statement rewrite alone leaves 97 such
+# call sites in 12 crates (2026-11-19 measured), so deleting the `compat-2x`
+# re-export at v2.31 would still break the build. The module prefix is
+# preserved (`types::` / `payloads::` / `topic::`) so the rewritten path keeps
+# the same shape as the source module it now points at.
+FULLPATH_RE = re.compile(r"\bevent_bus::((?:types|payloads|topic)::)?([A-Za-z_]\w*)")
+
+
+def rewrite_fullpaths(text, symbols, relpath=""):
+    """Rewrite inline `event_bus::[mod::]Sym` where `Sym` is an events symbol.
+
+    Line-oriented on purpose: a Rust file's comments are line-delimited here
+    (`//`, `///`, `//!`, `*` continuation), and a file-level regex over raw
+    text would happily rewrite a doc example. Block-comment bodies are skipped
+    by the `/*` / `*` prefix test. String literals that happen to contain
+    `event_bus::X` are left alone by requiring the match to be code, which the
+    compiler re-verifies afterwards.
+    """
+    sep = "\r\n" if "\r\n" in text else "\n"
+    out = []
+    records = []
+    for lineno, line in enumerate(text.split(sep), 1):
+        stripped = line.lstrip()
+        if (stripped.startswith("//") or stripped.startswith("/*")
+                or stripped.startswith("*")):
+            out.append(line)
+            continue
+        hits = []
+        for m in FULLPATH_RE.finditer(line):
+            if m.group(2) in symbols:
+                hits.append(m)
+        if not hits:
+            out.append(line)
+            continue
+        new = line
+        for m in reversed(hits):
+            mod = m.group(1) or ""
+            new = new[:m.start()] + "nexus_events::" + mod + m.group(2) + new[m.end():]
+            records.append({
+                "file": relpath, "line": lineno, "kind": "fullpath",
+                "before": m.group(0),
+                "after": "nexus_events::" + mod + m.group(2),
+                "migrated": [m.group(2)], "kept": [],
+            })
+        out.append(new)
+    return sep.join(out), records
 
 
 def scan_tree(root, symbols):
@@ -273,11 +324,14 @@ def scan_tree(root, symbols):
             if not found:
                 continue
             records.extend(found)
-            row = per_crate.setdefault(crate, {"stmts": 0, "syms": 0, "manual": 0})
+            row = per_crate.setdefault(
+                crate, {"stmts": 0, "syms": 0, "fullpaths": 0, "manual": 0})
             for rec in found:
                 if rec["kind"] == "rewrite":
                     row["stmts"] += 1
                     row["syms"] += len(rec["migrated"])
+                elif rec["kind"] == "fullpath":
+                    row["fullpaths"] += 1
                 else:
                     row["manual"] += 1
     return records, per_crate
@@ -299,7 +353,7 @@ def apply_tree(root, symbols):
                 continue
             rel = os.path.relpath(path, root).replace(os.sep, "/")
             new, found = rewrite_text(text, symbols, rel)
-            if not any(rec["kind"] == "rewrite" for rec in found) or new == text:
+            if new == text:
                 continue
             with open(path, "w", encoding="utf-8", newline="") as fh:
                 fh.write(new)
@@ -310,13 +364,16 @@ def apply_tree(root, symbols):
 def _summary(records, per_crate):
     rewrites = [r for r in records if r["kind"] == "rewrite"]
     manual = [r for r in records if r["kind"] == "manual"]
+    fullpaths = [r for r in records if r["kind"] == "fullpath"]
     return {
         "statements": len(rewrites),
         "symbols": sum(len(r["migrated"]) for r in rewrites),
         "crates": len(per_crate),
         "manual": len(manual),
+        "fullpaths": len(fullpaths),
         "rewrites": rewrites,
         "manual_records": manual,
+        "fullpath_records": fullpaths,
         "per_crate": per_crate,
     }
 
@@ -327,14 +384,17 @@ def _print_report(symbols, result, limit=20):
     core = ["NexusEvent", "EventMetadata", "EventTopic"]
     print("[CORE] " + " ".join("%s=%s" % (n, "yes" if n in symbols else "no")
                                for n in core))
-    print("[CHECK] %d use statement(s) pending across %d crate(s); "
-          "%d symbol(s) migrate" % (result["statements"], result["crates"],
-                                    result["symbols"]))
-    rows = sorted(result["per_crate"].items(), key=lambda kv: (-kv[1]["stmts"], kv[0]))
+    print("[CHECK] %d use statement(s) + %d inline path(s) pending across %d "
+          "crate(s); %d symbol(s) migrate"
+          % (result["statements"], result["fullpaths"], result["crates"],
+             result["symbols"]))
+    rows = sorted(result["per_crate"].items(),
+                  key=lambda kv: (-(kv[1]["stmts"] + kv[1]["fullpaths"]), kv[0]))
     if rows:
-        print("  crate                                  stmts  syms")
+        print("  crate                                  stmts  syms  inline")
         for crate, row in rows:
-            print("  %-38s %5d %5d" % (crate, row["stmts"], row["syms"]))
+            print("  %-38s %5d %5d %7d"
+                  % (crate, row["stmts"], row["syms"], row["fullpaths"]))
     if result["manual"]:
         print("[MANUAL] %d statement(s) refused (self group; human decision):"
               % result["manual"])
@@ -392,13 +452,14 @@ def main(argv):
             "symbols_migrating": result["symbols"],
             "crates": result["crates"],
             "manual": result["manual"],
+            "fullpaths": result["fullpaths"],
             "per_crate": {k: dict(v) for k, v in sorted(per_crate.items())},
             "records": records,
         }
         print(json.dumps(payload, ensure_ascii=True, indent=2))
     else:
         _print_report(symbols, result)
-    rc = 1 if result["statements"] else 0
+    rc = 1 if (result["statements"] or result["fullpaths"]) else 0
     if not want_json:
         if rc:
             print("[FAIL] compat-2x still carries %d migrated statement(s); run "
@@ -460,6 +521,13 @@ def selftest():
            "use event_bus::logging::BusLogger;\n"
            "use event_bus::{logging::BusLogger, NexusEvent};\n"
            "\n"
+           "fn inline_hits() {\n"
+           "    let _m = event_bus::EventMetadata::new(\"x\");\n"
+           "    let _t = event_bus::types::ChatStatus::Idle;\n"
+           "    let _k = event_bus::EventBus::new(1);\n"
+           "    // event_bus::NexusEvent in a line comment must NOT move\n"
+           "}\n"
+           "\n"
            "#[cfg(test)]\n"
            "mod checks;\n")
     _write(os.path.join(root, "crates", "aaa", "src", "checks.rs"),
@@ -502,11 +570,22 @@ def selftest():
           in new_text, True)
     check("cfg(test) external module is not scanned",
           any(r["file"].endswith("checks.rs") for r in records), False)
+    check("inline full path is rewritten",
+          "nexus_events::EventMetadata::new(" in new_text, True)
+    check("inline module-qualified path keeps its prefix",
+          "nexus_events::types::ChatStatus::Idle" in new_text, True)
+    check("inline runtime type stays on the carrier",
+          "event_bus::EventBus::new(1)" in new_text, True)
+    check("inline hit inside a line comment is untouched",
+          "// event_bus::NexusEvent in a line comment must NOT move" in new_text, True)
+    check("inline hits are counted separately", result["fullpaths"], 2)
 
     touched = apply_tree(root, symbols)
     check("apply rewrote exactly one file", touched, 1)
     check("apply is idempotent on a second pass",
           any(r["kind"] == "rewrite" for r in scan_tree(root, symbols)[0]), False)
+    check("apply is idempotent for inline paths too",
+          any(r["kind"] == "fullpath" for r in scan_tree(root, symbols)[0]), False)
 
     check("unknown flag exits 2", main(["--bogus"]), 2)
 

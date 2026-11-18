@@ -599,7 +599,7 @@ mod tests {
 
         // 订阅 MemCon 事件
         let mut subscriber = bus.subscribe_filtered(std::collections::HashSet::from([
-            event_bus::EventTopic::Memory,
+            nexus_events::EventTopic::Memory,
         ]));
 
         let controller = MemConController::new(config, Some(bus));
@@ -640,7 +640,7 @@ mod tests {
         let mut out = Vec::new();
         for _ in 0..200 {
             match rx.try_recv() {
-                Ok(Some(event_bus::NexusEvent::GhostMemoryDetected {
+                Ok(Some(nexus_events::NexusEvent::GhostMemoryDetected {
                     ghost_rate,
                     ghost_count,
                     total_recalls,

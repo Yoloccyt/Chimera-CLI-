@@ -1192,7 +1192,7 @@ mod tests {
             // publish_critical 显式走 mpsc 旁路，容量满时 try_send 失败丢弃并递增计数
             let _ = bus
                 .publish_critical(NexusEvent::CacheHit {
-                    metadata: event_bus::EventMetadata::new("test"),
+                    metadata: nexus_events::EventMetadata::new("test"),
                     cache_key: format!("k-{i}"),
                 })
                 .await;
@@ -1253,7 +1253,7 @@ mod tests {
         for i in 0..(capacity + 50) as u64 {
             let _ = bus
                 .publish_critical(NexusEvent::CacheHit {
-                    metadata: event_bus::EventMetadata::new("test"),
+                    metadata: nexus_events::EventMetadata::new("test"),
                     cache_key: format!("k-{i}"),
                 })
                 .await;

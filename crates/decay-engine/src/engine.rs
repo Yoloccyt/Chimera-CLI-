@@ -483,8 +483,8 @@ impl DecayEngine {
         } else {
             caps.iter().map(|(_, lvl, _)| lvl.value()).sum::<f32>() / caps.len() as f32
         };
-        let ev = event_bus::NexusEvent::DecayMetricsReported {
-            metadata: event_bus::EventMetadata::new("decay-engine"),
+        let ev = nexus_events::NexusEvent::DecayMetricsReported {
+            metadata: nexus_events::EventMetadata::new("decay-engine"),
             coefficient,
             recent_events: Vec::new(),
             cycle_start: chrono::Utc::now(),
@@ -628,7 +628,7 @@ mod tests {
             .expect("try_recv 不应 Err")
             .expect("应收到事件");
         match ev {
-            event_bus::NexusEvent::DecayMetricsReported {
+            nexus_events::NexusEvent::DecayMetricsReported {
                 metadata,
                 coefficient,
                 recent_events,
@@ -661,7 +661,7 @@ mod tests {
             .expect("try_recv 不应 Err")
             .expect("应收到事件");
         match ev {
-            event_bus::NexusEvent::DecayMetricsReported { coefficient, .. } => {
+            nexus_events::NexusEvent::DecayMetricsReported { coefficient, .. } => {
                 assert_eq!(coefficient, 1.0);
             }
             other => panic!("期望 DecayMetricsReported,收到 {other:?}"),

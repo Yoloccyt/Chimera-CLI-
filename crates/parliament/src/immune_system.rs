@@ -694,7 +694,7 @@ mod tests {
     fn test_stability_mirror_update_from_agent_task_failed() {
         let mirror = StabilityMirror::new();
         let event = NexusEvent::AgentTaskFailed {
-            metadata: event_bus::EventMetadata::new("test"),
+            metadata: nexus_events::EventMetadata::new("test"),
             from: "agent-1".into(),
             to: "agent-0".into(),
             task_id: "t-1".into(),
@@ -710,7 +710,7 @@ mod tests {
     fn test_stability_mirror_update_from_capability_frozen() {
         let mirror = StabilityMirror::new();
         let event = NexusEvent::CapabilityFrozen {
-            metadata: event_bus::EventMetadata::new("test"),
+            metadata: nexus_events::EventMetadata::new("test"),
             capability_id: "cap-1".into(),
             reason: "test".into(),
         };
@@ -724,7 +724,7 @@ mod tests {
         // (observation-not-control:degradation_level/断路器状态均不变)
         let mirror = StabilityMirror::new();
         let event = NexusEvent::ParliamentStrategyCapChanged {
-            metadata: event_bus::EventMetadata::new("parliament:StrategyCapGuard"),
+            metadata: nexus_events::EventMetadata::new("parliament:StrategyCapGuard"),
             old_cap: "full".into(),
             new_cap: "simplified".into(),
             ratio: 1.5,
@@ -751,7 +751,7 @@ mod tests {
         let mirror = StabilityMirror::new();
         for ts in [1000u64, 1500, 5000, 9000] {
             let event = NexusEvent::BudgetExceeded {
-                metadata: event_bus::EventMetadata::new("test"),
+                metadata: nexus_events::EventMetadata::new("test"),
                 budget_type: "token".into(),
                 current: 100,
                 limit: 100,
@@ -772,7 +772,7 @@ mod tests {
     fn test_stability_mirror_not_stale_after_recent_update() {
         let mirror = StabilityMirror::new();
         let event = NexusEvent::AgentTaskCompleted {
-            metadata: event_bus::EventMetadata::new("test"),
+            metadata: nexus_events::EventMetadata::new("test"),
             from: "agent-1".into(),
             to: "agent-0".into(),
             task_id: "t-1".into(),

@@ -890,7 +890,7 @@ mod tests {
 
         // 发布 TuiActionProgressed 事件(模拟 tool 调用进度)
         let progressed = NexusEvent::TuiActionProgressed {
-            metadata: event_bus::EventMetadata::new("chat-test"),
+            metadata: nexus_events::EventMetadata::new("chat-test"),
             action_id: "test-tool".into(),
             delta: "{\"arg\":\"value\"}".into(),
         };
@@ -899,7 +899,7 @@ mod tests {
 
         // 发布 TuiActionCompleted 事件(模拟 tool 调用完成)
         let completed = NexusEvent::TuiActionCompleted {
-            metadata: event_bus::EventMetadata::new("chat-test"),
+            metadata: nexus_events::EventMetadata::new("chat-test"),
             request_id: "tui-test".into(),
             action_id: "test-tool".into(),
             result: "{\"ok\":true}".into(),

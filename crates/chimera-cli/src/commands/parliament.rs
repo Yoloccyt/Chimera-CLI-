@@ -256,7 +256,7 @@ mod tests {
         let mut saw_quest_created = false;
         for _ in 0..40 {
             match tokio::time::timeout(Duration::from_millis(50), rx.recv()).await {
-                Ok(Ok(event_bus::NexusEvent::QuestCreated { .. })) => {
+                Ok(Ok(nexus_events::NexusEvent::QuestCreated { .. })) => {
                     saw_quest_created = true;
                     break;
                 }

@@ -790,7 +790,7 @@ mod tests {
             Arc::new(|_t: AgentTask| Box::pin(async move { Err("runner failure".to_string()) }));
         // §4.4 反模式 3: subscribe 必须在 spawn 之前同步调用
         let bus = EventBus::new();
-        let mut rx = bus.subscribe_filtered(HashSet::from([event_bus::EventTopic::Agent]));
+        let mut rx = bus.subscribe_filtered(HashSet::from([nexus_events::EventTopic::Agent]));
 
         let executor = BatchExecutor::new(BatchConfig::default(), runner, bus);
 
@@ -827,7 +827,7 @@ mod tests {
             })
         });
         let bus = EventBus::new();
-        let mut rx = bus.subscribe_filtered(HashSet::from([event_bus::EventTopic::Agent]));
+        let mut rx = bus.subscribe_filtered(HashSet::from([nexus_events::EventTopic::Agent]));
 
         let config = BatchConfig::new(4, Duration::from_millis(100));
         let executor = BatchExecutor::new(config, runner, bus);

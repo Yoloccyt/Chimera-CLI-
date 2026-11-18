@@ -204,7 +204,7 @@ pub fn spawn_quest_lifecycle_bridge(bus: EventBus, engine: Arc<QuestEngine>) -> 
                         continue;
                     };
                     // 终局状态映射为奖励(成功 1.0 / 失败 0.0)
-                    let terminal_reward = if matches!(status, event_bus::QuestStatus::Completed) {
+                    let terminal_reward = if matches!(status, nexus_events::QuestStatus::Completed) {
                         1.0f32
                     } else {
                         0.0f32
@@ -532,7 +532,7 @@ mod tests {
         bus.publish(NexusEvent::QuestCompleted {
             metadata: EventMetadata::new("test"),
             quest_id: quest_id.clone(),
-            status: event_bus::QuestStatus::Completed,
+            status: nexus_events::QuestStatus::Completed,
         })
         .await
         .expect("发布成功");
@@ -614,7 +614,7 @@ mod tests {
         bus.publish(NexusEvent::QuestCompleted {
             metadata: EventMetadata::new("test"),
             quest_id: quest_id.clone(),
-            status: event_bus::QuestStatus::Completed,
+            status: nexus_events::QuestStatus::Completed,
         })
         .await
         .expect("发布成功");
@@ -677,7 +677,7 @@ mod tests {
         bus.publish(NexusEvent::QuestCompleted {
             metadata: EventMetadata::new("test"),
             quest_id: quest_id.clone(),
-            status: event_bus::QuestStatus::Completed,
+            status: nexus_events::QuestStatus::Completed,
         })
         .await
         .expect("发布成功");

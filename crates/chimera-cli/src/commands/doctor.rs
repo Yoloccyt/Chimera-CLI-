@@ -424,7 +424,7 @@ mod tests {
             .expect("500ms 内应收到 GatherCompleted")
             .expect("recv 失败");
         match event {
-            event_bus::NexusEvent::GatherCompleted {
+            nexus_events::NexusEvent::GatherCompleted {
                 total, succeeded, ..
             } => {
                 assert_eq!(

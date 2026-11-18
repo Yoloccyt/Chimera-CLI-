@@ -710,21 +710,21 @@ mod tests {
     fn router_stats_event(kvbsr_hit: f32, sesa_hit: f32, faae_hit: f32) -> NexusEvent {
         NexusEvent::RouterStatsReported {
             metadata: EventMetadata::new("efficiency-monitor"),
-            kvbsr_stats: event_bus::RouterStatsPayload {
+            kvbsr_stats: nexus_events::RouterStatsPayload {
                 hit_rate: kvbsr_hit,
                 p50_latency_us: 100,
                 p95_latency_us: 500,
                 p99_latency_us: 1000,
                 hot_capabilities: vec![("cap-1".into(), 42)],
             },
-            sesa_stats: event_bus::RouterStatsPayload {
+            sesa_stats: nexus_events::RouterStatsPayload {
                 hit_rate: sesa_hit,
                 p50_latency_us: 200,
                 p95_latency_us: 800,
                 p99_latency_us: 1500,
                 hot_capabilities: vec![],
             },
-            faae_stats: event_bus::RouterStatsPayload {
+            faae_stats: nexus_events::RouterStatsPayload {
                 hit_rate: faae_hit,
                 p50_latency_us: 50,
                 p95_latency_us: 300,
@@ -905,7 +905,7 @@ mod tests {
             metadata: EventMetadata::new("nmc-encoder"),
             modality: "Text".into(),
             content_hash: format!("hash-{l2_norm}"),
-            clv_summary: event_bus::ClvSummary {
+            clv_summary: nexus_events::ClvSummary {
                 block_means: vec![0.1; block_count],
                 l2_norm,
                 top_dims: vec![(0, 0.8)],

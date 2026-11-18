@@ -98,7 +98,7 @@ pub struct HeartbeatInfo {
     /// 心跳来源 Agent ID
     pub agent_id: String,
     /// Agent 运行时状态
-    pub status: event_bus::AgentStatus,
+    pub status: nexus_events::AgentStatus,
     /// 当前任务 ID(空闲时为 None)
     pub current_task: Option<String>,
     /// Token 使用量

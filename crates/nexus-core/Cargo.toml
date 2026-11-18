@@ -37,6 +37,10 @@ tracing = { workspace = true }
 # B4d/ADR-311: `types` 纯 re-export 汇聚点已退役 ⇒ 消费方直连 nexus-contracts,
 # 本 crate 只在自身实现处使用 L0 领域类型(Quest/Task/TaskStatus/ThinkingMode)。
 nexus-contracts = { workspace = true }
+# L1-E-2 (ADR-322): 事件目录已自 event-bus 迁出为 nexus-events。本 crate 只需
+# 事件类型（纯类型面），故直连 nexus-events 而不经 event-bus 的 compat-2x
+# re-export —— 同层互引允许（L1 -> L1），且不引入 event-bus 运行时依赖。
+nexus-events = { workspace = true }
 # P1-W4 统计学习层与 P1-W5 RL 客户端已随 B2/ADR-311 退役（2026-11-15）：
 # rand（仅 stat_learning 消费）与 async-trait（仅 rl_client 消费）同批摘除；
 # rayon/arc-swap 系 W4-1 compute/HTS 迁出后的零消费残留，B2 一并清理。

@@ -1091,7 +1091,7 @@ pub struct TuiState {
     /// OSA 稀疏度历史(容量 256,FIFO)
     pub osa_sparsity_history: Vec<u64>,
     /// CLV 摘要(None = 未收到事件)
-    pub clv_summary: Option<event_bus::ClvSummary>,
+    pub clv_summary: Option<nexus_events::ClvSummary>,
     // === PROBE P0.4:HCW 召回读数(由 HcwRecallReported 事件同步,None = 未收到报告) ===
     /// 多针召回率 needle_recall@8 ∈ [0,1]
     #[serde(default)]
@@ -1225,7 +1225,7 @@ pub struct PendingAction {
     /// 动作 id(须存在于 ActionRegistry,如 "agent.chat")
     pub action_id: String,
     /// 触发入口(palette 参数流固定为 Palette)
-    pub source: event_bus::ActionSource,
+    pub source: nexus_events::ActionSource,
 }
 
 /// 协议握手兼容级别(TUI 本地投影,PS-2 F-1)
@@ -2044,7 +2044,7 @@ mod tests {
         state.osa_sparsity = Some(0.45);
         state.osa_context_mask = vec!["file1.rs".into(), "file2.rs".into()];
         state.osa_sparsity_history = vec![100, 200];
-        state.clv_summary = Some(event_bus::ClvSummary {
+        state.clv_summary = Some(nexus_events::ClvSummary {
             block_means: vec![0.1; 8],
             l2_norm: 2.5,
             top_dims: vec![(0, 0.8)],
@@ -2125,7 +2125,7 @@ mod tests {
     #[test]
     fn test_tui_state_clv_summary_update() {
         let mut state = TuiState::new();
-        let summary = event_bus::ClvSummary {
+        let summary = nexus_events::ClvSummary {
             block_means: vec![0.1; 8],
             l2_norm: 2.5,
             top_dims: vec![(0, 0.8)],
@@ -2205,7 +2205,7 @@ mod state_persistence_tests {
         state.budget_history = vec![1, 2, 3];
         // WHY Arc::make_mut:latest_events 已 Arc 化(P-A),测试桩注入走 COW
         std::sync::Arc::make_mut(&mut state.latest_events).push_back(NexusEvent::CacheHit {
-            metadata: event_bus::EventMetadata::new("chimera-tui"),
+            metadata: nexus_events::EventMetadata::new("chimera-tui"),
             cache_key: "roundtrip-key".into(),
         });
 

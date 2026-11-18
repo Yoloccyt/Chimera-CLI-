@@ -106,7 +106,7 @@ pub struct DataSnapshot {
     /// OSA 稀疏度历史(容量 256,FIFO,存 sparsity * 1000 为 u64)
     pub osa_sparsity_history: Vec<u64>,
     /// CLV 摘要(None = 未收到事件)
-    pub clv_summary: Option<event_bus::ClvSummary>,
+    pub clv_summary: Option<nexus_events::ClvSummary>,
     // === PROBE P0.4:HCW 召回读数(由 HcwRecallReported 事件同步) ===
     /// 多针召回率 needle_recall@8 ∈ [0,1]
     #[serde(default)]

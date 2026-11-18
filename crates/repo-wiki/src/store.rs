@@ -1891,7 +1891,7 @@ mod tests {
             "AffinityUnknownField 事件 source 应为 repo-wiki"
         );
         match event {
-            event_bus::NexusEvent::AffinityUnknownField {
+            nexus_events::NexusEvent::AffinityUnknownField {
                 route_key,
                 raw_excerpt,
                 ..
@@ -1949,10 +1949,10 @@ mod tests {
     fn recv_wiki_updated(rx: &mut event_bus::EventReceiver) -> (String, u32) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
-            if let Ok(Some(event_bus::NexusEvent::WikiUpdated {
+            if let Ok(Some(nexus_events::NexusEvent::WikiUpdated {
                 wiki_hash, delta, ..
             })) =
-                rx.try_recv_matching(|e| matches!(e, event_bus::NexusEvent::WikiUpdated { .. }))
+                rx.try_recv_matching(|e| matches!(e, nexus_events::NexusEvent::WikiUpdated { .. }))
             {
                 return (wiki_hash, delta);
             }

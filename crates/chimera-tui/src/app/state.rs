@@ -419,7 +419,7 @@ mod visualization_sync_proptests {
                 recall_needle_at_8: needle,
                 recall_position_bias: bias,
                 recall_chain_success: chain,
-                clv_summary: Some(event_bus::ClvSummary {
+                clv_summary: Some(nexus_events::ClvSummary {
                     block_means: vec![0.0; 8],
                     l2_norm,
                     top_dims: Vec::new(),

@@ -3656,6 +3656,7 @@ dependencies = [
  "hex",
  "ndarray",
  "nexus-contracts",
+ "nexus-events",
  "proptest",
  "rmp-serde",
  "serde",

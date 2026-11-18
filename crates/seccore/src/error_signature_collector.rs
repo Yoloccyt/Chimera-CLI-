@@ -261,8 +261,8 @@ impl ErrorSignatureCollector {
         if is_repeat {
             if let Some(ref s) = sig {
                 // 重复签名命中 → 发布 Critical 事件(Debug 算子检索同签名兄弟)
-                if let Err(e) = bus.publish_blocking(event_bus::NexusEvent::ErrorSignatureMatched {
-                    metadata: event_bus::EventMetadata::new("seccore"),
+                if let Err(e) = bus.publish_blocking(nexus_events::NexusEvent::ErrorSignatureMatched {
+                    metadata: nexus_events::EventMetadata::new("seccore"),
                     error_hash: s.error_hash.to_string(),
                     matched_card_ids: vec![], // L3 关联卡片由消费端按需填充
                 }) {
@@ -466,7 +466,7 @@ mod tests {
             .expect("应收到事件")
             .expect("接收成功");
         assert!(
-            matches!(event, event_bus::NexusEvent::ErrorSignatureMatched { .. }),
+            matches!(event, nexus_events::NexusEvent::ErrorSignatureMatched { .. }),
             "应为 ErrorSignatureMatched"
         );
     }

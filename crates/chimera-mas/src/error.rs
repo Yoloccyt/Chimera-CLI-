@@ -503,7 +503,7 @@ pub enum MasError {
         /// P2-13: 结构化触发条件类型(ADR-043 决策 4)
         ///
         /// 对应 4 种回滚触发条件 + Unknown 兜底。
-        trigger_type: event_bus::types::RollbackTriggerType,
+        trigger_type: nexus_events::types::RollbackTriggerType,
         /// P2-13: 详细错误消息
         ///
         /// 承载回滚操作失败的底层错误详情,如 CapabilityTokenRegistry
@@ -512,7 +512,7 @@ pub enum MasError {
         /// P2-13: 诊断上下文(EWMA 水平、观察期天数等)
         ///
         /// 承载回滚失败时的诊断快照,便于专家团队复盘根因。
-        diagnostic: event_bus::types::RollbackDiagnosticContext,
+        diagnostic: nexus_events::types::RollbackDiagnosticContext,
     },
 
     /// R2 冻结违反 — 冻结期内检测到 R2(GSOE×AutoDPO 约束 RL)路径激活(ADR-042 决策 4)
@@ -910,9 +910,9 @@ mod tests {
             MasError::IoError(std::io::Error::other("io")),
             MasError::R1ShadowRollbackFailed {
                 reason: "ConsecutiveRegression".into(),
-                trigger_type: event_bus::types::RollbackTriggerType::ConsecutiveRegression,
+                trigger_type: nexus_events::types::RollbackTriggerType::ConsecutiveRegression,
                 details: "test details".into(),
-                diagnostic: event_bus::types::RollbackDiagnosticContext::default(),
+                diagnostic: nexus_events::types::RollbackDiagnosticContext::default(),
             },
             MasError::R2FreezeViolation {
                 violation_type: "CiDetection".into(),
@@ -939,9 +939,9 @@ mod tests {
     fn test_p2_13_r1_shadow_rollback_failed_display() {
         let err = MasError::R1ShadowRollbackFailed {
             reason: "EWMA collapsed from 0.7 to 0.35".to_string(),
-            trigger_type: event_bus::types::RollbackTriggerType::EwmaCollapse,
+            trigger_type: nexus_events::types::RollbackTriggerType::EwmaCollapse,
             details: "CapabilityTokenRegistry internal error".to_string(),
-            diagnostic: event_bus::types::RollbackDiagnosticContext::empty()
+            diagnostic: nexus_events::types::RollbackDiagnosticContext::empty()
                 .with_ewma_level(0.35)
                 .with_observation_days(7),
         };
@@ -972,18 +972,18 @@ mod tests {
     #[test]
     fn test_p2_13_r1_shadow_rollback_failed_all_trigger_types() {
         let triggers = [
-            event_bus::types::RollbackTriggerType::ConsecutiveRegression,
-            event_bus::types::RollbackTriggerType::AsaIntervention,
-            event_bus::types::RollbackTriggerType::EwmaCollapse,
-            event_bus::types::RollbackTriggerType::RecallRateDrop,
-            event_bus::types::RollbackTriggerType::Unknown,
+            nexus_events::types::RollbackTriggerType::ConsecutiveRegression,
+            nexus_events::types::RollbackTriggerType::AsaIntervention,
+            nexus_events::types::RollbackTriggerType::EwmaCollapse,
+            nexus_events::types::RollbackTriggerType::RecallRateDrop,
+            nexus_events::types::RollbackTriggerType::Unknown,
         ];
         for trigger in triggers {
             let err = MasError::R1ShadowRollbackFailed {
                 reason: "test".to_string(),
                 trigger_type: trigger.clone(),
                 details: "test details".to_string(),
-                diagnostic: event_bus::types::RollbackDiagnosticContext::default(),
+                diagnostic: nexus_events::types::RollbackDiagnosticContext::default(),
             };
             let display = format!("{}", err);
             assert!(

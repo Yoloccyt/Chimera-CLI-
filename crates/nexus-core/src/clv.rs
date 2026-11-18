@@ -140,9 +140,9 @@ impl CLV {
             hasher.update(v.to_bits().to_le_bytes());
         }
         let content_hash = hex::encode(hasher.finalize());
-        let summary = event_bus::ClvSummary::from_clv_slice(self.as_slice());
-        let ev = event_bus::NexusEvent::ClvSnapshotReported {
-            metadata: event_bus::EventMetadata::new("nexus-core"),
+        let summary = nexus_events::ClvSummary::from_clv_slice(self.as_slice());
+        let ev = nexus_events::NexusEvent::ClvSnapshotReported {
+            metadata: nexus_events::EventMetadata::new("nexus-core"),
             modality: "Text".to_string(),
             content_hash,
             clv_summary: summary,
@@ -311,7 +311,7 @@ mod tests {
             .expect("try_recv 不应 Err")
             .expect("应收到事件");
         match ev {
-            event_bus::NexusEvent::ClvSnapshotReported {
+            nexus_events::NexusEvent::ClvSnapshotReported {
                 metadata,
                 modality,
                 content_hash,

@@ -110,7 +110,7 @@ pub fn spawn_variant_event_subscriber(
                 Err(_) => break,
             };
             match event {
-                event_bus::NexusEvent::VariantApproved {
+                nexus_events::NexusEvent::VariantApproved {
                     variant_id, score, ..
                 } => {
                     // 议会批准 → 登记(锁内短临界区,不跨 await)
@@ -118,7 +118,7 @@ pub fn spawn_variant_event_subscriber(
                         reg.record_approved(variant_id, score);
                     }
                 }
-                event_bus::NexusEvent::ParentSelected {
+                nexus_events::NexusEvent::ParentSelected {
                     task_id,
                     parent_node_id,
                     quality,

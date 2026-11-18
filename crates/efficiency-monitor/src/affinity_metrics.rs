@@ -191,9 +191,9 @@ impl AffinityMetrics {
     /// - `StreamSessionCompleted` -> `record_session`
     /// - `AffinityCapabilityNegotiated` -> `record_negotiation`
     /// - `ProviderDegraded` -> `record_degraded`
-    pub fn handle_mca_event(&self, event: &event_bus::NexusEvent) {
+    pub fn handle_mca_event(&self, event: &nexus_events::NexusEvent) {
         match event {
-            event_bus::NexusEvent::StreamSessionCompleted {
+            nexus_events::NexusEvent::StreamSessionCompleted {
                 route_key,
                 ttft_ms,
                 cost_actual_micro,
@@ -209,17 +209,17 @@ impl AffinityMetrics {
                     *cache_hit_tokens,
                 );
             }
-            event_bus::NexusEvent::AffinityCapabilityNegotiated {
+            nexus_events::NexusEvent::AffinityCapabilityNegotiated {
                 route_key,
                 fidelity,
                 ..
             } => {
                 self.record_negotiation(route_key, fidelity);
             }
-            event_bus::NexusEvent::ProviderDegraded { route_key, .. } => {
+            nexus_events::NexusEvent::ProviderDegraded { route_key, .. } => {
                 self.record_degraded(route_key);
             }
-            event_bus::NexusEvent::SemanticCacheHit { .. } => {
+            nexus_events::NexusEvent::SemanticCacheHit { .. } => {
                 self.record_semantic_cache_hit();
             }
             _ => {}
@@ -366,8 +366,8 @@ mod tests {
     #[test]
     fn handle_mca_event_stream_session() {
         let m = AffinityMetrics::new();
-        let event = event_bus::NexusEvent::StreamSessionCompleted {
-            metadata: event_bus::EventMetadata::new("test"),
+        let event = nexus_events::NexusEvent::StreamSessionCompleted {
+            metadata: nexus_events::EventMetadata::new("test"),
             intent_id: "i-1".into(),
             route_key: "test/t-model".into(),
             input_tokens: 100,
@@ -390,8 +390,8 @@ mod tests {
     #[test]
     fn handle_mca_event_negotiation() {
         let m = AffinityMetrics::new();
-        let event = event_bus::NexusEvent::AffinityCapabilityNegotiated {
-            metadata: event_bus::EventMetadata::new("test"),
+        let event = nexus_events::NexusEvent::AffinityCapabilityNegotiated {
+            metadata: nexus_events::EventMetadata::new("test"),
             route_key: "test/t-model".into(),
             fidelity: "full_fidelity".into(),
             degraded_capabilities: vec![],
@@ -404,8 +404,8 @@ mod tests {
     #[test]
     fn handle_mca_event_degraded() {
         let m = AffinityMetrics::new();
-        let event = event_bus::NexusEvent::ProviderDegraded {
-            metadata: event_bus::EventMetadata::new("test"),
+        let event = nexus_events::NexusEvent::ProviderDegraded {
+            metadata: nexus_events::EventMetadata::new("test"),
             route_key: "test/t-model".into(),
             reason: "timeout".into(),
             health_score: 30,
@@ -424,8 +424,8 @@ mod tests {
         let m = AffinityMetrics::new();
         assert_eq!(m.semantic_cache_hit_count(), 0);
 
-        let event = event_bus::NexusEvent::SemanticCacheHit {
-            metadata: event_bus::EventMetadata::new("test"),
+        let event = nexus_events::NexusEvent::SemanticCacheHit {
+            metadata: nexus_events::EventMetadata::new("test"),
             namespace: "intent-1".into(),
             similarity: 0.95,
         };

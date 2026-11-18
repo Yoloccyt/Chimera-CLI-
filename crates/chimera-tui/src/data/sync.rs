@@ -642,7 +642,7 @@ impl RouterSync {
 /// 载荷→本地类型的转换,提取为函数避免重复代码。同时隔离类型映射,
 /// 未来若 TUI 内部类型字段变化,只需修改此函数。
 fn convert_router_payload(
-    payload: &event_bus::RouterStatsPayload,
+    payload: &nexus_events::RouterStatsPayload,
 ) -> crate::types::RouterStatsInfo {
     crate::types::RouterStatsInfo {
         hit_rate: payload.hit_rate,
@@ -898,7 +898,7 @@ impl OsaSync {
 /// 发布者:L2 nmc-encoder。消费:L10 TUI ClvVector 面板。
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ClvSync {
-    summary: Option<event_bus::ClvSummary>,
+    summary: Option<nexus_events::ClvSummary>,
 }
 
 impl ClvSync {
@@ -919,7 +919,7 @@ impl ClvSync {
     }
 
     /// 获取当前 CLV 摘要副本
-    pub fn summary(&self) -> Option<event_bus::ClvSummary> {
+    pub fn summary(&self) -> Option<nexus_events::ClvSummary> {
         self.summary.clone()
     }
 }

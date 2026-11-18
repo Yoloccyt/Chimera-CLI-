@@ -979,7 +979,7 @@ mod tests {
             "AuditLogged 事件 source 应为 seccore"
         );
         match event {
-            event_bus::NexusEvent::AuditLogged {
+            nexus_events::NexusEvent::AuditLogged {
                 audit_hash,
                 severity,
                 ..

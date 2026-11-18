@@ -95,8 +95,8 @@ impl SuperpositionQuery {
     /// 携带上游 trace 时延续同一追踪链（外部进程入口视上游为根，直接赋值
     /// 而非 `child_of`——本进程不在上游事件总线上，无 parent metadata 可借）；
     /// 无上游 trace 时保持历史行为（fresh 元数据，下游自行种根）。
-    pub(crate) fn trace_meta(&self) -> event_bus::EventMetadata {
-        let mut meta = event_bus::EventMetadata::new("mcp-mesh");
+    pub(crate) fn trace_meta(&self) -> nexus_events::EventMetadata {
+        let mut meta = nexus_events::EventMetadata::new("mcp-mesh");
         meta.trace_id = self.trace_id.clone();
         meta
     }

@@ -277,5 +277,6 @@ quest-engine|nexus-contracts   # L9->L0 down; BudgetTier type source after the A
 nexus-compute|event-bus         # L0-B -> L0-B, same machine layer 1; the extracted telemetry adapter publishes ComputePoolSaturated over the existing bus channel (edge moved verbatim with crates/nexus-core/src/compute/, zero new event variants).
 nexus-compute|nexus-telemetry   # L0-B -> L0-B, same machine layer 1; ADR-222 D3 dependency inversion kept -- nexus-compute implements SaturationSource (ComputeTelemetry adapter, moved verbatim from nexus-core/src/compute/telemetry.rs). Reverse edge would close a cycle through KindCounters/TaskKind.
 ssra-fusion|nexus-events         # ADR-322 (L1-E-2): direct import of the event catalogue (NexusEvent/payloads/EventTopic); v2.31 removes the compat-2x re-export. L(N)->L1 downward, allowed by s2.2.
+nexus-core|nexus-events         # ADR-324 (L1-E-2 last mile): nexus-core needs only the pure event TYPES, so it binds to the catalogue crate, NOT to event-bus. Same machine layer 1 (L0-B -> L0-B), no cycle: nexus-events depends on nexus-contracts only. The gate's "prefer EventBus" default does not apply here -- the whole point of ADR-322 is that a type-only consumer must not pull the bus runtime. EventBus itself stays in event-bus.
 
 

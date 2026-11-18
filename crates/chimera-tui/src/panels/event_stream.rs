@@ -636,7 +636,7 @@ mod tests {
             request_id: "tui-42".into(),
             action_id: "quest.pause".into(),
             payload: "{}".into(),
-            source: event_bus::ActionSource::Palette,
+            source: nexus_events::ActionSource::Palette,
         };
         assert!(
             event_matches_keyword(&event, "tui-42"),

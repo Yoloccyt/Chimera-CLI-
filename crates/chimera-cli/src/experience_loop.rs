@@ -559,7 +559,7 @@ mod tests {
 
         // 发布验证完成事件(模拟 L7 verifier)
         bus.publish(NexusEvent::PredictionVerified {
-            metadata: event_bus::EventMetadata::new("pvl-layer"),
+            metadata: nexus_events::EventMetadata::new("pvl-layer"),
             op_id: "op-1".to_string(),
             score: 0.9,
         })
@@ -607,7 +607,7 @@ mod tests {
     /// 构造一次越阈 ratio 报告(ratio=2.0 > threshold=1.0)
     async fn publish_ratio_report(bus: &EventBus, ratio: f64, offset: f64) {
         bus.publish(NexusEvent::CoordinationRatioReported {
-            metadata: event_bus::EventMetadata::new("quest-engine"),
+            metadata: nexus_events::EventMetadata::new("quest-engine"),
             coordination_cost_ms: 2000.0,
             inference_gain: 0.5,
             cost_index: 1.0 + offset,

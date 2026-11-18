@@ -300,7 +300,7 @@ mod tests {
     fn reflection_card_none_without_failure() {
         let mut state = TuiState::new();
         std::sync::Arc::make_mut(&mut state.latest_events).push_back(NexusEvent::QuestCompleted {
-            metadata: event_bus::EventMetadata::new("test"),
+            metadata: nexus_events::EventMetadata::new("test"),
             quest_id: "q-ok".into(),
             status: QuestStatus::Completed,
         });
@@ -312,12 +312,12 @@ mod tests {
         let mut state = TuiState::new();
         let events = std::sync::Arc::make_mut(&mut state.latest_events);
         events.push_back(NexusEvent::QuestCompleted {
-            metadata: event_bus::EventMetadata::new("test"),
+            metadata: nexus_events::EventMetadata::new("test"),
             quest_id: "q-old".into(),
             status: QuestStatus::Failed,
         });
         events.push_back(NexusEvent::QuestCompleted {
-            metadata: event_bus::EventMetadata::new("test"),
+            metadata: nexus_events::EventMetadata::new("test"),
             quest_id: "q-new".into(),
             status: QuestStatus::Cancelled,
         });
