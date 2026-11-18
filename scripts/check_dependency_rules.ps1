@@ -82,6 +82,8 @@ $layerMap = @{
     'nexus-contracts' = 0; 'nexus-contracts-core' = 0; 'nexus-contracts-sparse' = 0; 'nexus-contracts-safety' = 0; 'nexus-contracts-seams' = 0; 'nexus-contracts-mca' = 0; 'nexus-contracts-memory' = 0
     # L1 Core
     'nexus-core' = 1; 'event-bus' = 1; 'nexus-telemetry' = 1; 'nexus-compute' = 1
+    # ADR-322 (2026-11-18): nexus-events event catalog (L0-B, machine layer 1)
+    'nexus-events' = 1
     # L2 Memory
     'nmc-encoder' = 2; 'hcw-window' = 2; 'mlc-engine' = 2
     # L3 Storage
@@ -130,6 +132,8 @@ $subLayerMap = @{
     'nexus-contracts' = '0A'; 'nexus-contracts-core' = '0A'; 'nexus-contracts-sparse' = '0A'; 'nexus-contracts-safety' = '0A'; 'nexus-contracts-seams' = '0A'; 'nexus-contracts-mca' = '0A'; 'nexus-contracts-memory' = '0A'
     # L0-B core foundation (machine layer 1)
     'nexus-core' = '0B'; 'event-bus' = '0B'; 'nexus-telemetry' = '0B'; 'nexus-compute' = '0B'
+    # ADR-322 (2026-11-18): nexus-events event catalog (pure types, zero IO/runtime)
+    'nexus-events' = '0B'
 }
 
 # Expected total crate count (workspace members). Static completeness bound.
@@ -146,7 +150,9 @@ $subLayerMap = @{
 # nexus-core -> nexus-telemetry; reverse would form a crate cycle via TaskKind/KindCounters)
 # ADR-309 (2026-11-15, W4-1): +nexus-compute -> 47 (L0-B core foundation; compute/ extracted
 #   from nexus-core with a compat shim; single-direction nexus-core -> nexus-compute)
-$expectedCrates = 47
+# ADR-322 (2026-11-18): +nexus-events -> 48 (L0-B event catalog extracted from event-bus;
+#   zero-IO/zero-runtime, its only internal edge is nexus-events -> nexus-contracts)
+$expectedCrates = 48
 
 # Inner-ring whitelist ($innerRing) and L0/L1 base ($innerBase) tables were
 # removed together with Check A by ADR-187 (2026-09-24); they were referenced

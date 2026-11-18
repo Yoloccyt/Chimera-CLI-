@@ -40,7 +40,15 @@ import re
 import sys
 from pathlib import Path
 
-SHARD_FILE = "event-bus/src/shard.rs"
+# The shard face was one file (`event-bus/src/shard.rs`) until L1-D-2b split it
+# into `shard/{mod,queue,tests}.rs`. The gate reads STRUCTURE over the whole
+# shard face (frozen consts, key markers, the single justified silent send), so
+# the unit of measurement is the subtree -- a filename here would turn a pure
+# refactor into a false red. `tests.rs` stays INCLUDED on purpose: the old
+# single file carried its inline `#[cfg(test)] mod tests`, so including it keeps
+# the counts comparable across the split.
+SHARD_DIR = "event-bus/src/shard"
+LEGACY_SHARD_FILE = "event-bus/src/shard.rs"
 
 # ---- frozen expectations (edit ONLY together with a bench re-calibration) ----
 EXPECT_KEY_MARKERS = (r"\bfnv1a\b", r"\btype_name\s*\(\s*\)")
@@ -57,7 +65,14 @@ JUSTIFICATION_TOKENS = ("不视为错误", "ADR-")
 
 
 def load_shard(crates_root: Path) -> list[str] | None:
-    p = crates_root / SHARD_FILE
+    """Shard source lines: the whole `shard/` subtree, else the legacy file."""
+    d = crates_root / SHARD_DIR
+    if d.is_dir():
+        lines: list[str] = []
+        for p in sorted(d.rglob("*.rs")):
+            lines.extend(p.read_text(encoding="utf-8", errors="replace").splitlines())
+        return lines or None
+    p = crates_root / LEGACY_SHARD_FILE
     try:
         return p.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:

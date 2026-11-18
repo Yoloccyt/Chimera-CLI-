@@ -75,6 +75,37 @@ count_enum_variants() {
         }' "$file"
 }
 
+# Count NexusEvent variants across the event-catalog variant group files.
+# ADR-322 moved the enum out of event-bus: the 155 variants now live in ordered
+# macro groups under crates/nexus-events/src/types/ (one `Name {` line per
+# variant, assembled by types/mod.rs). The authority is still ONE enum — the
+# split is a file-size measure, not a contract change — so this counts the
+# group files instead of a single `pub enum` body and REFUSES (rc=2) when the
+# directory is missing or empty rather than returning 0.
+count_nexus_event_variants() {
+    local dir="$1"
+    [ -d "$dir" ] || { echo "[FAIL] required directory not found: $dir" >&2; return 2; }
+    local f files=0 count=0 c
+    for f in "$dir"/*.rs; do
+        [ -f "$f" ] || continue
+        [ "$(basename "$f")" = "mod.rs" ] && continue
+        files=$((files + 1))
+        c="$(awk '
+            {
+                if (match($0, /^ +/)) lead = RLENGTH; else lead = 0
+                rest = substr($0, lead + 1)
+                if (lead >= 4 && rest ~ /^[A-Z][A-Za-z0-9_]*[ ]*([{(,]|$)/) count++
+            }
+            END { print count + 0 }' "$f")" || return 2
+        count=$((count + c))
+    done
+    if [ "$files" -eq 0 ]; then
+        echo "[FAIL] no variant group file under $dir" >&2
+        return 2
+    fi
+    echo "$count"
+}
+
 # Count "crates/ occurrences inside the [workspace] members block.
 count_workspace_crates() {
     local file="$1"
@@ -96,10 +127,9 @@ measure_code() {
     local scan_root="$1"
     MEASURED=()
     local v
-    v="$(count_enum_variants "$scan_root/crates/event-bus/src/types.rs" \
-            NexusEvent '^    [A-Z][A-Za-z0-9_]*[ ]*[{,(]')" || return 2
+    v="$(count_nexus_event_variants "$scan_root/crates/nexus-events/src/types")" || return 2
     MEASURED+=("$v")
-    v="$(count_enum_variants "$scan_root/crates/event-bus/src/topic.rs" \
+    v="$(count_enum_variants "$scan_root/crates/nexus-events/src/topic.rs" \
             EventTopic '^    [A-Z][A-Za-z0-9_]*,')" || return 2
     MEASURED+=("$v")
     v="$(count_workspace_crates "$scan_root/Cargo.toml")" || return 2
@@ -182,8 +212,8 @@ DECLS=(
     'crates/event-bus/src/topic.rs|event_topic_variants|全部 [0-9]+ 个 topic'
     'docs/reports/DOC-AUDIT-FACTS_2026-09-20.md|workspace_crates|Workspace × \*\*[0-9]+ crates\*\*'
     'crates/event-bus/src/lib.rs|nexus_event_variants|全部 [0-9]+ 类'
-    'crates/event-bus/src/registry.rs|event_topic_variants|[0-9]+ 类 EventTopic'
-    'crates/event-bus/src/registry.rs|event_topic_variants|[0-9]+ 类 topic'
+    'crates/nexus-events/src/registry.rs|event_topic_variants|[0-9]+ 类 EventTopic'
+    'crates/nexus-events/src/registry.rs|event_topic_variants|[0-9]+ 类 topic'
     'crates/event-bus/tests/variant_count_test.rs|nexus_event_variants|全部 [0-9]+ 个 NexusEvent 变体'
     'crates/event-bus/tests/variant_count_test.rs|nexus_event_variants|VARIANT_COUNT_LOCK: usize = [0-9]+'
 )
@@ -355,12 +385,16 @@ update_baseline() {
 selftest() {
     local fx
     fx="$(mktemp -d)"
-    mkdir -p "$fx/crates/event-bus/src" "$fx/crates/event-bus/tests" \
-        "$fx/scripts" "$fx/docs/reports"
+    mkdir -p "$fx/crates/nexus-events/src/types" "$fx/crates/event-bus/src" \
+        "$fx/crates/event-bus/tests" "$fx/scripts" "$fx/docs/reports"
 
-    cat > "$fx/crates/event-bus/src/types.rs" <<'RS'
-//! fixture types
-pub enum NexusEvent {
+    # ADR-322: variants live in ordered macro groups under
+    # crates/nexus-events/src/types/ (mod.rs carries the assembly, groups carry
+    # the `Name { ... }` lines the counter reads).
+    cat > "$fx/crates/nexus-events/src/types/contract.rs" <<'RS'
+//! fixture variant group
+macro_rules! variants_contract {
+    ($($acc:tt)*) => {
     Alpha {
         x: u8,
     },
@@ -368,9 +402,11 @@ pub enum NexusEvent {
         y: u8,
     },
     Gamma,
+        }
+    };
 }
 RS
-    cat > "$fx/crates/event-bus/src/topic.rs" <<'RS'
+    cat > "$fx/crates/nexus-events/src/topic.rs" <<'RS'
 //! event topics - 2 类 EventTopic fixture
 /// 事件主题 - 2 类分类覆盖全部 3 个 NexusEvent 变体(fixture)
 pub enum EventTopic {
@@ -381,6 +417,14 @@ impl EventTopic {
     /// 返回全部 2 个 topic
     pub fn all() {}
 }
+RS
+    # event-bus/src/topic.rs stays in the tree (it keeps the runtime
+    # FilteredSubscriber); the DECLS anchors below are read from it, so the
+    # fixture must carry it as well as the measured nexus-events twin.
+    cat > "$fx/crates/event-bus/src/topic.rs" <<'RS'
+//! event topics - 2 类 EventTopic anchor (fixture)
+/// 事件主题 - 2 类分类覆盖全部 3 个 NexusEvent 变体(fixture)
+/// 返回全部 2 个 topic
 RS
     # C-04 anchors: lib.rs declaration line, registry topic-count doc lines,
     # and the lock constants in variant_count_test.rs (must exist in the
@@ -393,7 +437,7 @@ RS
     cat > "$fx/crates/event-bus/src/lib.rs" <<'RS'
 //! - 定义全部 3 类 NexusEvent 跨层事件变体(fixture declaration anchor)
 RS
-    cat > "$fx/crates/event-bus/src/registry.rs" <<'RS'
+    cat > "$fx/crates/nexus-events/src/registry.rs" <<'RS'
 /// 获取事件所属主题(2 类 EventTopic)(fixture)
 /// 映射到 2 类 topic(fixture)
 RS
@@ -466,7 +510,7 @@ FRZ
     sed -i '/^drift = docs\/reports\//d' "$fx/scripts/doc_count_freeze.txt"
 
     # 5) code drift -> 1; --update-baseline re-locks; doc then mismatches -> 1
-    sed -i 's/    Gamma,/    Gamma,\n    Delta,/' "$fx/crates/event-bus/src/types.rs"
+    sed -i 's/^    Gamma,/    Gamma,\n    Delta,/' "$fx/crates/nexus-events/src/types/contract.rs"
     out="$(CHECK_DOC_DRIFT_ROOT="$fx" CHECK_DOC_DRIFT_FREEZE="$fx/scripts/doc_count_freeze.txt" \
            run_check 2>&1)" && rc=0 || rc=$?
     if [ "$rc" -ne 1 ] || ! printf '%s\n' "$out" | grep -q 'code drift'; then
@@ -491,7 +535,7 @@ FRZ
     fi
 
     # 6) missing code target -> 2 (never a silent pass)
-    rm "$fx/crates/event-bus/src/types.rs"
+    rm -rf "$fx/crates/nexus-events/src/types"
     out="$(CHECK_DOC_DRIFT_ROOT="$fx" CHECK_DOC_DRIFT_FREEZE="$fx/scripts/doc_count_freeze.txt" \
            run_check 2>&1)" && rc=0 || rc=$?
     if [ "$rc" -ne 2 ]; then

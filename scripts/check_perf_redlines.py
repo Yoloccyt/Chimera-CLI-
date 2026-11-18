@@ -224,6 +224,32 @@ def _check(name, ok):
     return ok
 
 
+def _read_subtree_text(rel_parts, skip_names=()):
+    """Concatenate every `.rs` under a src subtree, in stable path order.
+
+    WHY a subtree and not a file: source files get split by refactor waves
+    (L1-D-2b split `shard.rs` into `shard/{mod,queue,tests}.rs`). A gate that
+    hardcodes one filename reports "instrument broken" when the real change was
+    structural -- that is a false red, and false reds train people to ignore
+    the gate. Reading the whole subtree makes the invariant split-proof while
+    keeping the same regex contract.
+    """
+    root_dir = os.path.join(ROOT, *rel_parts)
+    if not os.path.isdir(root_dir):
+        raise OSError("missing subtree: %s" % os.path.join(*rel_parts))
+    chunks = []
+    for dirpath, _dirs, names in os.walk(root_dir):
+        for name in sorted(names):
+            if not name.endswith(".rs") or name in skip_names:
+                continue
+            with open(os.path.join(dirpath, name),
+                      encoding="utf-8", errors="ignore") as fh:
+                chunks.append(fh.read())
+    if not chunks:
+        raise OSError("no .rs under %s" % os.path.join(*rel_parts))
+    return "\n".join(chunks)
+
+
 # --------------------------------------------------------------------------- Part 3
 def slo_ghosts(redlines):
     """列出 `[slo]` 里"阈值键还在、它测的 bench 文件已消失"的条目（`crate/stem`）。
@@ -456,22 +482,23 @@ def mode_invariants(redlines, thresholds_doc, freeze):
     # 升格 registered 即棘轮式减债，floor 语义仅防空表不阻减债，I5 同先例）
     if not _check(f"I6 dev-only registry populated ({len(freeze)})", len(freeze) >= 60):
         fails += 1
-    # I8 注释-常量一致性 (ADR-190 §5 后续 / 深审 E-7c): shard.rs 文档注释里的
+    # I8 注释-常量一致性 (ADR-190 §5 后续 / 深审 E-7c): shard 文档注释里的
     # "N 个 Critical 事件" 必须等于 bus/mod.rs 的 CRITICAL_TOTAL 常量，防变体新增后注释滞后回潮
     # (本会话已手工修过一次 17->18；此不变式令其不可再现)。
+    # 2026-11-18: 路径由单文件改为 SUBTREE 扫描 —— `shard.rs` 已按职责拆成
+    # `shard/{mod,queue,tests}.rs`(L1-D-2b)。硬编码单文件会让"文件被拆分"看起来
+    # 像"判据变红"，那是仪器失真，不是缺陷。目录扫描对后续拆分免疫。
     try:
-        with open(os.path.join(ROOT, "crates", "event-bus", "src", "shard.rs"),
-                  encoding="utf-8", errors="ignore") as fh:
-            shard_txt = fh.read()
-        with open(os.path.join(ROOT, "crates", "event-bus", "src", "bus", "mod.rs"),
-                  encoding="utf-8", errors="ignore") as fh:
-            bus_txt = fh.read()
+        shard_txt = _read_subtree_text(("crates", "event-bus", "src", "shard"),
+                                       skip_names=("tests.rs",))
+        bus_txt = _read_subtree_text(("crates", "event-bus", "src", "bus"),
+                                     skip_names=("tests.rs",))
         m_cmt = re.search(r"(\d+)\s*个\s*Critical\s*事件", shard_txt)
         m_const = re.search(r"CRITICAL_TOTAL\s*:\s*usize\s*=\s*(\d+)", bus_txt)
         cmt_val = m_cmt.group(1) if m_cmt else "?"
         const_val = m_const.group(1) if m_const else "?"
         ok_i8 = bool(m_cmt) and bool(m_const) and cmt_val == const_val
-        if not _check(f"I8 shard.rs Critical-count comment == CRITICAL_TOTAL (comment={cmt_val} total={const_val})",
+        if not _check(f"I8 shard Critical-count comment == CRITICAL_TOTAL (comment={cmt_val} total={const_val})",
                       ok_i8):
             fails += 1
     except OSError as exc:

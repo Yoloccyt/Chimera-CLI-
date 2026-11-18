@@ -21,6 +21,10 @@ arc-swap = { workspace = true }
 # L0 Contracts:formal_props 验证结果类型(FormalVerifier M1 P7-T4,ADR-047)
 # WHY 合规:L1 → L0 恒允许(§2.2 依赖铁律扩展);nexus-contracts 纯类型零依赖,不引入环
 nexus-contracts = { workspace = true }
+# ADR-322:事件目录(NexusEvent 155 变体 + payload + registry)已迁出为 L0-B
+# `nexus-events`(零 IO 零运行时)。本 crate 只留运行时面(广播/背压/分片/mpsc),
+# 并经 lib.rs 的 compat-2x 纯路径 re-export 维持旧路径(v2.31.0-omega 移除)。
+nexus-events = { workspace = true }
 # P1-2 解耦(L1 Core 深度优化):原 nexus-core 生产依赖已移除。
 # 唯一依赖边 ClvSummary::from_clv(&CLV) 改签为 from_clv_slice(&[f32])
 # (payloads.rs),event-bus 对 nexus-core 零依赖。L1 同层互引虽允许(§2.2),

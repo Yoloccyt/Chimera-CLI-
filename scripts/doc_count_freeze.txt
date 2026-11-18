@@ -24,7 +24,7 @@
 
 nexus_event_variants = 155
 event_topic_variants = 10
-workspace_crates = 47
+workspace_crates = 48
 # B5/ADR-312 (2026-11-15): -TokenLedgerRecorded (token_ledger subsystem retired,
 # zero production publishers), 156 -> 155; ordinal 143 hole kept per ADR-197.
 # ADR-222 (2026-10-20): +nexus-telemetry (L0-B core foundation), 39 -> 40.

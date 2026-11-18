@@ -449,6 +449,11 @@ runner 的 `cargo test -p nexus-compute` 结果为最终判据（方案 §7.5 �
 
 1. **ADR-312 / ADR-313** 作为本 ADR 的子章节（D2.1 / D2.3）占位登记，
    编号不回收，保持 57 处引用的连续性。
+   > **2026-11-18 落档追记**：ADR-312 与 ADR-313 已补录独立物理文件
+   > （`ADR-312-event-bus-claim-surface-retirement.md` /
+   > `ADR-313-chimera-config-return-to-chimera-cli.md`），本 ADR 的 D2.1 / D2.3
+   > 仍为其决策依据；编号连续性按原裁决不变。ADR-315 亦于同日补录
+   > `ADR-315-gate-manifest-domainization-and-exclusive.md`。
 2. **R2 解冻**时按 D2.2 的重建触发条件恢复 RL 预留面。
 3. **`nexus-telemetry` / `nexus-compute` 的 `edition.workspace = true` 缺失**
    属配置漂移，与本 ADR 无涉，由独立批次（`edition.workspace` 一致性收口）

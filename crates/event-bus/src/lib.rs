@@ -141,19 +141,8 @@ pub mod logging;
 // NOTE(B5/ADR-312): membrane / pattern_index / segment_per / token_ledger 四个
 // 撤主张面子系统已随 2026-11-15 破坏式重构物理退役（生产装配点为零，仅
 // 测试/bench/注释引用；决策与测试退役清单登记 ADR-312，git 历史可恢复）。
-/// 事件载荷与辅助类型 — NexusEvent 枚举依赖的结构化数据类型
-///
-/// 将 `EventMetadata`、`BudgetMetricsPayload`、`ClvSummary` 等辅助类型
-/// 独立为 payloads 模块,减少 types.rs 膨胀。通过 types 模块的 `pub use`
-/// 重导出保持向后兼容。
+/// 事件载荷与辅助类型 — compat-2x 路径别名(定义已迁 `nexus-events`,ADR-322)
 pub mod payloads;
-/// 事件注册表(M5,方向 3-P1 同步点收敛)
-///
-/// `define_event_registry!` 单一声明点展开生成 severity()/type_name()/
-/// topic()/metadata() 四个无通配符 match;types.rs 保留 enum 本体,
-/// classification.rs/topic.rs 的手写分类表已退役。双清单同步红线
-/// (bus.rs `is_critical_mpsc_event`)刻意保留手写,由守护测试互锁。
-mod registry;
 // NOTE(2026-09-13):`rcu` 模块(`MonotonicState`,P2-W7.2.3)已按 ADR-181 决策 2
 // 退役条件执行删除——内环里程碑(P2-W7.2.3 → v2.28.x 全波次收尾)结束仍零生产
 // 消费(grep 实证),按 ADR-175 删除口径(验证零消费 → 删除+配套声明清理 →
@@ -214,9 +203,15 @@ pub use subscriber::{
     CriticalSubscribed, CriticalSubscriberBuilder, Subscribed, SubscriberBuilder, Unsubscribed,
 };
 // P2-W7.2.1: 因果一致性(向量时钟,跨膜事件因果关系跟踪)
-pub use causal::{CausalRelation, VectorClock};
+pub use causal::{CausalRelation, VectorClock, VectorClockIter, VectorClockNodes};
 pub use topic::{EventTopic, FilteredSubscriber};
-pub use types::{
+// === compat-2x:纯路径 re-export(ADR-322,v2.30 引入 / v2.31.0-omega 移除)===
+// WHY 保留:事件目录(NexusEvent + payload + registry)已迁至独立 crate
+// `nexus-events`(零 IO 零运行时),本 crate 只留运行时面。下列 re-export 让
+// 下游 37 个 crate 的 `use event_bus::NexusEvent;` 一类写法**零改动**编译;
+// 子模块路径(types / payloads / topic)另见各模块文件的别名说明。退役时
+// 下游按 `nexus_events::` 机械改写,本段整段删除。
+pub use nexus_events::{
     ActionSource, AgentStatus, BudgetMetricsPayload, ChatStatus, ClvSummary, CompatLevel,
     ConsultUrgency, CriticalEventDropped, EventMetadata, EventSeverity, NexusEvent, QuestStatus,
     RouterStatsPayload, TaskPriority, TuiChatMessagePayload, VoteValue,

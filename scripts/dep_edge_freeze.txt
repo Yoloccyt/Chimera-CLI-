@@ -89,6 +89,7 @@ decb-governor|nexus-contracts
 efficiency-monitor|event-bus
 efficiency-monitor|nexus-contracts
 event-bus|nexus-contracts
+event-bus|nexus-events          # ADR-322: event catalog (NexusEvent + payload + registry) extracted out of event-bus; L0-B -> L0-B same machine layer 1, runtime face depends on the pure catalog. Reverse edge would be a crate cycle (G-125 rejects it).
 faae-router|event-bus
 faae-router|gsoe-evolution
 faae-router|nexus-contracts
@@ -137,6 +138,7 @@ nexus-app-server|quest-engine
 nexus-app-server|session-store
 nexus-core|event-bus
 nexus-core|nexus-contracts
+nexus-events|nexus-contracts  # ADR-322: event catalog's only internal edge (L0-B -> L0-A, always allowed per ADR-033/ADR-222 D1). Catalog must stay dependency-free of event-bus, else crate cycle.
 nexus-hook|event-bus
 nexus-hook|nexus-contracts
 nexus-hook|seccore

@@ -1752,6 +1752,7 @@ dependencies = [
  "crossbeam-queue",
  "dashmap",
  "nexus-contracts",
+ "nexus-events",
  "prometheus-client",
  "proptest",
  "rmp-serde",
@@ -3641,6 +3642,15 @@ dependencies = [
  "sha2",
  "thiserror 1.0.69",
  "tracing",
+]
+
+[[package]]
+name = "nexus-events"
+version = "2.29.0-omega"
+dependencies = [
+ "chrono",
+ "nexus-contracts",
+ "serde",
 ]
 
 [[package]]

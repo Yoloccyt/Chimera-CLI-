@@ -1,0 +1,19 @@
+[package]
+name = "nexus-events"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# ADR-322 迁出面:事件目录(NexusEvent 155 变体 + payload + registry)。
+# 依赖面刻意锁死在纯类型/序列化库 —— 本 crate 的定位是「零 IO 零运行时」:
+# 任何**异步运行时 / 并发原语 / 日志埋点 / 线程池**类依赖一旦混入,都会把
+# 运行时语义带回目录层,event-bus 也就再也拆不动了(G-131 只减不增守着)。
+serde = { workspace = true }
+chrono = { workspace = true }
+# L0-A 契约面:EventMetadata / EventSeverity / TaskPriority / AgentStatus 与
+# Quest 领域类型的宿主。L0-B -> L0-A 恒允许(ADR-222 D1/D3)。
+nexus-contracts = { workspace = true }
+
+[lints]
+workspace = true

@@ -133,12 +133,63 @@ def _block_owner(line):
 
 
 def _files_under(src_dir):
+    """Raw walk: every `.rs` under `src_dir`, test modules included."""
     out = []
     for dirpath, _dirs, names in os.walk(src_dir):
         for name in sorted(names):
             if name.endswith(".rs"):
                 out.append(os.path.join(dirpath, name))
     return sorted(out)
+
+
+_EXTERN_MOD_RE = re.compile(r"^\s*(?:pub\s+)?mod\s+([A-Za-z_]\w*)\s*;\s*$")
+
+
+def _test_module_files(src_dir):
+    """Files reached through `#[cfg(test)] mod X;` (EXTERNAL test modules).
+
+    WHY: `purity.test_tail_mask` only masks the INLINE tail form
+    (`#[cfg(test)] mod tests { ... }`).  An external test module
+    (`#[cfg(test)] mod tests;`) points at a sibling FILE or DIRECTORY that lives
+    INSIDE `src/`, so a plain walk scans it as production code -- and then every
+    helper that only tests construct looks assembled.  Excluding exactly the
+    modules declared `#[cfg(test)]` keeps the judgement honest without
+    special-casing a filename (`tests.rs` may be a production name elsewhere).
+    """
+    out = []
+    for path in _files_under(src_dir):
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                lines = fh.read().splitlines()
+        except OSError:
+            continue
+        armed = False
+        for line in lines:
+            stripped = line.strip()
+            if not armed:
+                if stripped == "#[cfg(test)]":
+                    armed = True
+                continue
+            if not stripped or stripped.startswith("//"):
+                continue
+            if stripped.startswith("#["):  # further attributes stay on the item
+                continue
+            m = _EXTERN_MOD_RE.match(stripped)
+            if m:
+                base = os.path.join(os.path.dirname(path), m.group(1))
+                if os.path.isdir(base):
+                    out.extend(_files_under(base))
+                elif os.path.isfile(base + ".rs"):
+                    out.append(base + ".rs")
+            armed = False
+    return set(os.path.normcase(os.path.abspath(p)) for p in out)
+
+
+def _prod_files_under(src_dir):
+    """Production-side files = raw walk minus `#[cfg(test)] mod X;` targets."""
+    skip = _test_module_files(src_dir)
+    return [p for p in _files_under(src_dir)
+            if os.path.normcase(os.path.abspath(p)) not in skip]
 
 
 def _blocks_of(lines, mask):
@@ -183,7 +234,7 @@ def scan_crate(root, crate, want_items=True, name_filter=None):
         return {}, []
     items = {}
     blocks = []
-    for path in _files_under(src_dir):
+    for path in _prod_files_under(src_dir):
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             src = fh.read()
         if name_filter is not None and not name_filter.search(src):

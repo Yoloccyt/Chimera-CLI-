@@ -459,36 +459,32 @@ if (-not (Test-Path 'docs/architecture/governance/DOCUMENT_LIFECYCLE_POLICY.md')
 #     newlines (observed 3/32 variants instead of 126). Must read as UTF-8.
 #     Strip order matters: comments first, then strings - reversing it lets
 #     stray quotes in doc comments pair across lines and delete code regions.
-$eventTypes = 'crates/event-bus/src/types.rs'
+$eventTypes = 'crates/nexus-events/src/types'
 if (Test-Path $eventTypes) {
-    $ts = [System.IO.File]::ReadAllText((Resolve-Path $eventTypes), [System.Text.Encoding]::UTF8)
-    # Normalize newlines (defensive against CRLF / lone CR)
-    $ts = $ts -replace "`r`n", "`n"
-    $ts = $ts -replace "`r", "`n"
-    # Strip line comments (incl. trailing), then raw/normal strings, then chars
-    $ts = [regex]::Replace($ts, '(?m)//.*$', '')
-    $ts = [regex]::Replace($ts, 'r#*"[\s\S]*?"#*', '""')
-    $ts = [regex]::Replace($ts, '"[^"\\\r\n]*(?:\\.[^"\\\r\n]*)*"', '""')
-    $ts = [regex]::Replace($ts, "'(?![a-zA-Z_])[^'\\\r\n]'", "''")
-    $enumStart = $ts.IndexOf('pub enum NexusEvent')
-    if ($enumStart -ge 0) {
-        $braceStart = $ts.IndexOf('{', $enumStart)
-        $depth = 0
-        $braceEnd = -1
-        for ($i = $braceStart; $i -lt $ts.Length; $i++) {
-            $ch = $ts[$i]
-            if ($ch -eq '{') { $depth++ }
-            elseif ($ch -eq '}') {
-                $depth--
-                if ($depth -eq 0) { $braceEnd = $i; break }
-            }
+    # ADR-322: the 155 variants live in ordered macro groups under this dir
+    # (one `Name {` line per variant, assembled by types/mod.rs into the single
+    # `NexusEvent` enum). Count distinct variant names at >=4-space indent —
+    # same judgement as the old single-`pub enum` body scan, new file layout.
+    $variantNames = New-Object 'System.Collections.Generic.HashSet[string]'
+    $groupFiles = @(Get-ChildItem $eventTypes -Filter '*.rs' -File | Where-Object { $_.Name -ne 'mod.rs' })
+    foreach ($gf in $groupFiles) {
+        $ts = [System.IO.File]::ReadAllText($gf.FullName, [System.Text.Encoding]::UTF8)
+        # Normalize newlines (defensive against CRLF / lone CR)
+        $ts = $ts -replace "`r`n", "`n"
+        $ts = $ts -replace "`r", "`n"
+        # Strip line comments (incl. trailing), then raw/normal strings, then chars
+        $ts = [regex]::Replace($ts, '(?m)//.*$', '')
+        $ts = [regex]::Replace($ts, 'r#*"[\s\S]*?"#*', '""')
+        $ts = [regex]::Replace($ts, '"[^"\\\r\n]*(?:\\.[^"\\\r\n]*)*"', '""')
+        $ts = [regex]::Replace($ts, "'(?![a-zA-Z_])[^'\\\r\n]'", "''")
+        foreach ($m in [regex]::Matches($ts, '(?m)^[ \t]{4,}([A-Z][A-Za-z0-9_]*)\s*[{,(]')) {
+            [void]$variantNames.Add($m.Groups[1].Value)
         }
-        if ($braceEnd -gt $braceStart) {
-            $body = $ts.Substring($braceStart + 1, $braceEnd - $braceStart - 1)
-            $variants = [regex]::Matches($body, '(?m)^\s*([A-Z][A-Za-z0-9_]*)\s*(?:\{|\,|$|\()') |
-                ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
-            $eventVariantCount = $variants.Count
-            $report += '[F1] NexusEvent enum variants (types.rs) = ' + $eventVariantCount
+    }
+    if ($groupFiles.Count -gt 0) {
+        if ($variantNames.Count -gt 0) {
+            $eventVariantCount = $variantNames.Count
+            $report += '[F1] NexusEvent enum variants (nexus-events/src/types) = ' + $eventVariantCount
 
             # F2. CODE_WIKI.md must declare a matching NexusEvent variant count.
             # GAP only when declared < measured (stale docs). INFO when declared

@@ -13,8 +13,10 @@
 #
 # Two authorities are cross-checked before anything is judged (cardinality
 # closure, not a single parser):
-#   * crates/event-bus/src/types.rs    `pub enum NexusEvent { ... }`  (the variants)
-#   * crates/event-bus/src/registry.rs `Variant => Severity, Topic;`  (one row each)
+#   * crates/nexus-events/src/types/   variant group files (`Name { ... }` lines)
+#   * crates/nexus-events/src/registry.rs `Variant => Severity, Topic;`  (one row each)
+#   ADR-322 moved both authorities out of event-bus (the catalog crate keeps the
+#   single `NexusEvent` enum; event-bus only re-exports it for one release).
 #   The compiler already forces these two sets to agree, so a mismatch here means
 #   THIS PARSER IS WRONG -> exit 2 (undecidable), never a green run on a subset.
 #
@@ -67,8 +69,8 @@ import tempfile
 
 SCRIPTS = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SCRIPTS)
-TYPES = os.path.join(ROOT, "crates", "event-bus", "src", "types.rs")
-REGISTRY = os.path.join(ROOT, "crates", "event-bus", "src", "registry.rs")
+TYPES = os.path.join(ROOT, "crates", "nexus-events", "src", "types")
+REGISTRY = os.path.join(ROOT, "crates", "nexus-events", "src", "registry.rs")
 BASELINE = os.path.join(ROOT, "scripts", "event_ownership_baseline.txt")
 # G-66 第二轴（C-79 / M59）的台账：只记「生产构造点全落在默认构建不可达 crate」的事件。
 # 与 BASELINE 分开是因为语义不同：BASELINE 记「根本没有生产构造点」，本台账记
@@ -80,6 +82,9 @@ CLI_MANIFEST = os.path.join(ROOT, "crates", "chimera-cli", "Cargo.toml")
 
 ENUM_HEAD = re.compile(r"^pub enum NexusEvent\s*\{")
 VAR_LINE = re.compile(r"^    ([A-Z][A-Za-z0-9]*)\s*[,{]\s*$")
+# Group files nest variants one level deeper (inside the macro body); accept any
+# indent >= 4 so the same rule covers the pre-ADR-322 single-file enum too.
+VAR_ANY = re.compile(r"^ {4,}([A-Z][A-Za-z0-9]*)\s*[,{]\s*$")
 REG_LINE = re.compile(r"^\s+([A-Z][A-Za-z0-9]*)\s*=>")
 TEST_ATTR = re.compile(r"^#!?\[\s*(tokio::|test_log::)?test(_log)?\s*\]\s*$")
 CFG_TEST = re.compile(r"^\s*#\[cfg\(test\)\]\s*$")
@@ -105,27 +110,34 @@ def set_root(path):
     """Re-point every path at another repo root (used by --selftest fixtures)."""
     global ROOT, TYPES, REGISTRY, BASELINE
     ROOT = path
-    SCRIPT = os.path.join(path, "crates", "event-bus", "src")
-    TYPES = os.path.join(SCRIPT, "types.rs")
+    SCRIPT = os.path.join(path, "crates", "nexus-events", "src")
+    TYPES = os.path.join(SCRIPT, "types")
     REGISTRY = os.path.join(SCRIPT, "registry.rs")
+    _EXTERNAL_TEST_CACHE.clear()
     BASELINE = os.path.join(path, "scripts", "event_ownership_baseline.txt")
 
 
 # --- authorities -------------------------------------------------------------
 
 def enum_variants(path=None):
-    """Variant names declared by `pub enum NexusEvent`, struct variants included."""
+    """Variant names declared by `NexusEvent`, struct variants included.
+
+    ADR-322: the single enum is assembled from ordered macro groups, so the
+    authority is the group directory (one `Name {` line per variant). A plain
+    file path is still accepted (selftest keeps the single-file shape).
+    """
+    target = path or TYPES
+    if os.path.isdir(target):
+        files = [os.path.join(target, f) for f in sorted(os.listdir(target))
+                 if f.endswith(".rs") and f != "mod.rs"]
+    else:
+        files = [target]
     out = []
-    inside = False
-    for line in _read(path or TYPES).splitlines():
-        if not inside:
-            inside = bool(ENUM_HEAD.match(line))
-            continue
-        if line.startswith("}"):
-            break
-        m = VAR_LINE.match(line)
-        if m:
-            out.append(m.group(1))
+    for file_path in files:
+        for line in _read(file_path).splitlines():
+            m = VAR_ANY.match(line)
+            if m:
+                out.append(m.group(1))
     return out
 
 
@@ -216,9 +228,53 @@ def _next_code_line(lines, i):
     return j
 
 
+EXT_TEST_MOD = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;\s*$")
+_EXTERNAL_TEST_CACHE = {}
+
+
+def external_test_modules(root):
+    """Absolute paths of files declared as `#[cfg(test)] mod name;` (external test modules).
+
+    WHY this exists (found 2026-11-18 on the L1-D split): `crates/event-bus/src/bus.rs`
+    became `bus/mod.rs` + `bus/tests.rs`, and the module declaration is now
+    `#[cfg(test)] mod tests;` -- a braced-less form the inline `mod x {` rule
+    (test_line_ranges) cannot see. Every fixture ctor in that file was therefore
+    re-labelled production scope and produced 7 false GAP-S STALEs on variants
+    that genuinely have no producer. Same class of blind spot already fixed in
+    check_l1_dead_surface.py; the fix belongs at the file level, not the line level.
+    """
+    out = set()
+    base = os.path.join(root, "crates")
+    for dirpath, dirs, files in os.walk(base):
+        dirs[:] = [d for d in dirs if d not in SKIP_DIR_PARTS]
+        for f in sorted(files):
+            if not f.endswith(".rs"):
+                continue
+            lines = _read(os.path.join(dirpath, f)).splitlines()
+            for i, line in enumerate(lines):
+                if not CFG_TEST.match(line):
+                    continue
+                j = _next_item_line(lines, i)
+                if j >= len(lines):
+                    continue
+                m = EXT_TEST_MOD.match(lines[j])
+                if m:
+                    out.add(os.path.normcase(os.path.join(dirpath, m.group(1) + ".rs")))
+    return out
+
+
+def _external_test_files():
+    cached = _EXTERNAL_TEST_CACHE.get(ROOT)
+    if cached is None:
+        cached = external_test_modules(ROOT)
+        _EXTERNAL_TEST_CACHE[ROOT] = cached
+    return cached
+
+
 def scan_files():
     """Yield (rel_path, is_test_surface) for every .rs file worth scanning."""
     base = os.path.join(ROOT, "crates")
+    ext_test = _external_test_files()
     for dirpath, dirs, files in os.walk(base):
         dirs[:] = [d for d in dirs if d not in SKIP_DIR_PARTS]
         rel_dir = os.path.relpath(dirpath, ROOT).replace(os.sep, "/")
@@ -227,7 +283,8 @@ def scan_files():
                 continue
             rel = "%s/%s" % (rel_dir, f)
             in_src = "/src/" in "/%s" % rel
-            yield rel, (not in_src)
+            is_ext_test = os.path.normcase(os.path.join(dirpath, f)) in ext_test
+            yield rel, ((not in_src) or is_ext_test)
     root_tests = os.path.join(ROOT, "tests")
     if os.path.isdir(root_tests):
         for dirpath, dirs, files in os.walk(root_tests):
@@ -486,7 +543,7 @@ def _fixture(root):
         with open(p, "w", encoding="utf-8") as fh:
             fh.write(text)
 
-    w("crates/event-bus/src/types.rs", """
+    w("crates/nexus-events/src/types/contract.rs", """
 pub enum NexusEvent {
     OwnedHere {
         metadata: EventMetadata,
@@ -521,7 +578,7 @@ pub enum NexusEvent {
     BareUnit,
 }
 """)
-    w("crates/event-bus/src/registry.rs", """
+    w("crates/nexus-events/src/registry.rs", """
 macro_rules! define_event_registry {
     ($($k:ident => $s:expr, $t:expr;)*) => {};
 }

@@ -77,7 +77,7 @@ import check_l0_purity as purity  # noqa: E402  (shares lexer + test-tail mask)
 
 # L0-B core-foundation crates (ADR-222 D1 + ADR-309 W4-1: nexus-compute extracted
 # from nexus-core; machine layer 1, sub-layer 0B).
-L0B = ("nexus-compute", "nexus-core", "event-bus", "nexus-telemetry")
+L0B = ("nexus-compute", "nexus-core", "event-bus", "nexus-events", "nexus-telemetry")
 DEP_LEDGER = os.path.join(HERE, "l0b_dep_freeze.txt")
 BASELINE = os.path.join(HERE, "l0b_pub_signature_freeze.txt")
 

@@ -3,7 +3,7 @@
 //! ROLE:     NEXUS-OMEGA L0-A 契约层 facade — 纯类型 + 受控纯逻辑，对 workspace 的依赖仅限 6 个 L0-A sibling
 //! BACKEND:  memory
 //! PRODUCERS: 0 -
-//! CONSUMERS: 34 chimera-cli,chimera-mas,chimera-tui,cmt-tiering,csn-substitutor…
+//! CONSUMERS: 35 chimera-cli,chimera-mas,chimera-tui,cmt-tiering,csn-substitutor…
 //! MATURITY: TRUE
 //! CRATE-CONTRACT END
 //! NEXUS-OMEGA L0-A 契约层 facade — 纯类型 + 受控纯逻辑，对 workspace 的依赖仅限 6 个 L0-A sibling

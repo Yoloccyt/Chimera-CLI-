@@ -44,8 +44,9 @@ ROOT = os.path.dirname(HERE)
 BASELINE = os.path.join(HERE, "l0b_dep_freeze.txt")
 
 # L0-B core-foundation crates (ADR-222 D1 + ADR-309 W4-1: nexus-compute extracted
-# from nexus-core; machine layer 1, sub-layer 0B).
-L0B = ("nexus-compute", "nexus-core", "event-bus", "nexus-telemetry")
+# from nexus-core; machine layer 1, sub-layer 0B. ADR-322: nexus-events extracted
+# from event-bus, the pure catalog face).
+L0B = ("nexus-compute", "nexus-core", "event-bus", "nexus-events", "nexus-telemetry")
 
 # Below this many L0-B crates the roster is presumed blind/miswired, not clean.
 # Deliberately a floor, not an exact size: ADR-309 (2026-11-15) grew L0-B from 3

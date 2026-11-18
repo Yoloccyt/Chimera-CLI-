@@ -85,7 +85,7 @@ esac
 layer_of() {
     case "$1" in
         nexus-contracts|nexus-contracts-core|nexus-contracts-sparse|nexus-contracts-safety|nexus-contracts-seams|nexus-contracts-mca|nexus-contracts-memory) echo 0 ;;
-        nexus-core|event-bus|nexus-telemetry|nexus-compute) echo 1 ;;
+        nexus-core|event-bus|nexus-telemetry|nexus-compute|nexus-events) echo 1 ;;
         nmc-encoder|hcw-window|mlc-engine) echo 2 ;;
         # P2-T2 (2026-08-24): session-store session persistence (L3, 40th crate)
         scc-cache|cmt-tiering|session-store) echo 3 ;;
@@ -121,7 +121,7 @@ layer_of() {
 sublayer_of() {
     case "$1" in
         nexus-contracts|nexus-contracts-core|nexus-contracts-sparse|nexus-contracts-safety|nexus-contracts-seams|nexus-contracts-mca|nexus-contracts-memory) echo "0A" ;;
-        nexus-core|event-bus|nexus-telemetry|nexus-compute) echo "0B" ;;
+        nexus-core|event-bus|nexus-telemetry|nexus-compute|nexus-events) echo "0B" ;;
         *) echo "" ;;
     esac
 }
@@ -129,7 +129,7 @@ sublayer_of() {
 # All layered crates (static completeness bound for check C2).
 # Authority for layer numbers: $layerMap in check_dependency_rules.ps1 -- both
 # lists must stay identical (see DRIFT WARNING in the header).
-layered_crates="nexus-contracts nexus-contracts-core nexus-contracts-sparse nexus-contracts-safety nexus-contracts-seams nexus-contracts-mca nexus-contracts-memory nexus-core event-bus nexus-telemetry nexus-compute mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
+layered_crates="nexus-contracts nexus-contracts-core nexus-contracts-sparse nexus-contracts-safety nexus-contracts-seams nexus-contracts-mca nexus-contracts-memory nexus-core event-bus nexus-events nexus-telemetry nexus-compute mcp-mesh nmc-encoder hcw-window mlc-engine scc-cache cmt-tiering session-store seccore qeep-protocol decay-engine repo-wiki gsoe-evolution osa-coordinator kvbsr-router faae-router gea-activator sesa-router ssra-fusion omega-learner pvl-layer gqep-executor mtpe-executor csn-substitutor parliament decb-governor quest-engine efficiency-monitor chimera-mas mas-sched nexus-hook chimera-cli chimera-tui chtc-bridge mca-gateway nexus-app-server nexus-subagent"
 # ADR-182 (2026-09-16, M10): acb-governor 退役,43 -> 42
 # 架构减法批次 (2026-09-20): +router-traits -> 43
 # ADR-193 (2026-09-27): router-traits 整 crate 退役(唯一消费方 osa 的 trait 实现为空壳,
@@ -146,7 +146,9 @@ layered_crates="nexus-contracts nexus-contracts-core nexus-contracts-sparse nexu
 # nexus-core -> nexus-telemetry; reverse would form a crate cycle via TaskKind/KindCounters)
 # ADR-309 (2026-11-15, W4-1): +nexus-compute -> 47 (L0-B core foundation; compute/ extracted
 #   from nexus-core with a compat shim; single-direction nexus-core -> nexus-compute)
-expected_crates=47
+# ADR-322 (2026-11-18): +nexus-events -> 48 (L0-B event catalog extracted from event-bus;
+#   zero-IO/zero-runtime, its only internal edge is nexus-events -> nexus-contracts)
+expected_crates=48
 
 # Inner-ring whitelist (is_inner_ring) and L0/L1 base (is_inner_base) helpers
 # were removed together with Check A by ADR-187 (2026-09-24); they were used

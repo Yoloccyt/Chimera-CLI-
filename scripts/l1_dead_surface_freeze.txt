@@ -31,8 +31,9 @@
 #   or consciously registered.
 #
 # HOW THIS BASELINE WAS MEASURED
-#   `python scripts/check_l1_dead_surface.py --emit` (items=202 live=182
-#   dead=20 at the L1-B wave, 2026-11-16). The L1-B-1..L1-B-3 deletions
+#   `python scripts/check_l1_dead_surface.py --emit` (items=206 live=186
+#   dead=20 at the 2026-11-18 L1 结构拆分波次;拆分前为 items=202 live=182
+#   dead=20). The L1-B-1..L1-B-3 deletions
 #   (event-bus telemetry / shadow_diff / formal) are NOT listed here: they
 #   were removed from the tree, so their rows were removed with them --
 #   that is exactly what the STALE direction is for.
@@ -40,9 +41,12 @@
 # KNOWN CONTENTS (what the 20 rows are)
 #   event-bus::backpressure::SlowConsumerDetector
 #       live only in the crate's own unit tests.
-#   event-bus::causal::CausalBuffer(+Error, DEFAULT_CAUSAL_BUFFER_CAPACITY)
+#   event-bus::causal/buffer::CausalBuffer(+Error, DEFAULT_CAUSAL_BUFFER_CAPACITY)
 #       the causal buffer of the (assembled) causal module is itself
 #       unwired; only VectorClock / CausalRelation are on the live path.
+#       2026-11-18: causal.rs 拆为 causal/{mod,buffer,tests}.rs 后,单测迁入
+#       独立 causal/tests.rs;该门已改为识别 `#[cfg(test)] mod X;` 外部测试
+#       模块(_test_module_files),故这三条**保持登记**而非按 STALE 移出。
 #   nexus-compute::hts/cgroup::*
 #       cgroup core-count correction (CgroupProbe / effective_cores /
 #       parse_cpu_max) is re-exported but never called in production.
@@ -55,9 +59,9 @@
 #       unwired helpers on the L0-B core face.
 
 event-bus::backpressure::SlowConsumerDetector
-event-bus::causal::CausalBuffer
-event-bus::causal::CausalBufferError
-event-bus::causal::DEFAULT_CAUSAL_BUFFER_CAPACITY
+event-bus::causal/buffer::CausalBuffer
+event-bus::causal/buffer::CausalBufferError
+event-bus::causal/buffer::DEFAULT_CAUSAL_BUFFER_CAPACITY
 nexus-compute::hts/cgroup::CgroupProbe
 nexus-compute::hts/cgroup::effective_cores
 nexus-compute::hts/cgroup::parse_cpu_max

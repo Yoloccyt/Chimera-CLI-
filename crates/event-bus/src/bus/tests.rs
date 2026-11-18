@@ -12,6 +12,13 @@
 // EventBus / EventMetadata / serialize_* 等 —— 纯移动,不改任何用例的导入写法。
 use super::*;
 
+// 拆分后 bus/mod.rs 不再持有这三个导入(随接收者/报告器子模块迁出),
+// 测试侧显式补回,用例正文零改动。
+use std::time::Duration;
+
+use crate::error::EventBusError;
+use crate::types::EventMetadata;
+
 // ============================================================
 // P1-T12:测试辅助 — Critical 变体构造(D-8 口径,双清单同步红线)
 // ============================================================

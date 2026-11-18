@@ -1,6 +1,6 @@
 # Chimera CLI (NEXUS-OMEGA)
 
-面向开发者的命令行 AI 编程智能体，代号 **NEXUS-OMEGA**。Rust workspace（多 crate），架构为 L0 契约层 + L1–L10 十层，依赖方向受铁律约束。
+面向开发者的命令行 AI 编程智能体，代号 **NEXUS-OMEGA**。Rust workspace（多 crate，2026-11-18 现取 = **48 crates**：L0 契约层 7 + L0-B 核心基础面 5 + L1–L10；ADR-322 新增 `nexus-events`），架构为 L0 契约层 + L1–L10 十层，依赖方向受铁律约束。
 
 > 架构与计数的权威源不在本文件：架构看 `docs/architecture/CODE_WIKI.md`，版本演进看 `CHANGELOG.md`，crate 清单看 `Cargo.toml`（`workspace.members`），ADR 看 `docs/architecture/adr_index.md`。本文件不登记任何计数，避免漂移。
 >

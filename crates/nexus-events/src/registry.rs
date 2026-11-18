@@ -17,12 +17,7 @@
 //!   fail-closed 属性原样保留);
 //! - **重名**:同一变体在注册表登记两次 → 展开出重复 match 臂,
 //!   `unreachable_patterns` 在 `-D warnings` 下即编译失败;
-//! - **错位/定级错误**:由 tests/variant_count_test.rs 三层锁守护
-//!  (计数锁 + 序数表交叉锁 + 三档分布锁 + Critical 名单与
-//!   bus.rs `LANE_FORBIDDEN_SHARD` 双向互锁;锁定数值以该测试文件的
-//!   `VARIANT_COUNT_LOCK`/`CRITICAL_LOCK`/`INFO_LOCK`/`NORMAL_LOCK`
-//!   常量为单一权威,散文不重复登记),注册表任一属性笔误都会
-//!   使对应锁测试红灯;
+//! - **错位/定级错误**:由 tests/variant_count_test.rs 三层锁守护(计数锁 + 序数表交叉锁 + 三档分布锁 + Critical 名单与 bus.rs `LANE_FORBIDDEN_SHARD` 双向互锁;锁定数值以该测试文件常量为单一权威,散文不重复登记),注册表任一属性笔误都会使对应锁测试红灯;
 //! - **metadata()**:所有变体第一字段均为 `metadata: EventMetadata`,
 //!   注册表逐变体生成取元数据臂,与手写表逐字等价。
 //!
