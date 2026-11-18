@@ -50,3 +50,4 @@ seccore  # opted in, measured clean at registration time
 sesa-router  # opted in, measured clean at registration time
 session-store  # opted in, measured clean at registration time
 ssra-fusion  # opted in, measured clean at registration time
+nexus-events  # opted in, measured clean at registration time (ADR-322)

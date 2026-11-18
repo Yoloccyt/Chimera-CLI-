@@ -100,7 +100,52 @@ def production_lines(path: Path) -> list[tuple[int, str]]:
     return out
 
 
+_EXTERN_TEST_MOD_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;\s*$")
+
+
+def external_test_module_files(crates_root: Path) -> set:
+    """Absolute paths reached through `#[cfg(test)] mod X;` (external modules).
+
+    WHY: `production_lines` only masks the INLINE tail (`#[cfg(test)] mod tests
+    { ... }`). A test module in its own file carries no in-file marker, so after
+    a split wave (L1-D-2b moved `bridge.rs` inline tests into
+    `bridge/tests.rs`) every test-only `.spawn_compute_batch(` site would be
+    read as production reachability -- a measurement artifact, not new wiring.
+
+    Same predicate as `check_l1_dead_surface.py` / `check_lint_ratchet.py`. This
+    is the 4th copy: the next consumer must lift all of them into one shared
+    `scripts/rust_prod_scope.py` instead of growing a 5th.
+    """
+    out = set()
+    for path in sorted(crates_root.rglob("*.rs")):
+        if "target" in path.parts:
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        armed = False
+        for line in lines:
+            s = line.strip()
+            if not armed:
+                if CFG_TEST_RE.match(line):
+                    armed = True
+                continue
+            if not s or s.startswith("//") or s.startswith("#["):
+                continue
+            m = _EXTERN_TEST_MOD_RE.match(s)
+            if m:
+                base = path.parent / m.group(1)
+                if base.is_dir():
+                    out.update(p.resolve() for p in base.rglob("*.rs"))
+                elif (path.parent / (m.group(1) + ".rs")).is_file():
+                    out.add((path.parent / (m.group(1) + ".rs")).resolve())
+            armed = False
+    return out
+
+
 def iter_prod_files(crates_root: Path):
+    skip = external_test_module_files(crates_root)
     for path in sorted(crates_root.rglob("*.rs")):
         try:
             rel = path.relative_to(crates_root)
@@ -110,6 +155,8 @@ def iter_prod_files(crates_root: Path):
             continue
         parts = rel.parts
         if len(parts) < 3 or parts[1] != "src":
+            continue
+        if path.resolve() in skip:
             continue
         yield PurePosixPath(rel.as_posix()), path
 

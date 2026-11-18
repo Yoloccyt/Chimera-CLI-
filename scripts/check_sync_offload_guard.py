@@ -92,6 +92,45 @@ def _next_line_is_module(lines: list[str], cfg_idx: int) -> bool:
     return False
 
 
+_EXTERN_MOD_DECL_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_]\w*)\s*;\s*$")
+
+
+def _external_test_module_files(crates_root: Path) -> set:
+    """Paths reached through `#[cfg(test)] mod X;` (external test modules).
+
+    WHY: `_prod_lines` masks only the INLINE tail. A test module in its own file
+    (`#[cfg(test)] mod tests;` -> `tests.rs`) has no in-file marker, so after a
+    split wave its `.spawn_compute_batch(` sites read as unguarded production
+    chains. Same predicate as G-87 / check_l1_dead_surface.py / check_lint_ratchet.py.
+    """
+    out = set()
+    for path in sorted(crates_root.rglob("*.rs")):
+        if "target" in path.parts:
+            continue
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        armed = False
+        for line in lines:
+            s = line.strip()
+            if not armed:
+                if CFG_TEST_RE.match(line):
+                    armed = True
+                continue
+            if not s or s.startswith("//") or s.startswith("#["):
+                continue
+            m = _EXTERN_MOD_DECL_RE.match(s)
+            if m:
+                base = path.parent / m.group(1)
+                if base.is_dir():
+                    out.update(p.resolve() for p in base.rglob("*.rs"))
+                elif (path.parent / (m.group(1) + ".rs")).is_file():
+                    out.add((path.parent / (m.group(1) + ".rs")).resolve())
+            armed = False
+    return out
+
+
 def _prod_lines(path: Path) -> list[tuple[int, str]]:
     """Production-scope lines only -- SAME test-tail rule as G-87/ledger, so
     a `#[cfg(test)] mod` call inside the definition host (bridge.rs) never
@@ -145,6 +184,11 @@ def evaluate(crates_root: Path, freeze: dict[str, str]) -> list[dict]:
     # Comment/doc lines are skipped first -- the ledger's own lesson: bridge.rs and
     # mod.rs carry `bridge().spawn_compute_batch(` inside doc examples, and a text
     # scan without comment filtering would flag the definition host itself.
+    # EXTERNAL test modules are excluded for the same reason: `#[cfg(test)] mod
+    # tests;` puts the inline tests into `tests.rs`, which carries no in-file
+    # marker, so a split wave would look like a brand-new unguarded chain. Same
+    # predicate as G-87 / check_l1_dead_surface.py / check_lint_ratchet.py.
+    skip = _external_test_module_files(crates_root)
     for path in sorted(crates_root.rglob("*.rs")):
         try:
             rel = path.relative_to(crates_root).as_posix()
@@ -154,6 +198,8 @@ def evaluate(crates_root: Path, freeze: dict[str, str]) -> list[dict]:
         if "target" in path.parts or len(parts) < 3 or parts[1] != "src":
             continue
         if rel in anchored_files:
+            continue
+        if path.resolve() in skip:
             continue
         code_lines = [
             l for _i, l in _prod_lines(path) if not l.lstrip().startswith(("//", "/*"))

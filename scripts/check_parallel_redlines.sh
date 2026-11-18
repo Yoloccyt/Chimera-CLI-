@@ -45,7 +45,16 @@ done
 # 逐文件扫描（单 awk 全量过，per-file 状态在 FNR==1 重置）
 scan() {
     awk '
-    FNR == 1 { inTest = 0 }
+    FNR == 1 {
+        inTest = 0
+        # 独立测试文件整文件豁免（`#[cfg(test)] mod tests;` 指向的外部模块）。
+        # WHY: 文件拆分波次把内联测试落到 */tests.rs（causal/shard/bridge/bus），
+        # 该文件里没有内联 #[cfg(test)] 标记 —— 不按文件名豁免的话，测试里的合法
+        # 同步辅助（spin_loop 等待）会被判成生产违规，那是仪器失真而非新债。
+        # 与 .ps1 的豁免判据逐字等价（双源先例 G-133/G-134）。
+        wholeFileTest = (FILENAME ~ /(^|\/)tests\.rs$/ || FILENAME ~ /\/tests\//) ? 1 : 0
+    }
+    wholeFileTest { next }
     {
         raw = $0
         trimmed = raw

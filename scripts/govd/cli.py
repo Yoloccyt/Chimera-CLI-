@@ -329,7 +329,11 @@ def cmd_run(args):
         # WHY 只有真红停：env-fail 是环境问题（另一个门可能好着），unknown 是资源不足
         # （磁盘门槛），两者都不构成"仓库坏了"的结论，继续跑才能把"有多少门受同一处
         # 环境拖累"说清楚。mismatch 才是真红。
-        if attempt.verdict is Verdict.MISMATCH:
+        #
+        # `--no-fail-fast`（全量收口档）：有存量真红时也要拿到"全部门 × 全部判定"
+        # 的一张完整台账 —— 否则 fail-fast 让后续门永远 CANCELLED，既看不清债务总量，
+        # 也无法做 A/B 并发收益的同轮配对（判定不变性需要一个跑满的基线）。
+        if attempt.verdict is Verdict.MISMATCH and not args.no_fail_fast:
             stop.set()
         return attempt
 
@@ -557,6 +561,9 @@ def build_parser():
 
         s.add_argument("--allow-mutating", action="store_true")
         s.add_argument("--jobs", type=int, default=0)
+        s.add_argument("--no-fail-fast", action="store_true", dest="no_fail_fast",
+                       help="keep running every gate after a mismatch (full-ledger "
+                            "mode: debt census + A/B pairing against a complete run)")
         s.add_argument("--shard", default="",
                       help="run only shard k of n, e.g. 2/4 (deterministic round-robin)")
         s.add_argument("--resume", default="")
@@ -571,6 +578,9 @@ def build_parser():
     res.add_argument("--role", default="local-dev")
     res.add_argument("--allow-mutating", action="store_true")
     res.add_argument("--jobs", type=int, default=0)
+    res.add_argument("--no-fail-fast", action="store_true", dest="no_fail_fast",
+                     help="same as `run --no-fail-fast`; resume must accept it or a "
+                          "resumed full-ledger run would silently re-arm fail-fast")
     res.add_argument("--shard", default="")
     res.add_argument("--report", choices=("text", "json", "junit", "all"), default="all")
     # --reuse-ok belongs to `run` only: `list` must not silently accept a flag it

@@ -294,4 +294,5 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main(sys.argv[1:]))
+    import gate_rc
+    sys.exit(gate_rc.run(lambda: main(sys.argv[1:])))

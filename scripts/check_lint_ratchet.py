@@ -220,6 +220,58 @@ def opted_in(manifest_path):
     return bool(LINTS_WORKSPACE.search(text))
 
 
+_EXTERN_TEST_MOD_RE = re.compile(r"^\s*(?:pub\s+)?mod\s+([A-Za-z_]\w*)\s*;\s*$")
+
+
+def _extern_test_module_files(src_dir):
+    """Files reached through `#[cfg(test)] mod X;` (EXTERNAL test modules).
+
+    WHY: `count_offenders_file` only masks the INLINE form
+    (`#[cfg(test)] mod tests { ... }`). A test module in its own file
+    (`#[cfg(test)] mod tests;` -> `tests.rs`) carries no in-file marker, so a
+    split wave (L1-D-2b moved inline tests into `causal/tests.rs` etc.) makes the
+    production count jump by exactly the number of test-only unwraps -- a
+    measurement artifact, not new debt.
+
+    Same predicate as `check_l1_dead_surface.py::_test_module_files`. If a third
+    consumer appears, lift both copies into one shared module instead of
+    growing a third.
+    """
+    if not os.path.isdir(src_dir):
+        return set()
+    out = set()
+    for dirpath, _dirs, files in os.walk(src_dir):
+        for name in files:
+            if not name.endswith(".rs"):
+                continue
+            path = os.path.join(dirpath, name)
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                    lines = fh.read().splitlines()
+            except OSError:
+                continue
+            armed = False
+            for line in lines:
+                s = line.strip()
+                if not armed:
+                    if s == "#[cfg(test)]":
+                        armed = True
+                    continue
+                if not s or s.startswith("//") or s.startswith("#["):
+                    continue
+                m = _EXTERN_TEST_MOD_RE.match(s)
+                if m:
+                    base = os.path.join(dirpath, m.group(1))
+                    if os.path.isdir(base):
+                        for dp, _d, fs in os.walk(base):
+                            out.update(os.path.abspath(os.path.join(dp, f))
+                                       for f in fs if f.endswith(".rs"))
+                    elif os.path.isfile(base + ".rs"):
+                        out.add(os.path.abspath(base + ".rs"))
+                armed = False
+    return out
+
+
 def count_offenders(crate_dir):
     """Production-code (cfg(test)-excluded) unwrap/expect count for one crate."""
     total = 0
@@ -227,10 +279,14 @@ def count_offenders(crate_dir):
         d = os.path.join(crate_dir, sub)
         if not os.path.isdir(d):
             continue
+        skip = _extern_test_module_files(d)
         for dirpath, _dirs, files in os.walk(d):
             for f in files:
                 if f.endswith(".rs"):
-                    total += count_offenders_file(os.path.join(dirpath, f))
+                    p = os.path.abspath(os.path.join(dirpath, f))
+                    if p in skip:
+                        continue
+                    total += count_offenders_file(p)
     return total
 
 

@@ -186,12 +186,13 @@ def classify(rc, expect, log_text, cmd):
     return ("ok", None) if rc == expect else ("mismatch", None)
 
 
-KNOWN_FLAGS = ("--selftest", "--list", "--with-heavy")
+KNOWN_FLAGS = ("--selftest", "--list", "--with-heavy", "--no-fail-fast")
 ENGINES = ("legacy", "govd")
 USAGE = ("用法: py -3 scripts/run_gate_manifest.py [--list] [--selftest] [--with-heavy]\n"
-         "                              [--engine legacy|govd] [--jobs N]\n"
+         "                              [--engine legacy|govd] [--jobs N] [--no-fail-fast]\n"
          "  无参数 = 跑全部 light 判据（heavy 需显式 --with-heavy）\n"
          "  --engine govd = 默认：同一清单交给 scripts.govd 执行（--engine legacy 保留回滚面）\n"
+         "  --no-fail-fast = 真红后仍跑完全部门（存量债普查 / A/B 推论所需的完整台账）\n"
          "  --jobs N = 显式并发度；缺省（0）由 govd 按 profile 声明值 + 本机资源上限决定\n"
          "  ⚠ 未知参数不再静默降级为「跑全部」，而是退 2（不可判定）")
 
@@ -457,7 +458,7 @@ def usable_bash():
     return None, "; ".join(rejected) or "无可用 bash"
 
 
-def run_govd(list_only, with_heavy, jobs=0):
+def run_govd(list_only, with_heavy, jobs=0, no_fail_fast=False):
     """Thin adapter: same gate_manifest.toml, govd executor.
 
     并发度不再由本适配器钉死为 1：`--jobs` 缺省（0）时交给 govd 按 profile 声明值
@@ -474,6 +475,8 @@ def run_govd(list_only, with_heavy, jobs=0):
     argv = ["list" if list_only else "run", "--profile", profile]
     if not list_only and jobs > 0:
         argv += ["--jobs", str(jobs)]
+    if not list_only and no_fail_fast:
+        argv += ["--no-fail-fast"]
     return govd_cli.main(argv)
 
 def main(argv):
@@ -505,8 +508,9 @@ def main(argv):
         return mode_selftest()
     list_only = "--list" in argv
     with_heavy = "--with-heavy" in argv
+    no_fail_fast = "--no-fail-fast" in argv
     if engine == "govd":
-        return run_govd(list_only, with_heavy, jobs)
+        return run_govd(list_only, with_heavy, jobs, no_fail_fast)
     try:
         gates, problems = load()
     except Exception as e:

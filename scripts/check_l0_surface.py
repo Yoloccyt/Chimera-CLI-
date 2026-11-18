@@ -144,4 +144,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    import gate_rc
+    sys.exit(gate_rc.run(lambda: main(sys.argv[1:])))

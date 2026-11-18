@@ -34,9 +34,12 @@ CRATES = os.path.join(ROOT, "crates")
 
 # 允许签发 Certify 的 crate(定义方 + 可信验证器)。
 # - event-bus: 定义/注册/穷举夹具所在;不视为签发行为。
+# - nexus-events: ADR-322 迁出后 `NexusEvent` 与只读访问器
+#   `certify_claim_ref`(match 模式 `NexusEvent::CertifyIssued { claim_ref, .. }`)
+#   的**定义方**;纯类型 crate,零运行时,不存在 `publish_certify` 签发面。
 # - parliament: v2.3 §(b.4)(1) 异构对抗审查者/治理裁决宿主(certify_if_reviewed
 #   审查通过才签发),属 §(b.1) 验证器白名单成员。
-ALLOWLIST = {"event-bus", "parliament"}
+ALLOWLIST = {"event-bus", "nexus-events", "parliament"}
 
 # 生产签发面信号:构造 `NexusEvent::CertifyIssued {` 或调用 `.publish_certify(`。
 CONSTRUCT = re.compile(r"NexusEvent\s*::\s*CertifyIssued\s*\{")
