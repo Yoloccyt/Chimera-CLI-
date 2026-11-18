@@ -7,6 +7,8 @@ license.workspace = true
 [dependencies]
 # L1 Core:EventBus 跨层通信,发布 CapabilityTiered 事件(Week 3 Task 6 新增)
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # L1 Core:nexus-core(SubTask 21.2 — 共享 sqlite_pragma 模块,消除 PRAGMA 重复实现)
 nexus-core = { workspace = true }
 # L0 Contracts:八维度奖励权重接入(Milestone D-2e,RLVR 层权重 × RewardLayer)

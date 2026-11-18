@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use futures::stream::{FuturesUnordered, StreamExt};
 use gqep_executor::tool_plane::{
     ToolDescriptor, ToolInvocation, ToolOrigin, ToolOutcome, ToolPriority, ToolRuntime, ToolStatus,
@@ -31,6 +31,7 @@ use nexus_contracts::affinity::{
     MessageRole, OutputFormat, SamplingParams, ThinkingPreference, UsageReport,
 };
 use nexus_contracts::tool_plan::SideEffectDecl;
+use nexus_events::{EventMetadata, NexusEvent};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;

@@ -562,8 +562,8 @@ fn build_overwindow_handle(
 mod tests {
     use super::*;
     use crate::composition;
-    use event_bus::NexusEvent;
     use nexus_contracts::{MultimodalInput, UserIntent};
+    use nexus_events::NexusEvent;
     use uuid::Uuid;
 
     /// 构造最小 UserIntent(与 run.rs 测试同形,仅驱动引擎发布事件)

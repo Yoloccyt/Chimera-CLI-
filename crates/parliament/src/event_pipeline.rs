@@ -9,7 +9,8 @@
 //! - 背压降级:channel 满时自动降级到直接发布
 //! - 线程安全:所有操作 Send + Sync
 
-use event_bus::{EventBus, EventBusError, NexusEvent};
+use event_bus::{EventBus, EventBusError};
+use nexus_events::NexusEvent;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
@@ -191,7 +192,7 @@ impl EventPipeline {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     /// 创建非 Critical 测试事件
     fn make_test_event() -> NexusEvent {

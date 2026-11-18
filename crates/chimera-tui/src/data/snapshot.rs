@@ -7,8 +7,8 @@
 //! 对应架构层:L10 Interface
 
 use chrono::{DateTime, Utc};
-use event_bus::{ChatStatus, NexusEvent};
 use nexus_contracts::{Quest, TaskStatus};
+use nexus_events::{ChatStatus, NexusEvent};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;

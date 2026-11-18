@@ -15,7 +15,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 use std::time::Duration;
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 use tracing::warn;

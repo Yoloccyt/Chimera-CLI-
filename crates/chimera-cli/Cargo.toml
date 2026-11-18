@@ -33,6 +33,8 @@ nexus-compute = { workspace = true }
 nexus-contracts = { workspace = true }
 # event-bus:L1 事件总线,TUI 实时数据订阅依赖(向下依赖符合 §2.2 铁律)
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # chimera-tui:L10 Interface 层 TUI 界面(ratatui + crossterm)
 chimera-tui = { workspace = true }
 # WI-01 (2026-08-22): nexus-app-server host facade (L10 same-layer, chimera serve)

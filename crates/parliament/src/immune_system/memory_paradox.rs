@@ -121,7 +121,7 @@ impl ParadoxProbe for MemoryParadoxProbe {
 mod tests {
     use super::*;
     use crate::immune_system::StabilityMirror;
-    use event_bus::{EventMetadata, NexusEvent};
+    use nexus_events::{EventMetadata, NexusEvent};
 
     #[test]
     fn test_memory_paradox_probe_type() {

@@ -9,9 +9,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use event_bus::{ChatStatus, NexusEvent};
 use nexus_contracts::app::AppEvent;
 use nexus_contracts::Quest;
+use nexus_events::{ChatStatus, NexusEvent};
 
 use super::snapshot::{
     AsaInterventionSummary, BudgetMetrics, HealthMetrics, MemoryMetrics, RedTeamAuditSummary,
@@ -1194,7 +1194,7 @@ impl HandshakeSync {
             ..
         } = event
         {
-            use event_bus::CompatLevel;
+            use nexus_events::CompatLevel;
             let (level, degraded_items) = match compat {
                 CompatLevel::Full => (crate::types::HandshakeLevel::Full, Vec::new()),
                 CompatLevel::Degraded(items) => {
@@ -1355,7 +1355,7 @@ impl AgentFailureSync {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod handshake_sync_tests {
     use super::*;
-    use event_bus::{CompatLevel, EventMetadata};
+    use nexus_events::{CompatLevel, EventMetadata};
 
     fn ack(compat: CompatLevel) -> NexusEvent {
         NexusEvent::TuiHelloAck {
@@ -1492,7 +1492,7 @@ impl ParliamentSync {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod agent_failure_sync_tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     fn fail(task_id: &str) -> NexusEvent {
         NexusEvent::AgentTaskFailed {
@@ -1620,7 +1620,7 @@ impl GqepTimeoutSync {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod parliament_sync_tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     fn ratio_event(cost: f64, gain: f32, ratio: f64) -> NexusEvent {
         NexusEvent::CoordinationRatioReported {
@@ -1696,7 +1696,7 @@ mod parliament_sync_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod gqep_timeout_sync_tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     fn op_timed_out() -> NexusEvent {
         NexusEvent::OperationTimedOut {

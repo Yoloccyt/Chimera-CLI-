@@ -42,8 +42,9 @@ use std::future::Future;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::mca::context_capability::{CalibrationTier, ContextCapabilityProfile};
+use nexus_events::{EventMetadata, NexusEvent};
 
 /// 事件源标识(EventMetadata.source,对齐 adapters/hcw_integration 惯例)
 const EVENT_SOURCE: &str = "mca-gateway";

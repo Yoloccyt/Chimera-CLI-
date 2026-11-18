@@ -22,8 +22,8 @@
 //! - **去重键**：条目 id = `bb:{key}`，同 `key` 再投影即覆盖（幂等，检索/去重按 key）。
 
 use chrono::{DateTime, Utc};
-use event_bus::NexusEvent;
 use nexus_contracts::{EpistemicType, TemporalMeta};
+use nexus_events::NexusEvent;
 
 use crate::error::MlcError;
 use crate::l1_episodic::EpisodicMemory;

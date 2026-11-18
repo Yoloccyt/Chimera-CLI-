@@ -12,7 +12,7 @@
 //!   复用既有视觉语言,避免为单面板引入新 viz 依赖。
 
 use crossterm::event::KeyEvent;
-use event_bus::NexusEvent;
+use nexus_events::NexusEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -236,7 +236,7 @@ impl Panel for SelfAssessmentPanel {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     #[test]
     fn test_self_assessment_panel_id() {

@@ -415,7 +415,7 @@ fn parse_quadrant(quadrant: &str) -> Result<chimera_mas::Quadrant> {
 mod tests {
     use super::*;
     use crate::composition;
-    use event_bus::NexusEvent;
+    use nexus_events::NexusEvent;
 
     /// M4-P1：agent 子命令经 execute_with_ctx 使用组合根共享 bus ——
     /// spawn 经 RootOrchestrator 发布的 AgentTaskDelegated 在共享 bus 上可见

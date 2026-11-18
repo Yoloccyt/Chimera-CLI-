@@ -9,8 +9,9 @@
 //! L8 parliament → L0 nexus-contracts（enforce 纯函数）/ L1 event-bus（事件）
 //! 均为向下依赖，合规（§2.2）。
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::behavior_contract::{BehaviorContract, ContractCheckOutcome};
+use nexus_events::{EventMetadata, NexusEvent};
 use tracing::{info, warn};
 
 /// 审议建议 — FormalViolation 的处置方向

@@ -15,7 +15,8 @@
 //! - **Weighted**:按模态权重加权求和(归一化)。Text 权重最高(0.5)因文本语义最丰富,
 //!   Desktop 权重 0.1 因描述文本信息密度较低。归一化确保输出幅度与元素数量无关
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 
 use crate::config::{FusionStrategy, NmcConfig};
 use crate::error::NmcError;

@@ -6,8 +6,8 @@
 //! 对应架构层:L10 Interface
 
 use chrono::Utc;
-use event_bus::{EventMetadata, NexusEvent};
 use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
+use nexus_events::{EventMetadata, NexusEvent};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

@@ -32,8 +32,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::{MemoryStrategy, MemoryStrategyPolicy};
+use nexus_events::{EventMetadata, NexusEvent};
 use tracing::{debug, info};
 
 use super::config::MemConConfig;

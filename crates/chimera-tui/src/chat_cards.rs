@@ -18,8 +18,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 
-use event_bus::{NexusEvent, QuestStatus};
 use nexus_contracts::{Quest, TaskStatus};
+use nexus_events::{NexusEvent, QuestStatus};
 
 use crate::types::TuiState;
 

@@ -24,7 +24,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::panels::Panel;
 use crate::types::{ChatMessage, ChatRole, PanelId, TuiCommand, TuiState};
-use event_bus::ChatStatus;
+use nexus_events::ChatStatus;
 
 /// Chat 面板 — 渲染对话历史 + 会话状态指示器
 #[derive(Debug, Clone, PartialEq)]

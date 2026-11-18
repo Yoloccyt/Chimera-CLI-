@@ -33,7 +33,7 @@ use super::TuiApp;
 use crate::input::{lookup_key_action, InputRouter, KeyPattern, KeyRule, RouteTarget, RouterMode};
 use crate::popup::{PopupKind, Severity};
 use crate::types::{InputMode, PanelId, TuiCommand};
-use event_bus::{ActionSource, EventMetadata, NexusEvent};
+use nexus_events::{ActionSource, EventMetadata, NexusEvent};
 
 /// P1-2(评估报告 v2):TuiActionRequested 本地兜底超时(编排器未接线场景)
 ///

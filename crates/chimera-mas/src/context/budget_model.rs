@@ -20,7 +20,8 @@ use crate::context::ContextPriority;
 use crate::error::{MasError, Result};
 use crate::invariants::{InvariantChecker, MEMORY_BUDGET_MB};
 // 引入 event-bus 用于 SubTask 15.10:发布 AgentContextOverflow Critical 事件
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 
 // ============================================================
 // 常量(SubTask 15.9 REFACTOR — 抽取)

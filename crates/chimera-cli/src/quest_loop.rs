@@ -39,7 +39,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 use parliament::{StopContext, StopRuling, ThreeFactorAdjudicator};
 use quest_engine::{
     CreditStep, InMemoryExternalStorage, LongTaskMap, LongTermCreditAssigner, NoopMemorySyncHook,
@@ -498,7 +499,7 @@ fn make_terminal_card(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     #[tokio::test]
     async fn bridge_wires_quest_lifecycle_to_l9_components() {

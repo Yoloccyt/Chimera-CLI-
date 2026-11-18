@@ -36,8 +36,9 @@
 //!   自动恢复掩盖真实安全问题
 //! - **跳闸原因留档**:`trip_cause` 记录首次触发跳闸的违规反例,供审计追溯
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::formal_props::VerificationResult;
+use nexus_events::{EventMetadata, NexusEvent};
 use thiserror::Error;
 use tracing::warn;
 

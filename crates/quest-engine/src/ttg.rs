@@ -56,7 +56,8 @@ use nexus_contracts::{Quest, ThinkingMode};
 // 避免生产日志噪声;下游消费者订阅 EventBus 获取结构化切换通知,不依赖 tracing。
 use tracing::debug;
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 
 use crate::arbitration::ArbitrationLayer;
 use crate::error::QuestError;

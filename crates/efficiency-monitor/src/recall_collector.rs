@@ -21,7 +21,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use event_bus::{EventBus, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::NexusEvent;
 
 /// EWMA 平滑系数 — 新观测值权重（默认 0.3）
 ///
@@ -178,7 +179,7 @@ impl RecallCollector {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     fn recall_event(tier: &str, needle: f32, bias: f32, chain: f32) -> NexusEvent {
         NexusEvent::HcwRecallReported {

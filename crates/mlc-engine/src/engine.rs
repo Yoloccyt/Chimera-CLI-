@@ -23,9 +23,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use dashmap::DashMap;
-use event_bus::{EventBus, EventMetadata, ExperienceCardBus, NexusEvent};
+use event_bus::{EventBus, ExperienceCardBus};
 use nexus_contracts::{ExperienceCard, MemoryStrategy, MemoryStrategyPolicy};
 use nexus_core::CLV;
+use nexus_events::{EventMetadata, NexusEvent};
 use tracing::{debug, info, warn};
 
 use crate::config::MlcConfig;

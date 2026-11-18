@@ -26,7 +26,8 @@
 //! （需新 ADR + 回归面）， 见 ADR-225 T-16 B/C。
 
 use chrono::Utc;
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fmt;

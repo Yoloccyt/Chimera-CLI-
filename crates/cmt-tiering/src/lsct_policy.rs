@@ -26,7 +26,7 @@
 
 use std::sync::Arc;
 
-use event_bus::NexusEvent;
+use nexus_events::NexusEvent;
 use tracing::{debug, info, warn};
 
 use crate::lsct::{LsctConfig, LsctCoordinator};

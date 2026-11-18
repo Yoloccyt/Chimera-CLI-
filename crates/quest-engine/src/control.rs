@@ -13,7 +13,8 @@
 //! - `spawn_control_subscriber` 内部 `tokio::spawn`:调用方负责在运行时启动,
 //!   测试可选择同步 `handle_control_event` 路径,避免任务生命周期管理。
 
-use event_bus::{EventBus, EventReceiver, NexusEvent};
+use event_bus::{EventBus, EventReceiver};
+use nexus_events::NexusEvent;
 use std::sync::Arc;
 use tracing::{error, info};
 
@@ -147,8 +148,8 @@ pub fn spawn_control_subscriber_with_receiver(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
     use nexus_contracts::{MultimodalInput, UserIntent};
+    use nexus_events::EventMetadata;
     use std::sync::Arc;
 
     use crate::QuestEngine;

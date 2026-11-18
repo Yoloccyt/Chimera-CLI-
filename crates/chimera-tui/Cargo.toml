@@ -22,6 +22,8 @@ v3-engine = []
 [dependencies]
 # L10 Interface → L1 Core(向下依赖,event-bus 是唯一跨层通道,§2.2 依赖铁律)
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # WHY 直接依赖:engine::compat 需按 Unicode 显示宽度定位宽字符续格(ratatui 0.29
 # 渲染不写 skip 标志);unicode-width 已是 ratatui 传递依赖,版本同源零新增下载。
 unicode-width = "0.2"

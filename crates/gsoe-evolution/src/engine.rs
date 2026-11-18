@@ -34,8 +34,9 @@ use crate::policy::grpo::{compute_advantage, sample_rollouts};
 use crate::policy::mutation::{apply_mutation, mutate};
 use crate::types::{EvolutionPolicy, EvolutionResult, FitnessReport, GrpoRollout};
 // Task 3.10: EventMetadata 已下沉至 L0 nexus-contracts(ADR-033 扩展)
-use event_bus::{EventBus, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::EventMetadata;
+use nexus_events::NexusEvent;
 use tracing::debug;
 
 /// GSOE 进化引擎 — GRPO 风格的在线强化学习驱动器

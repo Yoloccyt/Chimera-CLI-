@@ -27,8 +27,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use futures::stream::{FuturesUnordered, StreamExt};
+use nexus_events::{EventMetadata, NexusEvent};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 use uuid::Uuid;

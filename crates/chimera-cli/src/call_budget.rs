@@ -35,7 +35,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;

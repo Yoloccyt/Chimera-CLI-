@@ -33,8 +33,9 @@
 
 use std::sync::Mutex;
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_core::{StateChangeKind, StateChangeListener};
+use nexus_events::{EventMetadata, NexusEvent};
 use tracing::{debug, warn};
 
 /// 默认事件源标识(EventMetadata.source,依赖方向审计用)

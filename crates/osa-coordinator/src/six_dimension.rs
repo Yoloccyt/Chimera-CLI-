@@ -29,9 +29,9 @@
 //! - **铁律6**: `export_trajectory` 导出调整决策轨迹（奖励为 0——调整动作无即时
 //!   可测收益，结局归因依赖后续反馈事件，v4.0 离线训练应按轨迹对齐回填，不伪造）
 
-use event_bus::NexusEvent;
 use nexus_contracts::rl_hooks::{RLActionVector, RLStateVector, RLTrajectory};
 use nexus_contracts::HarnessConfigContract;
+use nexus_events::NexusEvent;
 use sha2::{Digest, Sha256};
 
 use crate::tool_pruning::unix_now_ms;
@@ -336,7 +336,7 @@ impl Default for SixDimensionAdjuster {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::{EventMetadata, RouterStatsPayload};
+    use nexus_events::{EventMetadata, RouterStatsPayload};
 
     fn meta() -> EventMetadata {
         EventMetadata::new("test-six-dimension")

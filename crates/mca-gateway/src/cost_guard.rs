@@ -28,7 +28,8 @@
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 
 /// 事件源标识(与 adapters.rs EVENT_SOURCE 一致,同源链路可归并)
 const EVENT_SOURCE: &str = "mca-gateway";
@@ -221,7 +222,8 @@ impl std::fmt::Debug for CostGuard {
 mod tests {
     use std::time::Duration;
 
-    use event_bus::{EventBus, NexusEvent};
+    use event_bus::EventBus;
+    use nexus_events::NexusEvent;
 
     use super::{CostGuard, CostGuardError, CIRCUIT_OPEN_DURATION_SECS};
 

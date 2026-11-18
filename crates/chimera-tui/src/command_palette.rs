@@ -22,7 +22,7 @@ use crate::actions::codegen::{palette_entries, PaletteEntry};
 use crate::actions::ActionRegistry;
 use crate::popup::Severity;
 use crate::types::{InputMode, PanelId, TuiCommand, TuiState};
-use event_bus::VoteValue;
+use nexus_events::VoteValue;
 
 /// 命令面板 — 解析并执行底部输入栏的命令
 ///

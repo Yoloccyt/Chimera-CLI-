@@ -32,8 +32,9 @@
 //! ```
 
 use chrono::{DateTime, Utc};
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::{TemporalMeta, TransitionType, VectorStore};
+use nexus_events::{EventMetadata, NexusEvent};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use sha2::{Digest, Sha256};
 use std::path::Path;

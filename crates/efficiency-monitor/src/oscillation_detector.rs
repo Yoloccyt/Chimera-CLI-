@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 use crate::types::MetricSample;
 use chrono::Utc;
-use event_bus::NexusEvent;
+use nexus_events::NexusEvent;
 
 /// 默认滑动窗口长度:60 秒
 ///
@@ -386,7 +386,7 @@ impl Default for PolicyOscillationDetector {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
     use std::thread;
 
     fn make_ttg_switch(from: &str, to: &str) -> NexusEvent {

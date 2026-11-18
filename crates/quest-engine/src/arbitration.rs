@@ -35,8 +35,9 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-use event_bus::{EventBus, EventTopic, FilteredSubscriber, NexusEvent};
+use event_bus::{EventBus, FilteredSubscriber};
 use nexus_contracts::BudgetTier;
+use nexus_events::{EventTopic, NexusEvent};
 use tracing::{debug, warn};
 
 // ============================================================

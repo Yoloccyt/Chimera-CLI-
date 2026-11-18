@@ -28,8 +28,9 @@ use chimera_tui::data::curator::{
     parse_compact_args, CurationConfig, CurationPolicy, RuleCurationPolicy,
 };
 use chimera_tui::types::{ChatMessage, ChatRole};
-use event_bus::{EventBus, EventBusError, EventMetadata, NexusEvent, TuiChatMessagePayload};
+use event_bus::{EventBus, EventBusError};
 use nexus_contracts::{MultimodalInput, UserIntent};
+use nexus_events::{EventMetadata, NexusEvent, TuiChatMessagePayload};
 use quest_engine::QuestEngine;
 use serde_json::Value;
 use tokio::task::JoinHandle;
@@ -578,7 +579,7 @@ mod tests {
     // 共享策展配置(测试默认;LazyLock 规避非 const default)
     static CURATION: std::sync::LazyLock<chimera_tui::data::curator::CurationConfig> =
         std::sync::LazyLock::new(chimera_tui::data::curator::CurationConfig::default);
-    use event_bus::ActionSource;
+    use nexus_events::ActionSource;
 
     /// 构造 TuiActionRequested 事件(来源 Palette,固定 `request_id`)
     fn action(action_id: &str, payload: &str) -> NexusEvent {

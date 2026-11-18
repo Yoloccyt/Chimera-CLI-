@@ -13,7 +13,7 @@
 //!   走 i18n 表,与既有 panel.border.* 键族对齐)。
 
 use crossterm::event::KeyEvent;
-use event_bus::NexusEvent;
+use nexus_events::NexusEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -157,7 +157,7 @@ impl Panel for OverWindowPanel {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     fn trigger(
         corpus_tokens: u64,

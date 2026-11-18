@@ -26,7 +26,8 @@
 //! Cold/Warm → Hot:被访问时提升到 Hot(若 Hot 未满)
 //! ```
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 use tracing::{debug, info, warn};
 
 use crate::cold::ColdTier;

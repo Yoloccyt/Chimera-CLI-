@@ -18,7 +18,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use event_bus::{BudgetMetricsPayload, EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{BudgetMetricsPayload, EventMetadata, NexusEvent};
 use tracing::{error, info, warn};
 
 use crate::config::DecbConfig;

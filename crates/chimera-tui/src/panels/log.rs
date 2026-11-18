@@ -20,7 +20,7 @@ use crate::panels::Panel;
 use crate::popup::PopupKind;
 use crate::render::scroll_offset_window;
 use crate::types::{PanelId, TuiCommand, TuiState};
-use event_bus::{EventSeverity, NexusEvent};
+use nexus_events::{EventSeverity, NexusEvent};
 
 /// `content()` 方法默认渲染的可见行数(测试场景;实际渲染由终端高度决定)
 const LOG_CONTENT_DEFAULT_VISIBLE_ROWS: usize = 20;
@@ -466,7 +466,7 @@ fn event_severity_rank(event: &NexusEvent) -> u8 {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::{EventMetadata, NexusEvent};
+    use nexus_events::{EventMetadata, NexusEvent};
     use std::collections::VecDeque;
 
     #[test]

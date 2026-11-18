@@ -65,8 +65,9 @@
 use crate::error::GsoeError;
 use crate::{SpecEdge, SpecNode, SPEC_DAG};
 // Task 3.10: EventMetadata 已下沉至 L0 nexus-contracts(ADR-033 扩展)
-use event_bus::{EventBus, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::{EventMetadata, HarnessSpec, HarnessSpecError, ImmutableSurface};
+use nexus_events::NexusEvent;
 use std::collections::HashMap;
 use thiserror::Error;
 
@@ -756,8 +757,9 @@ impl Default for SpecRegistry {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::{EventBus, NexusEvent};
+    use event_bus::EventBus;
     use nexus_contracts::{ContractSpec, HarnessMeta, HopSpec, RetryPolicy};
+    use nexus_events::NexusEvent;
 
     // ============================================================
     // 测试辅助函数

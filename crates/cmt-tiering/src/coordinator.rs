@@ -21,7 +21,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use event_bus::{EventBus, EventMetadata, ExperienceCardBus, NexusEvent};
+use event_bus::{EventBus, ExperienceCardBus};
+use nexus_events::{EventMetadata, NexusEvent};
 use tracing::{debug, info, warn};
 
 use crate::cold::ColdTier;

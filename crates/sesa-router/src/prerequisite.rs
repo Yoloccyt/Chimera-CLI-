@@ -23,7 +23,8 @@
 use std::collections::HashSet;
 use std::sync::Mutex;
 
-use event_bus::{EventBus, EventTopic, FilteredSubscriber, NexusEvent};
+use event_bus::{EventBus, FilteredSubscriber};
+use nexus_events::{EventTopic, NexusEvent};
 use tracing::warn;
 
 use crate::error::SesaError;
@@ -210,7 +211,7 @@ impl PrerequisiteChecker {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     /// 构造 OmniSparseMasksComputed 事件
     fn make_osa_event() -> NexusEvent {

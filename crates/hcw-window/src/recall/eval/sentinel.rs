@@ -29,7 +29,8 @@
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 
 use crate::error::HcwError;
 use crate::recall::eval::position_bias;

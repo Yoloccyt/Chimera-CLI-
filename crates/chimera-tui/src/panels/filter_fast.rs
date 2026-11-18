@@ -15,7 +15,7 @@
 //!   快路径 `Some(true)` 与 JSON 路径必然一致(拼接文本是 JSON 的子集),
 //!   无误报风险。
 
-use event_bus::NexusEvent;
+use nexus_events::NexusEvent;
 
 /// 快速关键字命中判定(大小写不敏感)
 ///
@@ -85,7 +85,7 @@ pub fn event_keyword_hit_fast_pre_lowered(event: &NexusEvent, kw_lower: &str) ->
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     fn cache_hit(key: &str) -> NexusEvent {
         NexusEvent::CacheHit {

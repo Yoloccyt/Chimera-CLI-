@@ -31,7 +31,8 @@
 
 use std::sync::Arc;
 
-use event_bus::{ConsultUrgency, EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{ConsultUrgency, EventMetadata, NexusEvent};
 use tokio::sync::Semaphore;
 use tokio::time::{timeout, Duration};
 

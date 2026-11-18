@@ -1,4 +1,4 @@
-﻿//! S9 会话集成 — 将 StreamSessionCompleted 事件桥接到 S9RouteLearner
+//! S9 会话集成 — 将 StreamSessionCompleted 事件桥接到 S9RouteLearner
 //!
 //! 对应架构层: L6 Router(omega-learner)
 //! 对应 ADR: ADR-065(MCA M3), ADR-068, ADR-084 决策 4(W5 占位治理)
@@ -38,7 +38,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use event_bus::{EventBus, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::NexusEvent;
 use tracing::warn;
 
 use crate::s9_route::{S9Context, S9Reward, S9RouteLearner};
@@ -187,7 +188,7 @@ impl S9SessionIntegration {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
     use std::sync::Mutex;
 
     /// 构造样本臂集(8 provider-model × 3 mode = 24 臂)

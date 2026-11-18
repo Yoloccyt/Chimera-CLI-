@@ -32,7 +32,8 @@
 
 use chrono::Utc;
 use dashmap::DashMap;
-use event_bus::{EventBus, EventMetadata, NexusEvent, TaskPriority};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent, TaskPriority};
 
 use crate::agent::lifecycle::{AgentLifecycle, LifecycleState};
 use crate::agent::meta::{AgentMeta, AgentStatus, AgentType, ModelConfig};

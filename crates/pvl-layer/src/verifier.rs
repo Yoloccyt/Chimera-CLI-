@@ -12,7 +12,8 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 use tokio::sync::mpsc;
 use tracing::warn;
 

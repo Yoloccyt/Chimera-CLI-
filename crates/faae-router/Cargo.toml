@@ -14,6 +14,8 @@ nexus-core = { workspace = true }
 nexus-compute = { workspace = true }
 # L1 Core:EventBus 跨层通信,发布 ExpertRouted/EntropyBalanced 等事件
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # 异步运行时(RwLock/tokio::spawn 用于并发路由与后台衰减循环)
 tokio = { workspace = true }
 # 序列化:ExpertProfile/RoutingResult 等类型派生 Serialize/Deserialize

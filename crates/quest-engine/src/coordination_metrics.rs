@@ -33,7 +33,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 use serde::{Deserialize, Serialize};
 
 use crate::ComplexityScore;

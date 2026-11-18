@@ -17,6 +17,8 @@ nexus-contracts = { workspace = true }
 # - 发布 ContextWindowSwitched/ContextCompressed 事件(Week 3 Task 6 新增)
 # - 订阅 OmniSparseMasksComputed 事件(Week 1 定义,修正 V1 违规)
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # 序列化:状态持久化与事件 payload(CompressionReport/HcwState 序列化)
 # WHY(SubTask 13.6):启用 "rc" feature,使 serde 为 Arc<str> 实现 Serialize/Deserialize
 # (ContextEntry.content 改为 Arc<str> 共享,serde 默认不为 Arc/Rc 实现反序列化)

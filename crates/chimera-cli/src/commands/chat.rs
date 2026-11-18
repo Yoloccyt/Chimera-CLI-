@@ -40,8 +40,9 @@ use std::io::{self, BufRead, Write};
 use std::time::Duration;
 
 use anyhow::Result;
-use event_bus::{EventBus, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::{MultimodalInput, UserIntent};
+use nexus_events::NexusEvent;
 use quest_engine::QuestEngine;
 use uuid::Uuid;
 

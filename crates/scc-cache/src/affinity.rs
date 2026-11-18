@@ -17,8 +17,9 @@
 //! CacheSupport 经 event-bus 事件流入,或由调用方直接传入。
 
 use dashmap::DashMap;
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::affinity::CacheSupport;
+use nexus_events::{EventMetadata, NexusEvent};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 

@@ -80,7 +80,7 @@ impl FilterCache {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::{EventMetadata, NexusEvent};
+    use nexus_events::{EventMetadata, NexusEvent};
     use std::collections::VecDeque;
     use std::sync::Arc;
 

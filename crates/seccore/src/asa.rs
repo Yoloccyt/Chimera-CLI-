@@ -19,7 +19,8 @@ use std::collections::VecDeque;
 use std::sync::RwLock;
 
 use chrono::{DateTime, Utc};
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 use tracing::{error, warn};
 
 use crate::asa_ppo::PpoCritic;

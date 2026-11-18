@@ -14,7 +14,7 @@
 
 use chrono::Utc;
 use dashmap::DashMap;
-use event_bus::{EventSeverity, NexusEvent};
+use nexus_events::{EventSeverity, NexusEvent};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -232,7 +232,7 @@ impl MetricCollector for EventMetricCollector {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     /// A5/ADR-197:计算池饱和事件 → 降级数镜像为资源压力证据
     ///

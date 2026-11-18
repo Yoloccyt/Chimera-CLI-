@@ -209,7 +209,7 @@ impl ParentSelectionHistory {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
-    use event_bus::{EventMetadata, NexusEvent};
+    use nexus_events::{EventMetadata, NexusEvent};
 
     /// 注册表:登记 + 查询 + 快照(append-only)
     #[test]

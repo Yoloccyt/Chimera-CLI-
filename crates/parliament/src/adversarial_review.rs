@@ -256,7 +256,8 @@ mod tests {
         // v2.3 §(b.4)(1) 生产接线闭环:未过审不签发;非参与者审查通过→经 publish_certify
         // 发 CertifyIssued(Critical 旁路必达)。
         use crate::{Parliament, ParliamentConfig};
-        use event_bus::{EventBus, NexusEvent};
+        use event_bus::EventBus;
+        use nexus_events::NexusEvent;
         let bus = EventBus::new();
         let mut rx = bus.subscribe_critical_events();
         let p = Parliament::new(ParliamentConfig::default(), bus.clone());

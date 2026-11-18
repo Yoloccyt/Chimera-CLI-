@@ -9,6 +9,8 @@ license.workspace = true
 nexus-core = { workspace = true }
 # L1 Core:跨层通信唯一通道,发布 OperationProduced/PredictionVerified/ProducerStrategyAdjusted 事件
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # 异步运行时:tokio::sync::mpsc 通道(Producer→Verifier→Feedback 单向流)
 tokio = { workspace = true }
 # 配置与类型序列化(#[derive(Serialize, Deserialize)])

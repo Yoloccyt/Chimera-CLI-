@@ -15,7 +15,8 @@ use crate::config::MonitorConfig;
 use crate::error::MonitorError;
 use crate::oscillation_detector::{OscillationConfig, PolicyOscillationDetector};
 use crate::types::{AlertEvent, AlertRule, AlertSeverity};
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 use std::time::Duration;
 use tracing::warn;
 
@@ -773,7 +774,7 @@ fn publish_critical_dropped_alert(bus: &EventBus, dropped_count: u64) {
 mod tests {
     use super::*;
     use crate::types::Comparison;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     fn make_skeptic_veto() -> NexusEvent {
         NexusEvent::SkepticVeto {

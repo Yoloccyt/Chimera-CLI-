@@ -26,7 +26,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use crate::panels::Panel;
 use crate::render;
 use crate::types::{PanelId, TuiCommand, TuiState};
-use event_bus::NexusEvent;
+use nexus_events::NexusEvent;
 
 /// 高衰减阈值:当 coefficient 低于此值时,表示衰减量 > 0.7(高衰减)。
 ///

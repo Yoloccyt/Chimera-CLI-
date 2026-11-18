@@ -1,4 +1,4 @@
-﻿//! TUI 数据源抽象 — 为 L10 Interface 提供统一数据访问契约
+//! TUI 数据源抽象 — 为 L10 Interface 提供统一数据访问契约
 //!
 //! 设计约束(WHY):
 //! - `chimera-tui` 位于 L10,按 §2.2 依赖铁律禁止直接依赖 L9 的
@@ -79,8 +79,8 @@ mod tests {
     use super::*;
     use crate::types::{ChatRole, TickMode};
     use chrono::Utc;
-    use event_bus::{BudgetMetricsPayload, ChatStatus, EventMetadata, NexusEvent, QuestStatus};
     use nexus_contracts::{Quest, Task, TaskStatus, ThinkingMode};
+    use nexus_events::{BudgetMetricsPayload, ChatStatus, EventMetadata, NexusEvent, QuestStatus};
 
     /// 构造测试用 Quest
     fn quest(id: &str, title: &str) -> Quest {

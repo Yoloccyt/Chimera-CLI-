@@ -20,7 +20,8 @@
 //! `WindowAffinity::fold()` 是 O(1) 查表,不进任何热路径分配。
 //! 本模块仅在事件到达时执行,不在请求热路径上。
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 
 use crate::McaGateway;
 

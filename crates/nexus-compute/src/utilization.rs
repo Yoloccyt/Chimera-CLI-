@@ -263,7 +263,7 @@ impl UtilizationSampler {
         hottest_kind: String,
     ) -> bool {
         use super::telemetry::saturation_ratio_bp;
-        use event_bus::{EventMetadata, NexusEvent};
+        use nexus_events::{EventMetadata, NexusEvent};
 
         let ratio_bp = saturation_ratio_bp(snap.rayon.active_tasks, snap.rayon.pool_threads);
         if !saturated {

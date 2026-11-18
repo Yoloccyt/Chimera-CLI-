@@ -24,7 +24,7 @@ use crate::error::TuiError;
 use crate::input::{InputRouter, PaneDir, RouteTarget, RouterMode};
 use crate::popup::{PopupKind, Severity};
 use crate::types::{InputMode, LayoutMode, PanelId, TuiCommand};
-use event_bus::{ActionSource, EventMetadata, NexusEvent, VoteValue};
+use nexus_events::{ActionSource, EventMetadata, NexusEvent, VoteValue};
 
 /// PS-1 帧预算:两次真实渲染之间的最小间隔(≈60fps 上限,单位 ms)
 ///

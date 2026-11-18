@@ -45,7 +45,8 @@
 
 use dashmap::DashMap;
 use decb_governor::DecbGovernor;
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 use tracing::warn;
 
 // ============================================================
@@ -586,7 +587,7 @@ impl Default for RuntimeAuditor {
 #[allow(clippy::unwrap_used, clippy::expect_used)] // test-module unwrap is the Rust idiom; E-5 targets production code
 mod tests {
     use super::*;
-    use event_bus::{EventMetadata, QuestStatus};
+    use nexus_events::{EventMetadata, QuestStatus};
 
     fn quest_created(id: &str) -> NexusEvent {
         NexusEvent::QuestCreated {

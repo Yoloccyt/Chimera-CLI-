@@ -26,8 +26,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::{PrefetchPolicy, PrefetchStrategy};
+use nexus_events::{EventMetadata, NexusEvent};
 
 use crate::cache::SccCache;
 use crate::types::{AccessPattern, ContextId};

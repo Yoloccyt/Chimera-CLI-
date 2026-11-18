@@ -18,8 +18,8 @@ use crate::engine::layout::PaneMode;
 use crate::error::TuiError;
 use crate::popup::{PopupStack, Severity};
 use chrono::{DateTime, Utc};
-use event_bus::{ActionSource, ChatStatus, NexusEvent, VoteValue};
 use nexus_contracts::Quest;
+use nexus_events::{ActionSource, ChatStatus, NexusEvent, VoteValue};
 use serde::{Deserialize, Serialize};
 
 // ============================================================

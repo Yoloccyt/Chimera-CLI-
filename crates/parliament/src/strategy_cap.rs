@@ -25,8 +25,9 @@
 use std::sync::Mutex;
 use std::time::Instant;
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::ActivationStrategy;
+use nexus_events::{EventMetadata, NexusEvent};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 

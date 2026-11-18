@@ -14,6 +14,8 @@ nexus-core = { workspace = true }
 nexus-contracts = { workspace = true }
 # event-bus:L1 事件总线,跨层通信唯一通道(§2.2 依赖铁律)
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # dashmap:并发安全哈希表;读多写少场景下分片锁并发性能优于 RwLock<HashMap>
 dashmap = { workspace = true }
 # tokio:异步运行时,EventBus::publish 为 async

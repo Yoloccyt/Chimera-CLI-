@@ -43,9 +43,10 @@ use std::sync::{Arc, Mutex};
 
 use chrono::Utc;
 use decay_engine::{ResetAuthorization, RlGateVerdict, ShadowModeCircuitBreaker};
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use gsoe_evolution::{RlUpdateTarget, ScopeVerdict, UnfreezeScope};
 use nexus_contracts::formal_props::VerificationResult;
+use nexus_events::{EventMetadata, NexusEvent};
 
 use crate::error::{MasError, Result};
 use crate::shadow::batch::{

@@ -12,6 +12,8 @@ description = "NEXUS-OMEGA L10 宿主层协议门面 — 核心-表面分离（W
 nexus-contracts = { workspace = true }
 # L1 Core: 唯一跨层事件通道（AppEvent 经 EventBus 广播,内闭外开 T6）
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # L1 Core: RuntimeHandle 核心驱动的领域类型（Thread/Turn/Item 映射）
 # B4d/ADR-311:领域类型已下沉 L0 nexus-contracts,`nexus-core` 的 `types` re-export
 # 汇聚点退役 ⇒ 本 crate 直连 L0,`nexus-core` 依赖摘除(零消费)。

@@ -16,7 +16,7 @@
 //! WHY 简化:回退是低频操作(仅在预测失败时触发),且单步预测本身可靠,
 //! 无需 GQEP 的并行聚集开销。Week 6 接入真实模型后可重新评估
 
-use event_bus::{EventMetadata, NexusEvent};
+use nexus_events::{EventMetadata, NexusEvent};
 use tracing::debug;
 
 use crate::error::MtpeError;

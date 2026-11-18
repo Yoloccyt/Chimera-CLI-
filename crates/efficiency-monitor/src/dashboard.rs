@@ -318,7 +318,7 @@ mod tests {
     #[test]
     fn test_render_metrics_from_collector() {
         use crate::collectors::EventMetricCollector;
-        use event_bus::{EventMetadata, NexusEvent};
+        use nexus_events::{EventMetadata, NexusEvent};
 
         let collector = EventMetricCollector::new();
         let event = NexusEvent::CacheHit {

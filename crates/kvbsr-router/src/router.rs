@@ -32,8 +32,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use dashmap::DashMap;
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_core::CLV;
+use nexus_events::{EventMetadata, NexusEvent};
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 // ws2-c1 红线 #8:公共 Top-K 收敛工具(替代 sort_by 全排)

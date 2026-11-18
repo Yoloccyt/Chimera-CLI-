@@ -34,7 +34,8 @@
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 
 use crate::context::budget_model::SPARSE_FACTOR;
 use crate::error::{MasError, Result};

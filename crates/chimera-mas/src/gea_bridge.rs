@@ -46,7 +46,7 @@
 
 use std::sync::Arc;
 
-use event_bus::TaskPriority;
+use nexus_events::TaskPriority;
 
 use crate::delegation::{AgentTask, TaskComplexity};
 use crate::experts::{ExpertRegistry, PermissionTier};

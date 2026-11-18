@@ -20,8 +20,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use event_bus::{EventBus, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::mca::context_capability::CalibrationTier;
+use nexus_events::NexusEvent;
 
 use crate::governor::PlanContext;
 
@@ -187,7 +188,7 @@ fn parse_confidence(raw: &str) -> CalibrationTier {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     fn event(route: &str, advertised: u32, effective: u32, confidence: &str) -> NexusEvent {
         NexusEvent::ContextCapabilityUpdated {

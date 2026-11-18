@@ -19,9 +19,10 @@
 //! - `Complex` / `VeryComplex` → `ThinkingMode::Deep`(深度推理)
 
 use crate::error::Result;
-use event_bus::{EventBus, EventMetadata, NexusEvent, TaskPriority};
+use event_bus::EventBus;
 use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, StreamExt};
+use nexus_events::{EventMetadata, NexusEvent, TaskPriority};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Duration;

@@ -24,8 +24,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use dashmap::DashMap;
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::BudgetTier;
+use nexus_events::{EventMetadata, NexusEvent};
 // B4a/ADR-311: 领域类型直连 L0（nexus-core 仅保留 NexusState/StateChangeListener 面）
 use nexus_contracts::{Checkpoint, Quest, Task, TaskStatus, ThinkingMode, UserIntent};
 use tracing::{debug, info, warn};

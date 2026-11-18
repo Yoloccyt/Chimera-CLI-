@@ -129,7 +129,7 @@ mod tests {
     use super::*;
     use crate::immune_system::types::Severity;
     use crate::immune_system::StabilityMirror;
-    use event_bus::{EventMetadata, NexusEvent};
+    use nexus_events::{EventMetadata, NexusEvent};
 
     #[test]
     fn test_reasoning_trap_probe_type() {

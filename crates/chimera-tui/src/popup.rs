@@ -8,7 +8,7 @@
 //! - `PopupKind` 区分通知/详情/确认三种语义,M3 完成确认弹窗渲染并支持
 //!   详情弹窗滚动,为 M4 的用户确认流程预留扩展点。
 
-use event_bus::NexusEvent;
+use nexus_events::NexusEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};

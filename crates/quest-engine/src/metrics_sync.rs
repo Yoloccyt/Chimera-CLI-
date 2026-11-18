@@ -22,7 +22,8 @@
 //! - 尽力合并语义:事件丢失/时序错过时缓存字段保持 None,
 //!   与 `CoordinationCostSample` 的 Option 设计一致,不阻塞不报错
 
-use event_bus::{EventBus, EventReceiver, NexusEvent};
+use event_bus::{EventBus, EventReceiver};
+use nexus_events::NexusEvent;
 use std::sync::Arc;
 use tracing::{debug, error};
 
@@ -204,7 +205,7 @@ pub fn spawn_metrics_subscriber_with_receiver(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     fn make_engine() -> QuestEngine {
         QuestEngine::new(EventBus::new())

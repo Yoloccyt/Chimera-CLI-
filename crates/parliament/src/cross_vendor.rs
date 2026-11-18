@@ -18,9 +18,10 @@
 
 use std::sync::Arc;
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::affinity::ProviderId;
 use nexus_contracts::Quest;
+use nexus_events::{EventMetadata, NexusEvent};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 

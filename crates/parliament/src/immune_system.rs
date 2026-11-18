@@ -22,7 +22,8 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, RwLock};
 
-use event_bus::{EventBus, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::NexusEvent;
 
 use crate::immune_system::evolution_hack::EvolutionHackProbe;
 use crate::immune_system::membrane::MembraneController;

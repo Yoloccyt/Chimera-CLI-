@@ -15,13 +15,14 @@
 
 use std::sync::Arc;
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use hcw_window::{PlanContext, WindowGovernor};
 use nexus_contracts::affinity::{
     AffinityMessage, AffinityRequest, AffinityResponse, ContentBlock, CostEstimate, FinishReason,
     MessageRole, ModelAffinitySpec, ProtocolDialect, ProviderReceipt, TokenCacheKey, UsageReport,
 };
 use nexus_contracts::CapabilityToken;
+use nexus_events::{EventMetadata, NexusEvent};
 use scc_cache::{CacheHitTracker, CachedResponse, SemanticResponseCache};
 use sha2::{Digest, Sha256};
 

@@ -8,7 +8,8 @@
 //! - `try_recv` 非阻塞消费,供 TUI 主循环在 tick 时批量取出。
 //! - 后台任务遇到 broadcast `Lagged` 错误时记录 warn 并继续,不 panic。
 
-use event_bus::{EventBus, EventBusError, NexusEvent};
+use event_bus::{EventBus, EventBusError};
+use nexus_events::NexusEvent;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use tokio::sync::watch;
@@ -241,7 +242,7 @@ impl Drop for EventSubscriber {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::{ClvSummary, EventMetadata, NexusEvent};
+    use nexus_events::{ClvSummary, EventMetadata, NexusEvent};
     use tokio::time::{sleep, Duration};
 
     /// 构造 OmniSparseMasksComputed 事件

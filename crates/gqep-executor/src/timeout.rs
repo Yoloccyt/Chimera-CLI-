@@ -14,7 +14,8 @@
 
 use std::time::Duration;
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 use tracing::warn;
 
 use crate::error::GqepError;

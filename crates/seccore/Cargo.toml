@@ -42,6 +42,8 @@ uuid = { workspace = true, features = ["v4"] }
 serde_json = { workspace = true }
 # Event Bus:L1 事件总线,发布 AsaIntervention 事件通知 Parliament 干预决策(§2.2 跨层通信唯一通道)
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # WASM 沙箱后端(ADR-035 决策 2,可选):仅在 `wasm-sandbox` feature 启用时引入。
 # WHY 直接版本声明而非 workspace 级:ADR-035 决策 3 明确要求避免 workspace 级孤儿声明,
 #     由 seccore 自身显式声明,避免再次孤儿化(根 Cargo.toml L60 的孤儿声明已在 P1 阶段清理)。

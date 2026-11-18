@@ -10,6 +10,8 @@ nexus-core = { workspace = true }
 # L0-B（B1/ADR-311 shim 退役直连）：vector/parallel.rs KNN 批量挂 ComputeBridge
 nexus-compute = { workspace = true }
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # L0 Contracts 依赖(ADR-033:L(N) → L(0) 恒允许)
 # VectorStore trait + VectorHit + VectorStoreExt + VectorBackend + VectorStoreStats 来源
 nexus-contracts = { workspace = true }

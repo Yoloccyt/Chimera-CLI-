@@ -14,6 +14,8 @@ uuid = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 nexus-core = { workspace = true }
 
 [dev-dependencies]

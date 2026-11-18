@@ -21,7 +21,8 @@
 use std::sync::Mutex;
 
 use dashmap::DashMap;
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 use tracing::{debug, warn};
 
 use crate::lsct::config::LsctConfig;

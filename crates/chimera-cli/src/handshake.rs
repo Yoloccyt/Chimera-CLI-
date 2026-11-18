@@ -17,7 +17,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use event_bus::{CompatLevel, EventBus, EventBusError, EventMetadata, NexusEvent};
+use event_bus::{EventBus, EventBusError};
+use nexus_events::{CompatLevel, EventMetadata, NexusEvent};
 use tokio::task::JoinHandle;
 
 /// 事件来源标识

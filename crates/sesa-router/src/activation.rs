@@ -31,8 +31,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_core::cosine_similarity_slices;
+use nexus_events::{EventMetadata, NexusEvent};
 use tracing::warn;
 
 use crate::config::SesaConfig;

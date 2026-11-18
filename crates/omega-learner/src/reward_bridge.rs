@@ -8,8 +8,8 @@
 //! 经 EventBus 奖励信号流传输（R1 数据面先接入；R2 训练面解冻后由训练
 //! 服务消费）。依赖方向：L6 omega-learner → L0 nexus-contracts（合规）。
 
-use event_bus::{EventMetadata, NexusEvent};
 use nexus_contracts::reward::{RewardSignal, RewardSpec};
+use nexus_events::{EventMetadata, NexusEvent};
 
 use crate::s9_route::S9Reward;
 

@@ -138,7 +138,7 @@ impl ParadoxProbe for EvolutionHackProbe {
 mod tests {
     use super::*;
     use crate::immune_system::StabilityMirror;
-    use event_bus::{EventMetadata, NexusEvent};
+    use nexus_events::{EventMetadata, NexusEvent};
 
     #[test]
     fn test_evolution_hack_probe_type() {

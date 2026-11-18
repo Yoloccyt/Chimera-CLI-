@@ -19,7 +19,7 @@ use crate::panels::Panel;
 use crate::popup::PopupKind;
 use crate::render::scroll_offset_window;
 use crate::types::{PanelId, TuiCommand, TuiState};
-use event_bus::NexusEvent;
+use nexus_events::NexusEvent;
 
 /// Parliament 面板
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -503,7 +503,7 @@ impl Panel for ParliamentPanel {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::{EventMetadata, NexusEvent};
+    use nexus_events::{EventMetadata, NexusEvent};
     use std::collections::VecDeque;
 
     #[test]

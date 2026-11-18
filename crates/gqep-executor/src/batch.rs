@@ -18,7 +18,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Instant;
 
-use event_bus::{EventMetadata, NexusEvent};
+use nexus_events::{EventMetadata, NexusEvent};
 use tracing::warn;
 
 use crate::error::GqepError;

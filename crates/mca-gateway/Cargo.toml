@@ -36,6 +36,8 @@ rmp-serde = { workspace = true }
 nexus-contracts = { workspace = true }
 # L1 事件总线: 6 个 MCA 会话级/治理级事件的唯一跨层通道
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # L2 窗口亲和折减器:WindowAffinity::fold() 纯函数 O(1) 查表
 # WHY 跨层(MCA P5):折减逻辑是纯函数,不涉及 HCW 运行时状态。
 # 经 event-bus 发布 WindowAffinityApplied 事件供 HCW 消费。

@@ -28,8 +28,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use nexus_contracts::MemoryStrategyProvider;
+use nexus_events::{EventMetadata, NexusEvent};
 use sha2::{Digest, Sha256};
 use tracing::{debug, info};
 

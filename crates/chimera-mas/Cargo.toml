@@ -39,6 +39,8 @@ nexus-core = { workspace = true }
 nexus-contracts = { workspace = true }
 # L1 Core:跨层通信唯一通道,发布 7 个 Agent 相关 NexusEvent 变体(ADR-026 决策 2)
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # L2 Memory:AgentContext 包装 HierarchicalWindow,1M 上下文经 HCW 稀疏化(ADR-026 决策 7)
 hcw-window = { workspace = true }
 # L6 Router:OmniSparseCoordinator::compute_masks() 计算稀疏掩码(ADR-026 决策 7)

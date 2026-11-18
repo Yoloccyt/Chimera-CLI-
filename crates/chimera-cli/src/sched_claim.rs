@@ -31,10 +31,11 @@
 
 use std::sync::{Arc, OnceLock};
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use mas_sched::{
     ClaimOutcome, DenyReason, PeerScheduler, Priority, SimplePeerScheduler, TodoClaim,
 };
+use nexus_events::{EventMetadata, NexusEvent};
 
 /// 事件源标识（沿 `action_orchestrator::SOURCE` 惯例，chimera-cli 根事件）
 const SOURCE: &str = "chimera-cli";

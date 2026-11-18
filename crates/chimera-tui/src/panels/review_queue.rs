@@ -18,7 +18,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crossterm::event::KeyEvent;
-use event_bus::NexusEvent;
+use nexus_events::NexusEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -200,7 +200,7 @@ impl Panel for ReviewQueuePanel {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     fn push(state: &mut TuiState, ev: NexusEvent) {
         std::sync::Arc::make_mut(&mut state.latest_events).push_back(ev);

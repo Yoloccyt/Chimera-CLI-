@@ -22,7 +22,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 // ADR-054 决策 3(P9-T4):命令类探测改用 L0 契约(Command/CommandPolicy/CommandValidator),
 // 替代原 seccore 直接调用——parliament 生产依赖图不再含 seccore(L8→L0 恒允许)
 use nexus_contracts::command_validation::{Command, CommandPolicy, CommandValidator};

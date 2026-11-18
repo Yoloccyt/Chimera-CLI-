@@ -25,8 +25,9 @@
 use std::sync::Arc;
 
 use chrono::Utc;
-use event_bus::{EventBus, EventMetadata, NexusEvent, TaskPriority};
+use event_bus::EventBus;
 use nexus_contracts::NexusError;
+use nexus_events::{EventMetadata, NexusEvent, TaskPriority};
 use nexus_subagent::error::SubAgentError;
 use nexus_subagent::runtime::{SubAgentHandle, SubAgentRuntime, SubAgentTask};
 use nexus_subagent::types::SubAgentSpec;

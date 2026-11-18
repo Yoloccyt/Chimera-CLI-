@@ -31,7 +31,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use dashmap::{DashMap, DashSet};
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 
 /// EWMA 平滑系数(α=0.1 承袭 ADR-037 原 acb-governor 设计;
 /// 该 crate 已按 ADR-182 退役删除 2026-09-16)

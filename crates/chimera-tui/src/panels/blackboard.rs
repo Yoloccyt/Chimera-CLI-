@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use crossterm::event::KeyEvent;
-use event_bus::NexusEvent;
+use nexus_events::NexusEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -144,7 +144,7 @@ impl Panel for BlackboardPanel {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use event_bus::EventMetadata;
+    use nexus_events::EventMetadata;
 
     fn board(key: &str, epistemic: &str, summary: &str) -> NexusEvent {
         NexusEvent::BlackboardEntry {

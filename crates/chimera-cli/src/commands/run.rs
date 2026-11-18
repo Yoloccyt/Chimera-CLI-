@@ -756,7 +756,7 @@ mod tests {
     use super::*;
     use crate::composition;
     use crate::permission::{PermissionCtx, PermissionGate};
-    use event_bus::NexusEvent;
+    use nexus_events::NexusEvent;
     use std::time::Duration;
 
     /// M4-P1：run 经 execute_with_ctx 走组合根共享 bus ——

@@ -43,9 +43,10 @@ use crate::delegation::{AgentTask, TaskComplexity, TaskResult, TaskRunner};
 use crate::error::{MasError, Result};
 use crate::orchestrator::MAX_AGENT_DEPTH;
 use crate::quadrant::MAX_QUADRANT_FANOUT;
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
 use futures::stream::{FuturesUnordered, StreamExt};
 use hcw_window::{WindowSelector, WindowTier};
+use nexus_events::{EventMetadata, NexusEvent};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
@@ -563,8 +564,8 @@ mod tests {
     use super::*;
     use crate::delegation::QualityLevel;
     use crate::scheduler::{PriorityScheduler, WsjfInput};
-    use event_bus::TaskPriority;
     use nexus_contracts::{Task, TaskStatus};
+    use nexus_events::TaskPriority;
     use std::collections::HashSet;
     use std::time::Duration;
 

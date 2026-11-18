@@ -19,7 +19,8 @@ use chrono::Utc;
 
 use crate::error::{MasError, Result};
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 
 // ============================================================
 // 预注册检查点常量(rev3 决策 3A′-P,禁止运行时调整)

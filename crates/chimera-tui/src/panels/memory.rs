@@ -17,7 +17,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use crate::panels::Panel;
 use crate::render;
 use crate::types::{PanelId, TuiCommand, TuiState};
-use event_bus::NexusEvent;
+use nexus_events::NexusEvent;
 
 /// Memory 面板
 #[derive(Debug, Default, Clone, Copy, PartialEq)]

@@ -26,8 +26,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use event_bus::{ChatStatus, EventBus, EventBusError, EventMetadata, NexusEvent};
+use event_bus::{EventBus, EventBusError};
 use nexus_contracts::{MultimodalInput, Quest, UserIntent};
+use nexus_events::{ChatStatus, EventMetadata, NexusEvent};
 use quest_engine::{QuestEngine, QuestError};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;

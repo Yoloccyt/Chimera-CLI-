@@ -19,7 +19,7 @@
 //! 存储与选择,复用纯函数, 避免时间/随机性渗入核心逻辑(回应可测性诉求)。
 
 use crate::delegation::AgentTask;
-use event_bus::TaskPriority;
+use nexus_events::TaskPriority;
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap, HashMap};
 use std::time::{Duration, Instant};

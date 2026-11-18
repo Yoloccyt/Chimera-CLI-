@@ -12,7 +12,8 @@
 //! - `ConsensusReached` 事件为 Critical 级:丢失会导致 GSOE/AutoDPO
 //!   无法消费共识结果(§2.2 依赖铁律:跨层通信只能走 Event Bus)
 
-use event_bus::{EventBus, EventMetadata, NexusEvent};
+use event_bus::EventBus;
+use nexus_events::{EventMetadata, NexusEvent};
 use sha2::{Digest, Sha256};
 use tracing::warn;
 

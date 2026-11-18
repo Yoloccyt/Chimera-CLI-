@@ -13,6 +13,8 @@ nexus-contracts = { workspace = true }
 # WHY 合规:omega-learner 位于 L6,event-bus 位于 L1,L6 → L1 向下依赖允许(§2.2 依赖铁律)
 # 学习器只异步订阅反馈事件,不在推理关键路径同步调用(spec.md §7.3 "learner 只异步下发策略")
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # ndarray:LinUCB 算法核心矩阵运算(A_a d×d 矩阵 + b_a d 向量 + θ_a 计算)
 # WHY workspace 已声明:mlc-engine/osa-coordinator 等同层 crate 使用,LinUCB 与 CLV 共享同一线性代数栈
 ndarray = { workspace = true }

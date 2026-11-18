@@ -9,6 +9,8 @@ description = "NEXUS-OMEGA L0-B 核心基础面 — CPU 卸载计算面（Comput
 [dependencies]
 # L0-B 同层依赖：事件总线是遥测上报通道（同层互引允许，§2.2）。
 event-bus = { workspace = true }
+# ADR-322:L0-B 事件目录(NexusEvent + payloads + EventTopic);直连此处,不再经 event-bus 的 compat-2x re-export
+nexus-events = { workspace = true }
 # L0-B 同层：饱和判定纯函数 + SaturationSource 契约 + 上报循环（ADR-222 D3 上提），
 # 本 crate 实现该 trait（ComputeTelemetry 适配器）。单向 nexus-compute -> nexus-telemetry，
 # 反向会成 crate 环；G-125 守护 L0-B 方向。

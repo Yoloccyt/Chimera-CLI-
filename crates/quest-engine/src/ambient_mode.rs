@@ -34,7 +34,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
-use event_bus::{EventBus, EventReceiver, NexusEvent};
+use event_bus::{EventBus, EventReceiver};
+use nexus_events::NexusEvent;
 use tracing::{debug, info, warn};
 
 use crate::engine::QuestEngine;
