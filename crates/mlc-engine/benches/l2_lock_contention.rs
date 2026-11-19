@@ -69,7 +69,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion, SamplingMode};
+use criterion::{
+    criterion_group, criterion_main, BenchmarkGroup, BenchmarkId, Criterion, SamplingMode,
+};
 use mlc_engine::{MemoryEntry, MemoryId, MemoryTier, SemanticMemory, SharedCLV};
 use nexus_core::CLV;
 
@@ -251,9 +253,7 @@ fn wait_until_ready(rs: &Readers, count: usize) {
 
 /// 停读者并汇总其自记账
 fn stop_readers(rs: Readers) -> ReaderStat {
-    let Readers {
-        stop, handles, ..
-    } = rs;
+    let Readers { stop, handles, .. } = rs;
     stop.store(true, Ordering::Release);
     let mut total = ReaderStat::default();
     for h in handles {

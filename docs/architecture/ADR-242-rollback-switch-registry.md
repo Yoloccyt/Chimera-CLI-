@@ -108,11 +108,13 @@
 |------|------|------|---------|
 | `CHIMERA_NO_V3_ENGINE=1` | TUI 回退到 ratatui 渲染路径（替代 `--no-v3-engine` flag） | 兼容窗口**原计划 v2.11.0-omega 移除，未执行**；ADR-061 未修订，当前保留 | `crates/chimera-cli/src/cli.rs` |
 | `CHIMERA_LEGACY_EXIT_CODE`（`--legacy-exit-code` flag） | 所有错误统一返回退出码 1（v2.8.0 行为） | 兼容窗口**原计划 v2.11.0-omega 移除，未执行**；ADR-060 未修订，当前保留 | `crates/chimera-cli/src/main.rs` |
+| `compat-2x`（**非环境变量，是源码级纯路径 re-export**） | 下游 `use event_bus::<事件类型>` 旧路径继续可解析（替代 `use nexus_events::<事件类型>`） | 窗口：**v2.30.0-omega 引入 → v2.31.0-omega 移除**；当前零生产消费者（`migrate_l1_event_imports.py --check` = 0 use + 0 inline） | `crates/event-bus/src/lib.rs`（compat-2x 段）+ `types` / `payloads` 两个别名模块；退役预案见 ADR-324 |
 
 ### 3.5 明确**不提供**的开关（安全语义不可降级）
 
 | 不提供的东西 | 原因 |
 |-------------|------|
+| **关闭 Critical mpsc 旁路的开关** | `seccore` 不可学习红线 #6「BudgetExceeded=Critical 不可降级」；旁路是**安全信号的送达保证**，一旦可关，`SkepticVeto` / `R2FreezeViolation` / `CertifyIssued` 等事件会在背压下静默丢失。旁路规模由 `CRITICAL_MPSC_VARIANTS` / `CRITICAL_TOTAL` 常量 + D-8 双清单测试守护，不设运行时降级面 |
 | 跳过/关闭沙箱层的开关 | `seccore` 不可学习红线「沙箱不可降级」；ADR-238 的「顺序即安全边界」安全论证 |
 | 关闭策略层（policy）的开关 | 同上；策略是审批前置，绕过即等于隐式放行 |
 | 让路由层 miss 落到默认执行器的开关 | ADR-238 §1 明列该失败模式：「未注册工具被默认执行，等同于隐式放行」 |

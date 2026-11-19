@@ -204,7 +204,8 @@ pub fn spawn_quest_lifecycle_bridge(bus: EventBus, engine: Arc<QuestEngine>) -> 
                         continue;
                     };
                     // 终局状态映射为奖励(成功 1.0 / 失败 0.0)
-                    let terminal_reward = if matches!(status, nexus_events::QuestStatus::Completed) {
+                    let terminal_reward = if matches!(status, nexus_events::QuestStatus::Completed)
+                    {
                         1.0f32
                     } else {
                         0.0f32

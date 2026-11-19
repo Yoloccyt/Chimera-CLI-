@@ -58,7 +58,11 @@ impl BenchClv {
             return 0.0;
         }
         let d = dot / (na.sqrt() * nb.sqrt());
-        if d.is_finite() { d } else { 0.0 }
+        if d.is_finite() {
+            d
+        } else {
+            0.0
+        }
     }
 }
 
