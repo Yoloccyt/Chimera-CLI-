@@ -39,7 +39,8 @@ foreach ($f in $files) {
     # WHY: 文件拆分波次把内联测试落到 `*/tests.rs`（causal/shard/bridge/bus），
     # 该文件里没有内联 `#[cfg(test)]` 标记 —— 不按文件名豁免的话，测试里的合法
     # 同步辅助（如 spin_loop 等待）会被判成生产违规，那是仪器失真而非新债。
-    if ($rel -match '(^|/)tests\.rs$' -or $rel -match '/tests/') { continue }
+    $relNorm = $rel -replace '\\', '/'
+    if ($relNorm -match '(^|/)tests\.rs$' -or $relNorm -match '/tests/') { continue }
     $lines = Get-Content $f.FullName
     $inTest = $false   # 当前是否位于测试模块（#[cfg(test)] 或 mod tests）内
 

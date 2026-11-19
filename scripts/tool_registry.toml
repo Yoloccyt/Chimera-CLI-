@@ -501,3 +501,33 @@ script = "scripts/check_l0_extensibility_class.py"
 status = "active"
 owner = "l0-contract"
 evidence = "ADR-310 D6 L0 门单入口薄调度器委托的子执行体 —— G-115 逐类型可扩展性分类台账（ADR-310 D6 薄调度器委托） | 经 scripts/check_l0_surface.py <mode> 调用（该调度器是 ci.yml/gate_manifest 的登记入口），本脚本自身非门、不单独被 workflow 调用"
+
+[[tool]]
+script = "scripts/check_coe_observability.py"
+status = "diagnostic"
+owner = "toolchain"
+evidence = "观察期机器检查:把 slo.yml / perf_redline.yml 头注里的观察期切换条件做成可执行判据(ADR-319 W2~W7 批群产物);手动入口,不阻塞 CI。首次登记 2026-11-19。"
+
+[[tool]]
+script = "scripts/check_doc_dead_refs.py"
+status = "diagnostic"
+owner = "docs"
+evidence = "文档死引用门(R7-docs / P12 病灶处置);手动入口按批运行,不阻塞 CI。首次登记 2026-11-19。"
+
+[[tool]]
+script = "scripts/ws_snapshot.py"
+status = "diagnostic"
+owner = "toolchain"
+evidence = "workspace 知识统一快照模块(W3b,病灶 G4 的模块本体);被 gate 侧按需调用,自身不设判据。首次登记 2026-11-19。"
+
+[[tool]]
+script = "scripts/govd/tests/test_cargo_indirect_probe.py"
+status = "active"
+owner = "toolchain"
+evidence = "govd 单元测试套件的组成部分(间接 cargo 探针的负控);由 unittest discover 驱动,不是独立门。首次登记 2026-11-19。"
+
+[[tool]]
+script = "scripts/govd/tests/test_cargo_semaphore.py"
+status = "active"
+owner = "toolchain"
+evidence = "govd 单元测试套件的组成部分(cargo 信号量的并发语义);由 unittest discover 驱动,不是独立门。首次登记 2026-11-19。"

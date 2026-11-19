@@ -3,13 +3,13 @@
   <desc>GENERATED artifact. Regenerate with `python scripts/emit_architecture_views.py --write`; `--verify` fails on any hand edit. Numbers below come from `layers.txt` / `domains.txt` / `dependency.dot` in this same directory.</desc>
   <rect x="0" y="0" width="1240" height="1062" fill="#ffffff"/>
   <text x="28" y="46" font-size="24" font-weight="bold" fill="#111827">Chimera CLI (NEXUS-OMEGA) architecture — emitted view</text>
-  <text x="28" y="72" font-size="13" fill="#4b5563">47 crates · 11 layers · 4 domains · 151 non-optional internal edges · upward-edge violations (iron law) = 0</text>
+  <text x="28" y="72" font-size="13" fill="#4b5563">48 crates · 11 layers · 4 domains · 189 non-optional internal edges · upward-edge violations (iron law) = 0</text>
   <text x="28" y="92" font-size="13" fill="#4b5563">Dependencies may only point down (L(N)→L(N−1)) or sideways; cross-layer communication goes through event-bus (L1) or mcp-mesh (L10) only.</text>
   <line x1="28" y1="108" x2="1212" y2="108" stroke="#e5e7eb"/>
   <rect x="84" y="724" width="808" height="130" rx="8" fill="#eef2ff" stroke="#c7d2fe"/>
   <rect x="92" y="730" width="6" height="118" rx="3" fill="#c7d2fe"/>
   <text x="912" y="746" font-size="13" font-weight="bold" fill="#374151">D0 契约基座</text>
-  <text x="912" y="764" font-size="12" fill="#6b7280">L0-L1 · 11 crates · 17 intra-domain edges</text>
+  <text x="912" y="764" font-size="12" fill="#6b7280">L0-L1 · 12 crates · 20 intra-domain edges</text>
   <rect x="84" y="476" width="808" height="254" rx="8" fill="#ecfdf5" stroke="#a7f3d0"/>
   <rect x="92" y="482" width="6" height="242" rx="3" fill="#a7f3d0"/>
   <text x="912" y="498" font-size="13" font-weight="bold" fill="#374151">D1 认知与知识</text>
@@ -120,8 +120,10 @@
   <text x="207" y="763" font-size="13" fill="#111827">nexus-compute</text>
   <rect x="320" y="743" width="88" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
   <text x="327" y="763" font-size="13" fill="#111827">nexus-core</text>
-  <rect x="418" y="743" width="125" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
-  <text x="425" y="763" font-size="13" fill="#111827">nexus-telemetry</text>
+  <rect x="418" y="743" width="102" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="425" y="763" font-size="13" fill="#111827">nexus-events</text>
+  <rect x="530" y="743" width="125" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="537" y="763" font-size="13" fill="#111827">nexus-telemetry</text>
   <rect x="28" y="804" width="56" height="32" rx="6" fill="#f3f4f6" stroke="#d1d5db"/>
   <text x="42" y="826" font-size="14" font-weight="bold" fill="#374151">L0</text>
   <rect x="110" y="805" width="125" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
@@ -139,10 +141,10 @@
   <rect x="1132" y="805" width="176" height="30" rx="6" fill="#ffffff" stroke="#d1d5db"/>
   <text x="1139" y="825" font-size="13" fill="#111827">nexus-contracts-sparse</text>
   <text x="28" y="880" font-size="13" font-weight="bold" fill="#374151">Inter-domain edges</text>
-  <text x="28" y="900" font-size="12" fill="#4b5563">D1→D0 26</text>
-  <text x="28" y="918" font-size="12" fill="#4b5563">D2→D0 29</text>
+  <text x="28" y="900" font-size="12" fill="#4b5563">D1→D0 39</text>
+  <text x="28" y="918" font-size="12" fill="#4b5563">D2→D0 41</text>
   <text x="28" y="936" font-size="12" fill="#4b5563">D2→D1 5</text>
-  <text x="28" y="954" font-size="12" fill="#4b5563">D3→D0 32</text>
+  <text x="28" y="954" font-size="12" fill="#4b5563">D3→D0 42</text>
   <text x="28" y="972" font-size="12" fill="#4b5563">D3→D1 17</text>
   <text x="28" y="990" font-size="12" fill="#4b5563">D3→D2 12</text>
   <text x="248" y="900" font-size="12" fill="#6b7280">Full edge list: dependency.dot · per-crate BACKEND/MATURITY: layer_contracts.txt (all generated in scripts/emit_architecture_views.py --write; --verify byte-compares)</text>

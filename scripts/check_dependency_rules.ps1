@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # check_dependency_rules.ps1 - Architecture dependency-iron-law audit (P9-T10)
 # =============================================================================
 # Purpose: enforce the three dependency iron laws of the NEXUS-OMEGA 10-layer

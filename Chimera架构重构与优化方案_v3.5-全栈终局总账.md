@@ -179,7 +179,7 @@
 | `search-tree-viz` | L10 | §4.1 | ③ VOID | VOID | crates/chimera-tui/src/panels/search_tree_viz.rs 不存在；quest-engine 的 on_search_tree_best_path 是记忆同步钩子，非 L10 面板 |
 | `seccore` | L4 | §4.2 | ① CRATE | IN-PLACE | 机械判定即终判（crates/seccore 在籍） |
 | `segment-aware-per` | L1 | §4.2 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：event-bus） |
-| `segment-aware-validation` | L7 | §4.1+§4.2 | ②c PARTIAL | LANDED | crates/event-bus/src/segment_per.rs:178 SegmentAwarePER |
+| `segment-aware-validation` | L7 | §4.1+§4.2 | ②c PARTIAL | VOID | ADR-312（2026-11-15）已物理删除 `crates/event-bus/src/segment_per.rs`（生产装配点为零，撤主张面退役）；属"曾落地后退役"，不再作为 LANDED 证据 |
 | `self-assessment-panel` | L10 | §4.1+§4.2 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：chimera-tui） |
 | `six-class-feedback-integrator` | L4 | §4.1+§4.2 | ③ VOID | VOID | SixClass/six_class 全库零命中 |
 | `six-dimension-adjuster` | L6 | §4.1+§4.2 | ②b SYMBOL | IN-PLACE | 机械判定即终判（同名声明符号（大小写不敏感）于：osa-coordinator） |
