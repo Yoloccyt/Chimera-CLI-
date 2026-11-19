@@ -95,7 +95,10 @@ pub fn is_legal_server_id(id: &str) -> bool {
 ///
 /// 两种 MCP 前缀（[`MCP_COLON_PREFIX`] / [`MCP_DOT_PREFIX`]）解析到同一
 /// [`ParsedToolName::Mcp`] 变体 —— 调用方无需感知输入来自哪个面。
-#[must_use]
+///
+/// NOTE(2026-11-19): 此处**不再**写显式 `#[must_use]` —— `Result` 本身已是
+/// `#[must_use]`，重复标注触发 `clippy::double_must_use`（`-D warnings` 下即红），
+/// 且不改变任何调用方语义。
 pub fn parse_tool_name(raw: &str) -> Result<ParsedToolName, ToolNameError> {
     if let Some(rest) = raw.strip_prefix(MCP_COLON_PREFIX) {
         parse_mcp_body(rest, '/', raw)

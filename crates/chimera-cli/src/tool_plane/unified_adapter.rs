@@ -97,6 +97,7 @@ impl UnifiedExecutorAdapter {
     ///    ReadOnly 直接放行；Write 看 `approve_writes`；
     /// 2. 配置声明（`omega.yaml declared_side_effects`，用户显式意图）；
     /// 3. 能力自报（tool_plane descriptor 声明，装配期事实）。
+    ///
     /// 皆无 → fail-closed（未知按可能写）。
     fn mcp_approved(
         &self,
